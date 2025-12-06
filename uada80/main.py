@@ -48,6 +48,12 @@ def main():
     )
 
     parser.add_argument(
+        "-O0", "--no-optimize",
+        action="store_true",
+        help="Disable peephole optimization",
+    )
+
+    parser.add_argument(
         "-v", "--version",
         action="version",
         version=f"uada80 {__version__}",
@@ -67,7 +73,8 @@ def main():
         output_format = OutputFormat.IR
 
     # Create compiler
-    compiler = Compiler(output_format=output_format, debug=args.debug)
+    optimize = not args.no_optimize
+    compiler = Compiler(output_format=output_format, debug=args.debug, optimize=optimize)
 
     # Compile
     source_path = Path(args.source)
