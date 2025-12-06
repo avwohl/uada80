@@ -437,3 +437,49 @@ def test_many_local_variables():
     result = compile_source(source)
 
     assert result.success
+
+
+# ============================================================================
+# Array Tests
+# ============================================================================
+
+
+def test_array_access():
+    """Test array element access."""
+    source = """
+    procedure Test_Array is
+        type Arr is array (1 .. 10) of Integer;
+        Data : Arr;
+        Sum : Integer;
+    begin
+        Data(1) := 42;
+        Sum := Data(1);
+    end Test_Array;
+    """
+
+    result = compile_source(source)
+
+    assert result.success
+    assert "ld (HL)" in result.output  # Store to computed address
+    assert "ld E, (HL)" in result.output or "ld D, (HL)" in result.output  # Load from computed address
+
+
+def test_array_ir_generation():
+    """Test that array access generates correct IR."""
+    from uada80.compiler import Compiler, OutputFormat
+
+    source = """
+    procedure Test_Array is
+        type Arr is array (1 .. 5) of Integer;
+        Data : Arr;
+    begin
+        Data(3) := 99;
+    end Test_Array;
+    """
+
+    compiler = Compiler(output_format=OutputFormat.IR)
+    result = compiler.compile(source)
+
+    assert result.success
+    assert "lea" in result.output.lower()  # Load effective address
+    assert "store" in result.output.lower()  # Store to computed address

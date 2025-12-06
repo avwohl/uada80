@@ -8,12 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Record Type Support** (Complete):
+  - Record type declarations
+  - Field assignment and reading
+  - Nested records
+  - Mixed field types (Integer, Character, Boolean)
+  - Records as parameters and return values
+  - Comprehensive test suite (15 tests, all passing)
+  - Full documentation in RECORDS_IMPLEMENTATION.md
+- **CP/M Target Platform Specification** (Complete):
+  - CPM_RUNTIME.md - Complete Ada/CP/M runtime library specification
+  - CPM_QUICK_REFERENCE.md - CP/M quick reference for developers
+  - cpm22_bdos_calls.pdf - BDOS system call reference
+  - cpm22_bios_calls.pdf - BIOS hardware interface reference
+  - cpm22_memory_layout.pdf - CP/M memory organization
+  - SESSION_2025_12_06.md - Development session summary
 - Initial project structure
 - Project documentation:
   - ARCHITECTURE.md - Compiler architecture design
+  - AST_DESIGN.md - Abstract syntax tree structure
   - OPTIMIZATION_ANALYSIS.md - Analysis of reusable optimization code from uplm80
   - LANGUAGE_SUBSET.md - Ada language subset implementation plan
   - README.md - Project overview and getting started guide
+  - PLAN.md - Development plan
+  - CHANGELOG.md - This file
 - Downloaded Ada 2012 Reference Manual (specs/RM-2012.pdf)
 - Downloaded ACATS test suite (acats/)
 - Build system (pyproject.toml)
@@ -28,7 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Optimizer and codegen subdirectories
 
 ### Changed
-- None
+- Organized documentation into docs/ directory
+- Updated LANGUAGE_SUBSET.md to specify CP/M 2.2 as target platform
+- Updated README.md to emphasize CP/M targeting
+- Clarified Z80/CP/M limitations in documentation
 
 ### Deprecated
 - None
