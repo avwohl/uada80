@@ -24,7 +24,9 @@ classifiers = [
     "Topic :: Software Development :: Compilers",
 ]
 
-dependencies = []
+dependencies = [
+    "upeep80>=0.1.0",
+]
 
 [project.optional-dependencies]
 dev = [
