@@ -17,6 +17,13 @@ from uada80.lowering import lower_to_ir
 from uada80.codegen import generate_z80
 from uada80.ir import IRModule
 
+try:
+    from upeep80 import optimize_peephole
+    HAS_PEEPHOLE = True
+except ImportError:
+    HAS_PEEPHOLE = False
+    optimize_peephole = None
+
 
 class OutputFormat(Enum):
     """Output format options."""
@@ -79,9 +86,11 @@ class Compiler:
         self,
         output_format: OutputFormat = OutputFormat.ASM,
         debug: bool = False,
+        optimize: bool = True,
     ):
         self.output_format = output_format
         self.debug = debug
+        self.optimize = optimize and HAS_PEEPHOLE
 
     def compile(
         self,
@@ -167,7 +176,6 @@ class Compiler:
         # Phase 4: Code generation
         try:
             asm = generate_z80(ir)
-            result.output = asm
         except Exception as e:
             result.errors.append(
                 CompilerError(
@@ -178,6 +186,16 @@ class Compiler:
             )
             return result
 
+        # Phase 5: Peephole optimization (optional)
+        if self.optimize and optimize_peephole is not None:
+            try:
+                asm = optimize_peephole(asm)
+            except Exception as e:
+                # Optimization failure is non-fatal, use unoptimized code
+                if self.debug:
+                    result.warnings.append(f"Peephole optimization failed: {e}")
+
+        result.output = asm
         result.success = True
         return result
 
