@@ -41,8 +41,8 @@ dev = [
 uada80 = "uada80.main:main"
 
 [project.urls]
-Homepage = "https://github.com/yourusername/uada80"
-Repository = "https://github.com/yourusername/uada80"
+Homepage = "https://github.com/avwohl/uada80"
+Repository = "https://github.com/avwohl/uada80"
 
 [tool.setuptools.packages.find]
 where = ["."]
