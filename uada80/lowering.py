@@ -955,17 +955,45 @@ class ASTLowering:
         """Lower an attribute reference."""
         attr = expr.attribute.lower()
 
-        # For type attributes, return compile-time constant
         if isinstance(expr.prefix, Identifier):
             sym = self.symbols.lookup(expr.prefix.name)
-            if sym and sym.kind == SymbolKind.TYPE and sym.ada_type:
-                t = sym.ada_type
-                if attr == "first" and hasattr(t, "low"):
-                    return Immediate(t.low, IRType.WORD)
-                if attr == "last" and hasattr(t, "high"):
-                    return Immediate(t.high, IRType.WORD)
-                if attr == "size":
-                    return Immediate(t.size_bits, IRType.WORD)
+            if sym:
+                # Get the type - either from a TYPE symbol or from a VARIABLE symbol
+                ada_type = None
+                if sym.kind == SymbolKind.TYPE:
+                    ada_type = sym.ada_type
+                elif sym.ada_type:
+                    ada_type = sym.ada_type
+
+                if ada_type:
+                    # Handle array attributes
+                    if isinstance(ada_type, ArrayType) and ada_type.is_constrained:
+                        if ada_type.bounds:
+                            low, high = ada_type.bounds[0]  # First dimension
+                            if attr == "first":
+                                return Immediate(low, IRType.WORD)
+                            if attr == "last":
+                                return Immediate(high, IRType.WORD)
+                            if attr == "length":
+                                length = high - low + 1
+                                return Immediate(length, IRType.WORD)
+
+                    # Handle scalar type attributes (Integer'First, etc.)
+                    if attr == "first" and hasattr(ada_type, "low"):
+                        return Immediate(ada_type.low, IRType.WORD)
+                    if attr == "last" and hasattr(ada_type, "high"):
+                        return Immediate(ada_type.high, IRType.WORD)
+                    if attr == "size":
+                        return Immediate(ada_type.size_bits, IRType.WORD)
+
+                    # Handle enumeration attributes
+                    if isinstance(ada_type, EnumerationType):
+                        if attr == "first" and ada_type.literals:
+                            # Return position of first literal (always 0)
+                            return Immediate(0, IRType.WORD)
+                        if attr == "last" and ada_type.literals:
+                            # Return position of last literal
+                            return Immediate(len(ada_type.literals) - 1, IRType.WORD)
 
         # Default
         return Immediate(0, IRType.WORD)
