@@ -175,7 +175,7 @@ class Parser:
 
         # Package or subprogram
         if self.check(TokenType.PACKAGE):
-            return self.parse_package_declaration()
+            return self.parse_package()
         elif self.check(TokenType.PROCEDURE, TokenType.FUNCTION):
             return self.parse_subprogram()
         else:
@@ -461,16 +461,46 @@ class Parser:
         # Parenthesized expression or aggregate
         if self.match(TokenType.LEFT_PAREN):
             # Could be aggregate or parenthesized expression
-            # Peek ahead to distinguish
-            if self.check(TokenType.OTHERS) or self.peek(1).type == TokenType.ARROW:
-                # It's an aggregate
+            # Check for 'others' which definitely means aggregate
+            if self.check(TokenType.OTHERS):
                 components = self.parse_aggregate_components()
                 self.expect(TokenType.RIGHT_PAREN)
                 return Aggregate(components=components, span=self.make_span(start))
-            else:
-                expr = self.parse_expression()
+
+            # Parse first expression
+            first_expr = self.parse_expression()
+
+            # Check what follows to determine aggregate vs parenthesized
+            if self.match(TokenType.ARROW):
+                # Named aggregate: (field => value, ...)
+                choices = [ExprChoice(expr=first_expr)]
+                value = self.parse_expression()
+                components = [ComponentAssociation(choices=choices, value=value)]
+
+                while self.match(TokenType.COMMA):
+                    comp = self.parse_aggregate_component()
+                    components.append(comp)
+
                 self.expect(TokenType.RIGHT_PAREN)
-                return Parenthesized(expr=expr, span=self.make_span(start))
+                return Aggregate(components=components, span=self.make_span(start))
+
+            elif self.match(TokenType.COMMA):
+                # Positional aggregate: (val1, val2, ...)
+                components = [ComponentAssociation(choices=[], value=first_expr)]
+
+                while True:
+                    expr = self.parse_expression()
+                    components.append(ComponentAssociation(choices=[], value=expr))
+                    if not self.match(TokenType.COMMA):
+                        break
+
+                self.expect(TokenType.RIGHT_PAREN)
+                return Aggregate(components=components, span=self.make_span(start))
+
+            else:
+                # Simple parenthesized expression
+                self.expect(TokenType.RIGHT_PAREN)
+                return Parenthesized(expr=first_expr, span=self.make_span(start))
 
         # Allocator (new Type)
         if self.match(TokenType.NEW):
@@ -521,25 +551,36 @@ class Parser:
             )
         else:
             while True:
-                # Parse choice(s) => expression
-                choices = []
-                first_expr = self.parse_expression()
-
-                if self.match(TokenType.ARROW):
-                    # Named association
-                    choices.append(ExprChoice(expr=first_expr))
-                    while self.match(TokenType.PIPE):
-                        choices.append(ExprChoice(expr=self.parse_expression()))
-                    value = self.parse_expression()
-                    components.append(ComponentAssociation(choices=choices, value=value))
-                else:
-                    # Positional association
-                    components.append(ComponentAssociation(choices=[], value=first_expr))
+                comp = self.parse_aggregate_component()
+                components.append(comp)
 
                 if not self.match(TokenType.COMMA):
                     break
 
         return components
+
+    def parse_aggregate_component(self) -> ComponentAssociation:
+        """Parse a single aggregate component association."""
+        # Check for 'others'
+        if self.match(TokenType.OTHERS):
+            self.expect(TokenType.ARROW)
+            value = self.parse_expression()
+            return ComponentAssociation(choices=[OthersChoice()], value=value)
+
+        # Parse choice(s) => expression or positional
+        choices: list[Choice] = []
+        first_expr = self.parse_expression()
+
+        if self.match(TokenType.ARROW):
+            # Named association
+            choices.append(ExprChoice(expr=first_expr))
+            while self.match(TokenType.PIPE):
+                choices.append(ExprChoice(expr=self.parse_expression()))
+            value = self.parse_expression()
+            return ComponentAssociation(choices=choices, value=value)
+        else:
+            # Positional association
+            return ComponentAssociation(choices=[], value=first_expr)
 
     # ========================================================================
     # Statements
@@ -770,9 +811,22 @@ class Parser:
         name = self.expect_identifier()
         self.expect(TokenType.IN)
         is_reverse = self.match(TokenType.REVERSE)
-        iterable = self.parse_expression()  # Can be range or iterable type
+        iterable = self.parse_discrete_range_or_subtype()  # Can be range or iterable type
 
         return IteratorSpec(name=name, is_reverse=is_reverse, iterable=iterable)
+
+    def parse_discrete_range_or_subtype(self) -> Expr:
+        """Parse a discrete range (1..10) or a subtype indication (Integer)."""
+        start = self.current
+        first_expr = self.parse_additive()
+
+        if self.match(TokenType.DOUBLE_DOT):
+            # It's a discrete range
+            high = self.parse_additive()
+            return RangeExpr(low=first_expr, high=high, span=self.make_span(start))
+
+        # It's a subtype indication or type mark
+        return first_expr
 
     def parse_block_statement(self) -> BlockStmt:
         """Parse block statement."""
@@ -1087,9 +1141,9 @@ class Parser:
             index_subtypes = []
 
             # Parse index types/ranges
-            index_subtypes.append(self.parse_expression())
+            index_subtypes.append(self.parse_discrete_range_or_subtype())
             while self.match(TokenType.COMMA):
-                index_subtypes.append(self.parse_expression())
+                index_subtypes.append(self.parse_discrete_range_or_subtype())
 
             self.expect(TokenType.RIGHT_PAREN)
             self.expect(TokenType.OF)

@@ -35,7 +35,7 @@ class SourceSpan:
 class ASTNode:
     """Base class for all AST nodes."""
 
-    span: Optional[SourceSpan] = None
+    span: Optional[SourceSpan] = field(default=None, kw_only=True)
 
 
 @dataclass
@@ -958,8 +958,8 @@ class WithClause(ASTNode):
 class CompilationUnit(ASTNode):
     """Top-level compilation unit."""
 
-    context_clauses: list[WithClause | UseClause] = field(default_factory=list)
     unit: Decl  # Package, subprogram, or generic
+    context_clauses: list[WithClause | UseClause] = field(default_factory=list)
     is_separate: bool = False
 
 
