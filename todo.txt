@@ -1,0 +1,23 @@
+We recently made a PLM language compiler to z80
+see ~/src/uplm80.  Do the same for the full ada
+language. As minimum for testing pass ACATS.
+There is a lot of good peekhole and post optimizaiton
+in uplm80.  See if that can be factored out and shared
+with this project.
+
+COMPLETED:
+- [x] download ada spectifications
+- [x] download the ACATS test suite
+- [x] do your planning for a big job thing
+- [x] analyze uplm80 optimization code
+- [x] design compiler architecture
+- [x] plan language subset
+- [x] create project structure
+
+NEXT STEPS (Phase 1 - MVP):
+- [ ] implement lexer
+- [ ] implement parser (basic subset)
+- [ ] define AST nodes
+- [ ] implement semantic analysis
+- [ ] implement simple code generator
+- [ ] compile "Hello World" program
