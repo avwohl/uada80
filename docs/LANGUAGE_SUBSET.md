@@ -499,11 +499,16 @@ end record;
 for Device use at 16#FF00#;
 ```
 
-### Standard Library (Adapted)
+### Standard Library (Adapted for CP/M)
+
+**Target Platform**: CP/M 2.2 on Z80
+
+See [CPM_RUNTIME.md](CPM_RUNTIME.md) for complete CP/M interface specification.
 
 ```ada
--- Ada.Text_IO (simplified for Z80)
+-- Ada.Text_IO (CP/M BDOS interface)
 package Ada.Text_IO is
+   -- Console I/O (maps to BDOS functions 1, 2, 9, 11)
    procedure Put(Item : Character);
    procedure Put(Item : String);
    procedure Put_Line(Item : String);
@@ -511,6 +516,15 @@ package Ada.Text_IO is
 
    function Get return Character;
    procedure Get(Item : out Character);
+
+   -- File I/O (maps to BDOS functions 15-23)
+   type File_Type is private;
+   type File_Mode is (In_File, Out_File);
+
+   procedure Open(File : in out File_Type; Mode : File_Mode; Name : String);
+   procedure Create(File : in out File_Type; Mode : File_Mode; Name : String);
+   procedure Close(File : in out File_Type);
+   function End_Of_File(File : File_Type) return Boolean;
 end Ada.Text_IO;
 
 -- Ada.Integer_Text_IO
@@ -518,6 +532,14 @@ package Ada.Integer_Text_IO is
    procedure Put(Item : Integer);
    procedure Get(Item : out Integer);
 end Ada.Integer_Text_IO;
+
+-- System interface to CP/M BDOS
+package System.BDOS is
+   procedure Console_Output(C : Character);     -- BDOS 2
+   function Console_Input return Character;      -- BDOS 1
+   procedure System_Reset;                       -- BDOS 0 (exit)
+   -- See CPM_RUNTIME.md for complete interface
+end System.BDOS;
 ```
 
 ## Implementation Priority
@@ -568,14 +590,27 @@ The ACATS test suite is organized into chapters corresponding to Ada RM chapters
 **Advanced**: Chapters 11-12 (exceptions, generics)
 **Optional**: Chapter 9 (tasking - may be impractical for Z80)
 
-## Limitations for Z80 Target
+## Target Platform: CP/M 2.2 on Z80
 
-1. **No floating point** (unless software implementation)
-2. **Limited heap** (small memory space)
-3. **No full tasking** (single-threaded or cooperative)
-4. **Reduced standard library** (no file I/O unless CP/M)
-5. **Integer sizes**: 8-bit and 16-bit only
-6. **No 32-bit or 64-bit integers**
+The uada80 compiler targets CP/M 2.2 as its primary operating system. This provides:
+
+- **File System**: CP/M file I/O via BDOS (functions 15-23)
+- **Console I/O**: Character and string I/O via BDOS (functions 1-2, 9-11)
+- **Memory**: Approximately 57K TPA on typical 64K system
+- **Startup**: Programs load at 0x0100
+- **Exit**: Return to CP/M via BDOS function 0
+
+See [CPM_RUNTIME.md](CPM_RUNTIME.md) for complete details.
+
+## Limitations for Z80/CP/M Target
+
+1. **No floating point** (Z80 has no FPU; software implementation possible but slow)
+2. **Limited memory** (~57K TPA on 64K CP/M system)
+3. **No preemptive tasking** (CP/M is single-tasking; cooperative tasking possible)
+4. **8.3 filenames** (CP/M file system limitation)
+5. **Integer sizes**: 8-bit and 16-bit only (Z80 limitations)
+6. **No 32-bit or 64-bit integers** (without software multi-precision)
+7. **128-byte disk I/O** (CP/M sector size; requires buffering for text I/O)
 
 ## Test Program Examples
 

@@ -80,6 +80,7 @@ class LocalVariable:
     vreg: VReg
     stack_offset: int
     size: int
+    ada_type: Optional["AdaType"] = None
 
 
 @dataclass
@@ -313,6 +314,10 @@ class ASTLowering:
         elif isinstance(stmt.target, IndexedComponent):
             # Array assignment
             self._lower_indexed_store(stmt.target, value)
+
+        elif isinstance(stmt.target, SelectedName):
+            # Record field assignment
+            self._lower_selected_store(stmt.target, value)
 
     def _lower_if(self, stmt: IfStmt) -> None:
         """Lower an if statement."""
@@ -589,8 +594,209 @@ class ASTLowering:
 
     def _lower_indexed_store(self, target: IndexedComponent, value) -> None:
         """Lower an indexed component store (array assignment)."""
-        # For now, just generate a placeholder
-        pass
+        if self.ctx is None:
+            return
+
+        # Get array base address
+        base_addr = self._get_array_base(target.prefix)
+        if base_addr is None:
+            return
+
+        # Calculate element address
+        elem_addr = self._calc_element_addr(target, base_addr)
+
+        # Store value to element address
+        self.builder.store(elem_addr, value)
+
+    def _get_array_base(self, prefix: Expr) -> Optional[VReg]:
+        """Get the base address of an array."""
+        if self.ctx is None:
+            return None
+
+        if isinstance(prefix, Identifier):
+            name = prefix.name.lower()
+
+            # Check locals
+            if name in self.ctx.locals:
+                local = self.ctx.locals[name]
+                # Get address of local array
+                addr = self.builder.new_vreg(IRType.PTR, f"_{name}_addr")
+                # LEA: load effective address (IX + offset)
+                self.builder.emit(IRInstr(
+                    OpCode.LEA,
+                    dst=addr,
+                    src1=MemoryLocation(offset=local.stack_offset, ir_type=IRType.PTR),
+                ))
+                return addr
+
+            # Check for global arrays
+            sym = self.symbols.lookup(name)
+            if sym and sym.kind == SymbolKind.VARIABLE:
+                addr = self.builder.new_vreg(IRType.PTR, f"_{name}_addr")
+                self.builder.emit(IRInstr(
+                    OpCode.LEA,
+                    dst=addr,
+                    src1=MemoryLocation(is_global=True, symbol_name=name, ir_type=IRType.PTR),
+                ))
+                return addr
+
+        return None
+
+    def _calc_element_addr(self, indexed: IndexedComponent, base_addr: VReg) -> MemoryLocation:
+        """Calculate the memory location for an array element."""
+        # For now, assume 1-dimensional array with word elements
+        # Address = base + (index - lower_bound) * element_size
+
+        # Lower the index expression
+        index = self._lower_expr(indexed.indices[0])
+
+        # Get array type info to find lower bound and element size
+        lower_bound = 1  # Default Ada array lower bound
+        element_size = 2  # Default to word size
+
+        # Try to get actual bounds from type info
+        if isinstance(indexed.prefix, Identifier):
+            sym = self.symbols.lookup(indexed.prefix.name)
+            if sym and sym.ada_type and hasattr(sym.ada_type, 'bounds') and sym.ada_type.bounds:
+                lower_bound = sym.ada_type.bounds[0][0]
+            if sym and sym.ada_type and hasattr(sym.ada_type, 'component_type'):
+                comp_type = sym.ada_type.component_type
+                if comp_type:
+                    element_size = (comp_type.size_bits + 7) // 8
+
+        # Calculate offset: (index - lower_bound) * element_size
+        offset_vreg = self.builder.new_vreg(IRType.WORD, "_idx_offset")
+
+        if lower_bound != 0:
+            # Subtract lower bound from index
+            adjusted_idx = self.builder.new_vreg(IRType.WORD, "_adj_idx")
+            self.builder.sub(adjusted_idx, index, Immediate(lower_bound, IRType.WORD))
+            index = adjusted_idx
+
+        # Multiply by element size
+        if element_size == 1:
+            self.builder.mov(offset_vreg, index)
+        elif element_size == 2:
+            # Shift left by 1 (multiply by 2)
+            self.builder.add(offset_vreg, index, index)
+        else:
+            # General multiply
+            self.builder.mul(offset_vreg, index, Immediate(element_size, IRType.WORD))
+
+        # Add offset to base address
+        elem_addr_vreg = self.builder.new_vreg(IRType.PTR, "_elem_addr")
+        self.builder.add(elem_addr_vreg, base_addr, offset_vreg)
+
+        # Return as memory location using the computed address
+        return MemoryLocation(base=elem_addr_vreg, offset=0, ir_type=IRType.WORD)
+
+    def _lower_selected_store(self, target: SelectedName, value) -> None:
+        """Lower a selected component store (record field assignment)."""
+        if self.ctx is None:
+            return
+
+        # Get record base address
+        base_addr = self._get_record_base(target.prefix)
+        if base_addr is None:
+            return
+
+        # Get field offset
+        field_offset = self._get_field_offset(target)
+        field_size = self._get_field_size(target)
+
+        # Calculate field address
+        if field_offset != 0:
+            field_addr = self.builder.new_vreg(IRType.PTR, "_field_addr")
+            self.builder.add(field_addr, base_addr, Immediate(field_offset, IRType.WORD))
+        else:
+            field_addr = base_addr
+
+        # Store value to field
+        mem = MemoryLocation(base=field_addr, offset=0, ir_type=IRType.WORD)
+        self.builder.store(mem, value)
+
+    def _get_record_base(self, prefix: Expr) -> Optional[VReg]:
+        """Get the base address of a record."""
+        if self.ctx is None:
+            return None
+
+        if isinstance(prefix, Identifier):
+            name = prefix.name.lower()
+
+            # Check locals
+            if name in self.ctx.locals:
+                local = self.ctx.locals[name]
+                addr = self.builder.new_vreg(IRType.PTR, f"_{name}_addr")
+                self.builder.emit(IRInstr(
+                    OpCode.LEA,
+                    dst=addr,
+                    src1=MemoryLocation(offset=local.stack_offset, ir_type=IRType.PTR),
+                ))
+                return addr
+
+            # Check for global records
+            sym = self.symbols.lookup(name)
+            if sym and sym.kind == SymbolKind.VARIABLE:
+                addr = self.builder.new_vreg(IRType.PTR, f"_{name}_addr")
+                self.builder.emit(IRInstr(
+                    OpCode.LEA,
+                    dst=addr,
+                    src1=MemoryLocation(is_global=True, symbol_name=name, ir_type=IRType.PTR),
+                ))
+                return addr
+
+        return None
+
+    def _get_field_offset(self, selected: SelectedName) -> int:
+        """Get the byte offset of a record field."""
+        from uada80.type_system import RecordType
+
+        if isinstance(selected.prefix, Identifier):
+            sym = self.symbols.lookup(selected.prefix.name)
+            if sym and sym.ada_type and isinstance(sym.ada_type, RecordType):
+                for comp in sym.ada_type.components:
+                    if comp.name.lower() == selected.selector.lower():
+                        return comp.offset_bits // 8
+        return 0
+
+    def _get_field_size(self, selected: SelectedName) -> int:
+        """Get the byte size of a record field."""
+        from uada80.type_system import RecordType
+
+        if isinstance(selected.prefix, Identifier):
+            sym = self.symbols.lookup(selected.prefix.name)
+            if sym and sym.ada_type and isinstance(sym.ada_type, RecordType):
+                for comp in sym.ada_type.components:
+                    if comp.name.lower() == selected.selector.lower():
+                        return (comp.component_type.size_bits + 7) // 8
+        return 2  # Default to word size
+
+    def _lower_selected(self, expr: SelectedName):
+        """Lower a selected component (record field access)."""
+        if self.ctx is None:
+            return Immediate(0, IRType.WORD)
+
+        # Get record base address
+        base_addr = self._get_record_base(expr.prefix)
+        if base_addr is None:
+            return Immediate(0, IRType.WORD)
+
+        # Get field offset
+        field_offset = self._get_field_offset(expr)
+
+        # Calculate field address
+        if field_offset != 0:
+            field_addr = self.builder.new_vreg(IRType.PTR, "_field_addr")
+            self.builder.add(field_addr, base_addr, Immediate(field_offset, IRType.WORD))
+        else:
+            field_addr = base_addr
+
+        # Load value from field
+        result = self.builder.new_vreg(IRType.WORD, "_field")
+        mem = MemoryLocation(base=field_addr, offset=0, ir_type=IRType.WORD)
+        self.builder.load(result, mem)
+
+        return result
 
     # =========================================================================
     # Expressions
@@ -625,6 +831,9 @@ class ASTLowering:
 
         if isinstance(expr, IndexedComponent):
             return self._lower_indexed(expr)
+
+        if isinstance(expr, SelectedName):
+            return self._lower_selected(expr)
 
         # Default: return 0
         return Immediate(0, IRType.WORD)
@@ -763,8 +972,21 @@ class ASTLowering:
 
     def _lower_indexed(self, expr: IndexedComponent):
         """Lower an indexed component (array access)."""
-        # Simplified: just return a temp register
+        if self.ctx is None:
+            return Immediate(0, IRType.WORD)
+
+        # Get array base address
+        base_addr = self._get_array_base(expr.prefix)
+        if base_addr is None:
+            return Immediate(0, IRType.WORD)
+
+        # Calculate element address
+        elem_addr = self._calc_element_addr(expr, base_addr)
+
+        # Load value from element address
         result = self.builder.new_vreg(IRType.WORD, "_elem")
+        self.builder.load(result, elem_addr)
+
         return result
 
 

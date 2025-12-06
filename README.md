@@ -1,6 +1,6 @@
-# uada80 - Ada Compiler for Z80
+# uada80 - Ada Compiler for Z80/CP/M
 
-An Ada compiler targeting the Z80 processor, aiming for ACATS (Ada Conformity Assessment Test Suite) compliance.
+An Ada compiler targeting the Z80 processor and CP/M 2.2 operating system, aiming for ACATS (Ada Conformity Assessment Test Suite) compliance.
 
 ## Project Status
 
@@ -8,14 +8,20 @@ An Ada compiler targeting the Z80 processor, aiming for ACATS (Ada Conformity As
 
 ## Overview
 
-uada80 is a compiler for the Ada programming language that generates code for the Z80 8-bit microprocessor. The project aims to support a substantial subset of Ada 2012 and pass the ACATS conformance tests.
+uada80 is a compiler for the Ada programming language that generates code for the Z80 8-bit microprocessor running CP/M 2.2. The project aims to support a substantial subset of Ada 2012 and pass the ACATS conformance tests.
+
+**Target Platform**: CP/M 2.2 on Z80
+- Programs load at 0x0100
+- Access to CP/M BDOS for file I/O and console operations
+- Approximately 57K TPA on typical 64K system
 
 ### Goals
 
 1. Compile Ada source code to Z80 assembly/machine code
-2. Pass ACATS test suite (or as many tests as feasible for Z80)
-3. Generate efficient code suitable for embedded/retro systems
-4. Provide clear error messages and diagnostics
+2. Generate CP/M .COM executables
+3. Pass ACATS test suite (or as many tests as feasible for Z80/CP/M)
+4. Generate efficient code suitable for CP/M systems
+5. Provide clear error messages and diagnostics
 
 ### Inspiration
 
@@ -132,10 +138,21 @@ See [examples/](examples/) for more examples.
 
 ## Documentation
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) - Compiler architecture and design
-- [OPTIMIZATION_ANALYSIS.md](OPTIMIZATION_ANALYSIS.md) - Optimization strategies
-- [LANGUAGE_SUBSET.md](LANGUAGE_SUBSET.md) - Supported Ada language features
-- [specs/](specs/) - Ada language specifications
+### Compiler Documentation
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - Compiler architecture and design
+- [docs/AST_DESIGN.md](docs/AST_DESIGN.md) - Abstract syntax tree structure
+- [docs/OPTIMIZATION_ANALYSIS.md](docs/OPTIMIZATION_ANALYSIS.md) - Optimization strategies
+- [docs/LANGUAGE_SUBSET.md](docs/LANGUAGE_SUBSET.md) - Supported Ada language features
+
+### CP/M Target Platform
+- [docs/CPM_RUNTIME.md](docs/CPM_RUNTIME.md) - **Complete Ada/CP/M runtime specification**
+- [docs/CPM_QUICK_REFERENCE.md](docs/CPM_QUICK_REFERENCE.md) - **CP/M quick reference for developers**
+- [docs/cpm22_bdos_calls.pdf](docs/cpm22_bdos_calls.pdf) - BDOS system call reference
+- [docs/cpm22_bios_calls.pdf](docs/cpm22_bios_calls.pdf) - BIOS hardware interface
+- [docs/cpm22_memory_layout.pdf](docs/cpm22_memory_layout.pdf) - CP/M memory organization
+
+### Ada Language Specifications
+- [specs/](specs/) - Ada language specifications and ACATS tests
 
 ## ACATS Testing
 

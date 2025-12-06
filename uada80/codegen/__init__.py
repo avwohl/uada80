@@ -219,6 +219,8 @@ class Z80CodeGen:
             self._gen_pop(instr)
         elif op == OpCode.LABEL:
             pass  # Labels are handled in block generation
+        elif op == OpCode.LEA:
+            self._gen_lea(instr)
         elif op == OpCode.NOP:
             self._emit_instr("nop")
 
@@ -287,6 +289,18 @@ class Z80CodeGen:
         mem = instr.src1
         if mem.is_global:
             self._emit_instr("ld", "HL", f"({mem.symbol_name})")
+        elif mem.base is not None:
+            # Load from computed address: base + offset
+            # First load the base address into HL
+            self._load_to_hl(mem.base)
+            if mem.offset != 0:
+                self._emit_instr("ld", "DE", str(mem.offset))
+                self._emit_instr("add", "HL", "DE")
+            # Now load the value at (HL)
+            self._emit_instr("ld", "E", "(HL)")
+            self._emit_instr("inc", "HL")
+            self._emit_instr("ld", "D", "(HL)")
+            self._emit_instr("ex", "DE", "HL")
         else:
             # Load from stack-relative address
             self._emit_instr("ld", "L", f"(IX{mem.offset:+d})")
@@ -300,13 +314,54 @@ class Z80CodeGen:
             return
 
         mem = instr.dst
-        self._load_to_hl(instr.src1)
 
         if mem.is_global:
+            self._load_to_hl(instr.src1)
             self._emit_instr("ld", f"({mem.symbol_name})", "HL")
+        elif mem.base is not None:
+            # Store to computed address: base + offset
+            # Load value into DE first
+            self._load_to_de(instr.src1)
+            # Load address into HL
+            self._load_to_hl(mem.base)
+            if mem.offset != 0:
+                self._emit_instr("push", "DE")  # Save value
+                self._emit_instr("ld", "DE", str(mem.offset))
+                self._emit_instr("add", "HL", "DE")
+                self._emit_instr("pop", "DE")  # Restore value
+            # Store DE to (HL)
+            self._emit_instr("ld", "(HL)", "E")
+            self._emit_instr("inc", "HL")
+            self._emit_instr("ld", "(HL)", "D")
         else:
+            self._load_to_hl(instr.src1)
             self._emit_instr("ld", f"(IX{mem.offset:+d})", "L")
             self._emit_instr("ld", f"(IX{mem.offset+1:+d})", "H")
+
+    def _gen_lea(self, instr: IRInstr) -> None:
+        """Generate LEA (load effective address) instruction."""
+        if not isinstance(instr.dst, VReg) or not isinstance(instr.src1, MemoryLocation):
+            return
+
+        mem = instr.src1
+        if mem.is_global:
+            # Load address of global variable
+            self._emit_instr("ld", "HL", mem.symbol_name)
+        elif mem.base is not None:
+            # Computed address: base + offset
+            self._load_to_hl(mem.base)
+            if mem.offset != 0:
+                self._emit_instr("ld", "DE", str(mem.offset))
+                self._emit_instr("add", "HL", "DE")
+        else:
+            # Stack-relative address: IX + offset
+            self._emit_instr("push", "IX")
+            self._emit_instr("pop", "HL")
+            if mem.offset != 0:
+                self._emit_instr("ld", "DE", str(mem.offset))
+                self._emit_instr("add", "HL", "DE")
+
+        self._store_from_hl(instr.dst)
 
     def _gen_add(self, instr: IRInstr) -> None:
         """Generate ADD instruction."""
