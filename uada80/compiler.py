@@ -1,0 +1,285 @@
+"""
+Compiler driver for uada80.
+
+Coordinates all compilation phases: parsing, semantic analysis,
+lowering, and code generation.
+"""
+
+from dataclasses import dataclass, field
+from enum import Enum, auto
+from pathlib import Path
+from typing import Optional
+
+from uada80.ast_nodes import Program
+from uada80.parser import parse, ParseError
+from uada80.semantic import analyze, SemanticError, SemanticResult
+from uada80.lowering import lower_to_ir
+from uada80.codegen import generate_z80
+from uada80.ir import IRModule
+
+
+class OutputFormat(Enum):
+    """Output format options."""
+
+    ASM = auto()  # Z80 assembly
+    IR = auto()  # IR dump (for debugging)
+    AST = auto()  # AST dump (for debugging)
+
+
+@dataclass
+class CompilerError:
+    """A compilation error."""
+
+    phase: str
+    message: str
+    filename: Optional[str] = None
+    line: Optional[int] = None
+    column: Optional[int] = None
+
+    def __str__(self) -> str:
+        location = ""
+        if self.filename:
+            location = f"{self.filename}"
+            if self.line:
+                location += f":{self.line}"
+                if self.column:
+                    location += f":{self.column}"
+            location += ": "
+        return f"{location}{self.phase}: {self.message}"
+
+
+@dataclass
+class CompilationResult:
+    """Result of compilation."""
+
+    success: bool
+    errors: list[CompilerError] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    output: str = ""
+    ast: Optional[Program] = None
+    ir: Optional[IRModule] = None
+
+    @property
+    def has_errors(self) -> bool:
+        return len(self.errors) > 0
+
+
+class Compiler:
+    """
+    Main compiler driver.
+
+    Usage:
+        compiler = Compiler()
+        result = compiler.compile("procedure Main is begin null; end Main;")
+        if result.success:
+            print(result.output)
+    """
+
+    def __init__(
+        self,
+        output_format: OutputFormat = OutputFormat.ASM,
+        debug: bool = False,
+    ):
+        self.output_format = output_format
+        self.debug = debug
+
+    def compile(
+        self,
+        source: str,
+        filename: str = "<input>",
+    ) -> CompilationResult:
+        """
+        Compile source code to Z80 assembly.
+
+        Args:
+            source: Ada source code
+            filename: Name of the source file (for error messages)
+
+        Returns:
+            CompilationResult with output or errors
+        """
+        result = CompilationResult(success=False)
+
+        # Phase 1: Parse
+        try:
+            ast = parse(source, filename)
+            result.ast = ast
+        except ParseError as e:
+            result.errors.append(
+                CompilerError(
+                    phase="parse",
+                    message=str(e),
+                    filename=filename,
+                )
+            )
+            return result
+
+        if self.output_format == OutputFormat.AST:
+            result.success = True
+            result.output = self._dump_ast(ast)
+            return result
+
+        # Phase 2: Semantic analysis
+        try:
+            semantic_result = analyze(ast)
+        except SemanticError as e:
+            result.errors.append(
+                CompilerError(
+                    phase="semantic",
+                    message=str(e),
+                    filename=filename,
+                )
+            )
+            return result
+
+        if semantic_result.has_errors:
+            for err in semantic_result.errors:
+                result.errors.append(
+                    CompilerError(
+                        phase="semantic",
+                        message=err.message,
+                        filename=filename,
+                        line=err.line,
+                        column=err.column,
+                    )
+                )
+            return result
+
+        # Phase 3: Lower to IR
+        try:
+            ir = lower_to_ir(ast, semantic_result)
+            result.ir = ir
+        except Exception as e:
+            result.errors.append(
+                CompilerError(
+                    phase="lowering",
+                    message=str(e),
+                    filename=filename,
+                )
+            )
+            return result
+
+        if self.output_format == OutputFormat.IR:
+            result.success = True
+            result.output = self._dump_ir(ir)
+            return result
+
+        # Phase 4: Code generation
+        try:
+            asm = generate_z80(ir)
+            result.output = asm
+        except Exception as e:
+            result.errors.append(
+                CompilerError(
+                    phase="codegen",
+                    message=str(e),
+                    filename=filename,
+                )
+            )
+            return result
+
+        result.success = True
+        return result
+
+    def compile_file(self, path: Path | str) -> CompilationResult:
+        """
+        Compile a source file.
+
+        Args:
+            path: Path to the Ada source file
+
+        Returns:
+            CompilationResult with output or errors
+        """
+        path = Path(path)
+
+        if not path.exists():
+            result = CompilationResult(success=False)
+            result.errors.append(
+                CompilerError(
+                    phase="io",
+                    message=f"File not found: {path}",
+                )
+            )
+            return result
+
+        try:
+            source = path.read_text()
+        except Exception as e:
+            result = CompilationResult(success=False)
+            result.errors.append(
+                CompilerError(
+                    phase="io",
+                    message=f"Cannot read file: {e}",
+                )
+            )
+            return result
+
+        return self.compile(source, str(path))
+
+    def _dump_ast(self, ast: Program) -> str:
+        """Generate a string representation of the AST."""
+        lines = ["AST Dump:", "========="]
+        for unit in ast.units:
+            lines.append(f"CompilationUnit: {type(unit.unit).__name__}")
+            lines.append(f"  {unit.unit}")
+        return "\n".join(lines)
+
+    def _dump_ir(self, ir: IRModule) -> str:
+        """Generate a string representation of the IR."""
+        lines = [f"IR Module: {ir.name}", "=" * 40]
+
+        if ir.globals:
+            lines.append("\nGlobals:")
+            for name, (irtype, size) in ir.globals.items():
+                lines.append(f"  {name}: {irtype.name} ({size} bytes)")
+
+        if ir.string_literals:
+            lines.append("\nStrings:")
+            for name, value in ir.string_literals.items():
+                lines.append(f"  {name}: {repr(value)}")
+
+        for func in ir.functions:
+            lines.append(f"\nFunction: {func.name} -> {func.return_type.name}")
+            if func.params:
+                params = ", ".join(
+                    f"{p.name or f'v{p.id}'}: {p.ir_type.name}" for p in func.params
+                )
+                lines.append(f"  Params: {params}")
+            lines.append(f"  Locals: {func.locals_size} bytes")
+
+            for block in func.blocks:
+                lines.append(f"\n  {block.label}:")
+                for instr in block.instructions:
+                    lines.append(f"    {instr}")
+
+        return "\n".join(lines)
+
+
+def compile_source(source: str, filename: str = "<input>") -> CompilationResult:
+    """
+    Convenience function to compile source code.
+
+    Args:
+        source: Ada source code
+        filename: Name of the source file (for error messages)
+
+    Returns:
+        CompilationResult with output or errors
+    """
+    compiler = Compiler()
+    return compiler.compile(source, filename)
+
+
+def compile_file(path: Path | str) -> CompilationResult:
+    """
+    Convenience function to compile a file.
+
+    Args:
+        path: Path to the Ada source file
+
+    Returns:
+        CompilationResult with output or errors
+    """
+    compiler = Compiler()
+    return compiler.compile_file(path)
