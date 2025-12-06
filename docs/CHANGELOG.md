@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Enumeration Type Support** (Complete):
+  - Enumeration type declarations
+  - Enumeration literals as constants
+  - Comparison operations on enums
+  - Enums in control flow (if/case statements)
+  - Enums as parameters and return values
+  - Predefined Boolean and Character types
+  - Comprehensive test suite (22 tests, all passing)
+  - Full documentation in ENUMS_IMPLEMENTATION.md
+  - Automatic symbol table registration for literals
 - **Record Type Support** (Complete):
   - Record type declarations
   - Field assignment and reading
@@ -58,7 +68,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - None
 
 ### Fixed
-- None
+- Enumeration literals now properly added to symbol table during type declaration
+- Type system correctly handles enum position values
 
 ### Security
 - None

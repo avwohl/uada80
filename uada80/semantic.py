@@ -398,6 +398,26 @@ class SemanticAnalyzer:
         )
         self.symbols.define(symbol)
 
+        # For enumeration types, add literals to symbol table
+        if isinstance(ada_type, EnumerationType):
+            for literal in ada_type.literals:
+                # Check if literal already exists (could be from another enum)
+                if self.symbols.is_defined_locally(literal):
+                    self.error(
+                        f"enumeration literal '{literal}' conflicts with existing declaration",
+                        decl,
+                    )
+                    continue
+
+                literal_symbol = Symbol(
+                    name=literal,
+                    kind=SymbolKind.VARIABLE,
+                    ada_type=ada_type,
+                    is_constant=True,
+                    definition=decl,
+                )
+                self.symbols.define(literal_symbol)
+
     def _analyze_subtype_decl(self, decl: SubtypeDecl) -> None:
         """Analyze a subtype declaration."""
         if self.symbols.is_defined_locally(decl.name):
