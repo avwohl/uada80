@@ -18,6 +18,7 @@ from uada80.ast_nodes import (
     TypeDecl,
     SubtypeDecl,
     ParameterSpec,
+    GenericInstantiation,
     # Statements
     Stmt,
     NullStmt,
@@ -32,6 +33,7 @@ from uada80.ast_nodes import (
     ReturnStmt,
     RaiseStmt,
     ProcedureCallStmt,
+    ExceptionHandler,
     # Expressions
     Expr,
     Identifier,
@@ -101,6 +103,8 @@ class LoweringContext:
     params: dict[str, VReg] = field(default_factory=dict)
     loop_exit_label: Optional[str] = None  # For exit statements
     loop_continue_label: Optional[str] = None  # For continue
+    # Exception handling: stack of (handler_count, exit_label) for nested handlers
+    exception_handler_stack: list[tuple[int, str]] = field(default_factory=list)
 
 
 class ASTLowering:
@@ -111,6 +115,12 @@ class ASTLowering:
         self.builder = IRBuilder()
         self.ctx: Optional[LoweringContext] = None
         self._label_counter = 0
+        # For generic instantiation: type mappings and instance prefix
+        self._generic_type_map: dict[str, str] = {}
+        self._generic_prefix: Optional[str] = None
+        # Exception handling: map exception names to IDs
+        self._exception_ids: dict[str, int] = {}
+        self._next_exception_id = 1  # 0 reserved for "others"
 
     def lower(self, program: Program) -> IRModule:
         """Lower an entire program to IR."""
@@ -146,6 +156,14 @@ class ASTLowering:
         # Default to WORD for composite types
         return IRType.WORD
 
+    def _get_exception_id(self, name: str) -> int:
+        """Get or create an exception ID for the given exception name."""
+        name_lower = name.lower()
+        if name_lower not in self._exception_ids:
+            self._exception_ids[name_lower] = self._next_exception_id
+            self._next_exception_id += 1
+        return self._exception_ids[name_lower]
+
     # =========================================================================
     # Compilation Units
     # =========================================================================
@@ -158,6 +176,8 @@ class ASTLowering:
             self._lower_package_decl(unit.unit)
         elif isinstance(unit.unit, PackageBody):
             self._lower_package_body(unit.unit)
+        elif isinstance(unit.unit, GenericInstantiation):
+            self._lower_generic_instantiation(unit.unit)
 
     def _lower_subprogram_body(self, body: SubprogramBody) -> None:
         """Lower a subprogram body."""
@@ -205,9 +225,14 @@ class ASTLowering:
         for decl in body.declarations:
             self._lower_declaration(decl)
 
-        # Process statements
-        for stmt in body.statements:
-            self._lower_statement(stmt)
+        # Process statements (with exception handlers if present)
+        if body.handled_exception_handlers:
+            self._lower_block_with_handlers(
+                body.statements, body.handled_exception_handlers
+            )
+        else:
+            for stmt in body.statements:
+                self._lower_statement(stmt)
 
         # Add implicit return if needed
         if not self._block_has_return(self.builder.block):
@@ -228,6 +253,10 @@ class ASTLowering:
 
     def _lower_package_decl(self, pkg: PackageDecl) -> None:
         """Lower a package declaration."""
+        # Skip generic packages - they are templates, not concrete code
+        if pkg.generic_formals:
+            return
+
         # For now, just process any subprogram declarations
         for decl in pkg.declarations:
             if isinstance(decl, SubprogramBody):
@@ -238,6 +267,61 @@ class ASTLowering:
         for decl in body.declarations:
             if isinstance(decl, SubprogramBody):
                 self._lower_subprogram_body(decl)
+
+    def _lower_generic_instantiation(self, inst: GenericInstantiation) -> None:
+        """Lower a generic instantiation.
+
+        This creates specialized code for the generic package with the actual
+        type parameters substituted for the formal parameters.
+        """
+        if inst.kind != "package":
+            # For now, only support package instantiation
+            return
+
+        # Look up the generic package
+        generic_name = (
+            inst.generic_name.name
+            if hasattr(inst.generic_name, "name")
+            else str(inst.generic_name)
+        )
+        generic_sym = self.symbols.lookup(generic_name)
+        if generic_sym is None or generic_sym.kind != SymbolKind.GENERIC_PACKAGE:
+            return
+
+        # Get the generic package's AST definition
+        generic_pkg = generic_sym.definition
+        if not isinstance(generic_pkg, PackageDecl):
+            return
+
+        # Build type mapping from formal to actual parameters
+        type_map: dict[str, str] = {}
+        for i, formal in enumerate(generic_pkg.generic_formals):
+            if i < len(inst.actual_parameters):
+                formal_name = formal.name if hasattr(formal, "name") else str(formal)
+                actual = inst.actual_parameters[i]
+                actual_name = (
+                    actual.value.name
+                    if hasattr(actual.value, "name")
+                    else str(actual.value)
+                )
+                type_map[formal_name.lower()] = actual_name
+
+        # Store the type map for later use during expression lowering
+        self._generic_type_map = type_map
+        self._generic_prefix = inst.name
+
+        # Lower each subprogram in the generic package
+        for decl in generic_pkg.declarations:
+            if isinstance(decl, SubprogramBody):
+                # Create prefixed name for instantiated subprogram
+                original_name = decl.spec.name
+                decl.spec.name = f"{inst.name}.{original_name}"
+                self._lower_subprogram_body(decl)
+                decl.spec.name = original_name  # Restore original name
+
+        # Clear the type map
+        self._generic_type_map = {}
+        self._generic_prefix = None
 
     def _block_has_return(self, block: Optional[BasicBlock]) -> bool:
         """Check if a block ends with a return."""
@@ -296,6 +380,39 @@ class ASTLowering:
             self._lower_procedure_call(stmt)
         elif isinstance(stmt, CaseStmt):
             self._lower_case(stmt)
+        elif isinstance(stmt, RaiseStmt):
+            self._lower_raise(stmt)
+
+    def _lower_raise(self, stmt: RaiseStmt) -> None:
+        """Lower a raise statement."""
+        if self.ctx is None:
+            return
+
+        if stmt.exception_name is None:
+            # Re-raise: raise;
+            self.builder.emit(IRInstr(OpCode.EXC_RERAISE))
+        else:
+            # Get exception name
+            exc_name = ""
+            if isinstance(stmt.exception_name, Identifier):
+                exc_name = stmt.exception_name.name
+            elif hasattr(stmt.exception_name, "name"):
+                exc_name = stmt.exception_name.name
+
+            exc_id = self._get_exception_id(exc_name)
+
+            # Handle message if present
+            msg_vreg = None
+            if stmt.message:
+                msg_vreg = self._lower_expr(stmt.message)
+
+            # Emit raise instruction
+            self.builder.emit(IRInstr(
+                OpCode.EXC_RAISE,
+                src1=Immediate(exc_id, IRType.WORD),
+                src2=msg_vreg,
+                comment=f"raise {exc_name}",
+            ))
 
     def _lower_assignment(self, stmt: AssignmentStmt) -> None:
         """Lower an assignment statement."""
@@ -514,9 +631,96 @@ class ASTLowering:
         for decl in stmt.declarations:
             self._lower_declaration(decl)
 
-        # Process statements
-        for s in stmt.statements:
+        # Check if we have exception handlers
+        if stmt.handled_exception_handlers:
+            self._lower_block_with_handlers(
+                stmt.statements, stmt.handled_exception_handlers
+            )
+        else:
+            # No handlers - just lower statements directly
+            for s in stmt.statements:
+                self._lower_statement(s)
+
+    def _lower_block_with_handlers(
+        self, statements: list[Stmt], handlers: list[ExceptionHandler]
+    ) -> None:
+        """Lower a block with exception handlers.
+
+        Structure:
+        1. Push handler frames for each handler
+        2. Execute body statements
+        3. Pop handler frames (normal exit)
+        4. Jump past handlers
+        5. Handler code (jumped to by raise)
+        """
+        if self.ctx is None:
+            return
+
+        # Generate labels
+        end_label = self._new_label("block_end")
+        handler_labels = [
+            self._new_label(f"handler_{i}") for i in range(len(handlers))
+        ]
+
+        # Push exception handlers (in reverse order so first handler is checked first)
+        for i, handler in reversed(list(enumerate(handlers))):
+            handler_label = handler_labels[i]
+
+            # Determine exception ID(s) for this handler
+            if not handler.exception_names:
+                # "when others =>" catches all
+                exc_id = 0
+            else:
+                # For now, use the first exception name
+                # TODO: Support multiple exception names per handler
+                first_name = handler.exception_names[0]
+                if isinstance(first_name, Identifier):
+                    if first_name.name.lower() == "others":
+                        exc_id = 0
+                    else:
+                        exc_id = self._get_exception_id(first_name.name)
+                else:
+                    exc_id = 0
+
+            self.builder.emit(IRInstr(
+                OpCode.EXC_PUSH,
+                dst=Label(handler_label),
+                src1=Immediate(exc_id, IRType.WORD),
+            ))
+
+        # Track handler count for this block
+        handler_count = len(handlers)
+        self.ctx.exception_handler_stack.append((handler_count, end_label))
+
+        # Execute body statements
+        for s in statements:
             self._lower_statement(s)
+
+        # Pop exception handlers (normal exit)
+        for _ in range(handler_count):
+            self.builder.emit(IRInstr(OpCode.EXC_POP))
+
+        # Jump past handler code
+        self.builder.jmp(Label(end_label))
+
+        # Generate handler code
+        for i, handler in enumerate(handlers):
+            handler_block = self.builder.new_block(handler_labels[i])
+            self.builder.set_block(handler_block)
+
+            # Execute handler statements
+            for s in handler.statements:
+                self._lower_statement(s)
+
+            # Jump to end (after handler executes)
+            self.builder.jmp(Label(end_label))
+
+        # Pop from handler stack
+        self.ctx.exception_handler_stack.pop()
+
+        # End block
+        end_block = self.builder.new_block(end_label)
+        self.builder.set_block(end_block)
 
     def _lower_exit(self, stmt: ExitStmt) -> None:
         """Lower an exit statement."""

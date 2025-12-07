@@ -27,6 +27,7 @@ class SymbolKind(Enum):
     FUNCTION = auto()  # Function
     PARAMETER = auto()  # Formal parameter
     PACKAGE = auto()  # Package
+    GENERIC_PACKAGE = auto()  # Generic package (template)
     EXCEPTION = auto()  # Exception
     LABEL = auto()  # Statement label
     LOOP = auto()  # Loop identifier for exit statements

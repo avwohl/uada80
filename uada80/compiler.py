@@ -16,6 +16,7 @@ from uada80.semantic import analyze, SemanticError, SemanticResult
 from uada80.lowering import lower_to_ir
 from uada80.codegen import generate_z80
 from uada80.ir import IRModule
+from uada80.optimizer import ASTOptimizer, OptimizerConfig, OptimizationStats
 
 try:
     from upeep80 import optimize_peephole
@@ -65,6 +66,7 @@ class CompilationResult:
     output: str = ""
     ast: Optional[Program] = None
     ir: Optional[IRModule] = None
+    optimization_stats: Optional[OptimizationStats] = None
 
     @property
     def has_errors(self) -> bool:
@@ -87,10 +89,13 @@ class Compiler:
         output_format: OutputFormat = OutputFormat.ASM,
         debug: bool = False,
         optimize: bool = True,
+        optimization_level: int = 2,
     ):
         self.output_format = output_format
         self.debug = debug
-        self.optimize = optimize and HAS_PEEPHOLE
+        self.optimize = optimize
+        self.optimization_level = optimization_level
+        self.peephole_optimize = optimize and HAS_PEEPHOLE
 
     def compile(
         self,
@@ -154,7 +159,20 @@ class Compiler:
                 )
             return result
 
-        # Phase 3: Lower to IR
+        # Phase 3: AST Optimization
+        if self.optimize and self.optimization_level > 0:
+            try:
+                config = OptimizerConfig.for_level(self.optimization_level)
+                optimizer = ASTOptimizer(config)
+                ast = optimizer.optimize(ast)
+                result.ast = ast
+                result.optimization_stats = optimizer.stats
+            except Exception as e:
+                # Optimization failure is non-fatal
+                if self.debug:
+                    result.warnings.append(f"AST optimization failed: {e}")
+
+        # Phase 4: Lower to IR
         try:
             ir = lower_to_ir(ast, semantic_result)
             result.ir = ir
@@ -173,7 +191,7 @@ class Compiler:
             result.output = self._dump_ir(ir)
             return result
 
-        # Phase 4: Code generation
+        # Phase 5: Code generation
         try:
             asm = generate_z80(ir)
         except Exception as e:
@@ -186,8 +204,8 @@ class Compiler:
             )
             return result
 
-        # Phase 5: Peephole optimization (optional)
-        if self.optimize and optimize_peephole is not None:
+        # Phase 6: Peephole optimization (optional)
+        if self.peephole_optimize and optimize_peephole is not None:
             try:
                 asm = optimize_peephole(asm)
             except Exception as e:
