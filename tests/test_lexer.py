@@ -217,7 +217,7 @@ def test_unterminated_string_error():
 
 def test_invalid_character_error():
     """Test error on invalid character."""
-    source = "X := @"
+    source = "X := $"
     with pytest.raises(LexerError) as exc_info:
         lex(source)
     assert "Unexpected character" in str(exc_info.value)
@@ -233,3 +233,83 @@ def test_apostrophe_attribute():
     assert tokens[1].type == TokenType.APOSTROPHE
     assert tokens[2].type == TokenType.IDENTIFIER
     assert tokens[2].value == "First"
+
+
+def test_at_symbol():
+    """Test @ (target name) for Ada 2012."""
+    source = "X := @ + 1;"
+    tokens = lex(source)
+
+    assert tokens[0].type == TokenType.IDENTIFIER
+    assert tokens[1].type == TokenType.ASSIGN
+    assert tokens[2].type == TokenType.AT_SIGN
+    assert tokens[2].value == "@"
+    assert tokens[3].type == TokenType.PLUS
+
+
+def test_consecutive_underscores_error():
+    """Test error on consecutive underscores in identifier."""
+    source = "My__Var"
+    with pytest.raises(LexerError) as exc_info:
+        lex(source)
+    assert "consecutive underscores" in str(exc_info.value)
+
+
+def test_trailing_underscore_error():
+    """Test error on trailing underscore in identifier."""
+    source = "My_Var_"
+    with pytest.raises(LexerError) as exc_info:
+        lex(source)
+    assert "cannot end with underscore" in str(exc_info.value)
+
+
+def test_valid_underscored_identifier():
+    """Test valid identifier with underscores."""
+    source = "My_Long_Variable_Name"
+    tokens = lex(source)
+
+    assert tokens[0].type == TokenType.IDENTIFIER
+    assert tokens[0].value == "My_Long_Variable_Name"
+
+
+def test_integer_with_exponent():
+    """Test integer literal with exponent (1E6 is integer in Ada)."""
+    source = "1E6 2E+10 3E-5"
+    tokens = lex(source)
+
+    # Per Ada 2012 RM 2.4, exponent without decimal point is still integer
+    assert tokens[0].type == TokenType.INTEGER_LITERAL
+    assert tokens[0].value == "1E6"
+    assert tokens[1].type == TokenType.INTEGER_LITERAL
+    assert tokens[1].value == "2E+10"
+    assert tokens[2].type == TokenType.INTEGER_LITERAL
+    assert tokens[2].value == "3E-5"
+
+
+def test_real_with_exponent():
+    """Test real literal with exponent (decimal point makes it real)."""
+    source = "1.0E6 2.5E+10"
+    tokens = lex(source)
+
+    assert tokens[0].type == TokenType.REAL_LITERAL
+    assert tokens[0].value == "1.0E6"
+    assert tokens[1].type == TokenType.REAL_LITERAL
+    assert tokens[1].value == "2.5E+10"
+
+
+def test_based_literal_with_exponent():
+    """Test based literal with exponent."""
+    source = "16#FF#E2"
+    tokens = lex(source)
+
+    assert tokens[0].type == TokenType.INTEGER_LITERAL
+    assert tokens[0].value == "16#FF#E2"
+
+
+def test_based_real_literal():
+    """Test based real literal (with decimal point)."""
+    source = "16#F.FF#"
+    tokens = lex(source)
+
+    assert tokens[0].type == TokenType.REAL_LITERAL
+    assert tokens[0].value == "16#F.FF#"

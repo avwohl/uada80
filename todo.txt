@@ -21,3 +21,21 @@ NEXT STEPS (Phase 1 - MVP):
 - [ ] implement semantic analysis
 - [ ] implement simple code generator
 - [ ] compile "Hello World" program
+
+CPMEMU INTERRUPT SUPPORT (v1.5.0):
+The emulator now supports scheduled interrupts for testing interrupt-driven code:
+
+  # Maskable interrupt (respects DI/EI) every 4000-4500 cycles, RST 7
+  cpmemu --mask-interrupt 4000-4500 rst 7 program.com
+
+  # Maskable interrupt calling specific address
+  cpmemu --mask-interrupt 5000-6000 call 0x0100 program.com
+
+  # NMI (cannot be disabled) every 10000-12000 cycles, jumps to 0x0066
+  cpmemu --nmi 10000-12000 program.com
+
+Random range helps expose race conditions. For Ada tasking:
+- Timer interrupt at RST 7 (0x0038) for task scheduler tick
+- DI/EI brackets around critical sections
+- RETI to return and re-enable interrupts
+- NMI available for urgent/unblockable handlers

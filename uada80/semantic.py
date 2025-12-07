@@ -73,6 +73,8 @@ from uada80.ast_nodes import (
     DerivedTypeDef,
     SubtypeIndication,
     ComponentDecl,
+    GenericInstantiation,
+    GenericTypeDecl,
 )
 from uada80.symbol_table import SymbolTable, Symbol, SymbolKind
 from uada80.type_system import (
@@ -167,6 +169,8 @@ class SemanticAnalyzer:
             self._analyze_package_decl(unit.unit)
         elif isinstance(unit.unit, PackageBody):
             self._analyze_package_body(unit.unit)
+        elif isinstance(unit.unit, GenericInstantiation):
+            self._analyze_generic_instantiation(unit.unit)
 
     def _analyze_with_clause(self, clause: WithClause) -> None:
         """Analyze a with clause."""
@@ -252,14 +256,23 @@ class SemanticAnalyzer:
 
     def _analyze_package_decl(self, pkg: PackageDecl) -> None:
         """Analyze a package declaration."""
+        is_generic = bool(pkg.generic_formals)
+
         pkg_symbol = Symbol(
             name=pkg.name,
-            kind=SymbolKind.PACKAGE,
+            kind=SymbolKind.GENERIC_PACKAGE if is_generic else SymbolKind.PACKAGE,
         )
+        # Store the AST node for instantiation
+        if is_generic:
+            pkg_symbol.generic_decl = pkg
         self.symbols.define(pkg_symbol)
 
         # Enter package scope
         self.symbols.enter_scope(pkg.name, is_package=True)
+
+        # Process generic formal parameters first
+        for formal in pkg.generic_formals:
+            self._analyze_generic_formal(formal)
 
         # Process public declarations
         for decl in pkg.declarations:
@@ -274,6 +287,69 @@ class SemanticAnalyzer:
             self._add_to_package(pkg_symbol, decl, is_private=True)
 
         self.symbols.leave_scope()
+
+    def _analyze_generic_formal(self, formal) -> None:
+        """Analyze a generic formal parameter."""
+        if isinstance(formal, GenericTypeDecl):
+            # Create a placeholder type for the generic type formal
+            type_sym = Symbol(
+                name=formal.name,
+                kind=SymbolKind.TYPE,
+            )
+            # Mark it as a generic formal type
+            type_sym.is_generic_formal = True
+            type_sym.ada_type = AdaType(
+                kind=TypeKind.PRIVATE,
+                name=formal.name,
+            )
+            self.symbols.define(type_sym)
+        # TODO: Handle GenericObjectDecl, GenericSubprogramDecl, GenericPackageDecl
+
+    def _analyze_generic_instantiation(self, inst: GenericInstantiation) -> None:
+        """Analyze a generic instantiation."""
+        # Look up the generic
+        if isinstance(inst.generic_name, Identifier):
+            generic_name = inst.generic_name.name
+        else:
+            # Handle qualified names like Pkg.Generic_Unit
+            generic_name = str(inst.generic_name)
+
+        generic_sym = self.symbols.lookup(generic_name)
+
+        if generic_sym is None:
+            self.error(f"generic '{generic_name}' not found", inst.generic_name)
+            return
+
+        if generic_sym.kind != SymbolKind.GENERIC_PACKAGE:
+            self.error(f"'{generic_name}' is not a generic package", inst.generic_name)
+            return
+
+        # Get the generic declaration
+        generic_decl = getattr(generic_sym, 'generic_decl', None)
+        if generic_decl is None:
+            self.error(f"generic '{generic_name}' has no declaration", inst.generic_name)
+            return
+
+        # Check number of actual parameters
+        num_formals = len(generic_decl.generic_formals)
+        num_actuals = len(inst.actual_parameters)
+
+        if num_actuals != num_formals:
+            self.error(
+                f"wrong number of generic parameters for '{generic_name}': "
+                f"expected {num_formals}, got {num_actuals}",
+                inst
+            )
+
+        # Create the instantiated package
+        inst_symbol = Symbol(
+            name=inst.name,
+            kind=SymbolKind.PACKAGE,
+        )
+        # Store mapping from formals to actuals for code generation
+        inst_symbol.generic_instance_of = generic_sym
+        inst_symbol.generic_actuals = inst.actual_parameters
+        self.symbols.define(inst_symbol)
 
     def _analyze_package_body(self, body: PackageBody) -> None:
         """Analyze a package body."""

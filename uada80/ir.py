@@ -160,6 +160,12 @@ class OpCode(Enum):
     NOP = auto()  # no operation
     LABEL = auto()  # label definition (pseudo-instruction)
 
+    # Exception handling
+    EXC_PUSH = auto()  # push exception handler (dst=handler_label, src1=exc_id)
+    EXC_POP = auto()  # pop exception handler (normal exit)
+    EXC_RAISE = auto()  # raise exception (src1=exc_id, src2=message_ptr or None)
+    EXC_RERAISE = auto()  # re-raise current exception
+
 
 @dataclass
 class IRInstr:

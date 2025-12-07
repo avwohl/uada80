@@ -185,6 +185,25 @@ class Parser:
     # Names and Expressions
     # ========================================================================
 
+    def parse_qualified_name(self) -> Expr:
+        """
+        Parse a qualified name (identifier or selected component only).
+
+        This is used for generic names where we don't want to consume
+        function call syntax (parentheses) as part of the name.
+        """
+        start = self.current
+        name: Expr = Identifier(name=self.expect_identifier(), span=self.make_span(start))
+
+        # Handle only dot-selection, not parentheses or attributes
+        while self.match(TokenType.DOT):
+            component = self.expect_identifier()
+            name = SelectedComponent(
+                prefix=name, selector=component, span=self.make_span(start)
+            )
+
+        return name
+
     def parse_name(self) -> Expr:
         """
         Parse a name (identifier, selected name, indexed component, etc.).
@@ -1460,9 +1479,13 @@ class Parser:
         else:
             return self.parse_package_specification(name, start)
 
-    def parse_package_specification(self, name: str, start: Token) -> PackageDecl:
-        """Parse package specification."""
+    def parse_package_specification(self, name: str, start: Token) -> PackageDecl | GenericInstantiation:
+        """Parse package specification or instantiation."""
         self.expect(TokenType.IS)
+
+        # Check for generic instantiation: package X is new Generic_Pkg(...)
+        if self.match(TokenType.NEW):
+            return self.parse_generic_instantiation("package", name, start)
 
         declarations = self.parse_declarative_part()
 
@@ -1518,8 +1541,9 @@ class Parser:
             formals.append(formal)
 
         # Parse generic unit
-        if self.check(TokenType.PACKAGE):
-            pkg = self.parse_package_specification(self.expect_identifier(), start)
+        if self.match(TokenType.PACKAGE):
+            name = self.expect_identifier()
+            pkg = self.parse_package_specification(name, start)
             pkg.generic_formals = formals
             return pkg
         else:
@@ -1537,21 +1561,152 @@ class Parser:
             self.expect(TokenType.IS)
 
             # Parse generic type definition
+            # Syntax: is [tagged] private | is (<>) | is array ...
+            is_tagged = self.match(TokenType.TAGGED)
             if self.match(TokenType.PRIVATE):
-                is_tagged = False
-                if self.match(TokenType.TAGGED):
-                    is_tagged = True
                 self.expect(TokenType.SEMICOLON)
                 return GenericTypeDecl(name=name, is_tagged=is_tagged)
+            elif is_tagged:
+                # "is tagged" must be followed by "private"
+                raise ParseError("Expected 'private' after 'tagged'", self.current)
             else:
                 # Other type definitions
                 type_def = self.parse_type_definition()
                 self.expect(TokenType.SEMICOLON)
                 return GenericTypeDecl(name=name, definition=type_def)
 
-        # Generic object or subprogram
-        # Simplified for now
+        # Generic object formal: identifier : [mode] type [:= default]
+        if self.check(TokenType.IDENTIFIER):
+            obj_name = self.expect_identifier()
+            self.expect(TokenType.COLON)
+
+            # Parse mode (in, out, in out)
+            mode = "in"  # Default
+            if self.match(TokenType.IN):
+                if self.match(TokenType.OUT):
+                    mode = "in out"
+            elif self.match(TokenType.OUT):
+                mode = "out"
+
+            type_ref = self.parse_name()
+
+            default_value = None
+            if self.match(TokenType.ASSIGN):
+                default_value = self.parse_expression()
+
+            self.expect(TokenType.SEMICOLON)
+            return GenericObjectDecl(
+                name=obj_name, mode=mode, type_ref=type_ref, default_value=default_value
+            )
+
+        # Generic subprogram formal: with procedure/function ...
+        if self.match(TokenType.WITH):
+            if self.match(TokenType.PROCEDURE):
+                name = self.expect_identifier()
+                params = []
+                if self.match(TokenType.LEFT_PAREN):
+                    params = self.parse_parameter_specifications()
+                    self.expect(TokenType.RIGHT_PAREN)
+
+                # Check for "is <>"
+                is_box = False
+                if self.match(TokenType.IS):
+                    if self.match(TokenType.BOX):
+                        is_box = True
+
+                self.expect(TokenType.SEMICOLON)
+                return GenericSubprogramDecl(
+                    name=name, kind="procedure", params=params, is_box=is_box
+                )
+
+            elif self.match(TokenType.FUNCTION):
+                # Name can be identifier or operator string like "="
+                if self.check(TokenType.STRING_LITERAL):
+                    name = self.advance().value  # Operator name as string
+                else:
+                    name = self.expect_identifier()
+                params = []
+                if self.match(TokenType.LEFT_PAREN):
+                    params = self.parse_parameter_specifications()
+                    self.expect(TokenType.RIGHT_PAREN)
+
+                self.expect(TokenType.RETURN)
+                return_type = self.parse_name()
+
+                # Check for "is <>"
+                is_box = False
+                if self.match(TokenType.IS):
+                    if self.match(TokenType.BOX):
+                        is_box = True
+
+                self.expect(TokenType.SEMICOLON)
+                return GenericSubprogramDecl(
+                    name=name, kind="function", params=params, return_type=return_type, is_box=is_box
+                )
+
+            elif self.match(TokenType.PACKAGE):
+                # Generic package formal: with package X is new Generic_Pkg(<>)
+                name = self.expect_identifier()
+                self.expect(TokenType.IS)
+                self.expect(TokenType.NEW)
+                generic_ref = self.parse_name()
+                self.expect(TokenType.LEFT_PAREN)
+                self.expect(TokenType.BOX)  # (<>)
+                self.expect(TokenType.RIGHT_PAREN)
+                self.expect(TokenType.SEMICOLON)
+                return GenericPackageDecl(name=name, generic_ref=generic_ref)
+
         raise ParseError("Generic formal parsing incomplete", self.current)
+
+    def parse_generic_instantiation(self, kind: str, name: str, start: Token) -> GenericInstantiation:
+        """Parse generic instantiation: is new Generic_Name(actuals)."""
+        # Parse just the generic unit name (may be qualified like Pkg.Generic_Unit)
+        generic_name = self.parse_qualified_name()
+
+        actual_parameters = []
+        if self.match(TokenType.LEFT_PAREN):
+            # Parse actual parameters
+            while True:
+                # Could be named: Formal => Actual or positional
+                if self.check(TokenType.IDENTIFIER):
+                    # Look ahead for =>
+                    saved_pos = self.pos
+                    saved_current = self.current
+                    param_name = self.expect_identifier()
+                    if self.match(TokenType.ARROW):
+                        # Named parameter
+                        actual = self.parse_expression()
+                        actual_parameters.append(
+                            ActualParameter(name=param_name, value=actual)
+                        )
+                    else:
+                        # Positional - rewind and parse as expression
+                        self.pos = saved_pos
+                        self.current = saved_current
+                        actual = self.parse_expression()
+                        actual_parameters.append(
+                            ActualParameter(value=actual)
+                        )
+                else:
+                    actual = self.parse_expression()
+                    actual_parameters.append(
+                        ActualParameter(value=actual)
+                    )
+
+                if not self.match(TokenType.COMMA):
+                    break
+
+            self.expect(TokenType.RIGHT_PAREN)
+
+        self.expect(TokenType.SEMICOLON)
+
+        return GenericInstantiation(
+            kind=kind,
+            name=name,
+            generic_name=generic_name,
+            actual_parameters=actual_parameters,
+            span=self.make_span(start),
+        )
 
     def parse_task_declaration(self) -> TaskTypeDecl:
         """Parse task type declaration."""

@@ -879,3 +879,144 @@ def test_unique_labels():
     labels = [block.label for block in module.functions[0].blocks]
     # All labels should be unique
     assert len(labels) == len(set(labels))
+
+
+# ============================================================================
+# Exception Handling Tests
+# ============================================================================
+
+
+def test_lowering_raise_statement():
+    """Test lowering a raise statement."""
+    from uada80.ast_nodes import RaiseStmt
+
+    raise_stmt = RaiseStmt(exception_name=Identifier("Constraint_Error"))
+    program = create_procedure("test", [raise_stmt])
+    lowering = create_lowering()
+
+    module = lowering.lower(program)
+
+    has_exc_raise = any(
+        instr.opcode == OpCode.EXC_RAISE
+        for block in module.functions[0].blocks
+        for instr in block.instructions
+    )
+    assert has_exc_raise
+
+
+def test_lowering_reraise_statement():
+    """Test lowering a re-raise statement (raise without exception name)."""
+    from uada80.ast_nodes import RaiseStmt
+
+    raise_stmt = RaiseStmt(exception_name=None)  # re-raise
+    program = create_procedure("test", [raise_stmt])
+    lowering = create_lowering()
+
+    module = lowering.lower(program)
+
+    has_exc_reraise = any(
+        instr.opcode == OpCode.EXC_RERAISE
+        for block in module.functions[0].blocks
+        for instr in block.instructions
+    )
+    assert has_exc_reraise
+
+
+def test_lowering_exception_handler():
+    """Test lowering a block with exception handlers."""
+    from uada80.ast_nodes import BlockStmt, ExceptionHandler
+
+    # Create a block with a handler
+    handler = ExceptionHandler(
+        exception_names=[Identifier("Constraint_Error")],
+        statements=[NullStmt()],
+    )
+    block_stmt = BlockStmt(
+        label=None,
+        declarations=[],
+        statements=[NullStmt()],
+        handled_exception_handlers=[handler],
+    )
+    program = create_procedure("test", [block_stmt])
+    lowering = create_lowering()
+
+    module = lowering.lower(program)
+
+    # Should have EXC_PUSH and EXC_POP
+    has_exc_push = any(
+        instr.opcode == OpCode.EXC_PUSH
+        for block in module.functions[0].blocks
+        for instr in block.instructions
+    )
+    has_exc_pop = any(
+        instr.opcode == OpCode.EXC_POP
+        for block in module.functions[0].blocks
+        for instr in block.instructions
+    )
+    assert has_exc_push
+    assert has_exc_pop
+
+
+def test_lowering_exception_others_handler():
+    """Test lowering an 'others' exception handler."""
+    from uada80.ast_nodes import BlockStmt, ExceptionHandler
+
+    # Create a block with "when others =>" handler
+    handler = ExceptionHandler(
+        exception_names=[Identifier("others")],
+        statements=[NullStmt()],
+    )
+    block_stmt = BlockStmt(
+        label=None,
+        declarations=[],
+        statements=[NullStmt()],
+        handled_exception_handlers=[handler],
+    )
+    program = create_procedure("test", [block_stmt])
+    lowering = create_lowering()
+
+    module = lowering.lower(program)
+
+    # Find EXC_PUSH instruction and verify it uses ID 0 (catch all)
+    exc_push_instrs = [
+        instr
+        for block in module.functions[0].blocks
+        for instr in block.instructions
+        if instr.opcode == OpCode.EXC_PUSH
+    ]
+    assert len(exc_push_instrs) == 1
+    # src1 should be Immediate(0, ...) for "others"
+    assert exc_push_instrs[0].src1.value == 0
+
+
+def test_lowering_exception_id_assignment():
+    """Test that exception names get unique IDs."""
+    from uada80.ast_nodes import RaiseStmt
+
+    # Create two different exceptions
+    raise1 = RaiseStmt(exception_name=Identifier("Constraint_Error"))
+    raise2 = RaiseStmt(exception_name=Identifier("Storage_Error"))
+    raise3 = RaiseStmt(exception_name=Identifier("Constraint_Error"))  # same as raise1
+
+    program = create_procedure("test", [raise1, raise2, raise3])
+    lowering = create_lowering()
+
+    module = lowering.lower(program)
+
+    # Get all EXC_RAISE instructions
+    exc_raise_instrs = [
+        instr
+        for block in module.functions[0].blocks
+        for instr in block.instructions
+        if instr.opcode == OpCode.EXC_RAISE
+    ]
+    assert len(exc_raise_instrs) == 3
+
+    # First and third should have the same ID (Constraint_Error)
+    # Second should have a different ID (Storage_Error)
+    id1 = exc_raise_instrs[0].src1.value
+    id2 = exc_raise_instrs[1].src1.value
+    id3 = exc_raise_instrs[2].src1.value
+
+    assert id1 == id3  # Same exception
+    assert id1 != id2  # Different exceptions

@@ -662,7 +662,10 @@ class GenericTypeDecl(GenericFormal):
 class GenericSubprogramDecl(GenericFormal):
     """Generic subprogram formal."""
 
-    spec: SubprogramDecl
+    name: str
+    kind: str  # "procedure" or "function"
+    params: list["ParameterSpec"] = field(default_factory=list)
+    return_type: Optional[Expr] = None  # For functions
     is_box: bool = False  # 'is <>' means default
 
 
@@ -671,7 +674,7 @@ class GenericPackageDecl(GenericFormal):
     """Generic package formal."""
 
     name: str
-    package_name: Expr
+    generic_ref: Expr  # The generic package reference
     is_box: bool = False
 
 
@@ -679,9 +682,9 @@ class GenericPackageDecl(GenericFormal):
 class GenericObjectDecl(GenericFormal):
     """Generic object formal."""
 
-    names: list[str]
-    mode: str  # "in" or "in out"
-    type_mark: Expr
+    name: str  # Single name for now
+    mode: str  # "in", "out", or "in out"
+    type_ref: Expr
     default_value: Optional[Expr] = None
 
 

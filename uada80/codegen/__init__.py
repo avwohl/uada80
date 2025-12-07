@@ -101,6 +101,9 @@ class Z80CodeGen:
         # Generate heap runtime if needed
         self._generate_heap_runtime()
 
+        # Generate exception handling runtime
+        self._generate_exc_runtime()
+
         return "\n".join(self.output)
 
     def _generate_heap_runtime(self) -> None:
@@ -151,6 +154,103 @@ class Z80CodeGen:
         self._emit("_heap_start:")
         self._emit("    .ds 2048  ; 2KB heap")
         self._emit("_heap_end:")
+        self._emit("")
+
+    def _generate_exc_runtime(self) -> None:
+        """Generate exception handling runtime."""
+        self._emit("")
+        self._emit("; =========================================")
+        self._emit("; Exception Handling Runtime")
+        self._emit("; =========================================")
+        self._emit("")
+        self._emit("; Exception state variables")
+        self._emit("_exc_handler:")
+        self._emit("    .dw 0  ; current handler chain head (0 = none)")
+        self._emit("_exc_current:")
+        self._emit("    .dw 0  ; currently raised exception ID")
+        self._emit("_exc_message:")
+        self._emit("    .dw 0  ; exception message pointer (0 = none)")
+        self._emit("")
+        self._emit("; _exc_do_raise: Process a raised exception")
+        self._emit("; Expects _exc_current and _exc_message to be set")
+        self._emit("; Searches handler chain for matching handler")
+        self._emit("_exc_do_raise:")
+        self._emit("    ; Get current handler")
+        self._emit("    ld HL, (_exc_handler)")
+        self._emit("    ld A, H")
+        self._emit("    or L")
+        self._emit("    jr z, _exc_unhandled  ; no handler - halt")
+        self._emit("")
+        self._emit("_exc_check_handler:")
+        self._emit("    ; HL points to handler frame")
+        self._emit("    ; Frame: +0=prev, +2=SP, +4=addr, +6=exc_id")
+        self._emit("    push HL  ; save frame pointer")
+        self._emit("")
+        self._emit("    ; Get exception ID this handler catches (+6)")
+        self._emit("    ld DE, 6")
+        self._emit("    add HL, DE")
+        self._emit("    ld E, (HL)")
+        self._emit("    inc HL")
+        self._emit("    ld D, (HL)")
+        self._emit("")
+        self._emit("    ; Check if handler catches all (ID = 0)")
+        self._emit("    ld A, D")
+        self._emit("    or E")
+        self._emit("    jr z, _exc_handler_match  ; catches all")
+        self._emit("")
+        self._emit("    ; Check if handler ID matches raised exception")
+        self._emit("    ld HL, (_exc_current)")
+        self._emit("    or A  ; clear carry")
+        self._emit("    sbc HL, DE")
+        self._emit("    jr z, _exc_handler_match  ; ID matches")
+        self._emit("")
+        self._emit("    ; No match - try previous handler")
+        self._emit("    pop HL  ; restore frame pointer")
+        self._emit("    ; Get previous handler (+0)")
+        self._emit("    ld E, (HL)")
+        self._emit("    inc HL")
+        self._emit("    ld D, (HL)")
+        self._emit("    ex DE, HL  ; HL = previous handler")
+        self._emit("")
+        self._emit("    ; Check if there's a previous handler")
+        self._emit("    ld A, H")
+        self._emit("    or L")
+        self._emit("    jr nz, _exc_check_handler  ; try previous")
+        self._emit("    jr _exc_unhandled  ; no more handlers")
+        self._emit("")
+        self._emit("_exc_handler_match:")
+        self._emit("    ; Found matching handler")
+        self._emit("    pop HL  ; restore frame pointer")
+        self._emit("")
+        self._emit("    ; Get previous handler and update chain")
+        self._emit("    ld E, (HL)")
+        self._emit("    inc HL")
+        self._emit("    ld D, (HL)")
+        self._emit("    inc HL")
+        self._emit("    ld (_exc_handler), DE")
+        self._emit("")
+        self._emit("    ; Get saved SP (+2)")
+        self._emit("    ld E, (HL)")
+        self._emit("    inc HL")
+        self._emit("    ld D, (HL)")
+        self._emit("    inc HL")
+        self._emit("")
+        self._emit("    ; Get handler address (+4)")
+        self._emit("    ld A, (HL)")
+        self._emit("    inc HL")
+        self._emit("    ld H, (HL)")
+        self._emit("    ld L, A  ; HL = handler address")
+        self._emit("")
+        self._emit("    ; Restore SP and jump to handler")
+        self._emit("    ex DE, HL  ; DE = handler addr, HL = saved SP")
+        self._emit("    ld SP, HL")
+        self._emit("    ex DE, HL  ; HL = handler addr")
+        self._emit("    jp (HL)   ; jump to handler")
+        self._emit("")
+        self._emit("_exc_unhandled:")
+        self._emit("    ; No handler found - halt with error")
+        self._emit("    ; Could output error message here")
+        self._emit("    halt")
         self._emit("")
 
     def _emit(self, line: str) -> None:
@@ -276,6 +376,15 @@ class Z80CodeGen:
             self._gen_lea(instr)
         elif op == OpCode.NOP:
             self._emit_instr("nop")
+        # Exception handling
+        elif op == OpCode.EXC_PUSH:
+            self._gen_exc_push(instr)
+        elif op == OpCode.EXC_POP:
+            self._gen_exc_pop(instr)
+        elif op == OpCode.EXC_RAISE:
+            self._gen_exc_raise(instr)
+        elif op == OpCode.EXC_RERAISE:
+            self._gen_exc_reraise(instr)
 
     def _load_to_hl(self, value: IRValue) -> None:
         """Load a value into HL."""
@@ -627,6 +736,130 @@ class Z80CodeGen:
         if isinstance(instr.dst, VReg):
             self._emit_instr("pop", "HL")
             self._store_from_hl(instr.dst)
+
+    # =========================================================================
+    # Exception Handling
+    # =========================================================================
+    #
+    # Runtime exception handling uses a linked list of handler frames.
+    # Global variables:
+    #   _exc_handler:  current handler chain head (pointer)
+    #   _exc_current:  currently raised exception ID
+    #   _exc_message:  exception message pointer (or 0)
+    #
+    # Handler frame structure (8 bytes):
+    #   +0: previous handler pointer (2 bytes)
+    #   +2: saved SP (2 bytes)
+    #   +4: handler address (2 bytes)
+    #   +6: exception ID to catch (2 bytes, 0 = catch all)
+
+    def _gen_exc_push(self, instr: IRInstr) -> None:
+        """Generate exception handler push.
+
+        dst = handler label, src1 = exception ID to catch
+        """
+        self._emit(f"    ; push exception handler")
+
+        # Get handler address
+        if isinstance(instr.dst, Label):
+            handler_addr = instr.dst.name
+        else:
+            return
+
+        # Get exception ID
+        exc_id = 0
+        if isinstance(instr.src1, Immediate):
+            exc_id = instr.src1.value
+
+        # Allocate 8 bytes for handler frame on stack
+        self._emit_instr("ld", "HL", "-8")
+        self._emit_instr("add", "HL", "SP")
+        self._emit_instr("ld", "SP", "HL")
+
+        # Store previous handler pointer at +0
+        self._emit_instr("ld", "DE", "(_exc_handler)")
+        self._emit_instr("ld", "(HL)", "E")
+        self._emit_instr("inc", "HL")
+        self._emit_instr("ld", "(HL)", "D")
+        self._emit_instr("inc", "HL")
+
+        # Store saved SP at +2 (SP before the frame allocation + 8)
+        self._emit_instr("push", "HL")  # Save HL
+        self._emit_instr("ld", "HL", "10")  # 8 bytes + 2 for push HL
+        self._emit_instr("add", "HL", "SP")
+        self._emit_instr("ld", "D", "H")
+        self._emit_instr("ld", "E", "L")
+        self._emit_instr("pop", "HL")  # Restore HL
+        self._emit_instr("ld", "(HL)", "E")
+        self._emit_instr("inc", "HL")
+        self._emit_instr("ld", "(HL)", "D")
+        self._emit_instr("inc", "HL")
+
+        # Store handler address at +4
+        self._emit_instr("ld", "DE", handler_addr)
+        self._emit_instr("ld", "(HL)", "E")
+        self._emit_instr("inc", "HL")
+        self._emit_instr("ld", "(HL)", "D")
+        self._emit_instr("inc", "HL")
+
+        # Store exception ID at +6
+        self._emit_instr("ld", "DE", str(exc_id))
+        self._emit_instr("ld", "(HL)", "E")
+        self._emit_instr("inc", "HL")
+        self._emit_instr("ld", "(HL)", "D")
+
+        # Update _exc_handler to point to new frame
+        self._emit_instr("ld", "HL", "0")
+        self._emit_instr("add", "HL", "SP")
+        self._emit_instr("ld", "(_exc_handler)", "HL")
+
+    def _gen_exc_pop(self, instr: IRInstr) -> None:
+        """Generate exception handler pop (normal exit)."""
+        self._emit(f"    ; pop exception handler")
+
+        # Get previous handler from frame
+        self._emit_instr("ld", "HL", "(_exc_handler)")
+        self._emit_instr("ld", "E", "(HL)")
+        self._emit_instr("inc", "HL")
+        self._emit_instr("ld", "D", "(HL)")
+
+        # Restore _exc_handler
+        self._emit_instr("ld", "(_exc_handler)", "DE")
+
+        # Deallocate frame (8 bytes)
+        self._emit_instr("ld", "HL", "8")
+        self._emit_instr("add", "HL", "SP")
+        self._emit_instr("ld", "SP", "HL")
+
+    def _gen_exc_raise(self, instr: IRInstr) -> None:
+        """Generate raise exception.
+
+        src1 = exception ID, src2 = message pointer (optional)
+        """
+        self._emit(f"    ; raise exception")
+
+        # Store exception ID
+        exc_id = 0
+        if isinstance(instr.src1, Immediate):
+            exc_id = instr.src1.value
+        self._emit_instr("ld", "HL", str(exc_id))
+        self._emit_instr("ld", "(_exc_current)", "HL")
+
+        # Store message pointer (0 if none)
+        if instr.src2:
+            self._load_to_hl(instr.src2)
+        else:
+            self._emit_instr("ld", "HL", "0")
+        self._emit_instr("ld", "(_exc_message)", "HL")
+
+        # Call runtime raise routine
+        self._emit_instr("call", "_exc_do_raise")
+
+    def _gen_exc_reraise(self, instr: IRInstr) -> None:
+        """Generate re-raise current exception."""
+        self._emit(f"    ; reraise exception")
+        # _exc_current and _exc_message already set
+        self._emit_instr("call", "_exc_do_raise")
 
 
 def generate_z80(module: IRModule) -> str:

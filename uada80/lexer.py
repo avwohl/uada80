@@ -125,6 +125,7 @@ class TokenType(Enum):
     EQUAL = auto()  # =
     GREATER = auto()  # >
     PIPE = auto()  # |
+    AT_SIGN = auto()  # @ (Ada 2012 target name)
 
     # Special
     EOF = auto()
@@ -299,19 +300,43 @@ class Lexer:
                 self.advance()
 
     def read_identifier(self) -> str:
-        """Read an identifier or keyword."""
+        """Read an identifier or keyword.
+
+        Ada 2012 RM 2.3 - Identifiers must:
+        - Start with a letter
+        - Contain only letters, digits, and underscores
+        - Not have consecutive underscores
+        - Not end with an underscore
+        """
+        start_loc = self.current_location()
         start = self.pos
-        # First character must be letter
+        prev_was_underscore = False
+
+        # First character must be letter (already verified by caller)
         self.advance()
+
         # Subsequent characters can be letters, digits, or underscores
         while self.peek() and (self.peek().isalnum() or self.peek() == "_"):
-            # Ada doesn't allow consecutive underscores or trailing underscores
-            if self.peek() == "_" and self.peek(1) == "_":
-                break
+            if self.peek() == "_":
+                if prev_was_underscore:
+                    raise LexerError(
+                        "Identifier cannot have consecutive underscores",
+                        self.current_location(),
+                    )
+                prev_was_underscore = True
+            else:
+                prev_was_underscore = False
             self.advance()
 
-        # Remove trailing underscore if present (will be reported as error later)
         identifier = self.source[start : self.pos]
+
+        # Check for trailing underscore
+        if identifier.endswith("_"):
+            raise LexerError(
+                f"Identifier '{identifier}' cannot end with underscore",
+                start_loc,
+            )
+
         return identifier
 
     def read_number(self) -> tuple[TokenType, str]:
@@ -374,7 +399,9 @@ class Lexer:
 
         value = self.source[start : self.pos]
 
-        if has_dot or has_exp:
+        # Per Ada 2012 RM 2.4: Only presence of decimal point makes it real.
+        # Exponent alone (e.g., 1E6) is still an integer literal.
+        if has_dot:
             return (TokenType.REAL_LITERAL, value)
         else:
             return (TokenType.INTEGER_LITERAL, value)
@@ -543,6 +570,7 @@ class Lexer:
             "=": TokenType.EQUAL,
             ">": TokenType.GREATER,
             "|": TokenType.PIPE,
+            "@": TokenType.AT_SIGN,
         }
 
         if ch in single_char_tokens:
