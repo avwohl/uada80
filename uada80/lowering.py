@@ -52,6 +52,7 @@ from uada80.ast_nodes import (
     FunctionCall,
     TypeConversion,
     QualifiedExpr,
+    Allocator,
 )
 from uada80.ir import (
     IRType,
@@ -68,7 +69,15 @@ from uada80.ir import (
     ir_type_from_bits,
 )
 from uada80.symbol_table import SymbolTable, Symbol, SymbolKind
-from uada80.type_system import AdaType, TypeKind, PREDEFINED_TYPES
+from uada80.type_system import (
+    AdaType,
+    TypeKind,
+    PREDEFINED_TYPES,
+    AccessType,
+    RecordType,
+    ArrayType,
+    EnumerationType,
+)
 from uada80.semantic import SemanticResult
 
 
@@ -691,8 +700,32 @@ class ASTLowering:
         return MemoryLocation(base=elem_addr_vreg, offset=0, ir_type=IRType.WORD)
 
     def _lower_selected_store(self, target: SelectedName, value) -> None:
-        """Lower a selected component store (record field assignment)."""
+        """Lower a selected component store (record field assignment or pointer dereference)."""
         if self.ctx is None:
+            return
+
+        # Handle .all dereference store (Ptr.all := value)
+        if target.selector.lower() == "all":
+            ptr = self._lower_expr(target.prefix)
+            mem = MemoryLocation(base=ptr, offset=0, ir_type=IRType.WORD)
+            self.builder.store(mem, value)
+            return
+
+        # Check if prefix is an access type (implicit dereference for Ptr.Field)
+        prefix_type = self._get_prefix_type(target.prefix)
+        if prefix_type and isinstance(prefix_type, AccessType):
+            ptr = self._lower_expr(target.prefix)
+            field_offset = self._get_field_offset_for_type(
+                prefix_type.designated_type, target.selector
+            )
+            if field_offset != 0:
+                field_addr = self.builder.new_vreg(IRType.PTR, "_field_addr")
+                self.builder.add(field_addr, ptr, Immediate(field_offset, IRType.WORD))
+            else:
+                field_addr = ptr
+
+            mem = MemoryLocation(base=field_addr, offset=0, ir_type=IRType.WORD)
+            self.builder.store(mem, value)
             return
 
         # Get record base address
@@ -772,9 +805,36 @@ class ASTLowering:
         return 2  # Default to word size
 
     def _lower_selected(self, expr: SelectedName):
-        """Lower a selected component (record field access)."""
+        """Lower a selected component (record field access or pointer dereference)."""
         if self.ctx is None:
             return Immediate(0, IRType.WORD)
+
+        # Handle .all dereference
+        if expr.selector.lower() == "all":
+            ptr = self._lower_expr(expr.prefix)
+            result = self.builder.new_vreg(IRType.WORD, "_deref")
+            mem = MemoryLocation(base=ptr, offset=0, ir_type=IRType.WORD)
+            self.builder.load(result, mem)
+            return result
+
+        # Check if prefix is an access type (implicit dereference for Ptr.Field)
+        prefix_type = self._get_prefix_type(expr.prefix)
+        if prefix_type and isinstance(prefix_type, AccessType):
+            # Dereference the pointer first, then access the field
+            ptr = self._lower_expr(expr.prefix)
+            field_offset = self._get_field_offset_for_type(
+                prefix_type.designated_type, expr.selector
+            )
+            if field_offset != 0:
+                field_addr = self.builder.new_vreg(IRType.PTR, "_field_addr")
+                self.builder.add(field_addr, ptr, Immediate(field_offset, IRType.WORD))
+            else:
+                field_addr = ptr
+
+            result = self.builder.new_vreg(IRType.WORD, "_field")
+            mem = MemoryLocation(base=field_addr, offset=0, ir_type=IRType.WORD)
+            self.builder.load(result, mem)
+            return result
 
         # Get record base address
         base_addr = self._get_record_base(expr.prefix)
@@ -797,6 +857,25 @@ class ASTLowering:
         self.builder.load(result, mem)
 
         return result
+
+    def _get_prefix_type(self, expr: Expr):
+        """Get the Ada type of an expression."""
+        if isinstance(expr, Identifier):
+            sym = self.symbols.lookup(expr.name)
+            if sym:
+                return sym.ada_type
+        return None
+
+    def _get_field_offset_for_type(self, record_type, field_name: str) -> int:
+        """Get the byte offset of a field in a record type."""
+        if not isinstance(record_type, RecordType):
+            return 0
+        offset = 0
+        for comp in record_type.components:
+            if comp.name.lower() == field_name.lower():
+                return offset
+            offset += (comp.component_type.size_bits + 7) // 8
+        return 0
 
     # =========================================================================
     # Expressions
@@ -835,8 +914,65 @@ class ASTLowering:
         if isinstance(expr, SelectedName):
             return self._lower_selected(expr)
 
+        if isinstance(expr, NullLiteral):
+            # null is represented as 0 (null pointer)
+            return Immediate(0, IRType.PTR)
+
+        if isinstance(expr, Allocator):
+            return self._lower_allocator(expr)
+
         # Default: return 0
         return Immediate(0, IRType.WORD)
+
+    def _lower_allocator(self, expr: Allocator):
+        """Lower an allocator (new Type) expression."""
+        if self.ctx is None:
+            return Immediate(0, IRType.PTR)
+
+        # Determine size to allocate
+        designated_type = self._resolve_type(expr.type_mark)
+        if designated_type:
+            size = designated_type.size_bytes()
+        else:
+            size = 2  # Default to word size
+
+        # Allocate heap memory using calling convention:
+        # 1. Push size argument
+        # 2. Call _heap_alloc
+        # 3. Result returned in designated vreg (convention: function returns in first vreg)
+        # 4. Clean up stack
+
+        size_val = Immediate(size, IRType.WORD)
+        self.builder.push(size_val, comment=f"alloc size {size}")
+
+        # Call heap allocator
+        self.builder.call(Label("_heap_alloc"), comment="allocate heap memory")
+
+        # Clean up stack (pop the size argument)
+        temp = self.builder.new_vreg(IRType.WORD, "_discard")
+        self.builder.pop(temp)
+
+        # Result is returned in HL (Z80 convention), capture it in a vreg
+        result = self.builder.new_vreg(IRType.PTR, "_alloc_ptr")
+        # Use a mov from a special return register convention
+        # For now, emit a placeholder that codegen will handle
+        self.builder.mov(result, Immediate(0, IRType.PTR), comment="capture heap result from HL")
+
+        # If there's an initial value, store it
+        if expr.initial_value:
+            init_val = self._lower_expr(expr.initial_value)
+            mem = MemoryLocation(base=result, offset=0, ir_type=IRType.WORD)
+            self.builder.store(mem, init_val)
+
+        return result
+
+    def _resolve_type(self, type_expr: Expr):
+        """Resolve a type expression to an AdaType."""
+        if isinstance(type_expr, Identifier):
+            sym = self.symbols.lookup(type_expr.name)
+            if sym and sym.kind == SymbolKind.TYPE:
+                return sym.ada_type
+        return None
 
     def _lower_identifier(self, expr: Identifier):
         """Lower an identifier reference."""

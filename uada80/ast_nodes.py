@@ -358,6 +358,13 @@ class IntegerTypeDef(TypeDef):
 
 
 @dataclass
+class ModularTypeDef(TypeDef):
+    """Modular (unsigned wraparound) type definition: type X is mod N."""
+
+    modulus: Expr  # The modulus expression (must be static)
+
+
+@dataclass
 class RealTypeDef(TypeDef):
     """Real type definition (floating or fixed point)."""
 
