@@ -61,9 +61,11 @@ from uada80.ast_nodes import (
     FunctionCall,
     TypeConversion,
     QualifiedExpr,
+    Allocator,
     # Type definitions
     TypeDef,
     IntegerTypeDef,
+    ModularTypeDef,
     EnumerationTypeDef,
     ArrayTypeDef,
     RecordTypeDef,
@@ -491,6 +493,8 @@ class SemanticAnalyzer:
 
         if isinstance(type_def, IntegerTypeDef):
             return self._build_integer_type(name, type_def)
+        elif isinstance(type_def, ModularTypeDef):
+            return self._build_modular_type(name, type_def)
         elif isinstance(type_def, EnumerationTypeDef):
             return self._build_enumeration_type(name, type_def)
         elif isinstance(type_def, ArrayTypeDef):
@@ -515,6 +519,16 @@ class SemanticAnalyzer:
             high = self._eval_static_expr(type_def.range_constraint.high)
 
         return IntegerType(name=name, size_bits=0, low=low, high=high)
+
+    def _build_modular_type(
+        self, name: str, type_def: ModularTypeDef
+    ) -> ModularType:
+        """Build a modular (unsigned wraparound) type."""
+        modulus = self._eval_static_expr(type_def.modulus)
+        if modulus <= 0:
+            self.error(f"modulus must be positive, got {modulus}", type_def.modulus)
+            modulus = 256  # Default to byte
+        return ModularType(name=name, size_bits=0, modulus=modulus)
 
     def _build_enumeration_type(
         self, name: str, type_def: EnumerationTypeDef
@@ -901,8 +915,33 @@ class SemanticAnalyzer:
             return self._analyze_qualified_expr(expr)
         elif isinstance(expr, Aggregate):
             return None  # Type determined by context
+        elif isinstance(expr, Allocator):
+            return self._analyze_allocator(expr)
 
         return None
+
+    def _analyze_allocator(self, expr: Allocator) -> Optional[AdaType]:
+        """Analyze an allocator expression (new Type)."""
+        # Resolve the type mark
+        designated_type = self._resolve_type(expr.type_mark)
+        if designated_type is None:
+            return None
+
+        # If there's an initial value, check it's compatible
+        if expr.initial_value:
+            init_type = self._analyze_expr(expr.initial_value)
+            if init_type and not types_compatible(designated_type, init_type):
+                self.error(
+                    f"initial value type '{init_type.name}' not compatible with "
+                    f"designated type '{designated_type.name}'",
+                    expr.initial_value,
+                )
+
+        # Return an anonymous access type for the allocator
+        return AccessType(
+            name=f"access_{designated_type.name}",
+            designated_type=designated_type,
+        )
 
     def _analyze_identifier(self, expr: Identifier) -> Optional[AdaType]:
         """Analyze an identifier expression."""
@@ -929,7 +968,7 @@ class SemanticAnalyzer:
         ):
             return PREDEFINED_TYPES["Boolean"]
 
-        # Logical operators
+        # Logical/bitwise operators
         if expr.op in (
             BinaryOp.AND,
             BinaryOp.OR,
@@ -937,6 +976,24 @@ class SemanticAnalyzer:
             BinaryOp.AND_THEN,
             BinaryOp.OR_ELSE,
         ):
+            # For modular types, these are bitwise operators
+            if left_type and left_type.kind == TypeKind.MODULAR:
+                if right_type and right_type.kind == TypeKind.MODULAR:
+                    result = common_type(left_type, right_type)
+                    if result is None:
+                        self.error(
+                            f"incompatible modular types: "
+                            f"'{left_type.name}' and '{right_type.name}'",
+                            expr,
+                        )
+                    return result
+                else:
+                    self.error(
+                        f"expected modular type, got '{right_type.name if right_type else 'unknown'}'",
+                        expr.right,
+                    )
+                    return left_type
+            # For Boolean, these are logical operators
             self._check_boolean(left_type, expr.left)
             self._check_boolean(right_type, expr.right)
             return PREDEFINED_TYPES["Boolean"]
@@ -972,6 +1029,10 @@ class SemanticAnalyzer:
         operand_type = self._analyze_expr(expr.operand)
 
         if expr.op == UnaryOp.NOT:
+            # For modular types, NOT is bitwise complement
+            if operand_type and operand_type.kind == TypeKind.MODULAR:
+                return operand_type
+            # For Boolean, NOT is logical negation
             self._check_boolean(operand_type, expr.operand)
             return PREDEFINED_TYPES["Boolean"]
 
@@ -1019,7 +1080,7 @@ class SemanticAnalyzer:
         return prefix_type.component_type
 
     def _analyze_selected_name(self, expr: SelectedName) -> Optional[AdaType]:
-        """Analyze a selected name (record.field or package.item)."""
+        """Analyze a selected name (record.field, package.item, or pointer.all)."""
         prefix_type = self._analyze_expr(expr.prefix)
 
         if prefix_type is None:
@@ -1032,6 +1093,16 @@ class SemanticAnalyzer:
                     return symbol.ada_type
             return None
 
+        # Access type dereference (Ptr.all)
+        if expr.selector.lower() == "all":
+            if isinstance(prefix_type, AccessType):
+                return prefix_type.designated_type
+            self.error(
+                f"'.all' can only be applied to access types, not '{prefix_type.name}'",
+                expr,
+            )
+            return None
+
         # Record component access
         if isinstance(prefix_type, RecordType):
             comp = prefix_type.get_component(expr.selector)
@@ -1042,6 +1113,19 @@ class SemanticAnalyzer:
                 )
                 return None
             return comp.component_type
+
+        # Access to record - implicit dereference
+        if isinstance(prefix_type, AccessType):
+            designated = prefix_type.designated_type
+            if isinstance(designated, RecordType):
+                comp = designated.get_component(expr.selector)
+                if comp is None:
+                    self.error(
+                        f"record '{designated.name}' has no component '{expr.selector}'",
+                        expr,
+                    )
+                    return None
+                return comp.component_type
 
         self.error(f"'{prefix_type.name}' is not a record", expr.prefix)
         return None

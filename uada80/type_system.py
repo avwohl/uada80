@@ -479,6 +479,20 @@ def types_compatible(t1: AdaType, t2: AdaType) -> bool:
         if t1.kind in (TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.UNIVERSAL_INTEGER):
             return True
 
+    # Access type compatibility: two access types are compatible if they
+    # have the same designated type. This handles:
+    # - Named access types with same designated type
+    # - Anonymous access types (from allocators) with named access types
+    if t1.kind == TypeKind.ACCESS and t2.kind == TypeKind.ACCESS:
+        if isinstance(t1, AccessType) and isinstance(t2, AccessType):
+            if t1.designated_type and t2.designated_type:
+                # Compare designated types
+                if same_type(t1.designated_type, t2.designated_type):
+                    return True
+                # Also check if designated types are compatible
+                if types_compatible(t1.designated_type, t2.designated_type):
+                    return True
+
     # Check subtype relationship
     if is_subtype_of(t1, t2) or is_subtype_of(t2, t1):
         return True

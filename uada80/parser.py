@@ -1126,6 +1126,11 @@ class Parser:
                 range_expr = RangeExpr(low=low, high=high)
             return IntegerTypeDef(range_constraint=range_expr)
 
+        # Modular type (type X is mod N)
+        if self.match(TokenType.MOD):
+            modulus = self.parse_expression()
+            return ModularTypeDef(modulus=modulus)
+
         # Enumeration type
         if self.match(TokenType.LEFT_PAREN):
             literals = []
