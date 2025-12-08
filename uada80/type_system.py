@@ -44,6 +44,10 @@ class TypeKind(Enum):
     UNIVERSAL_INTEGER = auto()  # Compile-time integer
     UNIVERSAL_REAL = auto()  # Compile-time real
 
+    # Concurrent types
+    TASK = auto()  # Task type
+    PROTECTED = auto()  # Protected type
+
 
 @dataclass
 class AdaType:
@@ -53,6 +57,7 @@ class AdaType:
     kind: TypeKind = TypeKind.INTEGER  # Default, overridden by subclasses
     size_bits: int = 0  # Size in bits
     alignment: int = 1  # Alignment in bytes
+    is_packed: bool = False  # pragma Pack applied
 
     def size_bytes(self) -> int:
         """Return size in bytes, rounded up."""
@@ -210,6 +215,71 @@ class EnumerationType(AdaType):
 
 
 @dataclass
+class FloatType(AdaType):
+    """Floating point type."""
+
+    # Number of decimal digits of precision
+    digits: int = 6
+    # Range bounds (if specified)
+    range_first: Optional[float] = None
+    range_last: Optional[float] = None
+    base_type: Optional["FloatType"] = None  # For subtypes
+
+    def __post_init__(self) -> None:
+        self.kind = TypeKind.FLOAT
+        if self.size_bits == 0:
+            self.size_bits = self._compute_size()
+
+    def _compute_size(self) -> int:
+        """Compute size based on required digits."""
+        # On Z80, we use software floating point
+        # Single precision (32-bit) gives ~7 decimal digits
+        # Double precision (64-bit) gives ~15 decimal digits
+        if self.digits <= 7:
+            return 32  # Single precision
+        else:
+            return 64  # Double precision (very slow on Z80)
+
+
+@dataclass
+class FixedType(AdaType):
+    """Fixed point type."""
+
+    # Delta (smallest increment)
+    delta: float = 0.0
+    # Range bounds
+    range_first: float = 0.0
+    range_last: float = 0.0
+    # For ordinary fixed point: digits specifies decimal precision
+    # For decimal fixed point: digits specifies decimal digits
+    digits: Optional[int] = None
+    # Small (actual delta after representation)
+    small: Optional[float] = None
+    base_type: Optional["FixedType"] = None  # For subtypes
+
+    def __post_init__(self) -> None:
+        self.kind = TypeKind.FIXED
+        if self.small is None:
+            self.small = self.delta
+        if self.size_bits == 0:
+            self.size_bits = self._compute_size()
+
+    def _compute_size(self) -> int:
+        """Compute size based on range and delta."""
+        if self.delta == 0:
+            return 16  # Default
+        # Calculate number of values needed
+        range_size = abs(self.range_last - self.range_first)
+        num_values = int(range_size / self.delta) + 1
+        if num_values <= 256:
+            return 8
+        elif num_values <= 65536:
+            return 16
+        else:
+            return 32
+
+
+@dataclass
 class ArrayType(AdaType):
     """Array type."""
 
@@ -253,6 +323,62 @@ class RecordComponent:
     component_type: AdaType
     offset_bits: int = 0  # Offset from start of record
     default_value: Optional[any] = None
+    size_bits: Optional[int] = None  # Representation-specified size (overrides component_type.size_bits)
+
+
+@dataclass
+class PrimitiveOperation:
+    """A primitive operation of a tagged type."""
+
+    name: str
+    is_function: bool = False
+    parameter_types: list[AdaType] = field(default_factory=list)
+    return_type: Optional[AdaType] = None
+    slot_index: int = 0  # Index in vtable
+
+
+@dataclass
+class InterfaceType(AdaType):
+    """Ada interface type (Ada 2005+).
+
+    Interfaces define a set of abstract operations that tagged types can implement.
+    Unlike tagged records, interfaces have no data components.
+    """
+
+    # List of abstract primitive operations
+    primitive_ops: list[PrimitiveOperation] = field(default_factory=list)
+    # Interface properties
+    is_limited: bool = False  # limited interface
+    is_synchronized: bool = False  # synchronized interface (for tasking)
+    is_task: bool = False  # task interface
+    is_protected: bool = False  # protected interface
+    # Parent interfaces (for interface inheritance)
+    parent_interfaces: list["InterfaceType"] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.kind = TypeKind.RECORD  # Interfaces are treated as record-like
+        # Interface itself has no size (only pointers to vtables)
+        self.size_bits = 0
+
+    def all_primitives(self) -> list[PrimitiveOperation]:
+        """Get all primitives including those from parent interfaces."""
+        result = []
+        # Collect from parent interfaces first
+        for parent in self.parent_interfaces:
+            for op in parent.all_primitives():
+                # Check if already in result
+                if not any(p.name.lower() == op.name.lower() for p in result):
+                    result.append(op)
+        # Add own primitives
+        for op in self.primitive_ops:
+            if not any(p.name.lower() == op.name.lower() for p in result):
+                result.append(op)
+        return result
+
+    def add_primitive(self, op: PrimitiveOperation) -> None:
+        """Add an abstract primitive to this interface."""
+        op.slot_index = len(self.all_primitives())
+        self.primitive_ops.append(op)
 
 
 @dataclass
@@ -263,6 +389,16 @@ class RecordType(AdaType):
     discriminants: list[RecordComponent] = field(default_factory=list)
     is_tagged: bool = False
     parent_type: Optional["RecordType"] = None  # For derived types
+    # For tagged types: list of primitive operations (for vtable)
+    primitive_ops: list[PrimitiveOperation] = field(default_factory=list)
+    # For class-wide types: reference to the specific tagged type
+    is_class_wide: bool = False
+    specific_type: Optional["RecordType"] = None
+    # Implemented interfaces (Ada 2005+)
+    interfaces: list[InterfaceType] = field(default_factory=list)
+    # Controlled type support (Ada.Finalization)
+    is_controlled: bool = False  # Derives from Controlled
+    is_limited_controlled: bool = False  # Derives from Limited_Controlled
 
     def __post_init__(self) -> None:
         self.kind = TypeKind.RECORD
@@ -271,10 +407,13 @@ class RecordType(AdaType):
 
     def _compute_size(self) -> int:
         """Compute record size based on components."""
-        if not self.components and not self.discriminants:
-            return 0
-        # Simple layout: pack components sequentially
         total_bits = 0
+        # Tagged types have a hidden tag field (pointer to vtable)
+        if self.is_tagged and not self.is_class_wide:
+            total_bits = 16  # Tag is 16-bit pointer on Z80
+        if not self.components and not self.discriminants:
+            return total_bits
+        # Simple layout: pack components sequentially
         for comp in self.discriminants + self.components:
             # Align to byte boundary for simplicity
             if total_bits % 8 != 0:
@@ -293,6 +432,103 @@ class RecordType(AdaType):
             return self.parent_type.get_component(name)
         return None
 
+    def get_class_wide_type(self) -> "RecordType":
+        """Get the class-wide type T'Class for this tagged type."""
+        if not self.is_tagged:
+            raise ValueError(f"'{self.name}' is not a tagged type")
+        if self.is_class_wide:
+            return self  # Already class-wide
+        return RecordType(
+            name=f"{self.name}'Class",
+            is_tagged=True,
+            is_class_wide=True,
+            specific_type=self,
+            parent_type=self.parent_type,
+            components=self.components,
+            discriminants=self.discriminants,
+            primitive_ops=self.primitive_ops,
+        )
+
+    def add_primitive(self, op: PrimitiveOperation) -> None:
+        """Add a primitive operation to this tagged type."""
+        # Check if this overrides a parent's operation
+        if self.parent_type and self.parent_type.is_tagged:
+            for i, parent_op in enumerate(self.parent_type.primitive_ops):
+                if parent_op.name.lower() == op.name.lower():
+                    # Override: use same slot
+                    op.slot_index = parent_op.slot_index
+                    self.primitive_ops.append(op)
+                    return
+        # New primitive: assign next slot
+        op.slot_index = len(self.all_primitives())
+        self.primitive_ops.append(op)
+
+    def all_primitives(self) -> list[PrimitiveOperation]:
+        """Get all primitives including inherited ones and interface primitives."""
+        result: list[PrimitiveOperation] = []
+
+        # First, get parent primitives
+        if self.parent_type and self.parent_type.is_tagged:
+            result = list(self.parent_type.all_primitives())
+
+        # Add interface primitives (abstract placeholders)
+        for iface in self.interfaces:
+            for iface_op in iface.all_primitives():
+                # Check if already have this operation (from parent or another interface)
+                if not any(p.name.lower() == iface_op.name.lower() for p in result):
+                    result.append(iface_op)
+
+        # Add own primitives, replacing overridden ones
+        for op in self.primitive_ops:
+            replaced = False
+            for i, p in enumerate(result):
+                if p.name.lower() == op.name.lower():
+                    result[i] = op
+                    replaced = True
+                    break
+            if not replaced:
+                result.append(op)
+
+        return result
+
+    def get_primitive(self, name: str) -> Optional[PrimitiveOperation]:
+        """Look up a primitive operation by name."""
+        for op in self.all_primitives():
+            if op.name.lower() == name.lower():
+                return op
+        return None
+
+    def implements_interface(self, iface: "InterfaceType") -> bool:
+        """Check if this record type implements the given interface."""
+        # Check direct implementation
+        for impl_iface in self.interfaces:
+            if impl_iface.name.lower() == iface.name.lower():
+                return True
+            # Check parent interfaces
+            for parent_iface in impl_iface.parent_interfaces:
+                if parent_iface.name.lower() == iface.name.lower():
+                    return True
+        # Check parent type
+        if self.parent_type and isinstance(self.parent_type, RecordType):
+            return self.parent_type.implements_interface(iface)
+        return False
+
+    def needs_finalization(self) -> bool:
+        """Check if this type needs finalization (has Finalize)."""
+        return self.is_controlled or self.is_limited_controlled or (
+            self.parent_type is not None and
+            isinstance(self.parent_type, RecordType) and
+            self.parent_type.needs_finalization()
+        )
+
+    def needs_adjustment(self) -> bool:
+        """Check if this type needs adjustment after assignment (Controlled only)."""
+        return self.is_controlled or (
+            self.parent_type is not None and
+            isinstance(self.parent_type, RecordType) and
+            self.parent_type.needs_adjustment()
+        )
+
 
 @dataclass
 class AccessType(AdaType):
@@ -301,11 +537,81 @@ class AccessType(AdaType):
     designated_type: Optional[AdaType] = None
     is_access_all: bool = False  # 'access all' can point to aliased objects
     is_access_constant: bool = False  # 'access constant' for read-only
+    is_not_null: bool = False  # 'not null access' cannot be null
 
     def __post_init__(self) -> None:
         self.kind = TypeKind.ACCESS
         # Z80 has 16-bit addresses
         self.size_bits = 16
+
+
+@dataclass
+class AccessSubprogramType(AdaType):
+    """Access-to-subprogram type (function pointers)."""
+
+    is_function: bool = False  # True for function, False for procedure
+    parameter_types: list[AdaType] = field(default_factory=list)
+    return_type: Optional[AdaType] = None  # Only for functions
+    is_not_null: bool = False
+    is_access_protected: bool = False  # For protected subprograms
+
+    def __post_init__(self) -> None:
+        self.kind = TypeKind.ACCESS
+        # Z80 has 16-bit addresses - function pointer is just an address
+        self.size_bits = 16
+
+
+@dataclass
+class TaskType(AdaType):
+    """Task type for concurrent programming."""
+
+    entries: list["EntryInfo"] = field(default_factory=list)
+    discriminants: list[RecordComponent] = field(default_factory=list)
+    is_single_task: bool = False  # task T is vs task type T is
+
+    def __post_init__(self) -> None:
+        self.kind = TypeKind.TASK
+        # Task control block size: task ID (2) + state (1) + priority (1) + stack ptr (2)
+        self.size_bits = 48  # 6 bytes for Z80
+
+
+@dataclass
+class EntryInfo:
+    """Information about a task/protected entry."""
+
+    name: str
+    parameter_types: list[AdaType] = field(default_factory=list)
+    family_index_type: Optional[AdaType] = None  # For entry families
+
+
+@dataclass
+class ProtectedType(AdaType):
+    """Protected type for protected objects."""
+
+    entries: list[EntryInfo] = field(default_factory=list)
+    operations: list["ProtectedOperation"] = field(default_factory=list)
+    components: list[RecordComponent] = field(default_factory=list)
+    is_single_protected: bool = False  # protected P is vs protected type P is
+
+    def __post_init__(self) -> None:
+        self.kind = TypeKind.PROTECTED
+        # Protected type size: lock byte (1) + components
+        total_bits = 8  # Lock byte
+        for comp in self.components:
+            if total_bits % 8 != 0:
+                total_bits = ((total_bits + 7) // 8) * 8
+            total_bits += comp.component_type.size_bits
+        self.size_bits = total_bits
+
+
+@dataclass
+class ProtectedOperation:
+    """Protected procedure, function, or entry."""
+
+    name: str
+    kind: str  # "procedure", "function", or "entry"
+    parameter_types: list[AdaType] = field(default_factory=list)
+    return_type: Optional[AdaType] = None  # For functions
 
 
 @dataclass
@@ -426,6 +732,31 @@ def create_predefined_types() -> dict[str, AdaType]:
         size_bits=0,  # Conceptual, not stored
     )
 
+    # Universal_Real (compile-time real, unlimited precision)
+    types["Universal_Real"] = AdaType(
+        name="Universal_Real",
+        kind=TypeKind.UNIVERSAL_REAL,
+        size_bits=0,  # Conceptual, not stored
+    )
+
+    # Float type (single precision floating point - 32-bit IEEE on Z80)
+    types["Float"] = FloatType(
+        name="Float",
+        kind=TypeKind.FLOAT,
+        size_bits=32,
+        digits=6,  # Standard single precision
+    )
+
+    # Duration type (fixed point for time intervals)
+    types["Duration"] = FixedType(
+        name="Duration",
+        kind=TypeKind.FIXED,
+        size_bits=32,
+        delta=0.000001,  # 1 microsecond resolution
+        range_first=-86400.0,  # -1 day
+        range_last=86400.0,  # +1 day
+    )
+
     return types
 
 
@@ -477,6 +808,14 @@ def types_compatible(t1: AdaType, t2: AdaType) -> bool:
             return True
     if t2.kind == TypeKind.UNIVERSAL_INTEGER:
         if t1.kind in (TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.UNIVERSAL_INTEGER):
+            return True
+
+    # Interface compatibility: a tagged type is compatible with interfaces it implements
+    if isinstance(t2, InterfaceType) and isinstance(t1, RecordType):
+        if t1.is_tagged and t1.implements_interface(t2):
+            return True
+    if isinstance(t1, InterfaceType) and isinstance(t2, RecordType):
+        if t2.is_tagged and t2.implements_interface(t1):
             return True
 
     # Access type compatibility: two access types are compatible if they

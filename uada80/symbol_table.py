@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
 
-from uada80.type_system import AdaType, PREDEFINED_TYPES
+from uada80.type_system import AdaType, PREDEFINED_TYPES, IntegerType, RecordType
 from uada80.ast_nodes import ASTNode
 
 
@@ -28,10 +28,17 @@ class SymbolKind(Enum):
     PARAMETER = auto()  # Formal parameter
     PACKAGE = auto()  # Package
     GENERIC_PACKAGE = auto()  # Generic package (template)
+    GENERIC_PROCEDURE = auto()  # Generic procedure (template)
+    GENERIC_FUNCTION = auto()  # Generic function (template)
     EXCEPTION = auto()  # Exception
     LABEL = auto()  # Statement label
     LOOP = auto()  # Loop identifier for exit statements
     COMPONENT = auto()  # Record component
+    TASK_TYPE = auto()  # Task type
+    TASK = auto()  # Task object (single task)
+    ENTRY = auto()  # Task or protected entry
+    PROTECTED_TYPE = auto()  # Protected type
+    PROTECTED = auto()  # Protected object (single protected)
 
 
 @dataclass
@@ -46,6 +53,7 @@ class Symbol:
     mode: Optional[str] = None  # For parameters: "in", "out", "in out"
     definition: Optional[ASTNode] = None  # AST node where defined
     scope_level: int = 0  # Nesting level where defined
+    default_value: Optional[ASTNode] = None  # Default value expression for parameters
 
     # For subprograms: list of parameter symbols
     parameters: list["Symbol"] = field(default_factory=list)
@@ -57,6 +65,15 @@ class Symbol:
 
     # For overloading: chain of overloaded symbols with same name
     overloaded_next: Optional["Symbol"] = None
+
+    # Pragma-related attributes
+    is_imported: bool = False  # pragma Import
+    external_name: Optional[str] = None  # External name from pragma Import
+    is_inline: bool = False  # pragma Inline
+    is_volatile: bool = False  # pragma Volatile
+    is_no_return: bool = False  # pragma No_Return
+    is_generic_formal: bool = False  # Generic formal parameter
+    is_abstract: bool = False  # Abstract subprogram (is abstract)
 
 
 @dataclass
@@ -149,14 +166,1051 @@ class SymbolTable:
             scope_level=0,
         ))
 
-        # Add predefined exceptions
-        for exc_name in ["Constraint_Error", "Program_Error", "Storage_Error"]:
+        # Add predefined exceptions (Ada RM 11.1)
+        for exc_name in ["Constraint_Error", "Program_Error", "Storage_Error",
+                         "Tasking_Error", "Assertion_Error"]:
             symbol = Symbol(
                 name=exc_name,
                 kind=SymbolKind.EXCEPTION,
                 scope_level=0,
             )
             self.current_scope.define(symbol)
+
+        # Add predefined packages
+        self._init_text_io()
+        self._init_finalization()
+        self._init_strings()
+        self._init_command_line()
+        self._init_unchecked_ops()
+        self._init_calendar()
+        self._init_numerics()
+        self._init_containers()
+
+    def _init_text_io(self) -> None:
+        """Add Ada.Text_IO package to the standard scope."""
+        # Create the Ada package hierarchy
+        ada_pkg = Symbol(
+            name="Ada",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Create Text_IO subpackage
+        text_io_pkg = Symbol(
+            name="Text_IO",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Add procedure symbols to Text_IO
+        char_type = PREDEFINED_TYPES["Character"]
+        str_type = PREDEFINED_TYPES["String"]
+        int_type = PREDEFINED_TYPES["Integer"]
+
+        # Put(Item : Character)
+        put_char = Symbol(
+            name="Put",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[Symbol("Item", SymbolKind.PARAMETER, char_type, mode="in")],
+        )
+
+        # Put(Item : String)
+        put_str = Symbol(
+            name="Put",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[Symbol("Item", SymbolKind.PARAMETER, str_type, mode="in")],
+            overloaded_next=put_char,
+        )
+
+        # Put_Line(Item : String)
+        put_line = Symbol(
+            name="Put_Line",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[Symbol("Item", SymbolKind.PARAMETER, str_type, mode="in")],
+        )
+
+        # New_Line
+        new_line = Symbol(
+            name="New_Line",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[],
+        )
+
+        # Get(Item : out Character)
+        get_char = Symbol(
+            name="Get",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[Symbol("Item", SymbolKind.PARAMETER, char_type, mode="out")],
+        )
+
+        # Get_Line(Item : out String; Last : out Natural)
+        # Simplified: just reads a line
+        get_line = Symbol(
+            name="Get_Line",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Item", SymbolKind.PARAMETER, str_type, mode="out"),
+                Symbol("Last", SymbolKind.PARAMETER, int_type, mode="out"),
+            ],
+        )
+
+        # Put(Item : Integer) - for Integer'Image shorthand
+        put_int = Symbol(
+            name="Put",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[Symbol("Item", SymbolKind.PARAMETER, int_type, mode="in")],
+            overloaded_next=put_str,
+        )
+
+        # Add all to Text_IO public symbols
+        text_io_pkg.public_symbols = {
+            "put": put_int,
+            "put_line": put_line,
+            "new_line": new_line,
+            "get": get_char,
+            "get_line": get_line,
+        }
+
+        # Add Text_IO to Ada package
+        ada_pkg.public_symbols["text_io"] = text_io_pkg
+
+        # Define Ada package at standard scope (will be updated by _init_finalization)
+        self.current_scope.define(ada_pkg)
+
+    def _init_finalization(self) -> None:
+        """Add Ada.Finalization package to the standard scope."""
+        from uada80.type_system import RecordType
+
+        # Get the Ada package that was already defined
+        ada_pkg = self.lookup("Ada")
+        if ada_pkg is None:
+            return
+
+        # Create Finalization subpackage
+        finalization_pkg = Symbol(
+            name="Finalization",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Create Controlled type - abstract tagged limited type
+        controlled_type = RecordType(
+            name="Controlled",
+            is_tagged=True,
+            is_controlled=True,
+        )
+        controlled_sym = Symbol(
+            name="Controlled",
+            kind=SymbolKind.TYPE,
+            ada_type=controlled_type,
+            scope_level=0,
+        )
+
+        # Create Limited_Controlled type - abstract tagged limited type
+        limited_controlled_type = RecordType(
+            name="Limited_Controlled",
+            is_tagged=True,
+            is_limited_controlled=True,
+        )
+        limited_controlled_sym = Symbol(
+            name="Limited_Controlled",
+            kind=SymbolKind.TYPE,
+            ada_type=limited_controlled_type,
+            scope_level=0,
+        )
+
+        # Create Initialize procedure (for Controlled type)
+        initialize_sym = Symbol(
+            name="Initialize",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            is_abstract=True,
+        )
+
+        # Create Adjust procedure (for Controlled type - not Limited_Controlled)
+        adjust_sym = Symbol(
+            name="Adjust",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            is_abstract=True,
+        )
+
+        # Create Finalize procedure (for both types)
+        finalize_sym = Symbol(
+            name="Finalize",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            is_abstract=True,
+        )
+
+        # Add types and procedures to Finalization package
+        finalization_pkg.public_symbols = {
+            "controlled": controlled_sym,
+            "limited_controlled": limited_controlled_sym,
+            "initialize": initialize_sym,
+            "adjust": adjust_sym,
+            "finalize": finalize_sym,
+        }
+
+        # Add Finalization to Ada package
+        ada_pkg.public_symbols["finalization"] = finalization_pkg
+
+    def _init_strings(self) -> None:
+        """Add Ada.Strings and subpackages to the standard scope."""
+        # Get the Ada package that was already defined
+        ada_pkg = self.lookup("Ada")
+        if ada_pkg is None:
+            return
+
+        str_type = PREDEFINED_TYPES["String"]
+        char_type = PREDEFINED_TYPES["Character"]
+        int_type = PREDEFINED_TYPES["Integer"]
+        nat_type = PREDEFINED_TYPES["Natural"]
+        bool_type = PREDEFINED_TYPES["Boolean"]
+
+        # =====================================================================
+        # Ada.Strings - Base package with constants and types
+        # =====================================================================
+        strings_pkg = Symbol(
+            name="Strings",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Direction type: Forward, Backward
+        from uada80.type_system import EnumerationType
+        direction_type = EnumerationType(
+            name="Direction",
+            literals=["Forward", "Backward"],
+        )
+        direction_sym = Symbol(
+            name="Direction",
+            kind=SymbolKind.TYPE,
+            ada_type=direction_type,
+            scope_level=0,
+        )
+
+        # Truncation type: Left, Right, Error
+        truncation_type = EnumerationType(
+            name="Truncation",
+            literals=["Left", "Right", "Error"],
+        )
+        truncation_sym = Symbol(
+            name="Truncation",
+            kind=SymbolKind.TYPE,
+            ada_type=truncation_type,
+            scope_level=0,
+        )
+
+        # Membership type: Inside, Outside
+        membership_type = EnumerationType(
+            name="Membership",
+            literals=["Inside", "Outside"],
+        )
+        membership_sym = Symbol(
+            name="Membership",
+            kind=SymbolKind.TYPE,
+            ada_type=membership_type,
+            scope_level=0,
+        )
+
+        # Alignment type: Left, Right, Center
+        alignment_type = EnumerationType(
+            name="Alignment",
+            literals=["Left", "Right", "Center"],
+        )
+        alignment_sym = Symbol(
+            name="Alignment",
+            kind=SymbolKind.TYPE,
+            ada_type=alignment_type,
+            scope_level=0,
+        )
+
+        # Space constant
+        space_sym = Symbol(
+            name="Space",
+            kind=SymbolKind.VARIABLE,
+            ada_type=char_type,
+            is_constant=True,
+            scope_level=0,
+        )
+
+        strings_pkg.public_symbols = {
+            "direction": direction_sym,
+            "truncation": truncation_sym,
+            "membership": membership_sym,
+            "alignment": alignment_sym,
+            "space": space_sym,
+            "forward": Symbol("Forward", SymbolKind.VARIABLE, direction_type, is_constant=True),
+            "backward": Symbol("Backward", SymbolKind.VARIABLE, direction_type, is_constant=True),
+            "left": Symbol("Left", SymbolKind.VARIABLE, truncation_type, is_constant=True),
+            "right": Symbol("Right", SymbolKind.VARIABLE, truncation_type, is_constant=True),
+        }
+
+        # =====================================================================
+        # Ada.Strings.Fixed - Fixed-length string operations
+        # =====================================================================
+        fixed_pkg = Symbol(
+            name="Fixed",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Move procedure: Move(Source, Target, ...)
+        move_proc = Symbol(
+            name="Move",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Source", SymbolKind.PARAMETER, str_type, mode="in"),
+                Symbol("Target", SymbolKind.PARAMETER, str_type, mode="out"),
+            ],
+        )
+
+        # Index function: Index(Source, Pattern, Going) return Natural
+        index_func = Symbol(
+            name="Index",
+            kind=SymbolKind.FUNCTION,
+            return_type=nat_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Source", SymbolKind.PARAMETER, str_type, mode="in"),
+                Symbol("Pattern", SymbolKind.PARAMETER, str_type, mode="in"),
+            ],
+        )
+
+        # Index function with character: Index(Source, Set, Test, Going)
+        index_char_func = Symbol(
+            name="Index",
+            kind=SymbolKind.FUNCTION,
+            return_type=nat_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Source", SymbolKind.PARAMETER, str_type, mode="in"),
+                Symbol("Set", SymbolKind.PARAMETER, char_type, mode="in"),
+            ],
+            overloaded_next=index_func,
+        )
+
+        # Count function
+        count_func = Symbol(
+            name="Count",
+            kind=SymbolKind.FUNCTION,
+            return_type=nat_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Source", SymbolKind.PARAMETER, str_type, mode="in"),
+                Symbol("Pattern", SymbolKind.PARAMETER, str_type, mode="in"),
+            ],
+        )
+
+        # Head function
+        head_func = Symbol(
+            name="Head",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Source", SymbolKind.PARAMETER, str_type, mode="in"),
+                Symbol("Count", SymbolKind.PARAMETER, nat_type, mode="in"),
+            ],
+        )
+
+        # Tail function
+        tail_func = Symbol(
+            name="Tail",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Source", SymbolKind.PARAMETER, str_type, mode="in"),
+                Symbol("Count", SymbolKind.PARAMETER, nat_type, mode="in"),
+            ],
+        )
+
+        # Trim function
+        trim_func = Symbol(
+            name="Trim",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Source", SymbolKind.PARAMETER, str_type, mode="in"),
+            ],
+        )
+
+        # Overwrite procedure
+        overwrite_proc = Symbol(
+            name="Overwrite",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Source", SymbolKind.PARAMETER, str_type, mode="in out"),
+                Symbol("Position", SymbolKind.PARAMETER, int_type, mode="in"),
+                Symbol("New_Item", SymbolKind.PARAMETER, str_type, mode="in"),
+            ],
+        )
+
+        # Delete procedure
+        delete_proc = Symbol(
+            name="Delete",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Source", SymbolKind.PARAMETER, str_type, mode="in out"),
+                Symbol("From", SymbolKind.PARAMETER, int_type, mode="in"),
+                Symbol("Through", SymbolKind.PARAMETER, int_type, mode="in"),
+            ],
+        )
+
+        # Insert function
+        insert_func = Symbol(
+            name="Insert",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Source", SymbolKind.PARAMETER, str_type, mode="in"),
+                Symbol("Before", SymbolKind.PARAMETER, int_type, mode="in"),
+                Symbol("New_Item", SymbolKind.PARAMETER, str_type, mode="in"),
+            ],
+        )
+
+        # Replace_Slice function
+        replace_slice_func = Symbol(
+            name="Replace_Slice",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Source", SymbolKind.PARAMETER, str_type, mode="in"),
+                Symbol("Low", SymbolKind.PARAMETER, int_type, mode="in"),
+                Symbol("High", SymbolKind.PARAMETER, int_type, mode="in"),
+                Symbol("By", SymbolKind.PARAMETER, str_type, mode="in"),
+            ],
+        )
+
+        # Translate function (with mapping)
+        translate_func = Symbol(
+            name="Translate",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Source", SymbolKind.PARAMETER, str_type, mode="in"),
+            ],
+        )
+
+        fixed_pkg.public_symbols = {
+            "move": move_proc,
+            "index": index_char_func,
+            "count": count_func,
+            "head": head_func,
+            "tail": tail_func,
+            "trim": trim_func,
+            "overwrite": overwrite_proc,
+            "delete": delete_proc,
+            "insert": insert_func,
+            "replace_slice": replace_slice_func,
+            "translate": translate_func,
+        }
+
+        # Add Fixed to Strings package
+        strings_pkg.public_symbols["fixed"] = fixed_pkg
+
+        # =====================================================================
+        # Ada.Strings.Maps - Character mappings (basic support)
+        # =====================================================================
+        maps_pkg = Symbol(
+            name="Maps",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Character_Set type (simplified as range of characters)
+        char_set_type = PREDEFINED_TYPES["String"]  # Simplified
+        char_set_sym = Symbol(
+            name="Character_Set",
+            kind=SymbolKind.TYPE,
+            ada_type=char_set_type,
+            scope_level=0,
+        )
+
+        # Character_Mapping type
+        char_mapping_sym = Symbol(
+            name="Character_Mapping",
+            kind=SymbolKind.TYPE,
+            ada_type=char_set_type,  # Simplified
+            scope_level=0,
+        )
+
+        # Is_In function
+        is_in_func = Symbol(
+            name="Is_In",
+            kind=SymbolKind.FUNCTION,
+            return_type=bool_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Element", SymbolKind.PARAMETER, char_type, mode="in"),
+                Symbol("Set", SymbolKind.PARAMETER, char_set_type, mode="in"),
+            ],
+        )
+
+        # To_Set function (String -> Character_Set)
+        to_set_func = Symbol(
+            name="To_Set",
+            kind=SymbolKind.FUNCTION,
+            return_type=char_set_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Sequence", SymbolKind.PARAMETER, str_type, mode="in"),
+            ],
+        )
+
+        maps_pkg.public_symbols = {
+            "character_set": char_set_sym,
+            "character_mapping": char_mapping_sym,
+            "is_in": is_in_func,
+            "to_set": to_set_func,
+        }
+
+        strings_pkg.public_symbols["maps"] = maps_pkg
+
+        # Add Strings to Ada package
+        ada_pkg.public_symbols["strings"] = strings_pkg
+
+    def _init_command_line(self) -> None:
+        """Add Ada.Command_Line package to the standard scope."""
+        ada_pkg = self.lookup("Ada")
+        if ada_pkg is None:
+            return
+
+        str_type = PREDEFINED_TYPES["String"]
+        nat_type = PREDEFINED_TYPES["Natural"]
+        int_type = PREDEFINED_TYPES["Integer"]
+
+        # Create Command_Line package
+        cmd_line_pkg = Symbol(
+            name="Command_Line",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Argument_Count : function return Natural
+        arg_count_func = Symbol(
+            name="Argument_Count",
+            kind=SymbolKind.FUNCTION,
+            return_type=nat_type,
+            scope_level=0,
+            parameters=[],
+        )
+
+        # Argument : function (Number : Positive) return String
+        argument_func = Symbol(
+            name="Argument",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Number", SymbolKind.PARAMETER, int_type, mode="in"),
+            ],
+        )
+
+        # Command_Name : function return String
+        cmd_name_func = Symbol(
+            name="Command_Name",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[],
+        )
+
+        # Set_Exit_Status : procedure (Code : Exit_Status)
+        set_exit_proc = Symbol(
+            name="Set_Exit_Status",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Code", SymbolKind.PARAMETER, int_type, mode="in"),
+            ],
+        )
+
+        # Exit_Status type (Integer subtype)
+        exit_status_sym = Symbol(
+            name="Exit_Status",
+            kind=SymbolKind.TYPE,
+            ada_type=int_type,
+            scope_level=0,
+        )
+
+        # Success and Failure constants
+        success_sym = Symbol(
+            name="Success",
+            kind=SymbolKind.VARIABLE,
+            ada_type=int_type,
+            is_constant=True,
+            scope_level=0,
+        )
+        failure_sym = Symbol(
+            name="Failure",
+            kind=SymbolKind.VARIABLE,
+            ada_type=int_type,
+            is_constant=True,
+            scope_level=0,
+        )
+
+        cmd_line_pkg.public_symbols = {
+            "argument_count": arg_count_func,
+            "argument": argument_func,
+            "command_name": cmd_name_func,
+            "set_exit_status": set_exit_proc,
+            "exit_status": exit_status_sym,
+            "success": success_sym,
+            "failure": failure_sym,
+        }
+
+        ada_pkg.public_symbols["command_line"] = cmd_line_pkg
+
+    def _init_unchecked_ops(self) -> None:
+        """Add Ada.Unchecked_Conversion and Ada.Unchecked_Deallocation."""
+        ada_pkg = self.lookup("Ada")
+        if ada_pkg is None:
+            return
+
+        # Unchecked_Conversion is a generic function:
+        # generic
+        #    type Source(<>) is limited private;
+        #    type Target(<>) is limited private;
+        # function Ada.Unchecked_Conversion(S : Source) return Target;
+        #
+        # For simplicity, we represent it as a generic function symbol
+        unchecked_conv = Symbol(
+            name="Unchecked_Conversion",
+            kind=SymbolKind.GENERIC_FUNCTION,
+            scope_level=0,
+        )
+        # Mark as a built-in generic
+        unchecked_conv.is_builtin_generic = True
+
+        # Unchecked_Deallocation is a generic procedure:
+        # generic
+        #    type Object(<>) is limited private;
+        #    type Name is access Object;
+        # procedure Ada.Unchecked_Deallocation(X : in out Name);
+        unchecked_dealloc = Symbol(
+            name="Unchecked_Deallocation",
+            kind=SymbolKind.GENERIC_PROCEDURE,
+            scope_level=0,
+        )
+        unchecked_dealloc.is_builtin_generic = True
+
+        ada_pkg.public_symbols["unchecked_conversion"] = unchecked_conv
+        ada_pkg.public_symbols["unchecked_deallocation"] = unchecked_dealloc
+
+    def _init_calendar(self) -> None:
+        """Add Ada.Calendar package for time handling."""
+        ada_pkg = self.lookup("Ada")
+        if ada_pkg is None:
+            return
+
+        # Create Calendar subpackage
+        calendar_pkg = Symbol(
+            name="Calendar",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Add Time type (private type representing calendar time)
+        time_type = IntegerType(name="Time", low=0, high=2**63-1)
+
+        # Add Day_Duration subtype of Duration
+        day_duration_type = IntegerType(name="Day_Duration", low=0, high=86_400_000_000_000)
+
+        # Add Year_Number, Month_Number, Day_Number subtypes
+        year_type = IntegerType(name="Year_Number", low=1901, high=2399)
+        month_type = IntegerType(name="Month_Number", low=1, high=12)
+        day_type = IntegerType(name="Day_Number", low=1, high=31)
+
+        calendar_pkg.public_symbols["time"] = Symbol(
+            name="Time",
+            kind=SymbolKind.TYPE,
+            ada_type=time_type,
+            scope_level=0,
+        )
+        calendar_pkg.public_symbols["day_duration"] = Symbol(
+            name="Day_Duration",
+            kind=SymbolKind.TYPE,
+            ada_type=day_duration_type,
+            scope_level=0,
+        )
+        calendar_pkg.public_symbols["year_number"] = Symbol(
+            name="Year_Number",
+            kind=SymbolKind.TYPE,
+            ada_type=year_type,
+            scope_level=0,
+        )
+        calendar_pkg.public_symbols["month_number"] = Symbol(
+            name="Month_Number",
+            kind=SymbolKind.TYPE,
+            ada_type=month_type,
+            scope_level=0,
+        )
+        calendar_pkg.public_symbols["day_number"] = Symbol(
+            name="Day_Number",
+            kind=SymbolKind.TYPE,
+            ada_type=day_type,
+            scope_level=0,
+        )
+
+        # Add Clock function: returns current time
+        clock_func = Symbol(
+            name="Clock",
+            kind=SymbolKind.FUNCTION,
+            return_type=time_type,
+            scope_level=0,
+        )
+        calendar_pkg.public_symbols["clock"] = clock_func
+
+        # Add Year, Month, Day, Seconds functions
+        for func_name, ret_type in [
+            ("Year", year_type),
+            ("Month", month_type),
+            ("Day", day_type),
+        ]:
+            func_sym = Symbol(
+                name=func_name,
+                kind=SymbolKind.FUNCTION,
+                return_type=ret_type,
+                scope_level=0,
+            )
+            func_sym.parameters = [
+                Symbol(name="Date", kind=SymbolKind.PARAMETER, ada_type=time_type, mode="in")
+            ]
+            calendar_pkg.public_symbols[func_name.lower()] = func_sym
+
+        # Add Seconds function returning Day_Duration
+        seconds_func = Symbol(
+            name="Seconds",
+            kind=SymbolKind.FUNCTION,
+            return_type=day_duration_type,
+            scope_level=0,
+        )
+        seconds_func.parameters = [
+            Symbol(name="Date", kind=SymbolKind.PARAMETER, ada_type=time_type, mode="in")
+        ]
+        calendar_pkg.public_symbols["seconds"] = seconds_func
+
+        # Add Time_Of function: create Time from components
+        time_of_func = Symbol(
+            name="Time_Of",
+            kind=SymbolKind.FUNCTION,
+            return_type=time_type,
+            scope_level=0,
+        )
+        calendar_pkg.public_symbols["time_of"] = time_of_func
+
+        # Add Split procedure: split Time into components
+        split_proc = Symbol(
+            name="Split",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+        )
+        calendar_pkg.public_symbols["split"] = split_proc
+
+        # Add "+" and "-" operators for Time arithmetic
+        for op_name in ["+", "-"]:
+            op_sym = Symbol(
+                name=op_name,
+                kind=SymbolKind.FUNCTION,
+                return_type=time_type,
+                scope_level=0,
+            )
+            calendar_pkg.public_symbols[op_name] = op_sym
+
+        # Add comparison operators
+        bool_type = PREDEFINED_TYPES.get("Boolean")
+        for op_name in ["<", "<=", ">", ">=", "="]:
+            op_sym = Symbol(
+                name=op_name,
+                kind=SymbolKind.FUNCTION,
+                return_type=bool_type,
+                scope_level=0,
+            )
+            calendar_pkg.public_symbols[op_name] = op_sym
+
+        # Add Time_Error exception
+        time_error = Symbol(
+            name="Time_Error",
+            kind=SymbolKind.EXCEPTION,
+            scope_level=0,
+        )
+        calendar_pkg.public_symbols["time_error"] = time_error
+
+        ada_pkg.public_symbols["calendar"] = calendar_pkg
+
+    def _init_numerics(self) -> None:
+        """Add Ada.Numerics packages for math functions."""
+        ada_pkg = self.lookup("Ada")
+        if ada_pkg is None:
+            return
+
+        # Create Numerics parent package
+        numerics_pkg = Symbol(
+            name="Numerics",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Add mathematical constants
+        float_type = PREDEFINED_TYPES.get("Float")
+        if float_type:
+            # Pi constant
+            pi_sym = Symbol(
+                name="Pi",
+                kind=SymbolKind.VARIABLE,
+                ada_type=float_type,
+                is_constant=True,
+                scope_level=0,
+            )
+            numerics_pkg.public_symbols["pi"] = pi_sym
+
+            # e constant
+            e_sym = Symbol(
+                name="e",
+                kind=SymbolKind.VARIABLE,
+                ada_type=float_type,
+                is_constant=True,
+                scope_level=0,
+            )
+            numerics_pkg.public_symbols["e"] = e_sym
+
+        # Create Elementary_Functions subpackage (trigonometric, etc.)
+        elem_funcs_pkg = Symbol(
+            name="Elementary_Functions",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        if float_type:
+            # Add elementary functions
+            for func_name in [
+                "Sqrt", "Log", "Log10", "Exp",
+                "Sin", "Cos", "Tan",
+                "Arcsin", "Arccos", "Arctan",
+                "Sinh", "Cosh", "Tanh",
+                "Arcsinh", "Arccosh", "Arctanh",
+            ]:
+                func_sym = Symbol(
+                    name=func_name,
+                    kind=SymbolKind.FUNCTION,
+                    return_type=float_type,
+                    scope_level=0,
+                )
+                func_sym.parameters = [
+                    Symbol(name="X", kind=SymbolKind.PARAMETER, ada_type=float_type, mode="in")
+                ]
+                elem_funcs_pkg.public_symbols[func_name.lower()] = func_sym
+
+            # Add power function (two arguments)
+            power_func = Symbol(
+                name="**",
+                kind=SymbolKind.FUNCTION,
+                return_type=float_type,
+                scope_level=0,
+            )
+            elem_funcs_pkg.public_symbols["**"] = power_func
+
+            # Add Arctan with two arguments (Y, X)
+            arctan2_func = Symbol(
+                name="Arctan",
+                kind=SymbolKind.FUNCTION,
+                return_type=float_type,
+                scope_level=0,
+            )
+            arctan2_func.parameters = [
+                Symbol(name="Y", kind=SymbolKind.PARAMETER, ada_type=float_type, mode="in"),
+                Symbol(name="X", kind=SymbolKind.PARAMETER, ada_type=float_type, mode="in"),
+            ]
+            # Note: This overloads the single-argument Arctan
+
+        numerics_pkg.public_symbols["elementary_functions"] = elem_funcs_pkg
+
+        # Create Random subpackage
+        random_pkg = Symbol(
+            name="Discrete_Random",
+            kind=SymbolKind.GENERIC_PACKAGE,
+            scope_level=0,
+        )
+        random_pkg.is_builtin_generic = True
+        numerics_pkg.public_symbols["discrete_random"] = random_pkg
+
+        float_random_pkg = Symbol(
+            name="Float_Random",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+        if float_type:
+            # Generator type (opaque)
+            gen_type = RecordType(name="Generator", components=[])
+            float_random_pkg.public_symbols["generator"] = Symbol(
+                name="Generator",
+                kind=SymbolKind.TYPE,
+                ada_type=gen_type,
+                scope_level=0,
+            )
+
+            # Random function
+            random_func = Symbol(
+                name="Random",
+                kind=SymbolKind.FUNCTION,
+                return_type=float_type,
+                scope_level=0,
+            )
+            float_random_pkg.public_symbols["random"] = random_func
+
+            # Reset procedure
+            reset_proc = Symbol(
+                name="Reset",
+                kind=SymbolKind.PROCEDURE,
+                scope_level=0,
+            )
+            float_random_pkg.public_symbols["reset"] = reset_proc
+
+        numerics_pkg.public_symbols["float_random"] = float_random_pkg
+
+        ada_pkg.public_symbols["numerics"] = numerics_pkg
+
+    def _init_containers(self) -> None:
+        """Add Ada.Containers packages (Ada 2005+)."""
+        ada_pkg = self.lookup("Ada")
+        if ada_pkg is None:
+            return
+
+        # Create Containers parent package
+        containers_pkg = Symbol(
+            name="Containers",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Add Count_Type (used throughout containers)
+        count_type = IntegerType(name="Count_Type", low=0, high=2**31-1)
+        containers_pkg.public_symbols["count_type"] = Symbol(
+            name="Count_Type",
+            kind=SymbolKind.TYPE,
+            ada_type=count_type,
+            scope_level=0,
+        )
+
+        # Add Hash_Type for hashed containers
+        hash_type = IntegerType(name="Hash_Type", low=0, high=2**32-1)
+        containers_pkg.public_symbols["hash_type"] = Symbol(
+            name="Hash_Type",
+            kind=SymbolKind.TYPE,
+            ada_type=hash_type,
+            scope_level=0,
+        )
+
+        # Add generic Vectors package
+        vectors_pkg = Symbol(
+            name="Vectors",
+            kind=SymbolKind.GENERIC_PACKAGE,
+            scope_level=0,
+        )
+        vectors_pkg.is_builtin_generic = True
+        # Key operations: Append, Prepend, Insert, Delete, Element, Replace_Element,
+        # Length, Is_Empty, Clear, First, Last, Next, Previous, etc.
+        containers_pkg.public_symbols["vectors"] = vectors_pkg
+
+        # Add generic Doubly_Linked_Lists package
+        lists_pkg = Symbol(
+            name="Doubly_Linked_Lists",
+            kind=SymbolKind.GENERIC_PACKAGE,
+            scope_level=0,
+        )
+        lists_pkg.is_builtin_generic = True
+        containers_pkg.public_symbols["doubly_linked_lists"] = lists_pkg
+
+        # Add generic Hashed_Maps package
+        hashed_maps_pkg = Symbol(
+            name="Hashed_Maps",
+            kind=SymbolKind.GENERIC_PACKAGE,
+            scope_level=0,
+        )
+        hashed_maps_pkg.is_builtin_generic = True
+        containers_pkg.public_symbols["hashed_maps"] = hashed_maps_pkg
+
+        # Add generic Ordered_Maps package
+        ordered_maps_pkg = Symbol(
+            name="Ordered_Maps",
+            kind=SymbolKind.GENERIC_PACKAGE,
+            scope_level=0,
+        )
+        ordered_maps_pkg.is_builtin_generic = True
+        containers_pkg.public_symbols["ordered_maps"] = ordered_maps_pkg
+
+        # Add generic Hashed_Sets package
+        hashed_sets_pkg = Symbol(
+            name="Hashed_Sets",
+            kind=SymbolKind.GENERIC_PACKAGE,
+            scope_level=0,
+        )
+        hashed_sets_pkg.is_builtin_generic = True
+        containers_pkg.public_symbols["hashed_sets"] = hashed_sets_pkg
+
+        # Add generic Ordered_Sets package
+        ordered_sets_pkg = Symbol(
+            name="Ordered_Sets",
+            kind=SymbolKind.GENERIC_PACKAGE,
+            scope_level=0,
+        )
+        ordered_sets_pkg.is_builtin_generic = True
+        containers_pkg.public_symbols["ordered_sets"] = ordered_sets_pkg
+
+        # Add generic Indefinite_Vectors (for unconstrained element types)
+        indef_vectors_pkg = Symbol(
+            name="Indefinite_Vectors",
+            kind=SymbolKind.GENERIC_PACKAGE,
+            scope_level=0,
+        )
+        indef_vectors_pkg.is_builtin_generic = True
+        containers_pkg.public_symbols["indefinite_vectors"] = indef_vectors_pkg
+
+        # Add generic Indefinite_Doubly_Linked_Lists
+        indef_lists_pkg = Symbol(
+            name="Indefinite_Doubly_Linked_Lists",
+            kind=SymbolKind.GENERIC_PACKAGE,
+            scope_level=0,
+        )
+        indef_lists_pkg.is_builtin_generic = True
+        containers_pkg.public_symbols["indefinite_doubly_linked_lists"] = indef_lists_pkg
+
+        # Add generic Indefinite_Hashed_Maps
+        indef_hashed_maps_pkg = Symbol(
+            name="Indefinite_Hashed_Maps",
+            kind=SymbolKind.GENERIC_PACKAGE,
+            scope_level=0,
+        )
+        indef_hashed_maps_pkg.is_builtin_generic = True
+        containers_pkg.public_symbols["indefinite_hashed_maps"] = indef_hashed_maps_pkg
+
+        # Add generic Indefinite_Ordered_Maps
+        indef_ordered_maps_pkg = Symbol(
+            name="Indefinite_Ordered_Maps",
+            kind=SymbolKind.GENERIC_PACKAGE,
+            scope_level=0,
+        )
+        indef_ordered_maps_pkg.is_builtin_generic = True
+        containers_pkg.public_symbols["indefinite_ordered_maps"] = indef_ordered_maps_pkg
+
+        ada_pkg.public_symbols["containers"] = containers_pkg
 
     def enter_scope(self, name: str = "", is_package: bool = False) -> Scope:
         """Enter a new nested scope."""
@@ -223,6 +1277,10 @@ class SymbolTable:
     def is_defined_locally(self, name: str) -> bool:
         """Check if a name is defined in the current scope."""
         return self.current_scope.lookup_local(name) is not None
+
+    def current_scope_symbols(self) -> list[Symbol]:
+        """Return all symbols defined in the current scope."""
+        return list(self.current_scope.symbols.values())
 
     def add_use_clause(self, package_symbol: Symbol) -> None:
         """Add a use clause to the current scope."""

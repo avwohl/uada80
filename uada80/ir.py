@@ -117,7 +117,8 @@ class OpCode(Enum):
     SUB = auto()  # dst = src1 - src2
     MUL = auto()  # dst = src1 * src2
     DIV = auto()  # dst = src1 / src2
-    MOD = auto()  # dst = src1 mod src2
+    MOD = auto()  # dst = src1 mod src2 (Ada mod: sign of divisor)
+    REM = auto()  # dst = src1 rem src2 (Ada rem: sign of dividend)
     NEG = auto()  # dst = -src
 
     # Logical (bitwise)
@@ -145,6 +146,7 @@ class OpCode(Enum):
     JZ = auto()  # jump if zero
     JNZ = auto()  # jump if not zero
     CALL = auto()  # call subroutine
+    DISPATCH = auto()  # dispatching call through vtable (src1=object, src2=slot)
     RET = auto()  # return from subroutine
 
     # Stack operations
@@ -260,6 +262,7 @@ class IRModule:
     functions: list[IRFunction] = field(default_factory=list)
     globals: dict[str, tuple[IRType, int]] = field(default_factory=dict)  # name -> (type, size)
     string_literals: dict[str, str] = field(default_factory=dict)  # label -> value
+    vtables: dict[str, list[str]] = field(default_factory=dict)  # vtable_name -> [proc_names]
 
     def add_function(self, func: IRFunction) -> None:
         """Add a function to the module."""

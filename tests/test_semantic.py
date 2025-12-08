@@ -691,3 +691,101 @@ def test_nested_procedures():
     result = analyze_source(source)
 
     assert not result.has_errors
+
+
+# ============================================================================
+# Incomplete Type Tests
+# ============================================================================
+
+
+def test_incomplete_type_basic():
+    """Test basic incomplete type declaration and completion."""
+    source = """
+    procedure Test is
+        type Node;
+        type Node_Access is access Node;
+        type Node is record
+            Data : Integer;
+            Next : Node_Access;
+        end record;
+    begin
+        null;
+    end Test;
+    """
+    result = analyze_source(source)
+    assert not result.has_errors
+
+
+def test_incomplete_type_access_before_completion():
+    """Test that access types can refer to incomplete types."""
+    source = """
+    procedure Test is
+        type List_Node;
+        type List_Ptr is access List_Node;
+
+        P : List_Ptr;
+
+        type List_Node is record
+            Value : Integer;
+            Next : List_Ptr;
+        end record;
+    begin
+        null;
+    end Test;
+    """
+    result = analyze_source(source)
+    assert not result.has_errors
+
+
+def test_incomplete_type_mutually_recursive():
+    """Test mutually recursive types using incomplete declarations."""
+    source = """
+    procedure Test is
+        type Tree_Node;
+        type Tree_Ptr is access Tree_Node;
+
+        type Tree_Node is record
+            Value : Integer;
+            Left : Tree_Ptr;
+            Right : Tree_Ptr;
+        end record;
+    begin
+        null;
+    end Test;
+    """
+    result = analyze_source(source)
+    assert not result.has_errors
+
+
+def test_incomplete_type_redefinition_error():
+    """Test that redefining an incomplete type before completion is an error."""
+    source = """
+    procedure Test is
+        type Node;
+        type Node;  -- Error: already defined
+    begin
+        null;
+    end Test;
+    """
+    result = analyze_source(source)
+    assert result.has_errors
+    assert any("already defined" in e.message for e in result.errors)
+
+
+def test_type_redefinition_after_completion_error():
+    """Test that redefining a completed type is an error."""
+    source = """
+    procedure Test is
+        type Node is record
+            Data : Integer;
+        end record;
+        type Node is record  -- Error: already defined
+            Value : Integer;
+        end record;
+    begin
+        null;
+    end Test;
+    """
+    result = analyze_source(source)
+    assert result.has_errors
+    assert any("already defined" in e.message for e in result.errors)

@@ -253,6 +253,147 @@ class Compiler:
 
         return self.compile(source, str(path))
 
+    def compile_files(self, paths: list[Path | str]) -> CompilationResult:
+        """
+        Compile multiple source files together.
+
+        Parses all files, combines them into a single AST, and compiles.
+        Like PL/M-80, all source is compiled together without separate compilation.
+
+        Args:
+            paths: List of paths to Ada source files
+
+        Returns:
+            CompilationResult with output or errors
+        """
+        result = CompilationResult(success=False)
+        combined_ast = Program(units=[])
+
+        # Phase 1: Parse all files and combine into single AST
+        for path in paths:
+            path = Path(path)
+
+            if not path.exists():
+                result.errors.append(
+                    CompilerError(
+                        phase="io",
+                        message=f"File not found: {path}",
+                    )
+                )
+                return result
+
+            try:
+                source = path.read_text()
+            except Exception as e:
+                result.errors.append(
+                    CompilerError(
+                        phase="io",
+                        message=f"Cannot read file: {e}",
+                        filename=str(path),
+                    )
+                )
+                return result
+
+            try:
+                ast = parse(source, str(path))
+                # Combine compilation units
+                combined_ast.units.extend(ast.units)
+            except ParseError as e:
+                result.errors.append(
+                    CompilerError(
+                        phase="parse",
+                        message=str(e),
+                        filename=str(path),
+                    )
+                )
+                return result
+
+        result.ast = combined_ast
+
+        if self.output_format == OutputFormat.AST:
+            result.success = True
+            result.output = self._dump_ast(combined_ast)
+            return result
+
+        # Phase 2: Semantic analysis on combined AST
+        try:
+            semantic_result = analyze(combined_ast)
+        except SemanticError as e:
+            result.errors.append(
+                CompilerError(
+                    phase="semantic",
+                    message=str(e),
+                )
+            )
+            return result
+
+        if semantic_result.has_errors:
+            for err in semantic_result.errors:
+                result.errors.append(
+                    CompilerError(
+                        phase="semantic",
+                        message=err.message,
+                        line=err.line,
+                        column=err.column,
+                    )
+                )
+            return result
+
+        # Phase 3: AST Optimization
+        ast = combined_ast
+        if self.optimize and self.optimization_level > 0:
+            try:
+                config = OptimizerConfig.for_level(self.optimization_level)
+                optimizer = ASTOptimizer(config)
+                ast = optimizer.optimize(ast)
+                result.ast = ast
+                result.optimization_stats = optimizer.stats
+            except Exception as e:
+                if self.debug:
+                    result.warnings.append(f"AST optimization failed: {e}")
+
+        # Phase 4: Lower to IR
+        try:
+            ir = lower_to_ir(ast, semantic_result)
+            result.ir = ir
+        except Exception as e:
+            result.errors.append(
+                CompilerError(
+                    phase="lowering",
+                    message=str(e),
+                )
+            )
+            return result
+
+        if self.output_format == OutputFormat.IR:
+            result.success = True
+            result.output = self._dump_ir(ir)
+            return result
+
+        # Phase 5: Code generation
+        try:
+            asm = generate_z80(ir)
+        except Exception as e:
+            result.errors.append(
+                CompilerError(
+                    phase="codegen",
+                    message=str(e),
+                )
+            )
+            return result
+
+        # Phase 6: Peephole optimization
+        if self.peephole_optimize and optimize_peephole is not None:
+            try:
+                asm = optimize_peephole(asm)
+            except Exception as e:
+                if self.debug:
+                    result.warnings.append(f"Peephole optimization failed: {e}")
+
+        result.output = asm
+        result.success = True
+        return result
+
     def _dump_ast(self, ast: Program) -> str:
         """Generate a string representation of the AST."""
         lines = ["AST Dump:", "========="]
@@ -319,3 +460,21 @@ def compile_file(path: Path | str) -> CompilationResult:
     """
     compiler = Compiler()
     return compiler.compile_file(path)
+
+
+def compile_files(paths: list[Path | str]) -> CompilationResult:
+    """
+    Compile multiple Ada source files together.
+
+    All files are parsed, combined into a single AST, and compiled together.
+    This enables cross-file references without separate compilation.
+    File order matters: packages must be declared before they're used.
+
+    Args:
+        paths: List of paths to Ada source files
+
+    Returns:
+        CompilationResult with output or errors
+    """
+    compiler = Compiler()
+    return compiler.compile_files(paths)
