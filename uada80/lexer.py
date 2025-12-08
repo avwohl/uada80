@@ -58,6 +58,7 @@ class TokenType(Enum):
     OUT = auto()
     OVERRIDING = auto()
     PACKAGE = auto()
+    PARALLEL = auto()  # Ada 2022
     PRAGMA = auto()
     PRIVATE = auto()
     PROCEDURE = auto()
@@ -126,6 +127,8 @@ class TokenType(Enum):
     GREATER = auto()  # >
     PIPE = auto()  # |
     AT_SIGN = auto()  # @ (Ada 2012 target name)
+    LEFT_BRACKET = auto()  # [ (Ada 2022 container aggregates)
+    RIGHT_BRACKET = auto()  # ] (Ada 2022 container aggregates)
 
     # Special
     EOF = auto()
@@ -179,6 +182,7 @@ KEYWORDS = {
     "out": TokenType.OUT,
     "overriding": TokenType.OVERRIDING,
     "package": TokenType.PACKAGE,
+    "parallel": TokenType.PARALLEL,
     "pragma": TokenType.PRAGMA,
     "private": TokenType.PRIVATE,
     "procedure": TokenType.PROCEDURE,
@@ -285,8 +289,9 @@ class Lexer:
         return ch
 
     def skip_whitespace(self) -> None:
-        """Skip whitespace characters (but not newlines for now)."""
-        while self.peek() in (" ", "\t", "\r", "\n"):
+        """Skip whitespace characters including Ada format effectors."""
+        # Ada format effectors: HT (09), LF (0A), VT (0B), FF (0C), CR (0D)
+        while self.peek() in (" ", "\t", "\r", "\n", "\v", "\f"):
             self.advance()
 
     def skip_comment(self) -> None:
@@ -407,9 +412,9 @@ class Lexer:
             return (TokenType.INTEGER_LITERAL, value)
 
     def read_string(self) -> str:
-        """Read a string literal."""
+        """Read a string literal (supports both " and obsolescent % delimiter)."""
         start_loc = self.current_location()
-        quote = self.advance()  # Skip opening quote
+        delimiter = self.advance()  # Skip opening delimiter (" or %)
         chars = []
 
         while True:
@@ -418,11 +423,11 @@ class Lexer:
             if ch is None:
                 raise LexerError("Unterminated string literal", start_loc)
 
-            if ch == '"':
+            if ch == delimiter:
                 self.advance()
-                # Check for doubled quote (escaped quote in Ada)
-                if self.peek() == '"':
-                    chars.append('"')
+                # Check for doubled delimiter (escaped quote in Ada)
+                if self.peek() == delimiter:
+                    chars.append(delimiter)
                     self.advance()
                 else:
                     break
@@ -479,8 +484,8 @@ class Lexer:
             token_type, value = self.read_number()
             return Token(token_type, value, location)
 
-        # String literals
-        if ch == '"':
+        # String literals (including obsolescent % delimiter)
+        if ch == '"' or ch == '%':
             value = self.read_string()
             return Token(TokenType.STRING_LITERAL, value, location)
 
@@ -570,7 +575,10 @@ class Lexer:
             "=": TokenType.EQUAL,
             ">": TokenType.GREATER,
             "|": TokenType.PIPE,
+            "!": TokenType.PIPE,  # Obsolescent alternative to |
             "@": TokenType.AT_SIGN,
+            "[": TokenType.LEFT_BRACKET,
+            "]": TokenType.RIGHT_BRACKET,
         }
 
         if ch in single_char_tokens:

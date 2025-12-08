@@ -7,6 +7,9 @@ from uada80.ast_nodes import (
     PackageDecl,
     GenericInstantiation,
     GenericTypeDecl,
+    GenericSubprogramUnit,
+    SubprogramBody,
+    SubprogramDecl,
 )
 from uada80.symbol_table import SymbolKind
 
@@ -299,3 +302,184 @@ class TestGenericLowering:
             # Look for the instantiated procedure with prefixed name
             func_names = [f.name for f in module.functions]
             assert any("Int_Stack" in name for name in func_names) or len(func_names) == 0
+
+
+class TestGenericSubprograms:
+    """Tests for generic procedure and function declarations."""
+
+    def test_parse_generic_procedure(self):
+        """Test parsing a generic procedure declaration with body."""
+        source = """
+        generic
+            type Item is private;
+        procedure Swap(A, B : in out Item) is
+            Temp : Item;
+        begin
+            Temp := A;
+            A := B;
+            B := Temp;
+        end Swap;
+        """
+        ast = parse(source)
+        assert len(ast.units) == 1
+        unit = ast.units[0].unit
+        assert isinstance(unit, GenericSubprogramUnit)
+        assert len(unit.formals) == 1
+        assert unit.formals[0].name == "Item"
+        assert isinstance(unit.subprogram, SubprogramBody)
+        assert unit.name == "Swap"
+        assert not unit.is_function
+
+    def test_parse_generic_function(self):
+        """Test parsing a generic function declaration with body."""
+        source = """
+        generic
+            type Element is private;
+        function Identity(X : Element) return Element is
+        begin
+            return X;
+        end Identity;
+        """
+        ast = parse(source)
+        unit = ast.units[0].unit
+        assert isinstance(unit, GenericSubprogramUnit)
+        assert unit.name == "Identity"
+        assert unit.is_function
+        assert isinstance(unit.subprogram, SubprogramBody)
+
+    def test_parse_generic_procedure_spec_only(self):
+        """Test parsing a generic procedure specification (no body)."""
+        source = """
+        generic
+            type T is private;
+        procedure Do_Something(X : T);
+        """
+        ast = parse(source)
+        unit = ast.units[0].unit
+        assert isinstance(unit, GenericSubprogramUnit)
+        assert unit.name == "Do_Something"
+        assert isinstance(unit.subprogram, SubprogramDecl)
+
+    def test_generic_procedure_creates_symbol(self):
+        """Test that generic procedure creates proper symbol."""
+        source = """
+        generic
+            type T is private;
+        procedure Process(X : T) is
+        begin
+            null;
+        end Process;
+        """
+        ast = parse(source)
+        result = analyze(ast)
+        assert not result.has_errors
+
+        sym = result.symbols.lookup("Process")
+        assert sym is not None
+        assert sym.kind == SymbolKind.GENERIC_PROCEDURE
+
+    def test_generic_function_creates_symbol(self):
+        """Test that generic function creates proper symbol."""
+        source = """
+        generic
+            type T is private;
+        function Maximum(A, B : T) return T is
+        begin
+            return A;
+        end Maximum;
+        """
+        ast = parse(source)
+        result = analyze(ast)
+        assert not result.has_errors
+
+        sym = result.symbols.lookup("Maximum")
+        assert sym is not None
+        assert sym.kind == SymbolKind.GENERIC_FUNCTION
+
+    def test_generic_procedure_instantiation_syntax(self):
+        """Test parsing generic procedure instantiation."""
+        source = """
+        generic
+            type T is private;
+        procedure Swap(A, B : in out T) is
+            Temp : T;
+        begin
+            Temp := A;
+            A := B;
+            B := Temp;
+        end Swap;
+
+        procedure Int_Swap is new Swap(Integer);
+        """
+        ast = parse(source)
+        assert len(ast.units) == 2
+        # First unit is generic
+        assert isinstance(ast.units[0].unit, GenericSubprogramUnit)
+        # Second unit is instantiation
+        assert isinstance(ast.units[1].unit, GenericInstantiation)
+        inst = ast.units[1].unit
+        assert inst.kind == "procedure"
+        assert inst.name == "Int_Swap"
+
+    def test_generic_function_instantiation_syntax(self):
+        """Test parsing generic function instantiation."""
+        source = """
+        generic
+            type T is private;
+        function Max(A, B : T) return T is
+        begin
+            return A;
+        end Max;
+
+        function Int_Max is new Max(Integer);
+        """
+        ast = parse(source)
+        assert len(ast.units) == 2
+        inst = ast.units[1].unit
+        assert isinstance(inst, GenericInstantiation)
+        assert inst.kind == "function"
+        assert inst.name == "Int_Max"
+
+    def test_generic_subprogram_instantiation_semantic(self):
+        """Test semantic analysis of generic subprogram instantiation."""
+        source = """
+        generic
+            type T is private;
+        procedure Process(X : T) is
+        begin
+            null;
+        end Process;
+
+        procedure Int_Process is new Process(Integer);
+        """
+        ast = parse(source)
+        result = analyze(ast)
+        assert not result.has_errors
+
+        # Check generic is registered
+        gen_sym = result.symbols.lookup("Process")
+        assert gen_sym is not None
+        assert gen_sym.kind == SymbolKind.GENERIC_PROCEDURE
+
+        # Check instance is registered
+        inst_sym = result.symbols.lookup("Int_Process")
+        assert inst_sym is not None
+        assert inst_sym.kind == SymbolKind.PROCEDURE
+
+    def test_generic_subprogram_multiple_type_formals(self):
+        """Test generic subprogram with multiple type formal parameters."""
+        source = """
+        generic
+            type K is private;
+            type V is private;
+        procedure Store(Key : K; Value : V) is
+        begin
+            null;
+        end Store;
+        """
+        ast = parse(source)
+        unit = ast.units[0].unit
+        assert isinstance(unit, GenericSubprogramUnit)
+        assert len(unit.formals) == 2
+        assert unit.formals[0].name == "K"
+        assert unit.formals[1].name == "V"

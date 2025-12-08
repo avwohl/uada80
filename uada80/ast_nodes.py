@@ -169,6 +169,17 @@ class NullLiteral(Expr):
     pass
 
 
+@dataclass
+class TargetName(Expr):
+    """Target name '@' (Ada 2022).
+
+    Refers to the target of an assignment in the expression.
+    Example: X := @ + 1;  -- equivalent to X := X + 1;
+    """
+
+    pass
+
+
 # ============================================================================
 # Operators and Expressions
 # ============================================================================
@@ -246,7 +257,32 @@ class Parenthesized(Expr):
 class Aggregate(Expr):
     """Aggregate expression (array, record, or extension aggregate)."""
 
+    components: list["ComponentAssociation | IteratedComponentAssociation"]
+
+
+@dataclass
+class DeltaAggregate(Expr):
+    """Delta aggregate expression (Ada 2022).
+
+    Syntax: (base_expression with delta component_associations)
+    Example: (Rec with delta Field1 => Value1, Field2 => Value2)
+    Creates a copy of base_expression with specified components modified.
+    """
+
+    base_expression: Expr
     components: list["ComponentAssociation"]
+
+
+@dataclass
+class ContainerAggregate(Expr):
+    """Container aggregate expression (Ada 2022).
+
+    Syntax: [component_associations]
+    Example: [for I in 1 .. 10 => I * 2]
+    Uses square brackets for container types (vectors, maps, etc.).
+    """
+
+    components: list["ComponentAssociation | IteratedComponentAssociation"]
 
 
 @dataclass
@@ -254,6 +290,22 @@ class ComponentAssociation(ASTNode):
     """Component association in aggregate."""
 
     choices: list["Choice"]  # Empty for positional
+    value: Expr
+
+
+@dataclass
+class IteratedComponentAssociation(ASTNode):
+    """Iterated component association (Ada 2012).
+
+    Syntax: for Name in discrete_range => expression
+            for Name of iterable => expression
+
+    Example: (for I in 1 .. 10 => I * 2)
+    """
+
+    loop_parameter: str
+    iterator_spec: Expr  # Discrete range or iterable
+    is_of_form: bool  # True for "of", False for "in"
     value: Expr
 
 
@@ -310,6 +362,13 @@ class Allocator(Expr):
 
 
 @dataclass
+class Dereference(Expr):
+    """Dereference expression (P.all)."""
+
+    prefix: Expr
+
+
+@dataclass
 class TypeConversion(Expr):
     """Type conversion (Type(expr))."""
 
@@ -343,6 +402,42 @@ class QuantifiedExpr(Expr):
     is_for_all: bool  # True for 'for all', False for 'for some'
     iterator: "IteratorSpec"
     predicate: Expr
+
+
+@dataclass
+class DeclareExpr(Expr):
+    """Declare expression (Ada 2022).
+
+    Syntax: (declare declarations begin expression)
+    Example: (declare X : Integer := 5; begin X + 1)
+
+    Allows local declarations within an expression.
+    """
+
+    declarations: list["Decl"]
+    result_expr: Expr
+
+
+@dataclass
+class CaseExprAlternative(ASTNode):
+    """A single alternative in a case expression."""
+
+    choices: list["Choice"]  # List of choices (values, ranges, or 'others')
+    result_expr: Expr
+
+
+@dataclass
+class CaseExpr(Expr):
+    """Case expression (Ada 2012).
+
+    Syntax: (case Selector is
+               when Choice1 => Expr1,
+               when Choice2 => Expr2,
+               when others => DefaultExpr)
+    """
+
+    selector: Expr
+    alternatives: list[CaseExprAlternative] = field(default_factory=list)
 
 
 # ============================================================================
@@ -430,6 +525,23 @@ class AccessTypeDef(TypeDef):
     is_access_all: bool  # access all vs. plain access
     is_access_constant: bool
     designated_type: Expr
+    is_not_null: bool = False  # not null access
+
+
+@dataclass
+class AccessSubprogramTypeDef(TypeDef):
+    """Access-to-subprogram type definition (function pointers).
+
+    Examples:
+        type Unary_Func is access function (X : Integer) return Integer;
+        type Callback is access procedure (Status : Integer);
+    """
+
+    is_function: bool  # True for function, False for procedure
+    parameters: list["ParameterSpec"] = field(default_factory=list)
+    return_type: Optional[Expr] = None  # Only for functions
+    is_not_null: bool = False
+    is_access_protected: bool = False  # access protected procedure/function
 
 
 @dataclass
@@ -440,6 +552,7 @@ class DerivedTypeDef(TypeDef):
     is_abstract: bool = False
     is_limited: bool = False
     record_extension: Optional[RecordTypeDef] = None  # For tagged types
+    interfaces: list[Expr] = field(default_factory=list)  # Implemented interfaces (Ada 2005)
 
 
 @dataclass
@@ -509,6 +622,21 @@ class DiscriminantConstraint(Constraint):
 
 
 @dataclass
+class AspectSpecification(ASTNode):
+    """Aspect specification (Ada 2012).
+
+    Syntax: with Aspect_Name [=> Expression] [, ...]
+    Examples:
+        with Inline
+        with Pre => X > 0
+        with Size => 32
+    """
+
+    name: str
+    value: Optional[Expr] = None  # None for boolean aspects like Inline
+
+
+@dataclass
 class ObjectDecl(Decl):
     """Object (variable/constant) declaration."""
 
@@ -518,6 +646,7 @@ class ObjectDecl(Decl):
     is_aliased: bool = False
     init_expr: Optional[Expr] = None
     renames: Optional[Expr] = None  # For renaming declarations
+    aspects: list[AspectSpecification] = field(default_factory=list)
 
 
 @dataclass
@@ -538,6 +667,7 @@ class TypeDecl(Decl):
     is_abstract: bool = False
     is_tagged: bool = False
     is_limited: bool = False
+    aspects: list[AspectSpecification] = field(default_factory=list)
 
 
 @dataclass
@@ -546,6 +676,7 @@ class SubtypeDecl(Decl):
 
     name: str
     subtype_indication: SubtypeIndication
+    aspects: list["AspectSpecification"] = field(default_factory=list)
 
 
 @dataclass
@@ -567,8 +698,11 @@ class SubprogramDecl(Decl):
     parameters: list["ParameterSpec"] = field(default_factory=list)
     return_type: Optional[Expr] = None  # For functions
     is_abstract: bool = False
+    is_null: bool = False  # Ada 2005 null procedure: procedure P is null;
     is_overriding: bool = False
     is_not_overriding: bool = False
+    renames: Optional[Expr] = None  # Subprogram renaming declaration
+    aspects: list[AspectSpecification] = field(default_factory=list)
 
 
 @dataclass
@@ -600,6 +734,7 @@ class PackageDecl(Decl):
     generic_formals: list["GenericFormal"] = field(default_factory=list)  # For generic packages
     declarations: list[Decl] = field(default_factory=list)
     private_declarations: list[Decl] = field(default_factory=list)
+    renames: Optional[Expr] = None  # Package renaming declaration
 
 
 @dataclass
@@ -621,10 +756,11 @@ class ExceptionDecl(Decl):
 
 @dataclass
 class UseClause(Decl):
-    """Use clause (use Package; use type Type;)."""
+    """Use clause (use Package; use type Type; use all type Type;)."""
 
     names: list[Expr]
     is_type: bool = False  # use type vs. use package
+    is_all: bool = False  # use all type (Ada 2012)
 
 
 @dataclass
@@ -666,7 +802,8 @@ class GenericSubprogramDecl(GenericFormal):
     kind: str  # "procedure" or "function"
     params: list["ParameterSpec"] = field(default_factory=list)
     return_type: Optional[Expr] = None  # For functions
-    is_box: bool = False  # 'is <>' means default
+    is_box: bool = False  # 'is <>' means match visible subprogram
+    default_subprogram: Optional[Expr] = None  # 'is Name' specific default
 
 
 @dataclass
@@ -686,6 +823,29 @@ class GenericObjectDecl(GenericFormal):
     mode: str  # "in", "out", or "in out"
     type_ref: Expr
     default_value: Optional[Expr] = None
+
+
+@dataclass
+class GenericSubprogramUnit(Decl):
+    """Generic subprogram declaration (generic procedure or function).
+
+    Wraps a SubprogramDecl/SubprogramBody with generic formals.
+    """
+
+    formals: list["GenericFormal"]
+    subprogram: "SubprogramDecl | SubprogramBody"
+
+    @property
+    def name(self) -> str:
+        if isinstance(self.subprogram, SubprogramBody):
+            return self.subprogram.spec.name
+        return self.subprogram.name
+
+    @property
+    def is_function(self) -> bool:
+        if isinstance(self.subprogram, SubprogramBody):
+            return self.subprogram.spec.is_function
+        return self.subprogram.is_function
 
 
 @dataclass
@@ -721,6 +881,30 @@ class TaskBody(Decl):
     declarations: list[Decl] = field(default_factory=list)
     statements: list[Stmt] = field(default_factory=list)
     handled_exception_handlers: list["ExceptionHandler"] = field(default_factory=list)
+
+
+@dataclass
+class Subunit(Decl):
+    """Separate subunit (SEPARATE (parent) body).
+
+    Ada allows subprogram bodies, package bodies, task bodies, and protected
+    bodies to be compiled separately using the SEPARATE syntax.
+    """
+
+    parent_unit: Expr  # The parent unit name (can be qualified)
+    body: Decl  # The actual body (SubprogramBody, PackageBody, TaskBody, etc.)
+
+
+@dataclass
+class BodyStub(Decl):
+    """Body stub declaration (IS SEPARATE).
+
+    A body stub declares that the actual body is in a separate compilation unit.
+    Syntax: procedure/function Name is separate; or package/task body Name is separate;
+    """
+
+    name: str
+    kind: str  # "procedure", "function", "package", "task", "protected"
 
 
 @dataclass
@@ -810,6 +994,18 @@ class LoopStmt(Stmt):
     iteration_scheme: Optional["IterationScheme"] = None
     statements: list[Stmt] = field(default_factory=list)
     label: Optional[str] = None
+    is_parallel: bool = False  # Ada 2022 parallel loop
+
+
+@dataclass
+class ParallelBlockStmt(Stmt):
+    """Parallel block statement (Ada 2022).
+
+    Syntax: parallel do seq1; and do seq2; end parallel;
+    Executes multiple statement sequences concurrently.
+    """
+
+    sequences: list[list[Stmt]]  # List of statement sequences
 
 
 @dataclass
@@ -840,6 +1036,7 @@ class IteratorSpec(ASTNode):
     name: str
     is_reverse: bool = False
     iterable: Expr = None  # Can be range or iterable
+    is_of_iterator: bool = False  # True for "for X of Array", False for "for X in Range"
 
 
 @dataclass
@@ -868,6 +1065,29 @@ class ReturnStmt(Stmt):
 
 
 @dataclass
+class ExtendedReturnStmt(Stmt):
+    """Extended return statement (Ada 2005).
+
+    return Object_Name : Type [:= Init] do
+        Statements;
+    end return;
+    """
+
+    object_name: str
+    type_mark: Optional[Expr] = None
+    init_expr: Optional[Expr] = None
+    statements: list["Stmt"] = field(default_factory=list)
+
+
+@dataclass
+class LabeledStmt(Stmt):
+    """A statement with a label prefix (<<Label>> Statement)."""
+
+    label: str
+    statement: Stmt
+
+
+@dataclass
 class GotoStmt(Stmt):
     """Goto statement."""
 
@@ -880,6 +1100,18 @@ class RaiseStmt(Stmt):
 
     exception_name: Optional[Expr] = None
     message: Optional[Expr] = None  # For 'raise E with "message"'
+
+
+@dataclass
+class RaiseExpr(Expr):
+    """Raise expression (Ada 2012).
+
+    Syntax: raise Exception_Name [with String_Expression]
+    Example: (if X > 0 then X else raise Constraint_Error with "X must be positive")
+    """
+
+    exception_name: Expr
+    message: Optional[Expr] = None
 
 
 @dataclass

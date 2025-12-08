@@ -27,6 +27,12 @@ from uada80.ast_nodes import (
     UseClause,
     WithClause,
     ExceptionDecl,
+    GenericSubprogramUnit,
+    TaskTypeDecl,
+    TaskBody,
+    EntryDecl,
+    ProtectedTypeDecl,
+    ProtectedBody,
     # Statements
     Stmt,
     NullStmt,
@@ -39,8 +45,16 @@ from uada80.ast_nodes import (
     BlockStmt,
     ExitStmt,
     ReturnStmt,
+    ExtendedReturnStmt,
     RaiseStmt,
     ProcedureCallStmt,
+    PragmaStmt,
+    DelayStmt,
+    AcceptStmt,
+    SelectStmt,
+    RequeueStmt,
+    AbortStmt,
+    ParallelBlockStmt,
     # Expressions
     Expr,
     Identifier,
@@ -58,10 +72,27 @@ from uada80.ast_nodes import (
     UnaryOp,
     RangeExpr,
     Aggregate,
+    DeltaAggregate,
+    ContainerAggregate,
+    IteratedComponentAssociation,
+    ComponentAssociation,
     FunctionCall,
     TypeConversion,
     QualifiedExpr,
     Allocator,
+    ConditionalExpr,
+    QuantifiedExpr,
+    DeclareExpr,
+    CaseExpr,
+    CaseExprAlternative,
+    MembershipTest,
+    ExprChoice,
+    RangeChoice,
+    OthersChoice,
+    Slice,
+    Dereference,
+    TargetName,
+    RaiseExpr,
     # Type definitions
     TypeDef,
     IntegerTypeDef,
@@ -70,11 +101,19 @@ from uada80.ast_nodes import (
     ArrayTypeDef,
     RecordTypeDef,
     AccessTypeDef,
+    AccessSubprogramTypeDef,
     DerivedTypeDef,
+    InterfaceTypeDef,
     SubtypeIndication,
     ComponentDecl,
     GenericInstantiation,
     GenericTypeDecl,
+    # Representation clauses
+    RepresentationClause,
+    AttributeDefinitionClause,
+    RecordRepresentationClause,
+    EnumerationRepresentationClause,
+    ComponentClause,
 )
 from uada80.symbol_table import SymbolTable, Symbol, SymbolKind
 from uada80.type_system import (
@@ -87,6 +126,12 @@ from uada80.type_system import (
     RecordType,
     RecordComponent,
     AccessType,
+    AccessSubprogramType,
+    InterfaceType,
+    TaskType,
+    EntryInfo,
+    ProtectedType,
+    ProtectedOperation,
     PREDEFINED_TYPES,
     types_compatible,
     common_type,
@@ -137,6 +182,13 @@ class SemanticAnalyzer:
         self.errors: list[SemanticError] = []
         self.current_subprogram: Optional[Symbol] = None  # For return type checking
         self.in_loop: bool = False  # For exit statement validation
+        self.loop_labels: list[Optional[str]] = []  # Stack of loop labels (None = unlabeled)
+        # Task-related state
+        self.in_task_body: bool = False  # For accept statement validation
+        self.current_task: Optional[Symbol] = None  # Current task being analyzed
+        self.in_accept_or_entry: bool = False  # For requeue statement validation
+        # Assignment target tracking for @ (target name) support
+        self.current_assignment_target_type: Optional[AdaType] = None
 
     def analyze(self, program: Program) -> SemanticResult:
         """Analyze a complete program."""
@@ -171,6 +223,8 @@ class SemanticAnalyzer:
             self._analyze_package_body(unit.unit)
         elif isinstance(unit.unit, GenericInstantiation):
             self._analyze_generic_instantiation(unit.unit)
+        elif isinstance(unit.unit, GenericSubprogramUnit):
+            self._analyze_generic_subprogram(unit.unit)
 
     def _analyze_with_clause(self, clause: WithClause) -> None:
         """Analyze a with clause."""
@@ -222,6 +276,9 @@ class SemanticAnalyzer:
         for param_spec in spec.parameters:
             self._analyze_parameter_spec(param_spec, subprog_symbol)
 
+        # Analyze Pre/Post aspects
+        self._analyze_subprogram_aspects(spec, subprog_symbol)
+
         # Process declarations
         for decl in body.declarations:
             self._analyze_declaration(decl)
@@ -249,6 +306,65 @@ class SemanticAnalyzer:
             )
             self.symbols.define(param_symbol)
             subprog.parameters.append(param_symbol)
+
+    def _analyze_subprogram_aspects(
+        self, spec: SubprogramDecl, subprog: Symbol
+    ) -> None:
+        """Analyze aspects on a subprogram (Pre, Post, etc.)."""
+        for aspect in spec.aspects:
+            aspect_name = aspect.name.lower()
+
+            if aspect_name == "pre":
+                # Precondition - must be Boolean expression
+                if aspect.value:
+                    expr_type = self._analyze_expr(aspect.value)
+                    if expr_type and expr_type.name.lower() != "boolean":
+                        self.error(
+                            f"Pre aspect expression must be Boolean, got '{expr_type.name}'",
+                            aspect.value,
+                        )
+                else:
+                    self.error("Pre aspect requires an expression", spec)
+
+            elif aspect_name == "post":
+                # Postcondition - must be Boolean expression
+                # For functions, Name'Result can be used to refer to return value
+                if aspect.value:
+                    # Temporarily add 'Result attribute support for functions
+                    if spec.is_function:
+                        subprog.analyzing_post = True
+                    expr_type = self._analyze_expr(aspect.value)
+                    if spec.is_function:
+                        subprog.analyzing_post = False
+                    if expr_type and expr_type.name.lower() != "boolean":
+                        self.error(
+                            f"Post aspect expression must be Boolean, got '{expr_type.name}'",
+                            aspect.value,
+                        )
+                else:
+                    self.error("Post aspect requires an expression", spec)
+
+            elif aspect_name == "inline":
+                # Boolean aspect, no value needed
+                subprog.is_inline = True
+
+            elif aspect_name == "import":
+                # Mark as imported (external)
+                subprog.is_imported = True
+
+            elif aspect_name == "export":
+                # Mark as exported
+                subprog.is_exported = True
+
+            elif aspect_name in ("convention", "external_name", "link_name"):
+                # These affect linkage - store the values
+                if aspect.value:
+                    if isinstance(aspect.value, StringLiteral):
+                        setattr(subprog, aspect_name, aspect.value.value)
+                    elif isinstance(aspect.value, Identifier):
+                        setattr(subprog, aspect_name, aspect.value.name)
+
+            # Other aspects (Pure, Spark_Mode, etc.) are silently accepted
 
     # =========================================================================
     # Packages
@@ -320,8 +436,13 @@ class SemanticAnalyzer:
             self.error(f"generic '{generic_name}' not found", inst.generic_name)
             return
 
+        # Handle generic subprogram instantiation
+        if generic_sym.kind in (SymbolKind.GENERIC_PROCEDURE, SymbolKind.GENERIC_FUNCTION):
+            self._analyze_generic_subprogram_instantiation(inst)
+            return
+
         if generic_sym.kind != SymbolKind.GENERIC_PACKAGE:
-            self.error(f"'{generic_name}' is not a generic package", inst.generic_name)
+            self.error(f"'{generic_name}' is not a generic", inst.generic_name)
             return
 
         # Get the generic declaration
@@ -349,6 +470,105 @@ class SemanticAnalyzer:
         # Store mapping from formals to actuals for code generation
         inst_symbol.generic_instance_of = generic_sym
         inst_symbol.generic_actuals = inst.actual_parameters
+        self.symbols.define(inst_symbol)
+
+    def _analyze_generic_subprogram(self, gen_subprog: GenericSubprogramUnit) -> None:
+        """Analyze a generic subprogram declaration."""
+        name = gen_subprog.name
+        is_function = gen_subprog.is_function
+
+        # Create symbol for the generic subprogram (template)
+        kind = SymbolKind.GENERIC_FUNCTION if is_function else SymbolKind.GENERIC_PROCEDURE
+
+        gen_symbol = Symbol(
+            name=name,
+            kind=kind,
+        )
+        # Store the AST node for instantiation
+        gen_symbol.generic_decl = gen_subprog
+        self.symbols.define(gen_symbol)
+
+        # Enter scope for analyzing the generic formals
+        self.symbols.enter_scope(name)
+
+        # Process generic formal parameters
+        for formal in gen_subprog.formals:
+            self._analyze_generic_formal(formal)
+
+        # Analyze the subprogram spec/body (but don't generate code - it's a template)
+        if isinstance(gen_subprog.subprogram, SubprogramBody):
+            spec = gen_subprog.subprogram.spec
+        else:
+            spec = gen_subprog.subprogram
+
+        # Record parameter info
+        return_type = None
+        if is_function and spec.return_type:
+            return_type = self._resolve_type(spec.return_type)
+
+        gen_symbol.return_type = return_type
+
+        # Process parameters to record their types
+        for param_spec in spec.parameters:
+            param_type = self._resolve_type(param_spec.type_mark)
+            for param_name in param_spec.names:
+                param_symbol = Symbol(
+                    name=param_name,
+                    kind=SymbolKind.PARAMETER,
+                    ada_type=param_type,
+                    mode=param_spec.mode,
+                )
+                gen_symbol.parameters.append(param_symbol)
+
+        self.symbols.leave_scope()
+
+    def _analyze_generic_subprogram_instantiation(
+        self, inst: GenericInstantiation
+    ) -> None:
+        """Analyze a generic subprogram instantiation."""
+        # Look up the generic
+        if isinstance(inst.generic_name, Identifier):
+            generic_name = inst.generic_name.name
+        else:
+            generic_name = str(inst.generic_name)
+
+        generic_sym = self.symbols.lookup(generic_name)
+
+        if generic_sym is None:
+            self.error(f"generic '{generic_name}' not found", inst.generic_name)
+            return
+
+        if generic_sym.kind not in (SymbolKind.GENERIC_PROCEDURE, SymbolKind.GENERIC_FUNCTION):
+            self.error(f"'{generic_name}' is not a generic subprogram", inst.generic_name)
+            return
+
+        # Get the generic declaration
+        generic_decl = getattr(generic_sym, 'generic_decl', None)
+        if generic_decl is None:
+            self.error(f"generic '{generic_name}' has no declaration", inst.generic_name)
+            return
+
+        # Check number of actual parameters
+        num_formals = len(generic_decl.formals)
+        num_actuals = len(inst.actual_parameters)
+
+        if num_actuals != num_formals:
+            self.error(
+                f"wrong number of generic parameters for '{generic_name}': "
+                f"expected {num_formals}, got {num_actuals}",
+                inst
+            )
+
+        # Create the instantiated subprogram
+        is_function = generic_sym.kind == SymbolKind.GENERIC_FUNCTION
+        inst_symbol = Symbol(
+            name=inst.name,
+            kind=SymbolKind.FUNCTION if is_function else SymbolKind.PROCEDURE,
+        )
+        # Store mapping from formals to actuals for code generation
+        inst_symbol.generic_instance_of = generic_sym
+        inst_symbol.generic_actuals = inst.actual_parameters
+        inst_symbol.return_type = generic_sym.return_type
         self.symbols.define(inst_symbol)
 
     def _analyze_package_body(self, body: PackageBody) -> None:
@@ -417,9 +637,30 @@ class SemanticAnalyzer:
             self._analyze_exception_decl(decl)
         elif isinstance(decl, UseClause):
             self._analyze_use_clause(decl)
+        elif isinstance(decl, RepresentationClause):
+            self._analyze_representation_clause(decl)
+        elif isinstance(decl, GenericSubprogramUnit):
+            self._analyze_generic_subprogram(decl)
+        elif isinstance(decl, GenericInstantiation):
+            self._analyze_generic_instantiation(decl)
+        elif isinstance(decl, TaskTypeDecl):
+            self._analyze_task_type_decl(decl)
+        elif isinstance(decl, TaskBody):
+            self._analyze_task_body(decl)
+        elif isinstance(decl, EntryDecl):
+            self._analyze_entry_decl(decl)
+        elif isinstance(decl, ProtectedTypeDecl):
+            self._analyze_protected_type_decl(decl)
+        elif isinstance(decl, ProtectedBody):
+            self._analyze_protected_body(decl)
 
     def _analyze_object_decl(self, decl: ObjectDecl) -> None:
         """Analyze an object (variable/constant) declaration."""
+        # Handle renaming declarations
+        if decl.renames:
+            self._analyze_renaming_decl(decl)
+            return
+
         # Resolve type
         obj_type: Optional[AdaType] = None
         if decl.type_mark:
@@ -459,22 +700,90 @@ class SemanticAnalyzer:
             )
             self.symbols.define(symbol)
 
+    def _analyze_renaming_decl(self, decl: ObjectDecl) -> None:
+        """Analyze a renaming declaration (X : T renames Y)."""
+        # Analyze the renamed object
+        renamed_type = self._analyze_expr(decl.renames)
+
+        # Resolve declared type if provided
+        obj_type = renamed_type
+        if decl.type_mark:
+            declared_type = self._resolve_subtype_indication(decl.type_mark)
+            if declared_type and renamed_type:
+                if not types_compatible(declared_type, renamed_type):
+                    self.error(
+                        f"type mismatch in renaming: declared type "
+                        f"'{declared_type.name}' does not match renamed "
+                        f"object type '{renamed_type.name}'",
+                        decl,
+                    )
+            if declared_type:
+                obj_type = declared_type
+
+        # Create symbol for the new name that aliases the renamed object
+        for name in decl.names:
+            if self.symbols.is_defined_locally(name):
+                self.error(f"'{name}' is already defined in this scope", decl)
+                continue
+
+            symbol = Symbol(
+                name=name,
+                kind=SymbolKind.VARIABLE,
+                ada_type=obj_type,
+                is_constant=decl.is_constant,
+                is_aliased=True,  # Renamings are effectively aliases
+                definition=decl,
+            )
+            self.symbols.define(symbol)
+
     def _analyze_type_decl(self, decl: TypeDecl) -> None:
         """Analyze a type declaration."""
-        if self.symbols.is_defined_locally(decl.name):
-            self.error(f"type '{decl.name}' is already defined", decl)
+        existing = self.symbols.lookup_local(decl.name)
+
+        # Check for incomplete type declaration (type T;)
+        if decl.type_def is None:
+            if existing is not None:
+                self.error(f"type '{decl.name}' is already defined", decl)
+                return
+
+            # Create an incomplete type placeholder
+            ada_type = AdaType(
+                name=decl.name,
+                kind=TypeKind.INCOMPLETE,
+            )
+            symbol = Symbol(
+                name=decl.name,
+                kind=SymbolKind.TYPE,
+                ada_type=ada_type,
+                definition=decl,
+            )
+            self.symbols.define(symbol)
             return
 
-        # Build the type
-        ada_type = self._build_type(decl.name, decl.type_def)
+        # Check if we're completing an incomplete type
+        if existing is not None:
+            if (existing.kind == SymbolKind.TYPE and
+                existing.ada_type and
+                existing.ada_type.kind == TypeKind.INCOMPLETE):
+                # This is completing an incomplete type - update the existing symbol
+                ada_type = self._build_type(decl.name, decl.type_def)
+                existing.ada_type = ada_type
+                existing.definition = decl
+                # Fall through to handle enum literals if applicable
+            else:
+                self.error(f"type '{decl.name}' is already defined", decl)
+                return
+        else:
+            # Build the type
+            ada_type = self._build_type(decl.name, decl.type_def)
 
-        symbol = Symbol(
-            name=decl.name,
-            kind=SymbolKind.TYPE,
-            ada_type=ada_type,
-            definition=decl,
-        )
-        self.symbols.define(symbol)
+            symbol = Symbol(
+                name=decl.name,
+                kind=SymbolKind.TYPE,
+                ada_type=ada_type,
+                definition=decl,
+            )
+            self.symbols.define(symbol)
 
         # For enumeration types, add literals to symbol table
         if isinstance(ada_type, EnumerationType):
@@ -527,11 +836,14 @@ class SemanticAnalyzer:
             name=decl.name,
             kind=kind,
             return_type=return_type,
+            is_abstract=decl.is_abstract,
         )
 
         # Process parameters to record their types
+        param_types = []
         for param_spec in decl.parameters:
             param_type = self._resolve_type(param_spec.type_mark)
+            param_types.append(param_type)
             for name in param_spec.names:
                 param_symbol = Symbol(
                     name=name,
@@ -541,7 +853,55 @@ class SemanticAnalyzer:
                 )
                 symbol.parameters.append(param_symbol)
 
+        # Abstract subprograms can only be declared for tagged types
+        if decl.is_abstract:
+            if not param_types or not self._is_tagged_type(param_types[0]):
+                # In full Ada, this would be an error
+                pass  # Allow for now, just track the flag
+
         self.symbols.define(symbol)
+
+        # Check if this is a primitive operation of a tagged type
+        self._check_primitive_operation(decl.name, kind == SymbolKind.FUNCTION,
+                                        param_types, return_type)
+
+    def _is_tagged_type(self, ada_type) -> bool:
+        """Check if a type is a tagged type or interface."""
+        from uada80.type_system import RecordType, InterfaceType
+        if isinstance(ada_type, InterfaceType):
+            return True
+        return isinstance(ada_type, RecordType) and ada_type.is_tagged
+
+    def _check_primitive_operation(self, name: str, is_function: bool,
+                                   param_types: list, return_type) -> None:
+        """Check if a subprogram is a primitive operation of a tagged type or interface."""
+        from uada80.type_system import RecordType, InterfaceType, PrimitiveOperation
+
+        # Check first parameter for controlling type
+        controlling_type = None
+        if param_types:
+            first_type = param_types[0]
+            if isinstance(first_type, RecordType) and first_type.is_tagged:
+                controlling_type = first_type
+            elif isinstance(first_type, InterfaceType):
+                controlling_type = first_type
+
+        # Check return type for tagged type or interface
+        if not controlling_type and is_function:
+            if isinstance(return_type, RecordType) and return_type.is_tagged:
+                controlling_type = return_type
+            elif isinstance(return_type, InterfaceType):
+                controlling_type = return_type
+
+        if controlling_type:
+            # This is a primitive operation
+            op = PrimitiveOperation(
+                name=name,
+                is_function=is_function,
+                parameter_types=param_types,
+                return_type=return_type,
+            )
+            controlling_type.add_primitive(op)
 
     def _analyze_exception_decl(self, decl: ExceptionDecl) -> None:
         """Analyze an exception declaration."""
@@ -556,6 +916,393 @@ class SemanticAnalyzer:
                 definition=decl,
             )
             self.symbols.define(symbol)
+
+    def _analyze_representation_clause(self, decl: RepresentationClause) -> None:
+        """Analyze a representation clause.
+
+        Representation clauses specify:
+        - Type'Size use N;  (attribute definition)
+        - for Type use record ... end record; (record rep)
+        - for Type use (...); (enumeration rep)
+        """
+        if isinstance(decl, AttributeDefinitionClause):
+            self._analyze_attribute_definition_clause(decl)
+        elif isinstance(decl, RecordRepresentationClause):
+            self._analyze_record_representation_clause(decl)
+        elif isinstance(decl, EnumerationRepresentationClause):
+            self._analyze_enumeration_representation_clause(decl)
+
+    def _analyze_attribute_definition_clause(
+        self, decl: AttributeDefinitionClause
+    ) -> None:
+        """Analyze an attribute definition clause (Type'Size use N)."""
+        # Get the type being modified
+        type_name = ""
+        if isinstance(decl.name, Identifier):
+            type_name = decl.name.name
+        elif hasattr(decl.name, "name"):
+            type_name = decl.name.name
+
+        sym = self.symbols.lookup(type_name)
+        if sym is None:
+            self.error(f"unknown type '{type_name}'", decl)
+            return
+
+        if sym.kind != SymbolKind.TYPE:
+            self.error(f"'{type_name}' is not a type", decl)
+            return
+
+        # Evaluate the value expression
+        value = self._eval_static_expr(decl.value)
+
+        # Apply the attribute
+        attr = decl.attribute.lower()
+        if attr == "size":
+            if sym.ada_type:
+                sym.ada_type.size_bits = value
+        elif attr == "alignment":
+            if sym.ada_type:
+                # Store alignment (would need to add field to AdaType)
+                pass
+        elif attr == "":
+            # Direct value clause (for Type use value)
+            pass
+
+    def _analyze_record_representation_clause(
+        self, decl: RecordRepresentationClause
+    ) -> None:
+        """Analyze a record representation clause."""
+        # Get the record type
+        type_name = ""
+        if isinstance(decl.type_name, Identifier):
+            type_name = decl.type_name.name
+        elif hasattr(decl.type_name, "name"):
+            type_name = decl.type_name.name
+
+        sym = self.symbols.lookup(type_name)
+        if sym is None:
+            self.error(f"unknown type '{type_name}'", decl)
+            return
+
+        if sym.kind != SymbolKind.TYPE:
+            self.error(f"'{type_name}' is not a type", decl)
+            return
+
+        if not isinstance(sym.ada_type, RecordType):
+            self.error(f"'{type_name}' is not a record type", decl)
+            return
+
+        # Process each component clause
+        for comp_clause in decl.component_clauses:
+            position = self._eval_static_expr(comp_clause.position)
+            first_bit = self._eval_static_expr(comp_clause.first_bit)
+            last_bit = self._eval_static_expr(comp_clause.last_bit)
+
+            # Find the component in the record type
+            found = False
+            for comp in sym.ada_type.components:
+                if comp.name.lower() == comp_clause.name.lower():
+                    # Update the component's bit layout
+                    comp.offset_bits = position * 8 + first_bit
+                    # Store representation size on component, not on shared type
+                    comp.size_bits = last_bit - first_bit + 1
+                    found = True
+                    break
+
+            if not found:
+                self.error(
+                    f"'{comp_clause.name}' is not a component of '{type_name}'",
+                    decl
+                )
+
+    def _analyze_enumeration_representation_clause(
+        self, decl: EnumerationRepresentationClause
+    ) -> None:
+        """Analyze an enumeration representation clause."""
+        # Get the enumeration type
+        type_name = ""
+        if isinstance(decl.type_name, Identifier):
+            type_name = decl.type_name.name
+        elif hasattr(decl.type_name, "name"):
+            type_name = decl.type_name.name
+
+        sym = self.symbols.lookup(type_name)
+        if sym is None:
+            self.error(f"unknown type '{type_name}'", decl)
+            return
+
+        if sym.kind != SymbolKind.TYPE:
+            self.error(f"'{type_name}' is not a type", decl)
+            return
+
+        if not isinstance(sym.ada_type, EnumerationType):
+            self.error(f"'{type_name}' is not an enumeration type", decl)
+            return
+
+        # Process each value assignment
+        for lit_name, lit_value in decl.values:
+            value = self._eval_static_expr(lit_value)
+
+            # Update the position value for this literal
+            # EnumerationType.positions is a dict mapping literal name to value
+            if sym.ada_type.positions is not None:
+                # Find the literal (case-insensitive)
+                for lit in sym.ada_type.literals:
+                    if lit.lower() == lit_name.lower():
+                        sym.ada_type.positions[lit] = value
+                        break
+
+    # =========================================================================
+    # Task and Protected Types
+    # =========================================================================
+
+    def _analyze_task_type_decl(self, decl: TaskTypeDecl) -> None:
+        """Analyze a task type declaration."""
+        if self.symbols.is_defined_locally(decl.name):
+            self.error(f"task type '{decl.name}' is already defined", decl)
+            return
+
+        # Build entry information
+        entries = []
+        for entry_decl in decl.entries:
+            param_types = []
+            for param in entry_decl.parameters:
+                param_type = self._resolve_type(param.type_mark)
+                if param_type:
+                    param_types.append(param_type)
+
+            family_type = None
+            if entry_decl.family_index:
+                family_type = self._resolve_type(entry_decl.family_index)
+
+            entries.append(EntryInfo(
+                name=entry_decl.name,
+                parameter_types=param_types,
+                family_index_type=family_type,
+            ))
+
+        # Create the task type
+        task_type = TaskType(
+            name=decl.name,
+            entries=entries,
+        )
+
+        symbol = Symbol(
+            name=decl.name,
+            kind=SymbolKind.TASK_TYPE,
+            ada_type=task_type,
+            definition=decl,
+        )
+        self.symbols.define(symbol)
+
+        # Enter task scope to analyze entries and declarations
+        self.symbols.enter_scope(decl.name)
+
+        # Add entries to scope
+        for entry_decl in decl.entries:
+            self._analyze_entry_decl(entry_decl)
+
+        # Analyze other declarations
+        for inner_decl in decl.declarations:
+            self._analyze_declaration(inner_decl)
+
+        self.symbols.leave_scope()
+
+    def _analyze_task_body(self, body: TaskBody) -> None:
+        """Analyze a task body."""
+        # Look up the task type
+        task_sym = self.symbols.lookup(body.name)
+
+        if task_sym is None:
+            # Single task (no separate type declaration)
+            task_type = TaskType(name=body.name, is_single_task=True)
+            symbol = Symbol(
+                name=body.name,
+                kind=SymbolKind.TASK,
+                ada_type=task_type,
+                definition=body,
+            )
+            self.symbols.define(symbol)
+            task_sym = symbol
+        elif task_sym.kind != SymbolKind.TASK_TYPE:
+            self.error(f"'{body.name}' is not a task type", body)
+            return
+
+        # Enter task body scope
+        self.symbols.enter_scope(body.name)
+
+        # Set task context flags
+        old_in_task_body = self.in_task_body
+        old_current_task = self.current_task
+        self.in_task_body = True
+        self.current_task = task_sym
+
+        # Analyze declarations
+        for decl in body.declarations:
+            self._analyze_declaration(decl)
+
+        # Analyze statements
+        for stmt in body.statements:
+            self._analyze_statement(stmt)
+
+        # Analyze exception handlers
+        for handler in body.handled_exception_handlers:
+            self._analyze_exception_handler(handler)
+
+        # Restore task context
+        self.in_task_body = old_in_task_body
+        self.current_task = old_current_task
+
+        self.symbols.leave_scope()
+
+    def _analyze_entry_decl(self, decl: EntryDecl) -> None:
+        """Analyze an entry declaration."""
+        if self.symbols.is_defined_locally(decl.name):
+            self.error(f"entry '{decl.name}' is already defined", decl)
+            return
+
+        # Build parameter list
+        params = []
+        for param in decl.parameters:
+            param_type = self._resolve_type(param.type_mark)
+            for name in param.names:
+                param_sym = Symbol(
+                    name=name,
+                    kind=SymbolKind.PARAMETER,
+                    ada_type=param_type,
+                    mode=param.mode,
+                )
+                params.append(param_sym)
+
+        entry_sym = Symbol(
+            name=decl.name,
+            kind=SymbolKind.ENTRY,
+            definition=decl,
+            parameters=params,
+        )
+        self.symbols.define(entry_sym)
+
+    def _analyze_protected_type_decl(self, decl: ProtectedTypeDecl) -> None:
+        """Analyze a protected type declaration."""
+        if self.symbols.is_defined_locally(decl.name):
+            self.error(f"protected type '{decl.name}' is already defined", decl)
+            return
+
+        # Build entry and operation information
+        entries = []
+        operations = []
+        components = []
+
+        for item in decl.items:
+            if isinstance(item, EntryDecl):
+                param_types = []
+                for param in item.parameters:
+                    param_type = self._resolve_type(param.type_mark)
+                    if param_type:
+                        param_types.append(param_type)
+                entries.append(EntryInfo(
+                    name=item.name,
+                    parameter_types=param_types,
+                ))
+            elif isinstance(item, SubprogramDecl):
+                param_types = []
+                for param in item.parameters:
+                    param_type = self._resolve_type(param.type_mark)
+                    if param_type:
+                        param_types.append(param_type)
+                ret_type = None
+                if item.is_function and item.return_type:
+                    ret_type = self._resolve_type(item.return_type)
+                operations.append(ProtectedOperation(
+                    name=item.name,
+                    kind="function" if item.is_function else "procedure",
+                    parameter_types=param_types,
+                    return_type=ret_type,
+                ))
+            elif isinstance(item, ObjectDecl):
+                # Private component
+                for name in item.names:
+                    if isinstance(item.type_mark, SubtypeIndication):
+                        comp_type = self._resolve_subtype_indication(item.type_mark)
+                    else:
+                        comp_type = self._resolve_type(item.type_mark)
+                    if comp_type:
+                        components.append(RecordComponent(
+                            name=name,
+                            component_type=comp_type,
+                        ))
+
+        # Create the protected type
+        prot_type = ProtectedType(
+            name=decl.name,
+            entries=entries,
+            operations=operations,
+            components=components,
+        )
+
+        symbol = Symbol(
+            name=decl.name,
+            kind=SymbolKind.PROTECTED_TYPE,
+            ada_type=prot_type,
+            definition=decl,
+        )
+        self.symbols.define(symbol)
+
+        # Enter scope for protected type
+        self.symbols.enter_scope(decl.name)
+
+        # Add entries and operations to scope
+        for item in decl.items:
+            if isinstance(item, EntryDecl):
+                self._analyze_entry_decl(item)
+            elif isinstance(item, SubprogramDecl):
+                self._analyze_subprogram_decl(item)
+
+        self.symbols.leave_scope()
+
+    def _analyze_protected_body(self, body: ProtectedBody) -> None:
+        """Analyze a protected body."""
+        # Look up the protected type
+        prot_sym = self.symbols.lookup(body.name)
+        prot_type = None
+
+        if prot_sym is None:
+            # Single protected (no separate type declaration)
+            prot_type = ProtectedType(name=body.name, is_single_protected=True)
+            symbol = Symbol(
+                name=body.name,
+                kind=SymbolKind.PROTECTED,
+                ada_type=prot_type,
+                definition=body,
+            )
+            self.symbols.define(symbol)
+        elif prot_sym.kind != SymbolKind.PROTECTED_TYPE:
+            self.error(f"'{body.name}' is not a protected type", body)
+            return
+        else:
+            prot_type = prot_sym.ada_type
+
+        # Enter protected body scope
+        self.symbols.enter_scope(body.name)
+
+        # Add private components to scope (they're accessible in the body)
+        if prot_type and hasattr(prot_type, 'components'):
+            for comp in prot_type.components:
+                comp_sym = Symbol(
+                    name=comp.name,
+                    kind=SymbolKind.VARIABLE,
+                    ada_type=comp.component_type,
+                )
+                self.symbols.define(comp_sym)
+
+        # Analyze each item in the body
+        for item in body.items:
+            if isinstance(item, SubprogramBody):
+                self._analyze_subprogram_body(item)
+            else:
+                self._analyze_declaration(item)
+
+        self.symbols.leave_scope()
 
     # =========================================================================
     # Type Building
@@ -579,8 +1326,12 @@ class SemanticAnalyzer:
             return self._build_record_type(name, type_def)
         elif isinstance(type_def, AccessTypeDef):
             return self._build_access_type(name, type_def)
+        elif isinstance(type_def, AccessSubprogramTypeDef):
+            return self._build_access_subprogram_type(name, type_def)
         elif isinstance(type_def, DerivedTypeDef):
             return self._build_derived_type(name, type_def)
+        elif isinstance(type_def, InterfaceTypeDef):
+            return self._build_interface_type(name, type_def)
 
         return None
 
@@ -678,6 +1429,33 @@ class SemanticAnalyzer:
             is_access_constant=type_def.is_access_constant,
         )
 
+    def _build_access_subprogram_type(
+        self, name: str, type_def: AccessSubprogramTypeDef
+    ) -> AccessSubprogramType:
+        """Build an access-to-subprogram (function pointer) type."""
+        # Resolve parameter types
+        param_types: list[AdaType] = []
+        for param_spec in type_def.parameters:
+            param_type = self._resolve_type(param_spec.type_mark)
+            if param_type:
+                # Add one entry per parameter name (for multiple params of same type)
+                for _ in param_spec.names:
+                    param_types.append(param_type)
+
+        # Resolve return type
+        return_type = None
+        if type_def.is_function and type_def.return_type:
+            return_type = self._resolve_type(type_def.return_type)
+
+        return AccessSubprogramType(
+            name=name,
+            is_function=type_def.is_function,
+            parameter_types=param_types,
+            return_type=return_type,
+            is_not_null=type_def.is_not_null,
+            is_access_protected=type_def.is_access_protected,
+        )
+
     def _build_derived_type(
         self, name: str, type_def: DerivedTypeDef
     ) -> Optional[AdaType]:
@@ -696,7 +1474,60 @@ class SemanticAnalyzer:
                 high=parent.high,
             )
 
+        # Handle tagged type derivation with record extension and interfaces
+        if isinstance(parent, RecordType) and parent.is_tagged:
+            # Build components from record extension
+            components: list[RecordComponent] = []
+            if type_def.record_extension:
+                for comp_decl in type_def.record_extension.components:
+                    comp_type = self._resolve_type(comp_decl.type_mark)
+                    for comp_name in comp_decl.names:
+                        components.append(
+                            RecordComponent(name=comp_name, component_type=comp_type)
+                        )
+
+            # Resolve interfaces
+            interfaces: list[InterfaceType] = []
+            for iface_expr in type_def.interfaces:
+                iface_type = self._resolve_type(iface_expr)
+                if isinstance(iface_type, InterfaceType):
+                    interfaces.append(iface_type)
+
+            # Propagate controlled type status from parent
+            is_controlled = parent.is_controlled or parent.needs_finalization()
+            is_limited_controlled = parent.is_limited_controlled
+
+            return RecordType(
+                name=name,
+                is_tagged=True,
+                parent_type=parent,
+                components=components,
+                interfaces=interfaces,
+                is_controlled=is_controlled,
+                is_limited_controlled=is_limited_controlled,
+            )
+
         return parent
+
+    def _build_interface_type(
+        self, name: str, type_def: InterfaceTypeDef
+    ) -> InterfaceType:
+        """Build an interface type."""
+        # Resolve parent interfaces
+        parent_interfaces: list[InterfaceType] = []
+        for parent_expr in type_def.parent_interfaces:
+            parent_type = self._resolve_type(parent_expr)
+            if isinstance(parent_type, InterfaceType):
+                parent_interfaces.append(parent_type)
+
+        return InterfaceType(
+            name=name,
+            is_limited=type_def.is_limited,
+            is_synchronized=type_def.is_synchronized,
+            is_task=type_def.is_task,
+            is_protected=type_def.is_protected,
+            parent_interfaces=parent_interfaces,
+        )
 
     # =========================================================================
     # Type Resolution
@@ -751,15 +1582,103 @@ class SemanticAnalyzer:
             self._analyze_exit_stmt(stmt)
         elif isinstance(stmt, ReturnStmt):
             self._analyze_return_stmt(stmt)
+        elif isinstance(stmt, ExtendedReturnStmt):
+            self._analyze_extended_return_stmt(stmt)
         elif isinstance(stmt, RaiseStmt):
             self._analyze_raise_stmt(stmt)
         elif isinstance(stmt, ProcedureCallStmt):
             self._analyze_procedure_call(stmt)
+        elif isinstance(stmt, PragmaStmt):
+            self._analyze_pragma(stmt)
+        elif isinstance(stmt, DelayStmt):
+            self._analyze_delay_stmt(stmt)
+        elif isinstance(stmt, AcceptStmt):
+            self._analyze_accept_stmt(stmt)
+        elif isinstance(stmt, SelectStmt):
+            self._analyze_select_stmt(stmt)
+        elif isinstance(stmt, RequeueStmt):
+            self._analyze_requeue_stmt(stmt)
+        elif isinstance(stmt, AbortStmt):
+            self._analyze_abort_stmt(stmt)
+        elif isinstance(stmt, ParallelBlockStmt):
+            self._analyze_parallel_block(stmt)
+
+    def _analyze_parallel_block(self, stmt: ParallelBlockStmt) -> None:
+        """Analyze an Ada 2022 parallel block statement."""
+        # Analyze each parallel sequence
+        for sequence in stmt.sequences:
+            for s in sequence:
+                self._analyze_statement(s)
+
+    def _analyze_pragma(self, stmt: PragmaStmt) -> None:
+        """Analyze a pragma statement."""
+        pragma_name = stmt.name.lower()
+
+        if pragma_name == "import":
+            # pragma Import(Convention, Entity, External_Name);
+            # Used to import external (assembly) routines
+            if len(stmt.args) >= 2:
+                # Get entity name
+                entity = stmt.args[1]
+                if isinstance(entity, Identifier):
+                    sym = self.symbols.lookup(entity.name)
+                    if sym:
+                        sym.is_imported = True
+                        # External name is optional
+                        if len(stmt.args) >= 3:
+                            ext_name = stmt.args[2]
+                            if isinstance(ext_name, StringLiteral):
+                                sym.external_name = ext_name.value
+                            elif isinstance(ext_name, Identifier):
+                                sym.external_name = ext_name.name
+
+        elif pragma_name == "inline":
+            # pragma Inline(subprogram);
+            if stmt.args:
+                entity = stmt.args[0]
+                if isinstance(entity, Identifier):
+                    sym = self.symbols.lookup(entity.name)
+                    if sym:
+                        sym.is_inline = True
+
+        elif pragma_name == "volatile":
+            # pragma Volatile(variable);
+            if stmt.args:
+                entity = stmt.args[0]
+                if isinstance(entity, Identifier):
+                    sym = self.symbols.lookup(entity.name)
+                    if sym:
+                        sym.is_volatile = True
+
+        elif pragma_name == "no_return":
+            # pragma No_Return(procedure);
+            if stmt.args:
+                entity = stmt.args[0]
+                if isinstance(entity, Identifier):
+                    sym = self.symbols.lookup(entity.name)
+                    if sym:
+                        sym.is_no_return = True
+
+        elif pragma_name == "pack":
+            # pragma Pack(type);
+            if stmt.args:
+                entity = stmt.args[0]
+                if isinstance(entity, Identifier):
+                    sym = self.symbols.lookup(entity.name)
+                    if sym and sym.ada_type:
+                        sym.ada_type.is_packed = True
+
+        # Other pragmas are silently ignored for now
+        # This includes: Pure, Preelaborate, Elaborate_Body, etc.
 
     def _analyze_assignment(self, stmt: AssignmentStmt) -> None:
         """Analyze an assignment statement."""
         target_type = self._analyze_expr(stmt.target)
+        # Set target type for @ (target name) support in Ada 2022
+        old_target_type = self.current_assignment_target_type
+        self.current_assignment_target_type = target_type
         value_type = self._analyze_expr(stmt.value)
+        self.current_assignment_target_type = old_target_type
 
         # Check that target is assignable (variable, not constant)
         if isinstance(stmt.target, Identifier):
@@ -819,6 +1738,9 @@ class SemanticAnalyzer:
         old_in_loop = self.in_loop
         self.in_loop = True
 
+        # Track loop label for exit validation
+        self.loop_labels.append(stmt.label.lower() if stmt.label else None)
+
         if stmt.iteration_scheme:
             if isinstance(stmt.iteration_scheme, WhileScheme):
                 cond_type = self._analyze_expr(stmt.iteration_scheme.condition)
@@ -844,6 +1766,7 @@ class SemanticAnalyzer:
         if isinstance(stmt.iteration_scheme, ForScheme):
             self.symbols.leave_scope()
 
+        self.loop_labels.pop()
         self.in_loop = old_in_loop
 
     def _analyze_block_stmt(self, stmt: BlockStmt) -> None:
@@ -862,6 +1785,12 @@ class SemanticAnalyzer:
         """Analyze an exit statement."""
         if not self.in_loop:
             self.error("exit statement must be inside a loop", stmt)
+
+        # Validate loop label if specified
+        if stmt.loop_label:
+            label_lower = stmt.loop_label.lower()
+            if label_lower not in self.loop_labels:
+                self.error(f"exit references unknown loop label '{stmt.loop_label}'", stmt)
 
         if stmt.condition:
             cond_type = self._analyze_expr(stmt.condition)
@@ -893,6 +1822,64 @@ class SemanticAnalyzer:
             if stmt.value is not None:
                 self.error("procedure cannot return a value", stmt)
 
+    def _analyze_extended_return_stmt(self, stmt: ExtendedReturnStmt) -> None:
+        """Analyze an extended return statement (Ada 2005)."""
+        if self.current_subprogram is None:
+            self.error("extended return statement outside subprogram", stmt)
+            return
+
+        if self.current_subprogram.kind != SymbolKind.FUNCTION:
+            self.error("extended return statement only allowed in functions", stmt)
+            return
+
+        # Enter a new scope for the return object
+        self.symbols.enter_scope("extended_return")
+
+        # Resolve the return type
+        return_type: Optional[AdaType] = None
+        if stmt.type_mark:
+            return_type = self._resolve_type(stmt.type_mark)
+        elif self.current_subprogram.return_type:
+            return_type = self.current_subprogram.return_type
+
+        # Define the return object
+        if return_type:
+            self.symbols.define(
+                Symbol(
+                    name=stmt.object_name,
+                    kind=SymbolKind.VARIABLE,
+                    ada_type=return_type,
+                )
+            )
+
+        # Check type compatibility with function return type
+        if return_type and self.current_subprogram.return_type:
+            if not types_compatible(self.current_subprogram.return_type, return_type):
+                self.error(
+                    f"extended return type mismatch: expected "
+                    f"'{self.current_subprogram.return_type.name}', "
+                    f"got '{return_type.name}'",
+                    stmt,
+                )
+
+        # Analyze initialization expression if present
+        if stmt.init_expr:
+            init_type = self._analyze_expr(stmt.init_expr)
+            if init_type and return_type:
+                if not types_compatible(return_type, init_type):
+                    self.error(
+                        f"initialization type mismatch: expected "
+                        f"'{return_type.name}', got '{init_type.name}'",
+                        stmt.init_expr,
+                    )
+
+        # Analyze the statements in the do block
+        for inner_stmt in stmt.statements:
+            self._analyze_statement(inner_stmt)
+
+        # Leave the scope
+        self.symbols.leave_scope()
+
     def _analyze_raise_stmt(self, stmt: RaiseStmt) -> None:
         """Analyze a raise statement."""
         if stmt.exception_name:
@@ -907,6 +1894,123 @@ class SemanticAnalyzer:
                     self.error(
                         f"'{stmt.exception_name.name}' is not an exception",
                         stmt,
+                    )
+
+    def _analyze_delay_stmt(self, stmt: DelayStmt) -> None:
+        """Analyze a delay statement."""
+        # Analyze the delay expression
+        expr_type = self._analyze_expr(stmt.expression)
+        if expr_type:
+            # For delay, expect a Duration (numeric type)
+            # For delay until, expect a Time type from Ada.Calendar
+            # For now, accept any numeric type
+            type_name = expr_type.name.lower()
+            if stmt.is_until:
+                # delay until expects a Time type (or similar)
+                # Allow numeric types for now (until we have Ada.Calendar fully)
+                pass
+            else:
+                # delay expects a Duration (numeric type)
+                if type_name not in ("duration", "integer", "float", "universal_integer", "universal_real"):
+                    self.error(
+                        f"delay expression must be of numeric type, got '{expr_type.name}'",
+                        stmt.expression,
+                    )
+
+    def _analyze_accept_stmt(self, stmt: AcceptStmt) -> None:
+        """Analyze an accept statement for task rendezvous."""
+        # Check we're inside a task body
+        if not self.in_task_body:
+            self.error("accept statement must be inside a task body", stmt)
+            return
+
+        # Look up the entry being accepted
+        if self.current_task:
+            entry_sym = None
+            # Look for the entry in the task type's entries
+            if self.current_task.ada_type and hasattr(self.current_task.ada_type, 'entries'):
+                for entry_info in self.current_task.ada_type.entries:
+                    if entry_info.name.lower() == stmt.entry_name.lower():
+                        # Found entry - parameter count check based on entry_info
+                        if len(stmt.parameters) != len(entry_info.parameter_types):
+                            self.error(
+                                f"wrong number of parameters in accept: expected {len(entry_info.parameter_types)}, "
+                                f"got {len(stmt.parameters)}",
+                                stmt,
+                            )
+                        entry_sym = entry_info
+                        break
+
+            # Also check current scope for entries (for single tasks defined inline)
+            if entry_sym is None:
+                for sym in self.symbols.current_scope_symbols():
+                    if sym.name.lower() == stmt.entry_name.lower() and sym.kind == SymbolKind.ENTRY:
+                        entry_sym = sym
+                        break
+
+            # Also check parent scope (entries might be in task type scope)
+            if entry_sym is None:
+                entry_sym = self.symbols.lookup(stmt.entry_name)
+                if entry_sym and entry_sym.kind != SymbolKind.ENTRY:
+                    entry_sym = None
+
+            if entry_sym is None:
+                self.error(f"entry '{stmt.entry_name}' not found in current task", stmt)
+
+        # Analyze the statements in the accept body (requeue is valid here)
+        old_in_accept = self.in_accept_or_entry
+        self.in_accept_or_entry = True
+        for s in stmt.statements:
+            self._analyze_statement(s)
+        self.in_accept_or_entry = old_in_accept
+
+    def _analyze_select_stmt(self, stmt: SelectStmt) -> None:
+        """Analyze a select statement."""
+        # Check we're inside a task body for selective accept
+        # (though select can also be used for timed entry calls outside tasks)
+
+        for alt in stmt.alternatives:
+            # Analyze guard if present
+            if alt.guard:
+                guard_type = self._analyze_expr(alt.guard)
+                if guard_type and guard_type.name.lower() != "boolean":
+                    self.error(
+                        f"select guard must be Boolean, got '{guard_type.name}'",
+                        alt.guard,
+                    )
+
+            # Analyze statements in alternative
+            for s in alt.statements:
+                self._analyze_statement(s)
+
+    def _analyze_requeue_stmt(self, stmt: RequeueStmt) -> None:
+        """Analyze a requeue statement."""
+        # Requeue can only appear in accept statement or entry body
+        if not self.in_accept_or_entry:
+            self.error("requeue must be inside an accept statement or entry body", stmt)
+            return
+
+        # Analyze the entry name expression
+        if isinstance(stmt.entry_name, Identifier):
+            sym = self.symbols.lookup(stmt.entry_name.name)
+            if sym is None:
+                self.error(f"entry '{stmt.entry_name.name}' not found", stmt)
+            elif sym.kind != SymbolKind.ENTRY:
+                self.error(f"'{stmt.entry_name.name}' is not an entry", stmt)
+        else:
+            # Could be a selected component (task.entry)
+            self._analyze_expr(stmt.entry_name)
+
+    def _analyze_abort_stmt(self, stmt: AbortStmt) -> None:
+        """Analyze an abort statement."""
+        # Analyze each task name being aborted
+        for task_expr in stmt.task_names:
+            task_type = self._analyze_expr(task_expr)
+            if task_type:
+                if task_type.kind != TypeKind.TASK:
+                    self.error(
+                        f"abort requires a task object, got '{task_type.name}'",
+                        task_expr,
                     )
 
     def _analyze_procedure_call(self, stmt: ProcedureCallStmt) -> None:
@@ -965,6 +2069,8 @@ class SemanticAnalyzer:
             return self._analyze_identifier(expr)
         elif isinstance(expr, IntegerLiteral):
             return PREDEFINED_TYPES["Universal_Integer"]
+        elif isinstance(expr, RealLiteral):
+            return PREDEFINED_TYPES["Universal_Real"]
         elif isinstance(expr, StringLiteral):
             return PREDEFINED_TYPES["String"]
         elif isinstance(expr, CharacterLiteral):
@@ -990,9 +2096,31 @@ class SemanticAnalyzer:
         elif isinstance(expr, QualifiedExpr):
             return self._analyze_qualified_expr(expr)
         elif isinstance(expr, Aggregate):
-            return None  # Type determined by context
+            return self._analyze_aggregate(expr)
+        elif isinstance(expr, DeltaAggregate):
+            return self._analyze_delta_aggregate(expr)
+        elif isinstance(expr, ContainerAggregate):
+            return self._analyze_container_aggregate(expr)
         elif isinstance(expr, Allocator):
             return self._analyze_allocator(expr)
+        elif isinstance(expr, ConditionalExpr):
+            return self._analyze_conditional_expr(expr)
+        elif isinstance(expr, QuantifiedExpr):
+            return self._analyze_quantified_expr(expr)
+        elif isinstance(expr, DeclareExpr):
+            return self._analyze_declare_expr(expr)
+        elif isinstance(expr, CaseExpr):
+            return self._analyze_case_expr(expr)
+        elif isinstance(expr, MembershipTest):
+            return self._analyze_membership_test(expr)
+        elif isinstance(expr, Slice):
+            return self._analyze_slice(expr)
+        elif isinstance(expr, Dereference):
+            return self._analyze_dereference(expr)
+        elif isinstance(expr, TargetName):
+            return self._analyze_target_name(expr)
+        elif isinstance(expr, RaiseExpr):
+            return self._analyze_raise_expr(expr)
 
         return None
 
@@ -1018,6 +2146,364 @@ class SemanticAnalyzer:
             name=f"access_{designated_type.name}",
             designated_type=designated_type,
         )
+
+    def _analyze_conditional_expr(self, expr: ConditionalExpr) -> Optional[AdaType]:
+        """Analyze an Ada 2012 conditional expression: (if Cond then E1 else E2)."""
+        # Condition must be Boolean
+        cond_type = self._analyze_expr(expr.condition)
+        if cond_type and cond_type.name.lower() != "boolean":
+            self.error(
+                f"condition must be Boolean, got '{cond_type.name}'",
+                expr.condition,
+            )
+
+        # Analyze then expression
+        then_type = self._analyze_expr(expr.then_expr)
+
+        # Analyze elsif parts (if any)
+        result_type = then_type
+        for elsif_cond, elsif_expr in expr.elsif_parts:
+            elsif_cond_type = self._analyze_expr(elsif_cond)
+            if elsif_cond_type and elsif_cond_type.name.lower() != "boolean":
+                self.error(
+                    f"elsif condition must be Boolean, got '{elsif_cond_type.name}'",
+                    elsif_cond,
+                )
+            elsif_type = self._analyze_expr(elsif_expr)
+            if result_type and elsif_type and not types_compatible(result_type, elsif_type):
+                self.error(
+                    f"elsif branch type '{elsif_type.name}' not compatible with "
+                    f"then branch type '{result_type.name}'",
+                    elsif_expr,
+                )
+
+        # Analyze else expression (if any)
+        if expr.else_expr:
+            else_type = self._analyze_expr(expr.else_expr)
+            if result_type and else_type and not types_compatible(result_type, else_type):
+                self.error(
+                    f"else branch type '{else_type.name}' not compatible with "
+                    f"then branch type '{result_type.name}'",
+                    expr.else_expr,
+                )
+
+        return result_type
+
+    def _analyze_quantified_expr(self, expr: QuantifiedExpr) -> Optional[AdaType]:
+        """Analyze an Ada 2012 quantified expression: (for all/some X in Range => Pred)."""
+        # Push a new scope for the loop variable
+        self.symbols.enter_scope("quantified_expr")
+
+        # Analyze the iterator and define the loop variable
+        if expr.iterator:
+            # Get the iterable type
+            iter_type: Optional[AdaType] = None
+            if expr.iterator.iterable:
+                iter_type = self._analyze_expr(expr.iterator.iterable)
+
+            # Determine the element type for the loop variable
+            element_type = iter_type if iter_type else PREDEFINED_TYPES["Integer"]
+            if isinstance(iter_type, ArrayType):
+                element_type = iter_type.element_type
+
+            # Define the loop variable
+            self.symbols.define(
+                Symbol(
+                    name=expr.iterator.name,
+                    kind=SymbolKind.VARIABLE,
+                    ada_type=element_type,
+                    is_constant=True,  # Loop variable is constant
+                ),
+            )
+
+        # Analyze the predicate - must be Boolean
+        pred_type = self._analyze_expr(expr.predicate)
+        if pred_type and pred_type.name.lower() != "boolean":
+            self.error(
+                f"quantified expression predicate must be Boolean, got '{pred_type.name}'",
+                expr.predicate,
+            )
+
+        # Pop the scope
+        self.symbols.leave_scope()
+
+        # Quantified expressions always return Boolean
+        return PREDEFINED_TYPES["Boolean"]
+
+    def _analyze_declare_expr(self, expr: DeclareExpr) -> Optional[AdaType]:
+        """Analyze an Ada 2022 declare expression: (declare ... begin Expr)."""
+        # Enter a new scope for the declarations
+        self.symbols.enter_scope("declare_expr")
+
+        # Analyze each declaration
+        for decl in expr.declarations:
+            self._analyze_declaration(decl)
+
+        # Analyze the result expression
+        result_type = self._analyze_expr(expr.result_expr)
+
+        # Leave the scope
+        self.symbols.leave_scope()
+
+        return result_type
+
+    def _analyze_delta_aggregate(self, expr: DeltaAggregate) -> Optional[AdaType]:
+        """Analyze an Ada 2022 delta aggregate: (base with delta ...)."""
+        # Analyze the base expression to get its type
+        base_type = self._analyze_expr(expr.base_expression)
+        if base_type is None:
+            return None
+
+        # Base must be a record or array type
+        if not isinstance(base_type, (RecordType, ArrayType)):
+            self.error(
+                f"delta aggregate base must be record or array, got '{base_type.name}'",
+                expr.base_expression,
+            )
+            return base_type
+
+        # Analyze each component association
+        for component in expr.components:
+            # For record delta aggregates, verify the component exists
+            if isinstance(base_type, RecordType):
+                for choice in component.choices:
+                    if isinstance(choice, Identifier):
+                        found = False
+                        for comp in base_type.components:
+                            if comp.name.lower() == choice.name.lower():
+                                found = True
+                                break
+                        if not found:
+                            self.error(
+                                f"component '{choice.name}' not in record type '{base_type.name}'",
+                                choice,
+                            )
+
+            # Analyze the component value
+            if component.value:
+                self._analyze_expr(component.value)
+
+        # Delta aggregate has the same type as the base
+        return base_type
+
+    def _analyze_aggregate(self, expr: Aggregate) -> Optional[AdaType]:
+        """Analyze an aggregate expression."""
+        # Analyze all components, including iterated ones
+        element_type = None
+        for component in expr.components:
+            if isinstance(component, IteratedComponentAssociation):
+                element_type = self._analyze_iterated_component(component)
+            elif isinstance(component, ComponentAssociation):
+                # Analyze the value expression
+                if component.value:
+                    comp_type = self._analyze_expr(component.value)
+                    if element_type is None:
+                        element_type = comp_type
+        # Type is determined by context, but we analyze components
+        return None
+
+    def _analyze_container_aggregate(self, expr: ContainerAggregate) -> Optional[AdaType]:
+        """Analyze a container aggregate [...]."""
+        # Analyze all components
+        element_type = None
+        for component in expr.components:
+            if isinstance(component, IteratedComponentAssociation):
+                elem = self._analyze_iterated_component(component)
+                if element_type is None:
+                    element_type = elem
+            elif isinstance(component, ComponentAssociation):
+                if component.value:
+                    comp_type = self._analyze_expr(component.value)
+                    if element_type is None:
+                        element_type = comp_type
+        # Return an anonymous array type if we can determine element type
+        if element_type:
+            return ArrayType(
+                name="anonymous_array",
+                component_type=element_type,
+                index_types=[PREDEFINED_TYPES["Integer"]],
+            )
+        return None
+
+    def _analyze_iterated_component(
+        self, comp: IteratedComponentAssociation
+    ) -> Optional[AdaType]:
+        """Analyze an iterated component association (Ada 2012)."""
+        # Enter scope for loop variable
+        self.symbols.enter_scope("iterated_component")
+
+        # Analyze the iterator specification (range or iterable)
+        iter_type = self._analyze_expr(comp.iterator_spec)
+
+        # Define the loop parameter
+        if iter_type:
+            loop_var_type = iter_type
+            # For discrete ranges, the variable type is the range type
+            if isinstance(comp.iterator_spec, RangeExpr):
+                loop_var_type = PREDEFINED_TYPES["Integer"]
+        else:
+            loop_var_type = PREDEFINED_TYPES["Integer"]
+
+        self.symbols.define(
+            Symbol(
+                name=comp.loop_parameter,
+                kind=SymbolKind.VARIABLE,
+                ada_type=loop_var_type,
+            )
+        )
+
+        # Analyze the value expression
+        element_type = self._analyze_expr(comp.value)
+
+        self.symbols.leave_scope()
+        return element_type
+
+    def _analyze_target_name(self, expr: TargetName) -> Optional[AdaType]:
+        """Analyze an Ada 2022 target name (@) expression.
+
+        The @ symbol refers to the target of the enclosing assignment statement.
+        Example: X := @ + 1;  -- Equivalent to X := X + 1;
+        """
+        if self.current_assignment_target_type is None:
+            self.error(
+                "target name (@) can only be used in an assignment statement",
+                expr,
+            )
+            return None
+        return self.current_assignment_target_type
+
+    def _analyze_raise_expr(self, expr: RaiseExpr) -> Optional[AdaType]:
+        """Analyze an Ada 2012 raise expression.
+
+        Raise expressions can appear where any type is expected since
+        they never return normally.
+        Example: X := (if Y > 0 then Y else raise Constraint_Error);
+        """
+        # Verify exception name is valid if provided
+        if expr.exception_name:
+            # For now, allow any identifier as exception name
+            # In a full implementation, we'd verify it's a declared exception
+            pass
+
+        # Analyze the message expression if present
+        if expr.message:
+            msg_type = self._analyze_expr(expr.message)
+            if msg_type and msg_type.name.lower() != "string":
+                self.error(
+                    f"raise expression message must be String, got '{msg_type.name}'",
+                    expr.message,
+                )
+
+        # Raise expressions are "polymorphic" - they can have any type
+        # since they never return. Return None to allow type inference
+        # from context.
+        return None
+
+    def _analyze_case_expr(self, expr: CaseExpr) -> Optional[AdaType]:
+        """Analyze an Ada 2012 case expression: (case Selector is when ...)."""
+        # Analyze the selector expression
+        selector_type = self._analyze_expr(expr.selector)
+        if selector_type is None:
+            return None
+
+        # Selector must be a discrete type (integer, enumeration, or modular)
+        if selector_type and not isinstance(
+            selector_type, (IntegerType, EnumerationType, ModularType)
+        ):
+            self.error(
+                f"case expression selector must be a discrete type, got '{selector_type.name}'",
+                expr.selector,
+            )
+
+        # Analyze all alternatives and find common type
+        result_type: Optional[AdaType] = None
+        for alt in expr.alternatives:
+            # Analyze choice expressions (simple analysis)
+            for choice in alt.choices:
+                if isinstance(choice, ExprChoice):
+                    self._analyze_expr(choice.expr)
+                elif isinstance(choice, RangeChoice):
+                    if choice.range_expr:
+                        self._analyze_expr(choice.range_expr)
+                # OthersChoice needs no analysis
+
+            # Analyze the result expression
+            alt_type = self._analyze_expr(alt.result_expr)
+            if alt_type:
+                if result_type is None:
+                    result_type = alt_type
+                # Type compatibility check - just warn if different types
+                elif result_type.name.lower() != alt_type.name.lower():
+                    self.error(
+                        f"case expression alternatives must have compatible types, "
+                        f"got '{result_type.name}' and '{alt_type.name}'",
+                        alt.result_expr,
+                    )
+
+        return result_type
+
+    def _analyze_membership_test(self, expr: MembershipTest) -> Optional[AdaType]:
+        """Analyze a membership test (X in A | B | C)."""
+        # Analyze the tested expression
+        expr_type = self._analyze_expr(expr.expr)
+
+        # Analyze each choice
+        for choice in expr.choices:
+            if isinstance(choice, ExprChoice):
+                self._analyze_expr(choice.expr)
+            elif isinstance(choice, RangeChoice):
+                if choice.range_expr:
+                    self._analyze_expr(choice.range_expr)
+            # OthersChoice doesn't need analysis
+
+        # Membership tests always return Boolean
+        return PREDEFINED_TYPES["Boolean"]
+
+    def _analyze_slice(self, expr: Slice) -> Optional[AdaType]:
+        """Analyze a slice expression (A(1 .. 10))."""
+        # Get the prefix type
+        prefix_type = self._analyze_expr(expr.prefix)
+        if prefix_type is None:
+            return None
+
+        # Prefix must be an array type
+        if not isinstance(prefix_type, ArrayType):
+            self.error(
+                f"slice prefix must be an array type, got '{prefix_type.name}'",
+                expr.prefix,
+            )
+            return None
+
+        # Analyze the range expression
+        self._analyze_expr(expr.range_expr)
+
+        # Slice of an array returns same array type (unconstrained)
+        return ArrayType(
+            name=f"{prefix_type.name}_slice",
+            kind=prefix_type.kind,
+            size_bits=0,  # Size depends on range
+            index_types=prefix_type.index_types,
+            component_type=prefix_type.component_type,
+            is_constrained=False,
+        )
+
+    def _analyze_dereference(self, expr: Dereference) -> Optional[AdaType]:
+        """Analyze a dereference expression (P.all)."""
+        # Get the prefix type
+        prefix_type = self._analyze_expr(expr.prefix)
+        if prefix_type is None:
+            return None
+
+        # Prefix must be an access type
+        if not isinstance(prefix_type, AccessType):
+            self.error(
+                f"dereference prefix must be an access type, got '{prefix_type.name}'",
+                expr.prefix,
+            )
+            return None
+
+        # Return the designated type
+        return prefix_type.designated_type
 
     def _analyze_identifier(self, expr: Identifier) -> Optional[AdaType]:
         """Analyze an identifier expression."""
@@ -1208,20 +2694,125 @@ class SemanticAnalyzer:
 
     def _analyze_attribute_ref(self, expr: AttributeReference) -> Optional[AdaType]:
         """Analyze an attribute reference."""
-        # Analyze prefix
-        self._analyze_expr(expr.prefix)
+        # Analyze prefix and get its type
+        prefix_type = self._analyze_expr(expr.prefix)
 
-        # Most attributes return Integer or the type's range
+        # Handle attributes based on their name
         attr_lower = expr.attribute.lower()
-        if attr_lower in ("first", "last", "length", "size", "pos"):
+
+        # Integer-valued attributes
+        if attr_lower in ("first", "last", "length", "size", "pos", "min", "max"):
             return PREDEFINED_TYPES["Integer"]
+
+        # Val returns the enumeration type
         if attr_lower == "val":
-            # Returns the enumeration type
-            prefix_type = self._analyze_expr(expr.prefix)
             return prefix_type
+
+        # Image returns String
         if attr_lower == "image":
             return PREDEFINED_TYPES["String"]
 
+        # Value returns the type (inverse of Image)
+        if attr_lower == "value":
+            return prefix_type
+
+        # Address returns an access type (System.Address)
+        if attr_lower == "address":
+            return AccessType(
+                name="System.Address",
+                kind=TypeKind.ACCESS,
+                size_bits=16,  # Z80 has 16-bit addresses
+                designated_type=prefix_type if prefix_type else PREDEFINED_TYPES["Integer"],
+            )
+
+        # Access returns an access type to the prefix
+        if attr_lower == "access":
+            if prefix_type is None:
+                return None
+            return AccessType(
+                name=f"access_{prefix_type.name}",
+                kind=TypeKind.ACCESS,
+                size_bits=16,  # Z80 has 16-bit pointers
+                designated_type=prefix_type,
+            )
+
+        # Unchecked_Access is like Access but without accessibility checks
+        if attr_lower == "unchecked_access":
+            if prefix_type is None:
+                return None
+            return AccessType(
+                name=f"access_{prefix_type.name}",
+                kind=TypeKind.ACCESS,
+                size_bits=16,
+                designated_type=prefix_type,
+            )
+
+        # Range attribute on arrays returns the index range
+        if attr_lower == "range":
+            if isinstance(prefix_type, ArrayType) and prefix_type.index_types:
+                return prefix_type.index_types[0]
+            return PREDEFINED_TYPES["Integer"]
+
+        # Succ and Pred return the same discrete type
+        if attr_lower in ("succ", "pred"):
+            return prefix_type
+
+        # Modulus for modular types
+        if attr_lower == "modulus":
+            return PREDEFINED_TYPES["Integer"]
+
+        # Boolean attributes
+        if attr_lower in ("valid", "constrained"):
+            return PREDEFINED_TYPES["Boolean"]
+
+        # Reduce attribute (Ada 2022)
+        # Syntax: Prefix'Reduce(Combiner, Initial_Value)
+        if attr_lower == "reduce":
+            # Analyze the combiner and initial value arguments
+            if len(expr.args) >= 2:
+                self._analyze_expr(expr.args[0])  # Combiner (function or operator)
+                init_type = self._analyze_expr(expr.args[1])  # Initial value
+                # The result type is the type of the initial value
+                if init_type:
+                    return init_type
+            # If prefix is an array, the result type is component type
+            if isinstance(prefix_type, ArrayType):
+                return prefix_type.component_type
+            return PREDEFINED_TYPES["Integer"]
+
+        # Parallel_Reduce attribute (Ada 2022)
+        if attr_lower == "parallel_reduce":
+            if len(expr.args) >= 2:
+                self._analyze_expr(expr.args[0])
+                init_type = self._analyze_expr(expr.args[1])
+                if init_type:
+                    return init_type
+            if isinstance(prefix_type, ArrayType):
+                return prefix_type.component_type
+            return PREDEFINED_TYPES["Integer"]
+
+        # 'Old attribute (Ada 2012) - used in postconditions
+        # Returns the value of the expression at subprogram entry
+        if attr_lower == "old":
+            # 'Old has the same type as the prefix
+            return prefix_type
+
+        # 'Result attribute (Ada 2012) - used in postconditions
+        # Refers to the return value of the enclosing function
+        if attr_lower == "result":
+            # Should be used only in postconditions of functions
+            if self.current_subprogram is not None:
+                if self.current_subprogram.kind == SymbolKind.FUNCTION:
+                    return self.current_subprogram.return_type
+            self.error("'Result can only be used in function postconditions", expr)
+            return None
+
+        # 'Update attribute (Ada 2012 AI12-0001) - for record/array update
+        if attr_lower == "update":
+            # Returns same type as prefix
+            return prefix_type
+
+        # Default: return Integer for unknown attributes
         return PREDEFINED_TYPES["Integer"]
 
     def _analyze_function_call(self, expr: FunctionCall) -> Optional[AdaType]:
