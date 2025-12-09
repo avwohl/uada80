@@ -18,9 +18,11 @@ class IRType(Enum):
 
     BYTE = auto()  # 8-bit value
     WORD = auto()  # 16-bit value
+    DWORD = auto()  # 32-bit value (for fixed-point, uses two registers)
     BOOL = auto()  # Boolean (stored as byte)
     VOID = auto()  # No value (for procedures)
     PTR = auto()  # 16-bit pointer
+    FIXED = auto()  # 16.16 fixed-point (32-bit)
 
 
 @dataclass
@@ -146,6 +148,7 @@ class OpCode(Enum):
     JZ = auto()  # jump if zero
     JNZ = auto()  # jump if not zero
     CALL = auto()  # call subroutine
+    CALL_INDIRECT = auto()  # indirect call through function pointer (src1=ptr)
     DISPATCH = auto()  # dispatching call through vtable (src1=object, src2=slot)
     RET = auto()  # return from subroutine
 

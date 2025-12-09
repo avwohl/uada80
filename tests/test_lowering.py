@@ -1020,3 +1020,216 @@ def test_lowering_exception_id_assignment():
 
     assert id1 == id3  # Same exception
     assert id1 != id2  # Different exceptions
+
+
+# ============================================================================
+# Range Constraint Tests
+# ============================================================================
+
+
+def test_lowering_range_check_on_type_conversion():
+    """Test that type conversions to constrained subtypes emit range checks."""
+    from uada80.ast_nodes import TypeConversion, TypeDecl, SubtypeDecl
+    from uada80.type_system import IntegerType
+
+    # Create a constrained subtype
+    subtype_decl = SubtypeDecl(
+        name="Small_Int",
+        subtype_indication=SubtypeIndication(
+            type_mark=Identifier("Integer"),
+            constraint=RangeExpr(low=int_lit(1), high=int_lit(100)),
+        ),
+    )
+
+    # Create a type conversion: Small_Int(X) where X is a variable
+    conversion = TypeConversion(
+        type_mark=Identifier("Small_Int"),
+        operand=Identifier("X"),
+    )
+
+    # Use the conversion in a return statement
+    decl = ObjectDecl(
+        names=["X"],
+        type_mark=subtype("Integer"),
+        init_expr=int_lit(50),
+    )
+
+    program = create_simple_function(
+        "test_conversion",
+        [ReturnStmt(value=conversion)],
+        decls=[subtype_decl, decl],
+    )
+
+    lowering = create_lowering()
+
+    # Register the subtype in the symbol table
+    small_int_type = IntegerType(name="Small_Int", low=1, high=100)
+    lowering.symbols.define(Symbol(
+        name="Small_Int",
+        kind=SymbolKind.TYPE,
+        ada_type=small_int_type,
+    ))
+
+    module = lowering.lower(program)
+
+    # Should have CMP_LT and CMP_GT instructions for range checking
+    has_cmp_lt = False
+    has_cmp_gt = False
+    has_jnz = False
+
+    for block in module.functions[0].blocks:
+        for instr in block.instructions:
+            if instr.opcode == OpCode.CMP_LT:
+                has_cmp_lt = True
+            if instr.opcode == OpCode.CMP_GT:
+                has_cmp_gt = True
+            if instr.opcode == OpCode.JNZ:
+                has_jnz = True
+
+    # Range checks emit CMP_LT and CMP_GT with JNZ
+    assert has_cmp_lt, "Expected CMP_LT for lower bound check"
+    assert has_cmp_gt, "Expected CMP_GT for upper bound check"
+    assert has_jnz, "Expected JNZ for conditional jump to error handler"
+
+
+def test_lowering_range_check_on_assignment():
+    """Test that assignments to constrained variables emit range checks.
+
+    Note: This test verifies the basic mechanism. The assignment range check
+    depends on the variable having a type with bounds, which requires the
+    semantic analyzer to properly propagate the type information. Here we
+    test the infrastructure by manually setting up the variable with its type.
+    """
+    from uada80.type_system import IntegerType
+
+    # Create a simple variable with a constrained type
+    positive_type = IntegerType(name="Small", low=1, high=100)
+
+    # Create a variable declaration
+    decl = ObjectDecl(
+        names=["N"],
+        type_mark=subtype("Small"),
+        init_expr=int_lit(50),
+    )
+
+    # Assignment to the constrained variable
+    assign = AssignmentStmt(
+        target=Identifier("N"),
+        value=int_lit(75),
+    )
+
+    program = create_procedure(
+        "test_assign",
+        [assign],
+        decls=[decl],
+    )
+
+    lowering = create_lowering()
+
+    # Register the constrained type AND the variable with that type
+    lowering.symbols.define(Symbol(
+        name="Small",
+        kind=SymbolKind.TYPE,
+        ada_type=positive_type,
+    ))
+    lowering.symbols.define(Symbol(
+        name="N",
+        kind=SymbolKind.VARIABLE,
+        ada_type=positive_type,
+    ))
+
+    module = lowering.lower(program)
+
+    # Should have CMP_LT and CMP_GT instructions for range checking
+    has_cmp_lt = False
+    has_cmp_gt = False
+
+    for block in module.functions[0].blocks:
+        for instr in block.instructions:
+            if instr.opcode == OpCode.CMP_LT:
+                has_cmp_lt = True
+            if instr.opcode == OpCode.CMP_GT:
+                has_cmp_gt = True
+
+    # Range checks emit CMP_LT for lower bound and CMP_GT for upper bound
+    assert has_cmp_lt, "Expected CMP_LT for lower bound check on constrained assignment"
+    assert has_cmp_gt, "Expected CMP_GT for upper bound check on constrained assignment"
+
+
+def test_lowering_qualified_expr_range_check():
+    """Test that qualified expressions emit range checks."""
+    from uada80.ast_nodes import QualifiedExpr
+    from uada80.type_system import IntegerType
+
+    # Create a qualified expression: Small'(X)
+    qual_expr = QualifiedExpr(
+        type_mark=Identifier("Small"),
+        expr=int_lit(50),
+    )
+
+    program = create_simple_function(
+        "test_qualified",
+        [ReturnStmt(value=qual_expr)],
+    )
+
+    lowering = create_lowering()
+
+    # Register the type
+    small_type = IntegerType(name="Small", low=0, high=255)
+    lowering.symbols.define(Symbol(
+        name="Small",
+        kind=SymbolKind.TYPE,
+        ada_type=small_type,
+    ))
+
+    module = lowering.lower(program)
+
+    # Should have range check comparisons
+    has_cmp_lt = False
+    has_cmp_gt = False
+
+    for block in module.functions[0].blocks:
+        for instr in block.instructions:
+            if instr.opcode == OpCode.CMP_LT:
+                has_cmp_lt = True
+            if instr.opcode == OpCode.CMP_GT:
+                has_cmp_gt = True
+
+    # Range checks emit CMP_LT for lower bound and CMP_GT for upper bound
+    assert has_cmp_lt, "Expected CMP_LT for lower bound check"
+    assert has_cmp_gt, "Expected CMP_GT for upper bound check"
+
+
+def test_no_range_check_for_unconstrained_integer():
+    """Test that conversions to full Integer type don't emit unnecessary checks."""
+    from uada80.ast_nodes import TypeConversion
+
+    # Create a type conversion to Integer (full range)
+    conversion = TypeConversion(
+        type_mark=Identifier("Integer"),
+        operand=int_lit(42),
+    )
+
+    program = create_simple_function(
+        "test_full_range",
+        [ReturnStmt(value=conversion)],
+    )
+
+    lowering = create_lowering()
+
+    module = lowering.lower(program)
+
+    # Should NOT have range check instructions (Integer is full 16-bit range)
+    has_cmp_lt = False
+    has_cmp_gt = False
+
+    for block in module.functions[0].blocks:
+        for instr in block.instructions:
+            if instr.opcode == OpCode.CMP_LT:
+                has_cmp_lt = True
+            if instr.opcode == OpCode.CMP_GT:
+                has_cmp_gt = True
+
+    # Full integer range doesn't need range checks
+    assert not has_cmp_lt, "Should not emit CMP_LT for full Integer range"
+    assert not has_cmp_gt, "Should not emit CMP_GT for full Integer range"

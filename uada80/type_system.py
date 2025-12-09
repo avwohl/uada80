@@ -316,6 +316,16 @@ class ArrayType(AdaType):
 
 
 @dataclass
+class DiscriminantConstraint:
+    """A constraint on a discriminant value."""
+
+    discriminant_name: str
+    constraint_value: Optional[int] = None  # Static value constraint
+    constraint_low: Optional[int] = None  # Range constraint lower bound
+    constraint_high: Optional[int] = None  # Range constraint upper bound
+
+
+@dataclass
 class RecordComponent:
     """A component (field) of a record type."""
 
@@ -324,6 +334,9 @@ class RecordComponent:
     offset_bits: int = 0  # Offset from start of record
     default_value: Optional[any] = None
     size_bits: Optional[int] = None  # Representation-specified size (overrides component_type.size_bits)
+    # For discriminants: constraint information
+    is_discriminant: bool = False
+    discriminant_constraint: Optional[DiscriminantConstraint] = None
 
 
 @dataclass
@@ -382,6 +395,20 @@ class InterfaceType(AdaType):
 
 
 @dataclass
+class VariantInfo:
+    """Information about a variant in a discriminated record."""
+    choices: list  # List of discriminant values that select this variant
+    components: list[RecordComponent] = field(default_factory=list)
+
+
+@dataclass
+class VariantPartInfo:
+    """Information about the variant part of a discriminated record."""
+    discriminant_name: str
+    variants: list[VariantInfo] = field(default_factory=list)
+
+
+@dataclass
 class RecordType(AdaType):
     """Record type."""
 
@@ -399,6 +426,8 @@ class RecordType(AdaType):
     # Controlled type support (Ada.Finalization)
     is_controlled: bool = False  # Derives from Controlled
     is_limited_controlled: bool = False  # Derives from Limited_Controlled
+    # Variant part for discriminated records
+    variant_part: Optional[VariantPartInfo] = None
 
     def __post_init__(self) -> None:
         self.kind = TypeKind.RECORD
@@ -406,31 +435,94 @@ class RecordType(AdaType):
             self.size_bits = self._compute_size()
 
     def _compute_size(self) -> int:
-        """Compute record size based on components."""
+        """Compute record size based on components.
+
+        For variant records, size is computed as discriminants + common components +
+        maximum variant size (all variants occupy the same space).
+        """
         total_bits = 0
         # Tagged types have a hidden tag field (pointer to vtable)
         if self.is_tagged and not self.is_class_wide:
             total_bits = 16  # Tag is 16-bit pointer on Z80
-        if not self.components and not self.discriminants:
-            return total_bits
-        # Simple layout: pack components sequentially
-        for comp in self.discriminants + self.components:
-            # Align to byte boundary for simplicity
+
+        # Add discriminants
+        for disc in self.discriminants:
+            if total_bits % 8 != 0:
+                total_bits = ((total_bits + 7) // 8) * 8
+            disc.offset_bits = total_bits
+            total_bits += disc.component_type.size_bits
+
+        # Add common components
+        for comp in self.components:
             if total_bits % 8 != 0:
                 total_bits = ((total_bits + 7) // 8) * 8
             comp.offset_bits = total_bits
             total_bits += comp.component_type.size_bits
+
+        # Add variant part (size = max of all variants)
+        if self.variant_part:
+            variant_start = total_bits
+            max_variant_size = 0
+            for variant in self.variant_part.variants:
+                variant_size = 0
+                for comp in variant.components:
+                    if variant_size % 8 != 0:
+                        variant_size = ((variant_size + 7) // 8) * 8
+                    comp.offset_bits = variant_start + variant_size
+                    variant_size += comp.component_type.size_bits
+                if variant_size > max_variant_size:
+                    max_variant_size = variant_size
+            total_bits += max_variant_size
+
         return total_bits
 
     def get_component(self, name: str) -> Optional[RecordComponent]:
-        """Look up component by name."""
-        for comp in self.discriminants + self.components:
+        """Look up component by name (including variant components)."""
+        # Check discriminants first
+        for disc in self.discriminants:
+            if disc.name.lower() == name.lower():
+                return disc
+        # Check common components
+        for comp in self.components:
             if comp.name.lower() == name.lower():
                 return comp
+        # Check variant components
+        if self.variant_part:
+            for variant in self.variant_part.variants:
+                for comp in variant.components:
+                    if comp.name.lower() == name.lower():
+                        return comp
         # Check parent type for derived records
         if self.parent_type:
             return self.parent_type.get_component(name)
         return None
+
+    def get_variant_for_discriminant(self, disc_value) -> Optional[VariantInfo]:
+        """Find the variant that matches the given discriminant value."""
+        if not self.variant_part:
+            return None
+        for variant in self.variant_part.variants:
+            for choice in variant.choices:
+                # Handle different choice types (simple value, range, others)
+                if choice == disc_value:
+                    return variant
+                # Range check would go here
+        return None
+
+    def has_variant_part(self) -> bool:
+        """Check if this record has a variant part."""
+        return self.variant_part is not None
+
+    def get_discriminant(self, name: str) -> Optional[RecordComponent]:
+        """Look up discriminant by name."""
+        for disc in self.discriminants:
+            if disc.name.lower() == name.lower():
+                return disc
+        return None
+
+    def has_discriminants(self) -> bool:
+        """Check if this record type has discriminants."""
+        return len(self.discriminants) > 0
 
     def get_class_wide_type(self) -> "RecordType":
         """Get the class-wide type T'Class for this tagged type."""
