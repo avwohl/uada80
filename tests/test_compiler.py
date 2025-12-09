@@ -483,3 +483,193 @@ def test_array_ir_generation():
     assert result.success
     assert "lea" in result.output.lower()  # Load effective address
     assert "store" in result.output.lower()  # Store to computed address
+
+
+def test_multidimensional_array():
+    """Test multidimensional array element access."""
+    source = """
+    procedure Test_Matrix is
+        type Matrix is array (1 .. 3, 1 .. 4) of Integer;
+        M : Matrix;
+        Sum : Integer;
+    begin
+        M(2, 3) := 42;
+        Sum := M(1, 2);
+    end Test_Matrix;
+    """
+
+    result = compile_source(source)
+
+    assert result.success
+    assert "Test_Matrix:" in result.output
+
+
+def test_multidimensional_array_ir():
+    """Test that multidimensional array generates correct offset calculation."""
+    from uada80.compiler import Compiler, OutputFormat
+
+    source = """
+    procedure Test_3D is
+        type Cube is array (0 .. 2, 0 .. 3, 0 .. 4) of Integer;
+        C : Cube;
+    begin
+        C(1, 2, 3) := 99;
+    end Test_3D;
+    """
+
+    compiler = Compiler(output_format=OutputFormat.IR)
+    result = compiler.compile(source)
+
+    assert result.success
+    # Should have multiple offset calculations for 3D array
+    assert "mul" in result.output.lower() or "add" in result.output.lower()
+
+
+def test_array_aggregate_positional():
+    """Test positional array aggregate."""
+    source = """
+    procedure Test_Agg is
+        type Arr is array (1 .. 3) of Integer;
+        Data : Arr := (10, 20, 30);
+    begin
+        null;
+    end Test_Agg;
+    """
+
+    result = compile_source(source)
+    assert result.success
+
+
+def test_array_aggregate_with_others():
+    """Test array aggregate with others clause."""
+    source = """
+    procedure Test_Others is
+        type Arr is array (1 .. 5) of Integer;
+        Data : Arr := (others => 0);
+    begin
+        null;
+    end Test_Others;
+    """
+
+    result = compile_source(source)
+    assert result.success
+
+
+def test_record_aggregate():
+    """Test record aggregate initialization."""
+    source = """
+    procedure Test_Rec is
+        type Point is record
+            X : Integer;
+            Y : Integer;
+        end record;
+        P : Point := (X => 10, Y => 20);
+    begin
+        null;
+    end Test_Rec;
+    """
+
+    result = compile_source(source)
+    assert result.success
+
+
+def test_string_literal():
+    """Test string literal handling."""
+    source = '''
+    procedure Test_String is
+        S : String(1..5) := "Hello";
+    begin
+        null;
+    end Test_String;
+    '''
+
+    result = compile_source(source)
+    assert result.success
+
+
+def test_string_concatenation():
+    """Test string concatenation."""
+    source = '''
+    procedure Test_Concat is
+        A : String(1..5) := "Hello";
+        B : String(1..5) := "World";
+        C : String(1..10);
+    begin
+        C := A & B;
+    end Test_Concat;
+    '''
+
+    result = compile_source(source)
+    assert result.success
+
+
+def test_record_field_access():
+    """Test record field access (read and write)."""
+    source = """
+    procedure Test_Fields is
+        type Point is record
+            X : Integer;
+            Y : Integer;
+        end record;
+        P : Point;
+        Sum : Integer;
+    begin
+        P.X := 10;
+        P.Y := 20;
+        Sum := P.X + P.Y;
+    end Test_Fields;
+    """
+
+    result = compile_source(source)
+    assert result.success
+    assert "Test_Fields:" in result.output
+
+
+# ============================================================================
+# Target Name (@) Tests - Ada 2022
+# ============================================================================
+
+
+def test_target_name_simple():
+    """Test target name @ in simple increment."""
+    source = """
+    procedure Test_Increment is
+        Counter : Integer := 10;
+    begin
+        Counter := @ + 1;
+    end Test_Increment;
+    """
+
+    result = compile_source(source)
+    assert result.success
+    assert "Test_Increment:" in result.output
+
+
+def test_target_name_multiply():
+    """Test target name @ in multiplication."""
+    source = """
+    procedure Test_Double is
+        Value : Integer := 5;
+    begin
+        Value := @ * 2;
+    end Test_Double;
+    """
+
+    result = compile_source(source)
+    assert result.success
+    assert "Test_Double:" in result.output
+
+
+def test_target_name_complex_expr():
+    """Test target name @ in complex expression."""
+    source = """
+    procedure Test_Complex is
+        X : Integer := 3;
+    begin
+        X := (@ + 1) * @;
+    end Test_Complex;
+    """
+
+    result = compile_source(source)
+    assert result.success
+    assert "Test_Complex:" in result.output

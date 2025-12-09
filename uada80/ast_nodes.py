@@ -377,6 +377,23 @@ class TypeConversion(Expr):
 
 
 @dataclass
+class AccessTypeIndication(Expr):
+    """Anonymous access type indication.
+
+    Used for:
+    - Return types: function F return access Integer
+    - Parameter types: procedure P (X : access Integer)
+    - Object declarations: X : access Integer
+    """
+
+    subtype: Expr  # The designated type
+    is_constant: bool = False  # access constant
+    not_null: bool = False  # not null access
+    is_all: bool = False  # access all
+    is_protected: bool = False  # access protected (for subprograms)
+
+
+@dataclass
 class MembershipTest(Expr):
     """Membership test (X in Type, X not in 1..10)."""
 
@@ -483,6 +500,7 @@ class ArrayTypeDef(TypeDef):
     index_subtypes: list[Expr]  # Can be discrete ranges or type marks
     component_type: Expr
     is_constrained: bool = True
+    is_aliased: bool = False  # For "array ... of aliased Type"
 
 
 @dataclass
@@ -786,12 +804,30 @@ class GenericFormal(ASTNode):
 
 @dataclass
 class GenericTypeDecl(GenericFormal):
-    """Generic type formal."""
+    """Generic type formal.
+
+    Supports Ada generic formal type declarations:
+    - type T is private
+    - type T is tagged private
+    - type T is (<>)  -- discrete type
+    - type T is range <> -- signed integer
+    - type T is mod <> -- modular integer
+    - type T is digits <> -- floating point
+    - type T is delta <> -- fixed point
+    - type T is new Parent -- derived type
+    - type T is new Parent with private -- extension
+    - type T is array ... -- array type
+    - type T is access ... -- access type
+    """
 
     name: str
-    definition: Optional[TypeDef] = None  # Can be 'private', 'range <>', etc.
+    definition: Optional[TypeDef] = None  # Full type definition (array, access, etc.)
+    constraint: Optional[str] = None  # "private", "discrete", "range", "mod", "digits", "delta", "delta_digits", "derived"
     is_tagged: bool = False
     is_abstract: bool = False
+    is_limited: bool = False
+    parent_type: Optional[Expr] = None  # For derived types
+    with_private: bool = False  # For "new Parent with private"
 
 
 @dataclass
@@ -1140,9 +1176,18 @@ class AcceptStmt(Stmt):
 
 @dataclass
 class SelectStmt(Stmt):
-    """Select statement (for tasks)."""
+    """Select statement (for tasks).
+
+    Supports:
+    - Selective accept: alternatives with accept/delay/terminate
+    - Conditional entry call: first alternative + else_statements
+    - Timed entry call: first alternative + delay alternative
+    - Asynchronous select: triggering + then_abort_statements
+    """
 
     alternatives: list["SelectAlternative"]
+    else_statements: Optional[list[Stmt]] = None  # For conditional entry call
+    then_abort_statements: Optional[list[Stmt]] = None  # For asynchronous select
 
 
 @dataclass
@@ -1151,6 +1196,7 @@ class SelectAlternative(ASTNode):
 
     guard: Optional[Expr] = None
     statements: list[Stmt] = field(default_factory=list)
+    is_terminate: bool = False  # For terminate alternative
 
 
 @dataclass

@@ -181,6 +181,7 @@ class SemanticAnalyzer:
         self.symbols = SymbolTable()
         self.errors: list[SemanticError] = []
         self.current_subprogram: Optional[Symbol] = None  # For return type checking
+        self.current_package: Optional[Symbol] = None  # For pragma Pure/Preelaborate
         self.in_loop: bool = False  # For exit statement validation
         self.loop_labels: list[Optional[str]] = []  # Stack of loop labels (None = unlabeled)
         # Task-related state
@@ -266,6 +267,16 @@ class SemanticAnalyzer:
 
         # Define in current scope
         self.symbols.define(subprog_symbol)
+
+        # Collect parameter types for primitive operation check
+        param_types = []
+        for param_spec in spec.parameters:
+            param_type = self._resolve_type(param_spec.type_mark)
+            param_types.append(param_type)
+
+        # Check if this is a primitive operation of a tagged type
+        self._check_primitive_operation(subprog_symbol, kind == SymbolKind.FUNCTION,
+                                        param_types, return_type)
 
         # Enter subprogram scope
         self.symbols.enter_scope(spec.name)
@@ -383,6 +394,10 @@ class SemanticAnalyzer:
             pkg_symbol.generic_decl = pkg
         self.symbols.define(pkg_symbol)
 
+        # Track current package for pragma Pure/Preelaborate
+        old_package = self.current_package
+        self.current_package = pkg_symbol
+
         # Enter package scope
         self.symbols.enter_scope(pkg.name, is_package=True)
 
@@ -403,6 +418,7 @@ class SemanticAnalyzer:
             self._add_to_package(pkg_symbol, decl, is_private=True)
 
         self.symbols.leave_scope()
+        self.current_package = old_package
 
     def _analyze_generic_formal(self, formal) -> None:
         """Analyze a generic formal parameter."""
@@ -862,7 +878,7 @@ class SemanticAnalyzer:
         self.symbols.define(symbol)
 
         # Check if this is a primitive operation of a tagged type
-        self._check_primitive_operation(decl.name, kind == SymbolKind.FUNCTION,
+        self._check_primitive_operation(symbol, kind == SymbolKind.FUNCTION,
                                         param_types, return_type)
 
     def _is_tagged_type(self, ada_type) -> bool:
@@ -872,9 +888,12 @@ class SemanticAnalyzer:
             return True
         return isinstance(ada_type, RecordType) and ada_type.is_tagged
 
-    def _check_primitive_operation(self, name: str, is_function: bool,
+    def _check_primitive_operation(self, symbol: Symbol, is_function: bool,
                                    param_types: list, return_type) -> None:
-        """Check if a subprogram is a primitive operation of a tagged type or interface."""
+        """Check if a subprogram is a primitive operation of a tagged type or interface.
+
+        Updates the symbol with primitive_of and vtable_slot if it's a primitive.
+        """
         from uada80.type_system import RecordType, InterfaceType, PrimitiveOperation
 
         # Check first parameter for controlling type
@@ -896,12 +915,17 @@ class SemanticAnalyzer:
         if controlling_type:
             # This is a primitive operation
             op = PrimitiveOperation(
-                name=name,
+                name=symbol.name,
                 is_function=is_function,
                 parameter_types=param_types,
                 return_type=return_type,
             )
             controlling_type.add_primitive(op)
+
+            # Update the symbol with primitive information for dispatching
+            if isinstance(controlling_type, RecordType):
+                symbol.primitive_of = controlling_type
+                symbol.vtable_slot = op.slot_index
 
     def _analyze_exception_decl(self, decl: ExceptionDecl) -> None:
         """Analyze an exception declaration."""
@@ -1668,8 +1692,48 @@ class SemanticAnalyzer:
                     if sym and sym.ada_type:
                         sym.ada_type.is_packed = True
 
+        elif pragma_name == "pure":
+            # pragma Pure [(package_name)];
+            # Package has no state, can be preelaborated
+            if stmt.args:
+                entity = stmt.args[0]
+                if isinstance(entity, Identifier):
+                    sym = self.symbols.lookup(entity.name)
+                    if sym:
+                        sym.is_pure = True
+            elif self.current_package:
+                # If no argument, applies to enclosing package
+                self.current_package.is_pure = True
+
+        elif pragma_name == "preelaborate":
+            # pragma Preelaborate [(package_name)];
+            # Package can be elaborated before execution
+            if stmt.args:
+                entity = stmt.args[0]
+                if isinstance(entity, Identifier):
+                    sym = self.symbols.lookup(entity.name)
+                    if sym:
+                        sym.is_preelaborate = True
+            elif self.current_package:
+                self.current_package.is_preelaborate = True
+
+        elif pragma_name == "elaborate_body":
+            # pragma Elaborate_Body;
+            # Package body must be elaborated immediately after spec
+            if self.current_package:
+                self.current_package.requires_body = True
+
+        elif pragma_name == "suppress":
+            # pragma Suppress(Check_Name [, On => Entity]);
+            # Disable specified checks - note: we don't fully implement this
+            pass  # Silently accept
+
+        elif pragma_name == "unsuppress":
+            # pragma Unsuppress(Check_Name [, On => Entity]);
+            # Re-enable specified checks
+            pass  # Silently accept
+
         # Other pragmas are silently ignored for now
-        # This includes: Pure, Preelaborate, Elaborate_Body, etc.
 
     def _analyze_assignment(self, stmt: AssignmentStmt) -> None:
         """Analyze an assignment statement."""

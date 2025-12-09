@@ -197,9 +197,9 @@ class Parser:
         elif self.check(TokenType.PROCEDURE, TokenType.FUNCTION):
             return self.parse_subprogram()
         elif self.check(TokenType.TASK):
-            return self.parse_task()
+            return self.parse_task_declaration()
         elif self.check(TokenType.PROTECTED):
-            return self.parse_protected()
+            return self.parse_protected_declaration()
         else:
             raise ParseError("Expected package, subprogram, generic, or separate", self.current)
 
@@ -282,6 +282,11 @@ class Parser:
                 if self.match(TokenType.ALL):
                     # Dereference: P.all
                     name = Dereference(prefix=name, span=self.make_span(start))
+                elif self.check(TokenType.STRING_LITERAL):
+                    # Operator name: Package."="
+                    selector = self.current.value
+                    self.advance()
+                    name = SelectedName(prefix=name, selector=selector, span=self.make_span(start))
                 else:
                     selector = self.expect_identifier()
                     name = SelectedName(prefix=name, selector=selector, span=self.make_span(start))
@@ -296,7 +301,8 @@ class Parser:
                     name = QualifiedExpr(type_mark=name, expr=expr, span=self.make_span(start))
                 else:
                     # Attribute reference
-                    attr_name = self.expect_identifier()
+                    # Attribute names can be identifiers or certain keywords like ACCESS, RANGE, etc.
+                    attr_name = self._parse_attribute_designator()
                     args = []
                     if self.match(TokenType.LEFT_PAREN):
                         args = self.parse_expression_list()
@@ -329,6 +335,29 @@ class Parser:
                 break
 
         return name
+
+    def _parse_attribute_designator(self) -> str:
+        """Parse an attribute designator.
+
+        Attribute names can be identifiers or certain keywords that are also
+        valid attribute names (ACCESS, RANGE, DELTA, DIGITS, etc.).
+        """
+        # Keywords that are valid attribute names
+        keyword_attributes = {
+            TokenType.ACCESS: "Access",
+            TokenType.RANGE: "Range",
+            TokenType.DELTA: "Delta",
+            TokenType.DIGITS: "Digits",
+            TokenType.MOD: "Mod",
+            TokenType.ABORT: "Abort",  # For Exception_Name'Abort
+        }
+
+        if self.current.type in keyword_attributes:
+            attr = keyword_attributes[self.current.type]
+            self.advance()
+            return attr
+        else:
+            return self.expect_identifier()
 
     def parse_actual_parameter_list(self) -> list[ActualParameter]:
         """Parse actual parameter list, handling both positional and named parameters.
@@ -890,13 +919,16 @@ class Parser:
 
         # Based literal: base#value#[exponent]
         if "#" in text:
-            # Handle exponent if present
+            # Handle exponent if present - exponent comes AFTER the closing #
             exp_value = 0
-            if "e" in text.lower():
-                text_lower = text.lower()
-                exp_pos = text_lower.rfind("e")
-                exp_str = text[exp_pos + 1:]
-                text = text[:exp_pos]
+            # Find the last # (closing delimiter of based literal)
+            last_hash = text.rfind("#")
+            after_hash = text[last_hash + 1:] if last_hash < len(text) - 1 else ""
+            if "e" in after_hash.lower():
+                # Exponent is after the closing #
+                exp_pos = after_hash.lower().find("e")
+                exp_str = after_hash[exp_pos + 1:]
+                text = text[:last_hash + 1]  # Keep up to and including the closing #
                 exp_value = int(exp_str)
 
             parts = text.split("#")
@@ -922,13 +954,16 @@ class Parser:
 
         # Based literal: base#value#[exponent]
         if "#" in text:
-            # Split off exponent if present
+            # Split off exponent if present - exponent comes AFTER the closing #
             exp_value = 0
-            if "e" in text.lower():
-                text_lower = text.lower()
-                exp_pos = text_lower.rfind("e")
-                exp_str = text[exp_pos + 1:]
-                text = text[:exp_pos]
+            # Find the last # (closing delimiter of based literal)
+            last_hash = text.rfind("#")
+            after_hash = text[last_hash + 1:] if last_hash < len(text) - 1 else ""
+            if "e" in after_hash.lower():
+                # Exponent is after the closing #
+                exp_pos = after_hash.lower().find("e")
+                exp_str = after_hash[exp_pos + 1:]
+                text = text[:last_hash + 1]  # Keep up to and including the closing #
                 exp_value = int(exp_str)
 
             parts = text.split("#")
@@ -1517,34 +1552,72 @@ class Parser:
         return AcceptStmt(entry_name=entry_name, parameters=parameters, statements=statements, span=self.make_span(start))
 
     def parse_select_statement(self) -> SelectStmt:
-        """Parse select statement."""
+        """Parse select statement.
+
+        Handles:
+        - Selective accept: SELECT [WHEN guard =>] ACCEPT ... OR ... END SELECT;
+        - Timed entry call: SELECT entry_call OR delay_alternative END SELECT;
+        - Conditional entry call: SELECT entry_call ELSE stmts END SELECT;
+        - Asynchronous select: SELECT triggering THEN ABORT abortable END SELECT;
+        """
         start = self.current
         alternatives = []
+        else_stmts = None
+        then_abort_stmts = None
 
-        # Parse select alternatives
-        while self.match(TokenType.WHEN):
-            guard = self.parse_expression()
-            self.expect(TokenType.ARROW)
-            stmts = self.parse_statement_sequence()
-            alternatives.append(SelectAlternative(guard=guard, statements=stmts))
+        # Parse first alternative (and subsequent OR alternatives)
+        first = True
+        while first or self.match(TokenType.OR):
+            first = False
+            guard = None
 
-        if self.match(TokenType.OR):
-            while not self.check(TokenType.END):
-                if self.match(TokenType.WHEN):
-                    guard = self.parse_expression()
-                    self.expect(TokenType.ARROW)
-                    stmts = self.parse_statement_sequence()
-                    alternatives.append(SelectAlternative(guard=guard, statements=stmts))
-                else:
-                    stmts = self.parse_statement_sequence()
-                    alternatives.append(SelectAlternative(guard=None, statements=stmts))
-                    break
+            # Check for optional guard: WHEN condition =>
+            if self.match(TokenType.WHEN):
+                guard = self.parse_expression()
+                self.expect(TokenType.ARROW)
+
+            # Parse the alternative content
+            if self.match(TokenType.ACCEPT):
+                # Accept alternative
+                accept_stmt = self.parse_accept_statement()
+                # After the accept, there may be additional statements before OR/END
+                additional_stmts = self.parse_statement_sequence()
+                stmts = [accept_stmt] + additional_stmts
+                alternatives.append(SelectAlternative(guard=guard, statements=stmts))
+            elif self.match(TokenType.DELAY):
+                # Delay alternative
+                delay_stmt = self.parse_delay_statement()
+                additional_stmts = self.parse_statement_sequence()
+                stmts = [delay_stmt] + additional_stmts
+                alternatives.append(SelectAlternative(guard=guard, statements=stmts))
+            elif self.match(TokenType.TERMINATE):
+                # Terminate alternative
+                self.expect(TokenType.SEMICOLON)
+                alternatives.append(SelectAlternative(guard=guard, statements=[], is_terminate=True))
+            else:
+                # Entry call or triggering statement (for conditional/timed/async select)
+                stmts = self.parse_statement_sequence()
+                alternatives.append(SelectAlternative(guard=guard, statements=stmts))
+
+        # Check for ELSE (conditional entry call)
+        if self.match(TokenType.ELSE):
+            else_stmts = self.parse_statement_sequence()
+
+        # Check for THEN ABORT (asynchronous select)
+        if self.match(TokenType.THEN):
+            self.expect(TokenType.ABORT)
+            then_abort_stmts = self.parse_statement_sequence()
 
         self.expect(TokenType.END)
         self.expect(TokenType.SELECT)
         self.expect(TokenType.SEMICOLON)
 
-        return SelectStmt(alternatives=alternatives, span=self.make_span(start))
+        return SelectStmt(
+            alternatives=alternatives,
+            else_statements=else_stmts,
+            then_abort_statements=then_abort_stmts,
+            span=self.make_span(start)
+        )
 
     def parse_statement_sequence(self) -> list[Stmt]:
         """Parse a sequence of statements."""
@@ -1898,9 +1971,16 @@ class Parser:
 
             self.expect(TokenType.RIGHT_PAREN)
             self.expect(TokenType.OF)
+
+            # Component type may be prefixed with "aliased"
+            is_aliased = self.match(TokenType.ALIASED)
             component_type = self.parse_name()
 
-            return ArrayTypeDef(index_subtypes=index_subtypes, component_type=component_type)
+            return ArrayTypeDef(
+                index_subtypes=index_subtypes,
+                component_type=component_type,
+                is_aliased=is_aliased,
+            )
 
         # Record type
         if self.match(TokenType.RECORD):
@@ -1945,7 +2025,7 @@ class Parser:
                 return_type = None
                 if is_function:
                     self.expect(TokenType.RETURN)
-                    return_type = self.parse_name()
+                    return_type = self._parse_return_type()
 
                 return AccessSubprogramTypeDef(
                     is_function=is_function,
@@ -2327,7 +2407,7 @@ class Parser:
             # For generic instantiation "function Name is new ...", no return type
             if not (self.check(TokenType.IS) and self.peek(1).type == TokenType.NEW):
                 self.expect(TokenType.RETURN)
-                return_type = self.parse_name()
+                return_type = self._parse_return_type()
 
         return SubprogramDecl(
             name=name,
@@ -2338,6 +2418,46 @@ class Parser:
             is_not_overriding=is_not_overriding,
             span=self.make_span(start),
         )
+
+    def _parse_return_type(self) -> Expr:
+        """Parse function return type.
+
+        Return types can be:
+        - A simple type name: Integer
+        - A selected type: Ada.Text_IO.File_Type
+        - An anonymous access type: access Integer, access constant Integer,
+          not null access Integer
+        """
+        start = self.current
+
+        # Check for "not null" prefix
+        not_null = False
+        if self.match(TokenType.NOT):
+            self.expect(TokenType.NULL)
+            not_null = True
+
+        # Check for access type indication
+        if self.match(TokenType.ACCESS):
+            # Optional "constant" or "protected"
+            is_constant = self.match(TokenType.CONSTANT)
+            is_protected = self.match(TokenType.PROTECTED)
+            # Optional "all"
+            is_all = self.match(TokenType.ALL)
+
+            # The actual type
+            subtype = self.parse_name()
+
+            return AccessTypeIndication(
+                subtype=subtype,
+                is_constant=is_constant,
+                not_null=not_null,
+                is_all=is_all,
+                is_protected=is_protected,
+                span=self.make_span(start),
+            )
+
+        # Regular type name
+        return self.parse_name()
 
     def parse_parameter_specifications(self) -> list[ParameterSpec]:
         """Parse parameter specifications."""
@@ -2495,22 +2615,95 @@ class Parser:
 
         if self.match(TokenType.TYPE):
             name = self.expect_identifier()
+
+            # Check for discriminant part: type T (D : Integer) is ...
+            discriminants = []
+            if self.match(TokenType.LEFT_PAREN):
+                discriminants = self.parse_discriminant_specifications()
+                self.expect(TokenType.RIGHT_PAREN)
+
             self.expect(TokenType.IS)
 
             # Parse generic type definition
-            # Syntax: is [tagged] private | is (<>) | is array ...
+            # Syntax:
+            #   is [abstract] [tagged] [limited] private
+            #   is [abstract] new Parent [with private]
+            #   is (<>)  -- discrete type
+            #   is range <> -- signed integer type
+            #   is mod <> -- modular integer type
+            #   is digits <> -- floating point type
+            #   is delta <> [digits <>] -- fixed point type
+            #   is array ... -- array type
+            #   is access ... -- access type
+
+            is_abstract = self.match(TokenType.ABSTRACT)
             is_tagged = self.match(TokenType.TAGGED)
+            is_limited = self.match(TokenType.LIMITED)
+
             if self.match(TokenType.PRIVATE):
                 self.expect(TokenType.SEMICOLON)
-                return GenericTypeDecl(name=name, is_tagged=is_tagged)
-            elif is_tagged:
-                # "is tagged" must be followed by "private"
-                raise ParseError("Expected 'private' after 'tagged'", self.current)
-            else:
-                # Other type definitions
-                type_def = self.parse_type_definition()
+                return GenericTypeDecl(
+                    name=name, is_tagged=is_tagged, is_abstract=is_abstract,
+                    constraint="private", is_limited=is_limited
+                )
+
+            # Derived type: is [abstract] new Parent [with private]
+            if self.match(TokenType.NEW):
+                parent = self.parse_name()
+                with_private = False
+                if self.match(TokenType.WITH):
+                    self.expect(TokenType.PRIVATE)
+                    with_private = True
                 self.expect(TokenType.SEMICOLON)
-                return GenericTypeDecl(name=name, definition=type_def)
+                return GenericTypeDecl(
+                    name=name, is_abstract=is_abstract,
+                    constraint="derived", parent_type=parent, with_private=with_private
+                )
+
+            # Discrete type: is (<>)
+            if self.check(TokenType.LEFT_PAREN):
+                if self.peek(1) and self.peek(1).type == TokenType.BOX:
+                    self.advance()  # (
+                    self.advance()  # <>
+                    self.expect(TokenType.RIGHT_PAREN)
+                    self.expect(TokenType.SEMICOLON)
+                    return GenericTypeDecl(name=name, constraint="discrete")
+
+            # Signed integer type: is range <>
+            if self.match(TokenType.RANGE):
+                self.expect(TokenType.BOX)
+                self.expect(TokenType.SEMICOLON)
+                return GenericTypeDecl(name=name, constraint="range")
+
+            # Modular type: is mod <>
+            if self.match(TokenType.MOD):
+                self.expect(TokenType.BOX)
+                self.expect(TokenType.SEMICOLON)
+                return GenericTypeDecl(name=name, constraint="mod")
+
+            # Floating point: is digits <>
+            if self.match(TokenType.DIGITS):
+                self.expect(TokenType.BOX)
+                self.expect(TokenType.SEMICOLON)
+                return GenericTypeDecl(name=name, constraint="digits")
+
+            # Fixed point: is delta <> [digits <>]
+            if self.match(TokenType.DELTA):
+                self.expect(TokenType.BOX)
+                has_digits = False
+                if self.match(TokenType.DIGITS):
+                    self.expect(TokenType.BOX)
+                    has_digits = True
+                self.expect(TokenType.SEMICOLON)
+                return GenericTypeDecl(
+                    name=name,
+                    constraint="delta_digits" if has_digits else "delta"
+                )
+
+            # Otherwise, it's a full type definition (array, access, etc.)
+            type_def = self.parse_type_definition(is_limited=is_limited)
+            self.expect(TokenType.SEMICOLON)
+            return GenericTypeDecl(name=name, definition=type_def)
 
         # Generic object formal: identifier : [mode] type [:= default]
         if self.check(TokenType.IDENTIFIER):
@@ -2573,7 +2766,7 @@ class Parser:
                     self.expect(TokenType.RIGHT_PAREN)
 
                 self.expect(TokenType.RETURN)
-                return_type = self.parse_name()
+                return_type = self._parse_return_type()
 
                 # Check for "is <>" or "is Name"
                 is_box = False
@@ -2615,14 +2808,27 @@ class Parser:
             # Parse actual parameters
             while True:
                 # Could be named: Formal => Actual or positional
-                if self.check(TokenType.IDENTIFIER):
+                # Note: formal can be identifier or operator string like "="
+                if self.check(TokenType.IDENTIFIER) or self.check(TokenType.STRING_LITERAL):
                     # Look ahead for =>
                     saved_pos = self.pos
                     saved_current = self.current
-                    param_name = self.expect_identifier()
+                    if self.check(TokenType.STRING_LITERAL):
+                        param_name = self.current.value
+                        self.advance()
+                    else:
+                        param_name = self.expect_identifier()
                     if self.match(TokenType.ARROW):
-                        # Named parameter
-                        actual = self.parse_expression()
+                        # Named parameter - value can be expression or operator string
+                        if self.check(TokenType.STRING_LITERAL) and self.peek(1) and (
+                            self.peek(1).type == TokenType.COMMA or
+                            self.peek(1).type == TokenType.RIGHT_PAREN
+                        ):
+                            # It's an operator name as value (e.g., "=" => "=")
+                            actual = Identifier(name=self.current.value, span=self.make_span(self.current))
+                            self.advance()
+                        else:
+                            actual = self.parse_expression()
                         actual_parameters.append(
                             ActualParameter(name=param_name, value=actual)
                         )

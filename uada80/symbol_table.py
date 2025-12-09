@@ -11,7 +11,7 @@ Implements Ada's scoping and visibility rules:
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional
+from typing import Any, Optional
 
 from uada80.type_system import AdaType, PREDEFINED_TYPES, IntegerType, RecordType
 from uada80.ast_nodes import ASTNode
@@ -48,8 +48,10 @@ class Symbol:
     name: str
     kind: SymbolKind
     ada_type: Optional[AdaType] = None  # Type of this symbol
+    value: Optional[Any] = None  # Compile-time value for constants/named numbers
     is_constant: bool = False  # For variables
     is_aliased: bool = False  # For aliased objects
+    alias_for: Optional[str] = None  # For renaming: name of the original entity
     mode: Optional[str] = None  # For parameters: "in", "out", "in out"
     definition: Optional[ASTNode] = None  # AST node where defined
     scope_level: int = 0  # Nesting level where defined
@@ -74,6 +76,13 @@ class Symbol:
     is_no_return: bool = False  # pragma No_Return
     is_generic_formal: bool = False  # Generic formal parameter
     is_abstract: bool = False  # Abstract subprogram (is abstract)
+    is_pure: bool = False  # pragma Pure (for packages)
+    is_preelaborate: bool = False  # pragma Preelaborate (for packages)
+    requires_body: bool = False  # pragma Elaborate_Body
+
+    # For primitive operations of tagged types (OOP dispatching)
+    primitive_of: Optional["RecordType"] = None  # Tagged type this is a primitive of
+    vtable_slot: int = -1  # Slot index in vtable (-1 = not a primitive)
 
 
 @dataclass
