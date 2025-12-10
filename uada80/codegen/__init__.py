@@ -1737,6 +1737,11 @@ class Z80CodeGen:
             return
 
         mem = instr.src1
+
+        # Atomic access: disable interrupts before load
+        if mem.is_atomic:
+            self._emit_instr("di", "", "")  # Disable interrupts
+
         if mem.is_global:
             self._emit_instr("ld", "HL", f"({mem.symbol_name})")
         elif mem.base is not None:
@@ -1758,12 +1763,20 @@ class Z80CodeGen:
 
         self._store_from_hl(instr.dst)
 
+        # Atomic access: re-enable interrupts after load
+        if mem.is_atomic:
+            self._emit_instr("ei", "", "")  # Enable interrupts
+
     def _gen_store(self, instr: IRInstr) -> None:
         """Generate STORE instruction."""
         if not isinstance(instr.dst, MemoryLocation) or instr.src1 is None:
             return
 
         mem = instr.dst
+
+        # Atomic access: disable interrupts before store
+        if mem.is_atomic:
+            self._emit_instr("di", "", "")  # Disable interrupts
 
         if mem.is_global:
             self._load_to_hl(instr.src1)
@@ -1787,6 +1800,10 @@ class Z80CodeGen:
             self._load_to_hl(instr.src1)
             self._emit_instr("ld", f"(IX{mem.offset:+d})", "L")
             self._emit_instr("ld", f"(IX{mem.offset+1:+d})", "H")
+
+        # Atomic access: re-enable interrupts after store
+        if mem.is_atomic:
+            self._emit_instr("ei", "", "")  # Enable interrupts
 
     def _gen_lea(self, instr: IRInstr) -> None:
         """Generate LEA (load effective address) instruction."""

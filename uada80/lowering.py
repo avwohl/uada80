@@ -170,6 +170,11 @@ class ASTLowering:
         # Initialize with predefined exceptions
         self._exception_ids: dict[str, int] = dict(self.PREDEFINED_EXCEPTIONS)
         self._next_exception_id = 5  # Start user exceptions after predefined
+        # Z80 interrupt handler table: maps interrupt vector to handler
+        # Z80 vectors: RST 0 (0x00), RST 8 (0x08), ... RST 0x38, NMI (0x66)
+        self._interrupt_handlers: dict[int, str] = {}
+        # Procedures marked as interrupt handlers (need special prologue/epilogue)
+        self._is_interrupt_handler: set[str] = set()
 
     def lower(self, program: Program) -> IRModule:
         """Lower an entire program to IR."""
@@ -450,14 +455,53 @@ class ASTLowering:
                 self.builder.set_block(ok_block)
 
     def _lower_parameter(self, param: ParameterSpec) -> None:
-        """Lower a parameter specification."""
+        """Lower a parameter specification.
+
+        For unconstrained array parameters (like String), we pass a dope vector
+        containing: (data_ptr, first, last) - 6 bytes total for 1D arrays.
+        This allows the called function to access bounds at runtime.
+        """
         if self.ctx is None:
             return
 
+        # Check if parameter type is unconstrained array
+        param_type = None
+        if param.type_mark:
+            type_name = param.type_mark
+            if isinstance(type_name, Identifier):
+                type_name = type_name.name
+            type_sym = self.symbols.lookup(type_name)
+            if type_sym and type_sym.ada_type:
+                param_type = type_sym.ada_type
+
+        is_unconstrained = (
+            param_type and
+            isinstance(param_type, ArrayType) and
+            not param_type.is_constrained
+        )
+
         for name in param.names:
-            vreg = self.builder.new_vreg(IRType.WORD, name)
-            self.ctx.params[name.lower()] = vreg
-            self.ctx.function.params.append(vreg)
+            if is_unconstrained:
+                # Unconstrained array: pass dope vector (ptr, first, last)
+                # Create three vregs for the dope vector components
+                ptr_vreg = self.builder.new_vreg(IRType.PTR, f"{name}_ptr")
+                first_vreg = self.builder.new_vreg(IRType.WORD, f"{name}_first")
+                last_vreg = self.builder.new_vreg(IRType.WORD, f"{name}_last")
+
+                # Store in params dict with special marker
+                self.ctx.params[name.lower()] = ptr_vreg
+                self.ctx.params[f"{name.lower()}'first"] = first_vreg
+                self.ctx.params[f"{name.lower()}'last"] = last_vreg
+
+                # Add all three to function params (in order: ptr, first, last)
+                self.ctx.function.params.append(ptr_vreg)
+                self.ctx.function.params.append(first_vreg)
+                self.ctx.function.params.append(last_vreg)
+            else:
+                # Constrained type: single value
+                vreg = self.builder.new_vreg(IRType.WORD, name)
+                self.ctx.params[name.lower()] = vreg
+                self.ctx.function.params.append(vreg)
 
     def _lower_package_decl(self, pkg: PackageDecl) -> None:
         """Lower a package declaration."""
@@ -1665,14 +1709,25 @@ class ASTLowering:
         elif pragma_name == "volatile":
             # pragma Volatile(Object);
             # Ensure all reads/writes go to memory (disable register caching)
-            # For Z80, all memory accesses are already volatile
-            pass
+            # Mark the symbol as volatile for the code generator
+            args = getattr(stmt, 'args', None) or getattr(stmt, 'arguments', [])
+            if args and isinstance(args[0], Identifier):
+                sym = self.symbols.lookup(args[0].name) if hasattr(self, 'symbols') else None
+                if sym:
+                    sym.is_volatile = True
+            # For Z80, all memory accesses are volatile by nature (no cache)
+            # but marking ensures optimizer doesn't remove "redundant" loads
 
         elif pragma_name == "atomic":
             # pragma Atomic(Object);
             # Ensure atomic access (disable interrupts during access)
-            # For Z80, we could emit DI/EI around accesses
-            pass
+            # Mark the symbol as atomic so code generator emits DI/EI
+            args = getattr(stmt, 'args', None) or getattr(stmt, 'arguments', [])
+            if args and isinstance(args[0], Identifier):
+                sym = self.symbols.lookup(args[0].name) if hasattr(self, 'symbols') else None
+                if sym:
+                    sym.is_atomic = True
+                    sym.is_volatile = True  # Atomic implies volatile
 
         elif pragma_name == "unreferenced":
             # pragma Unreferenced(Name);
@@ -1768,17 +1823,30 @@ class ASTLowering:
 
         elif pragma_name == "attach_handler":
             # pragma Attach_Handler(Handler_Name, Interrupt_ID);
-            # Attach interrupt handler
+            # Attach interrupt handler to a specific vector
+            # Z80 interrupt vectors: RST 0x00, 0x08, 0x10, 0x18, 0x20, 0x28, 0x30, 0x38
+            # NMI at 0x66
             args = getattr(stmt, 'args', None) or getattr(stmt, 'arguments', [])
             if len(args) >= 2:
-                # Record interrupt handler attachment
-                # Z80 has limited interrupt modes (IM 0, 1, 2)
-                pass
+                handler_name = None
+                vector_id = None
+                if isinstance(args[0], Identifier):
+                    handler_name = args[0].name
+                if isinstance(args[1], IntegerLiteral):
+                    vector_id = args[1].value
+                elif isinstance(args[1], Identifier):
+                    # Could be a named constant for the vector
+                    vector_id = self._get_constant_value(args[1])
+                if handler_name and vector_id is not None:
+                    self._interrupt_handlers[vector_id] = handler_name
+                    self._is_interrupt_handler.add(handler_name)
 
         elif pragma_name == "interrupt_handler":
             # pragma Interrupt_Handler(Procedure_Name);
-            # Mark procedure as interrupt handler
-            pass
+            # Mark procedure as interrupt handler (uses EI/RETI epilogue)
+            args = getattr(stmt, 'args', None) or getattr(stmt, 'arguments', [])
+            if args and isinstance(args[0], Identifier):
+                self._is_interrupt_handler.add(args[0].name)
 
         elif pragma_name == "controlled":
             # pragma Controlled(Access_Type);
@@ -2777,6 +2845,78 @@ class ASTLowering:
                     return True
 
         return False
+
+    def _is_unconstrained_array_arg(self, sym: Optional[Symbol], arg_idx: int) -> bool:
+        """Check if a parameter at given index expects an unconstrained array.
+
+        Returns True if the corresponding parameter type is an unconstrained array,
+        meaning we need to pass a dope vector (ptr, first, last).
+        """
+        if not sym or not sym.parameters:
+            return False
+
+        if arg_idx >= len(sym.parameters):
+            return False
+
+        param = sym.parameters[arg_idx]
+        param_type = param.ada_type if hasattr(param, 'ada_type') else None
+
+        if param_type and isinstance(param_type, ArrayType):
+            return not param_type.is_constrained
+
+        return False
+
+    def _get_array_dope_vector(self, expr) -> tuple:
+        """Get the dope vector (first, last, ptr) for an array expression.
+
+        For constrained arrays, bounds come from the type.
+        For unconstrained arrays (parameters), bounds come from the dope vector.
+        For string literals, bounds are derived from the literal.
+
+        Returns: (first_val, last_val, ptr_val) - IRValues for the dope vector
+        """
+        # Get the pointer to the array data
+        ptr_val = self._lower_expr(expr)
+
+        # Determine bounds based on expression type
+        if isinstance(expr, StringLiteral):
+            # String literal: 1 to length
+            length = len(expr.value)
+            first_val = Immediate(1, IRType.WORD)
+            last_val = Immediate(length, IRType.WORD)
+        elif isinstance(expr, Identifier):
+            sym = self.symbols.lookup(expr.name)
+            if sym and sym.ada_type and isinstance(sym.ada_type, ArrayType):
+                if sym.ada_type.is_constrained and sym.ada_type.bounds:
+                    # Constrained array - bounds from type
+                    low, high = sym.ada_type.bounds[0]
+                    first_val = Immediate(low, IRType.WORD)
+                    last_val = Immediate(high, IRType.WORD)
+                else:
+                    # Unconstrained - check if it's a parameter with dope vector
+                    param_name = expr.name.lower()
+                    if self.ctx and f"{param_name}'first" in self.ctx.params:
+                        first_val = self.ctx.params[f"{param_name}'first"]
+                        last_val = self.ctx.params[f"{param_name}'last"]
+                    else:
+                        # Default: assume 1-indexed
+                        first_val = Immediate(1, IRType.WORD)
+                        # For length, we'd need to call strlen - use placeholder
+                        last_val = Immediate(0, IRType.WORD)  # Unknown
+            else:
+                # Unknown - use defaults
+                first_val = Immediate(1, IRType.WORD)
+                last_val = Immediate(0, IRType.WORD)
+        elif isinstance(expr, Slice):
+            # Slice: bounds come from the slice range
+            first_val = self._lower_expr(expr.range_expr.low)
+            last_val = self._lower_expr(expr.range_expr.high)
+        else:
+            # Unknown expression - default to 1-indexed
+            first_val = Immediate(1, IRType.WORD)
+            last_val = Immediate(0, IRType.WORD)
+
+        return (first_val, last_val, ptr_val)
 
     def _build_effective_args(self, provided_args: list, sym: Optional[Symbol]) -> list:
         """Build effective argument list with defaults for missing parameters.
@@ -5474,10 +5614,25 @@ class ASTLowering:
             is_dispatching = self._is_dispatching_call(sym, expr.args)
 
             # Push arguments (right to left for cdecl-style calling convention)
-            for arg in reversed(expr.args):
+            # Track number of stack slots used (for cleanup)
+            stack_slots = 0
+            for arg_idx, arg in enumerate(reversed(expr.args)):
                 if arg.value:
-                    value = self._lower_expr(arg.value)
-                    self.builder.push(value)
+                    # Check if this argument is an unconstrained array
+                    arg_is_unconstrained = self._is_unconstrained_array_arg(sym, len(expr.args) - 1 - arg_idx)
+
+                    if arg_is_unconstrained:
+                        # Push dope vector: last, first, ptr (reverse order for stack)
+                        first_val, last_val, ptr_val = self._get_array_dope_vector(arg.value)
+                        self.builder.push(last_val)
+                        self.builder.push(first_val)
+                        self.builder.push(ptr_val)
+                        stack_slots += 3
+                    else:
+                        # Regular argument
+                        value = self._lower_expr(arg.value)
+                        self.builder.push(value)
+                        stack_slots += 1
 
             if is_dispatching and sym and sym.vtable_slot >= 0:
                 # Dispatching call - emit DISPATCH instruction
@@ -5496,10 +5651,9 @@ class ASTLowering:
                 self.builder.call(Label(call_target))
 
             # Clean up stack (callee may not clean up on Z80)
-            num_args = len(expr.args)
-            if num_args > 0:
+            if stack_slots > 0:
                 # Pop arguments off stack (result is in HL, so we use DE for cleanup)
-                for _ in range(num_args):
+                for _ in range(stack_slots):
                     temp = self.builder.new_vreg(IRType.WORD, "_discard")
                     self.builder.pop(temp)
 
@@ -5591,28 +5745,47 @@ class ASTLowering:
                                 return Immediate(length, IRType.WORD)
                         elif not ada_type.is_constrained:
                             # Unconstrained array (like String) - need runtime calculation
-                            if attr == "length":
-                                # Get pointer to string and call strlen
-                                # _str_len expects HL = string pointer, returns length in HL
-                                str_ptr = self._lower_expr(expr.prefix)
-                                # Store to HL for the call
-                                self.builder.emit(IRInstr(
-                                    OpCode.MOV,
-                                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
-                                    str_ptr,
-                                    comment="set HL for _str_len"
-                                ))
-                                self.builder.call(Label("_str_len"), comment="String'Length")
-                                result = self.builder.new_vreg(IRType.WORD, "_strlen")
-                                self.builder.emit(IRInstr(
-                                    OpCode.MOV, result,
-                                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
-                                    comment="capture String'Length result from HL"
-                                ))
-                                return result
-                            if attr == "first":
-                                # Unconstrained strings are 1-indexed in Ada
-                                return Immediate(1, IRType.WORD)
+                            # Check if this is a parameter with dope vector
+                            param_name = expr.prefix.name.lower()
+                            if self.ctx and f"{param_name}'first" in self.ctx.params:
+                                # Parameter has dope vector - use bounds from dope
+                                if attr == "first":
+                                    return self.ctx.params[f"{param_name}'first"]
+                                if attr == "last":
+                                    return self.ctx.params[f"{param_name}'last"]
+                                if attr == "length":
+                                    # length = last - first + 1
+                                    first = self.ctx.params[f"{param_name}'first"]
+                                    last = self.ctx.params[f"{param_name}'last"]
+                                    result = self.builder.new_vreg(IRType.WORD, "_length")
+                                    temp = self.builder.new_vreg(IRType.WORD, "_temp")
+                                    self.builder.sub(temp, last, first)
+                                    self.builder.add(result, temp, Immediate(1, IRType.WORD))
+                                    return result
+                            else:
+                                # Not a parameter - fall back to strlen for strings
+                                if attr == "length":
+                                    # Get pointer to string and call strlen
+                                    # _str_len expects HL = string pointer, returns length in HL
+                                    str_ptr = self._lower_expr(expr.prefix)
+                                    # Store to HL for the call
+                                    self.builder.emit(IRInstr(
+                                        OpCode.MOV,
+                                        MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                                        str_ptr,
+                                        comment="set HL for _str_len"
+                                    ))
+                                    self.builder.call(Label("_str_len"), comment="String'Length")
+                                    result = self.builder.new_vreg(IRType.WORD, "_strlen")
+                                    self.builder.emit(IRInstr(
+                                        OpCode.MOV, result,
+                                        MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                                        comment="capture String'Length result from HL"
+                                    ))
+                                    return result
+                                if attr == "first":
+                                    # Unconstrained strings are 1-indexed in Ada
+                                    return Immediate(1, IRType.WORD)
 
                     # Handle scalar type attributes (Integer'First, etc.)
                     if attr == "first" and hasattr(ada_type, "low"):

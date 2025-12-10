@@ -73,12 +73,14 @@ class Symbol:
     external_name: Optional[str] = None  # External name from pragma Import
     is_inline: bool = False  # pragma Inline
     is_volatile: bool = False  # pragma Volatile
+    is_atomic: bool = False  # pragma Atomic (use DI/EI on Z80)
     is_no_return: bool = False  # pragma No_Return
     is_generic_formal: bool = False  # Generic formal parameter
     is_abstract: bool = False  # Abstract subprogram (is abstract)
     is_pure: bool = False  # pragma Pure (for packages)
     is_preelaborate: bool = False  # pragma Preelaborate (for packages)
     requires_body: bool = False  # pragma Elaborate_Body
+    is_withed: bool = False  # Package from with clause (not fully loaded)
 
     # For primitive operations of tagged types (OOP dispatching)
     primitive_of: Optional["RecordType"] = None  # Tagged type this is a primitive of
