@@ -1,3 +1,8 @@
+For now, the codegen infrastructure is in place. The MemoryLocation has is_atomic and
+  is_volatile flags, and codegen will emit DI/EI when those are set. The full integration with
+  lowering would require updating all the places where MemoryLocations are created to check the
+   symbol flags - this is a larger refactoring task.
+
 We recently made a PLM language compiler to z80
 see ~/src/uplm80.  Do the same for the full ada
 language. As minimum for testing pass ACATS.

@@ -78,7 +78,9 @@ class Parser:
 
     def synchronize(self) -> None:
         """Synchronize parser after error (skip to next statement/declaration)."""
+        # Skip tokens until we find something that looks like a new declaration
         while not self.check(TokenType.EOF):
+            # Check for tokens that typically start new declarations/statements
             if self.check(
                 TokenType.PROCEDURE,
                 TokenType.FUNCTION,
@@ -88,9 +90,22 @@ class Parser:
                 TokenType.BEGIN,
                 TokenType.END,
                 TokenType.SEPARATE,
+                TokenType.TASK,
+                TokenType.PROTECTED,
+                TokenType.GENERIC,
+                TokenType.ENTRY,
+                TokenType.FOR,  # representation clause
+                TokenType.PRAGMA,
+                TokenType.USE,
+                TokenType.PRIVATE,
             ):
                 return
+            # Skip this token
+            prev_type = self.current.type
             self.advance()
+            # Stop after a semicolon (likely end of problematic construct)
+            if prev_type == TokenType.SEMICOLON:
+                return
 
     def make_span(self, start_token: Token, end_token: Optional[Token] = None) -> SourceSpan:
         """Create a source span from start to end token."""
@@ -1403,14 +1418,47 @@ class Parser:
         )
 
     def parse_discrete_range_or_subtype(self) -> Expr:
-        """Parse a discrete range (1..10) or a subtype indication (Integer)."""
+        """Parse a discrete range (1..10), subtype indication (Integer),
+        or unconstrained range (Positive range <>).
+
+        Handles:
+        - Simple range: 1..10
+        - Type mark: Integer
+        - Subtype with range constraint: Integer range 1..10
+        - Unconstrained range: Positive range <>
+        """
         start = self.current
         first_expr = self.parse_additive()
 
         if self.match(TokenType.DOUBLE_DOT):
-            # It's a discrete range
+            # It's a discrete range: low..high
             high = self.parse_additive()
             return RangeExpr(low=first_expr, high=high, span=self.make_span(start))
+
+        if self.match(TokenType.RANGE):
+            # Could be "Type range Low..High" or "Type range <>"
+            if self.match(TokenType.BOX):
+                # Unconstrained: Type range <>
+                # Return SubtypeIndication with BoxConstraint
+                from uada80.ast_nodes import SubtypeIndication, BoxConstraint
+                return SubtypeIndication(
+                    type_mark=first_expr,
+                    constraint=BoxConstraint(type_mark=first_expr),
+                    span=self.make_span(start)
+                )
+            else:
+                # Constrained: Type range Low..High
+                low = self.parse_additive()
+                self.expect(TokenType.DOUBLE_DOT)
+                high = self.parse_additive()
+                from uada80.ast_nodes import SubtypeIndication, RangeConstraint
+                return SubtypeIndication(
+                    type_mark=first_expr,
+                    constraint=RangeConstraint(
+                        range_expr=RangeExpr(low=low, high=high, span=self.make_span(start))
+                    ),
+                    span=self.make_span(start)
+                )
 
         # It's a subtype indication or type mark
         return first_expr
@@ -1668,13 +1716,20 @@ class Parser:
         declarations = []
 
         while not self.check(TokenType.BEGIN, TokenType.END, TokenType.PRIVATE, TokenType.EOF):
+            start_pos = self.pos
             try:
                 decl = self.parse_declaration()
                 if decl:
                     declarations.append(decl)
+                elif self.pos == start_pos:
+                    # No progress made - skip this token to avoid infinite loop
+                    self.advance()
             except ParseError as e:
                 print(f"Parse error in declaration: {e}")
                 self.synchronize()
+                # Make sure we made progress
+                if self.pos == start_pos:
+                    self.advance()
 
         return declarations
 
@@ -2230,7 +2285,11 @@ class Parser:
 
         type_mark = None
         if not self.check(TokenType.ASSIGN) and not self.check(TokenType.RENAMES):
-            type_mark = self.parse_subtype_indication()
+            # Check for anonymous array type: array (Index) of Element
+            if self.check(TokenType.ARRAY):
+                type_mark = self.parse_type_definition()
+            else:
+                type_mark = self.parse_subtype_indication()
 
         # Check for renaming declaration
         renames_expr = None
@@ -2302,16 +2361,24 @@ class Parser:
                 kind = "function" if spec.is_function else "procedure"
                 return self.parse_generic_instantiation(kind, spec.name, start)
 
-            # Abstract subprogram
+            # Abstract subprogram: procedure X is abstract [with Aspect => Value];
             if self.match(TokenType.ABSTRACT):
-                self.expect(TokenType.SEMICOLON)
                 spec.is_abstract = True
+                # Parse optional aspects after 'is abstract'
+                abstract_aspects = self.parse_aspect_specification()
+                if abstract_aspects:
+                    spec.aspects = (spec.aspects or []) + abstract_aspects
+                self.expect(TokenType.SEMICOLON)
                 return spec
 
-            # Ada 2005 null procedure: procedure P is null;
+            # Ada 2005 null procedure: procedure P is null [with Aspect => Value];
             if self.match(TokenType.NULL):
-                self.expect(TokenType.SEMICOLON)
                 spec.is_null = True
+                # Parse optional aspects after 'is null'
+                null_aspects = self.parse_aspect_specification()
+                if null_aspects:
+                    spec.aspects = (spec.aspects or []) + null_aspects
+                self.expect(TokenType.SEMICOLON)
                 return spec
 
             # Ada 2012 expression function: function F(...) return T is (Expr);
@@ -2919,9 +2986,19 @@ class Parser:
 
         entries = []
         declarations = []
+        interfaces = []
 
         # Check for task spec
         if self.match(TokenType.IS):
+            # Check for interface inheritance: is new Interface [and Interface...] with
+            if self.match(TokenType.NEW):
+                # Parse interface list
+                interfaces.append(self.parse_name())
+                while self.match(TokenType.AND):
+                    interfaces.append(self.parse_name())
+                # Expect WITH after interface list
+                self.expect(TokenType.WITH)
+
             # Parse entries and other declarations
             while not self.check(TokenType.END, TokenType.EOF):
                 if self.match(TokenType.ENTRY):
@@ -2951,6 +3028,7 @@ class Parser:
             name=name,
             entries=entries,
             declarations=declarations,
+            interfaces=interfaces,
             span=self.make_span(start),
         )
 
@@ -3053,8 +3131,14 @@ class Parser:
                     item = self.parse_subprogram()
                     items.append(item)
                 elif self.match(TokenType.ENTRY):
-                    # Entry body: entry E when Cond is ... end E;
+                    # Entry body: entry E [(Params)] [when Cond] is ... end E;
                     entry_name = self.expect_identifier()
+                    entry_params = []
+                    # Parse optional parameters
+                    if self.match(TokenType.LEFT_PAREN):
+                        entry_params = self.parse_parameter_specifications()
+                        self.expect(TokenType.RIGHT_PAREN)
+                    # Parse optional barrier
                     barrier = None
                     if self.match(TokenType.WHEN):
                         barrier = self.parse_expression()
@@ -3071,7 +3155,7 @@ class Parser:
                         spec=SubprogramDecl(
                             name=entry_name,
                             is_function=False,
-                            parameters=[],
+                            parameters=entry_params,
                             span=self.make_span(start),
                         ),
                         declarations=declarations,
@@ -3100,9 +3184,19 @@ class Parser:
         name = self.expect_identifier()
 
         items = []
+        interfaces = []
 
         # Check for protected spec
         if self.match(TokenType.IS):
+            # Check for interface inheritance: is new Interface [and Interface...] with
+            if self.match(TokenType.NEW):
+                # Parse interface list
+                interfaces.append(self.parse_name())
+                while self.match(TokenType.AND):
+                    interfaces.append(self.parse_name())
+                # Expect WITH after interface list
+                self.expect(TokenType.WITH)
+
             # Parse public part
             while not self.check(TokenType.PRIVATE, TokenType.END, TokenType.EOF):
                 if self.check(TokenType.PROCEDURE, TokenType.FUNCTION):
@@ -3132,7 +3226,7 @@ class Parser:
 
         self.expect(TokenType.SEMICOLON)
 
-        return ProtectedTypeDecl(name=name, items=items, span=self.make_span(start))
+        return ProtectedTypeDecl(name=name, items=items, interfaces=interfaces, span=self.make_span(start))
 
     def parse_protected_body_impl(self, name: str, start: Token) -> ProtectedBody:
         """Parse protected body implementation after PROTECTED BODY name has been consumed.

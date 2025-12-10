@@ -40,6 +40,7 @@ class OptimizationStats:
     loop_invariants_moved: int = 0
     attribute_evaluations: int = 0
     range_checks_eliminated: int = 0
+    cases_eliminated: int = 0
 
     def total(self) -> int:
         """Total optimizations applied."""
@@ -55,6 +56,7 @@ class OptimizationStats:
             + self.loop_invariants_moved
             + self.attribute_evaluations
             + self.range_checks_eliminated
+            + self.cases_eliminated
         )
 
     def __str__(self) -> str:
@@ -81,6 +83,8 @@ class OptimizationStats:
             lines.append(f"  Attribute evaluations: {self.attribute_evaluations}")
         if self.range_checks_eliminated:
             lines.append(f"  Range checks eliminated: {self.range_checks_eliminated}")
+        if self.cases_eliminated:
+            lines.append(f"  Cases eliminated: {self.cases_eliminated}")
         lines.append(f"  Total: {self.total()}")
         return "\n".join(lines)
 

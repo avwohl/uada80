@@ -634,6 +634,19 @@ class DiscriminantConstraint(Constraint):
     discriminants: list[tuple[Optional[str], Expr]]  # (name, value) pairs
 
 
+@dataclass
+class BoxConstraint(Constraint):
+    """Box constraint (<>) for unconstrained ranges.
+
+    Used in array index subtype indications like:
+        type T is array (Positive range <>) of Element;
+
+    The type_mark specifies the index type (e.g., Positive).
+    """
+
+    type_mark: Optional[Expr] = None  # The index type (may be implicit)
+
+
 # ============================================================================
 # Declarations
 # ============================================================================
@@ -907,6 +920,7 @@ class TaskTypeDecl(Decl):
     discriminants: list[DiscriminantSpec] = field(default_factory=list)
     entries: list["EntryDecl"] = field(default_factory=list)
     declarations: list[Decl] = field(default_factory=list)
+    interfaces: list["Expr"] = field(default_factory=list)  # Interface inheritance
 
 
 @dataclass
@@ -959,6 +973,7 @@ class ProtectedTypeDecl(Decl):
     name: str
     discriminants: list[DiscriminantSpec] = field(default_factory=list)
     items: list[Decl] = field(default_factory=list)  # Entries, procedures, functions
+    interfaces: list["Expr"] = field(default_factory=list)  # Interface inheritance
 
 
 @dataclass

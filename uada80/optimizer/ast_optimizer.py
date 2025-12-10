@@ -40,6 +40,12 @@ from uada80.ast_nodes import (
     TypeConversion,
     QualifiedExpr,
     ConditionalExpr,
+    # Choices for case statements
+    Choice,
+    ExprChoice,
+    RangeChoice,
+    OthersChoice,
+    CaseAlternative,
     # Statements
     NullStmt,
     AssignmentStmt,
@@ -287,11 +293,59 @@ class ASTOptimizer:
 
         return replace(stmt, statements=opt_stmts)
 
-    def _optimize_case(self, stmt: CaseStmt) -> CaseStmt:
-        """Optimize a case statement."""
+    def _optimize_case(self, stmt: CaseStmt) -> Stmt:
+        """Optimize a case statement.
+
+        If the selector expression is a compile-time constant, we can
+        eliminate the entire case statement and keep only the matching
+        alternative's statements wrapped in a block.
+        """
         opt_expr = self._optimize_expr(stmt.expr)
-        # TODO: If expression is constant, could eliminate entire case
-        return replace(stmt, expr=opt_expr)
+
+        # Check if selector is a constant we can evaluate
+        const_val = self._get_constant_value(opt_expr)
+
+        if const_val is not None:
+            # Find the matching alternative
+            for alt in stmt.alternatives:
+                if self._choice_matches(alt.choices, const_val):
+                    # Optimize the matching statements and return as block
+                    opt_stmts = self._optimize_statement_list(alt.statements)
+                    self._changed = True
+                    self.stats.cases_eliminated += 1
+                    # Return a block containing just the matching statements
+                    return BlockStmt(
+                        declarations=[],
+                        statements=opt_stmts,
+                        label=None,
+                        span=stmt.span
+                    )
+
+        # Otherwise optimize alternatives normally
+        opt_alternatives = []
+        for alt in stmt.alternatives:
+            opt_stmts = self._optimize_statement_list(alt.statements)
+            opt_alternatives.append(replace(alt, statements=opt_stmts))
+
+        return replace(stmt, expr=opt_expr, alternatives=opt_alternatives)
+
+    def _choice_matches(self, choices: list[Choice], value: Any) -> bool:
+        """Check if a constant value matches any of the given choices."""
+        for choice in choices:
+            if isinstance(choice, OthersChoice):
+                # 'others' always matches as fallback
+                return True
+            elif isinstance(choice, ExprChoice):
+                choice_val = self._get_constant_value(choice.expr)
+                if choice_val is not None and choice_val == value:
+                    return True
+            elif isinstance(choice, RangeChoice):
+                low_val = self._get_constant_value(choice.range_expr.low)
+                high_val = self._get_constant_value(choice.range_expr.high)
+                if low_val is not None and high_val is not None:
+                    if low_val <= value <= high_val:
+                        return True
+        return False
 
     def _optimize_block(self, stmt: BlockStmt) -> BlockStmt:
         """Optimize a block statement."""
@@ -769,10 +823,69 @@ class ASTOptimizer:
                     length = high_val - low_val + 1
                     return IntegerLiteral(value=length, text=str(length))
 
-        # TODO: Add more attribute evaluations:
-        # - 'Size for known types
-        # - 'Pos/'Val for enumeration literals
-        # - 'Image for constant values (string result)
+        # 'Size for integer literals (bits needed to represent value)
+        if attr_upper == "SIZE" and isinstance(prefix, IntegerLiteral):
+            val = prefix.value
+            if val == 0:
+                return IntegerLiteral(value=1, text="1")  # At least 1 bit
+            size = val.bit_length()
+            return IntegerLiteral(value=size, text=str(size))
+
+        # 'Pos for character literals - returns code point
+        if attr_upper == "POS" and args and isinstance(args[0], CharacterLiteral):
+            char = args[0].value
+            if len(char) == 1:
+                pos = ord(char)
+                self.stats.attribute_evaluations += 1
+                return IntegerLiteral(value=pos, text=str(pos))
+
+        # 'Val for integers with known prefix type (Character)
+        if attr_upper == "VAL" and args and isinstance(args[0], IntegerLiteral):
+            val = args[0].value
+            # If prefix looks like Character type, convert to char literal
+            if isinstance(prefix, Identifier) and prefix.name.upper() == "CHARACTER":
+                if 0 <= val <= 127:  # ASCII range
+                    char = chr(val)
+                    self.stats.attribute_evaluations += 1
+                    return CharacterLiteral(value=char, text=f"'{char}'")
+
+        # 'Image for integer literals
+        if attr_upper == "IMAGE" and isinstance(prefix, IntegerLiteral):
+            text = str(prefix.value)
+            self.stats.attribute_evaluations += 1
+            return StringLiteral(value=text, text=f'"{text}"')
+
+        # 'Image with argument for integer type
+        if attr_upper == "IMAGE" and args and isinstance(args[0], IntegerLiteral):
+            text = str(args[0].value)
+            self.stats.attribute_evaluations += 1
+            return StringLiteral(value=text, text=f'"{text}"')
+
+        # 'Min and 'Max for constant pairs
+        if attr_upper in ("MIN", "MAX") and len(args) == 2:
+            left_val = self._get_integer_value(args[0])
+            right_val = self._get_integer_value(args[1])
+            if left_val is not None and right_val is not None:
+                result = min(left_val, right_val) if attr_upper == "MIN" else max(left_val, right_val)
+                self.stats.attribute_evaluations += 1
+                return IntegerLiteral(value=result, text=str(result))
+
+        # 'Succ and 'Pred for integer literals
+        if attr_upper == "SUCC" and args and isinstance(args[0], IntegerLiteral):
+            result = args[0].value + 1
+            self.stats.attribute_evaluations += 1
+            return IntegerLiteral(value=result, text=str(result))
+
+        if attr_upper == "PRED" and args and isinstance(args[0], IntegerLiteral):
+            result = args[0].value - 1
+            self.stats.attribute_evaluations += 1
+            return IntegerLiteral(value=result, text=str(result))
+
+        # 'Abs for integer literals
+        if attr_upper == "ABS" and args and isinstance(args[0], IntegerLiteral):
+            result = abs(args[0].value)
+            self.stats.attribute_evaluations += 1
+            return IntegerLiteral(value=result, text=str(result))
 
         return None
 
@@ -832,14 +945,84 @@ class ASTOptimizer:
         return isinstance(expr, Identifier) and expr.name.upper() == "FALSE"
 
     def _exprs_equal(self, a: Expr, b: Expr) -> bool:
-        """Check if two expressions are structurally equal."""
+        """Check if two expressions are structurally equal.
+
+        This is used for CSE (Common Subexpression Elimination) and
+        boolean simplifications like x = x -> True.
+        """
+        # Unwrap parentheses for comparison
+        a = self._unwrap_parens(a)
+        b = self._unwrap_parens(b)
+
         if type(a) != type(b):
             return False
-        if isinstance(a, Identifier) and isinstance(b, Identifier):
+
+        if isinstance(a, Identifier):
             return a.name.upper() == b.name.upper()
-        if isinstance(a, IntegerLiteral) and isinstance(b, IntegerLiteral):
+
+        if isinstance(a, IntegerLiteral):
             return a.value == b.value
-        # TODO: Add more cases for deep comparison
+
+        if isinstance(a, RealLiteral):
+            return a.value == b.value
+
+        if isinstance(a, CharacterLiteral):
+            return a.value == b.value
+
+        if isinstance(a, StringLiteral):
+            return a.value == b.value
+
+        if isinstance(a, NullLiteral):
+            return True  # All null literals are equal
+
+        if isinstance(a, BinaryExpr):
+            return (a.op == b.op and
+                    self._exprs_equal(a.left, b.left) and
+                    self._exprs_equal(a.right, b.right))
+
+        if isinstance(a, UnaryExpr):
+            return (a.op == b.op and
+                    self._exprs_equal(a.operand, b.operand))
+
+        if isinstance(a, IndexedComponent):
+            if not self._exprs_equal(a.prefix, b.prefix):
+                return False
+            if len(a.indices) != len(b.indices):
+                return False
+            return all(self._exprs_equal(ai, bi) for ai, bi in zip(a.indices, b.indices))
+
+        if isinstance(a, AttributeReference):
+            return (a.attribute.upper() == b.attribute.upper() and
+                    self._exprs_equal(a.prefix, b.prefix) and
+                    len(a.args) == len(b.args) and
+                    all(self._exprs_equal(ai, bi) for ai, bi in zip(a.args, b.args)))
+
+        if isinstance(a, FunctionCall):
+            if not self._exprs_equal(a.name, b.name):
+                return False
+            if len(a.args) != len(b.args):
+                return False
+            for arg_a, arg_b in zip(a.args, b.args):
+                if hasattr(arg_a, 'value') and hasattr(arg_b, 'value'):
+                    if not self._exprs_equal(arg_a.value, arg_b.value):
+                        return False
+                elif arg_a != arg_b:
+                    return False
+            return True
+
+        if isinstance(a, TypeConversion):
+            return (self._exprs_equal(a.type_mark, b.type_mark) and
+                    self._exprs_equal(a.expr, b.expr))
+
+        if isinstance(a, QualifiedExpr):
+            return (self._exprs_equal(a.type_mark, b.type_mark) and
+                    self._exprs_equal(a.expr, b.expr))
+
+        if isinstance(a, RangeExpr):
+            return (self._exprs_equal(a.low, b.low) and
+                    self._exprs_equal(a.high, b.high))
+
+        # For complex expressions we don't yet handle, be conservative
         return False
 
     def _is_power_of_2(self, n: int) -> bool:

@@ -89,6 +89,8 @@ class MemoryLocation(IRValue):
     offset: int = 0  # Offset from base
     is_global: bool = False  # True for global variables
     symbol_name: str = ""  # Name of symbol for globals
+    is_atomic: bool = False  # pragma Atomic - wrap in DI/EI
+    is_volatile: bool = False  # pragma Volatile - no caching
 
     def __repr__(self) -> str:
         if self.is_global:

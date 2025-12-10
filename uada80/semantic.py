@@ -228,10 +228,80 @@ class SemanticAnalyzer:
             self._analyze_generic_subprogram(unit.unit)
 
     def _analyze_with_clause(self, clause: WithClause) -> None:
-        """Analyze a with clause."""
-        # For now, just note that packages are imported
-        # Full implementation would load package specifications
-        pass
+        """Analyze a with clause.
+
+        A with clause makes the specified packages visible in the current
+        compilation unit. The package names become directly usable for
+        qualified references (Package.Entity).
+
+        For a full implementation, this would:
+        1. Load the package specification from the file system
+        2. Parse and analyze it
+        3. Add its public declarations to the visible scope
+
+        Currently we register a placeholder symbol for the package name
+        so qualified references can be resolved during semantic analysis.
+        """
+        for name in clause.names:
+            if isinstance(name, Identifier):
+                pkg_name = name.name
+                # Check if already defined (e.g., from a previous with)
+                existing = self.symbols.lookup(pkg_name)
+                if existing is None:
+                    # Create a placeholder package symbol
+                    # In a full implementation, we would load the actual package
+                    pkg_symbol = Symbol(
+                        name=pkg_name,
+                        kind=SymbolKind.PACKAGE,
+                    )
+                    pkg_symbol.is_withed = True  # Mark as from with clause
+                    # For standard library packages, we could predefine their contents
+                    if pkg_name.upper() in ("ADA", "SYSTEM", "INTERFACES"):
+                        self._setup_standard_package(pkg_symbol, pkg_name.upper())
+                    self.symbols.define(pkg_symbol)
+            elif hasattr(name, 'prefix') and hasattr(name, 'selector'):
+                # Handle hierarchical package names like Ada.Text_IO
+                # For now, just register the root package
+                if isinstance(name.prefix, Identifier):
+                    root_pkg = name.prefix.name
+                    existing = self.symbols.lookup(root_pkg)
+                    if existing is None:
+                        pkg_symbol = Symbol(
+                            name=root_pkg,
+                            kind=SymbolKind.PACKAGE,
+                        )
+                        pkg_symbol.is_withed = True
+                        if root_pkg.upper() in ("ADA", "SYSTEM", "INTERFACES"):
+                            self._setup_standard_package(pkg_symbol, root_pkg.upper())
+                        self.symbols.define(pkg_symbol)
+
+    def _setup_standard_package(self, pkg_symbol: Symbol, name: str) -> None:
+        """Set up standard library package contents.
+
+        This provides minimal type/subprogram definitions for standard
+        packages so that code referencing them can be analyzed.
+        """
+        if name == "SYSTEM":
+            # System package provides Address, Storage_Elements, etc.
+            # Add common types
+            addr_type = Symbol(name="Address", kind=SymbolKind.TYPE)
+            addr_type.ada_type = AdaType(kind=TypeKind.ACCESS, name="Address")
+            pkg_symbol.public_symbols["Address"] = addr_type
+
+            storage_type = Symbol(name="Storage_Offset", kind=SymbolKind.TYPE)
+            storage_type.ada_type = AdaType(kind=TypeKind.INTEGER, name="Storage_Offset")
+            pkg_symbol.public_symbols["Storage_Offset"] = storage_type
+
+        elif name == "INTERFACES":
+            # Interfaces package provides C types
+            for c_type in ["Integer_8", "Integer_16", "Integer_32",
+                          "Unsigned_8", "Unsigned_16", "Unsigned_32"]:
+                type_sym = Symbol(name=c_type, kind=SymbolKind.TYPE)
+                if "Unsigned" in c_type:
+                    type_sym.ada_type = AdaType(kind=TypeKind.MODULAR, name=c_type)
+                else:
+                    type_sym.ada_type = AdaType(kind=TypeKind.INTEGER, name=c_type)
+                pkg_symbol.public_symbols[c_type] = type_sym
 
     def _analyze_use_clause(self, clause: UseClause) -> None:
         """Analyze a use clause."""
@@ -422,6 +492,8 @@ class SemanticAnalyzer:
 
     def _analyze_generic_formal(self, formal) -> None:
         """Analyze a generic formal parameter."""
+        from uada80.ast_nodes import GenericObjectDecl, GenericSubprogramDecl
+
         if isinstance(formal, GenericTypeDecl):
             # Create a placeholder type for the generic type formal
             type_sym = Symbol(
@@ -435,7 +507,38 @@ class SemanticAnalyzer:
                 name=formal.name,
             )
             self.symbols.define(type_sym)
-        # TODO: Handle GenericObjectDecl, GenericSubprogramDecl, GenericPackageDecl
+
+        elif isinstance(formal, GenericObjectDecl):
+            # Generic formal object: X : in Integer := 0
+            # Create a variable symbol (VARIABLE is used for both vars and consts)
+            obj_sym = Symbol(
+                name=formal.name,
+                kind=SymbolKind.VARIABLE,
+            )
+            obj_sym.is_generic_formal = True
+            obj_sym.is_constant = (formal.mode == "in")  # "in" mode = read-only
+
+            # Resolve the type reference
+            if isinstance(formal.type_ref, Identifier):
+                type_sym = self.symbols.lookup(formal.type_ref.name)
+                if type_sym and type_sym.ada_type:
+                    obj_sym.ada_type = type_sym.ada_type
+            self.symbols.define(obj_sym)
+
+        elif hasattr(formal, '__class__') and formal.__class__.__name__ == 'GenericSubprogramDecl':
+            # Generic formal subprogram
+            # The formal subprogram declares a subprogram name that will be
+            # substituted with an actual subprogram at instantiation
+            subp_spec = getattr(formal, 'spec', None) or getattr(formal, 'subprogram', None)
+            if subp_spec:
+                subp_name = getattr(subp_spec, 'name', 'unknown')
+                is_function = getattr(subp_spec, 'is_function', False)
+                subp_sym = Symbol(
+                    name=subp_name,
+                    kind=SymbolKind.FUNCTION if is_function else SymbolKind.PROCEDURE,
+                )
+                subp_sym.is_generic_formal = True
+                self.symbols.define(subp_sym)
 
     def _analyze_generic_instantiation(self, inst: GenericInstantiation) -> None:
         """Analyze a generic instantiation."""
