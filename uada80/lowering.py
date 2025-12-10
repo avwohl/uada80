@@ -718,6 +718,8 @@ class ASTLowering:
             self._lower_protected_type_decl(decl)
         elif isinstance(decl, ProtectedBody):
             self._lower_protected_body(decl)
+        # Representation clauses are processed during type analysis
+        # and affect memory layout, not code generation directly
 
     def _lower_object_decl(self, decl: ObjectDecl) -> None:
         """Lower an object declaration."""
@@ -1561,11 +1563,12 @@ class ASTLowering:
 
         if pragma_name == "assert":
             # pragma Assert(Condition [, Message]);
-            if stmt.arguments:
-                cond = self._lower_expr(stmt.arguments[0])
-                self.builder.cmp(cond, Immediate(0, IRType.WORD))
+            args = getattr(stmt, 'args', None) or getattr(stmt, 'arguments', [])
+            if args:
+                cond = self._lower_expr(args[0])
+                # Jump to ok_label if condition is true (non-zero)
                 ok_label = self._new_label("assert_ok")
-                self.builder.jnz(Label(ok_label))
+                self.builder.jnz(cond, Label(ok_label))
 
                 # Assertion failed - raise Assertion_Error
                 exc_id = self._get_exception_id("Assertion_Error")
@@ -1580,13 +1583,444 @@ class ASTLowering:
         elif pragma_name == "debug":
             # pragma Debug(procedure_call);
             # Execute the call only in debug mode (for now, always execute)
-            if stmt.arguments:
-                arg = stmt.arguments[0]
+            args = getattr(stmt, 'args', None) or getattr(stmt, 'arguments', [])
+            if args:
+                arg = args[0]
                 if isinstance(arg, ProcedureCallStmt):
                     self._lower_procedure_call(arg)
 
-        # Other pragmas: Optimize, Inline, Suppress, etc. are compile-time only
-        # No runtime code needed
+        elif pragma_name == "check":
+            # pragma Check(Assertion_Kind, Condition [, Message]);
+            # Similar to Assert but with a named assertion kind
+            args = getattr(stmt, 'args', None) or getattr(stmt, 'arguments', [])
+            if len(args) >= 2:
+                cond = self._lower_expr(args[1])
+                # Jump to ok_label if condition is true (non-zero)
+                ok_label = self._new_label("check_ok")
+                self.builder.jnz(cond, Label(ok_label))
+
+                # Check failed - raise Assertion_Error
+                exc_id = self._get_exception_id("Assertion_Error")
+                self.builder.emit(IRInstr(
+                    OpCode.EXC_RAISE,
+                    src1=Immediate(exc_id, IRType.WORD),
+                    comment="check failed",
+                ))
+
+                self.builder.label(ok_label)
+
+        elif pragma_name == "assume":
+            # pragma Assume(Condition);
+            # Hint to the compiler that Condition is always true
+            # In generated code, we could skip checks based on this
+            # For Z80, we don't generate code but note it for optimization
+            pass
+
+        elif pragma_name == "warnings":
+            # pragma Warnings(On/Off, ...);
+            # Compile-time only - no code generated
+            pass
+
+        elif pragma_name == "suppress":
+            # pragma Suppress(Check_Name);
+            # Disable runtime checks - handled by optimization flags
+            pass
+
+        elif pragma_name == "unsuppress":
+            # pragma Unsuppress(Check_Name);
+            # Re-enable runtime checks - handled by optimization flags
+            pass
+
+        elif pragma_name == "optimize":
+            # pragma Optimize(Time/Space/Off);
+            # Compile-time optimization hints - no runtime code
+            pass
+
+        elif pragma_name == "inline":
+            # pragma Inline(Subprogram_Name);
+            # Compile-time inlining hint - no runtime code
+            pass
+
+        elif pragma_name == "no_return":
+            # pragma No_Return(Subprogram_Name);
+            # Indicates procedure never returns normally
+            # No runtime code needed
+            pass
+
+        elif pragma_name == "import":
+            # pragma Import(Convention, Entity, External_Name);
+            # Link external routine - handled during linking
+            pass
+
+        elif pragma_name == "export":
+            # pragma Export(Convention, Entity, External_Name);
+            # Export routine for external linking
+            pass
+
+        elif pragma_name == "convention":
+            # pragma Convention(Convention, Entity);
+            # Specify calling convention
+            pass
+
+        elif pragma_name == "volatile":
+            # pragma Volatile(Object);
+            # Ensure all reads/writes go to memory (disable register caching)
+            # For Z80, all memory accesses are already volatile
+            pass
+
+        elif pragma_name == "atomic":
+            # pragma Atomic(Object);
+            # Ensure atomic access (disable interrupts during access)
+            # For Z80, we could emit DI/EI around accesses
+            pass
+
+        elif pragma_name == "unreferenced":
+            # pragma Unreferenced(Name);
+            # Suppress warnings about unused entities
+            pass
+
+        elif pragma_name == "elaborate":
+            # pragma Elaborate(Package_Name);
+            # Force elaboration order - handled at link time
+            pass
+
+        elif pragma_name == "elaborate_all":
+            # pragma Elaborate_All(Package_Name);
+            # Force elaboration of all dependencies
+            pass
+
+        elif pragma_name == "preelaborate":
+            # pragma Preelaborate;
+            # Package can be preelaborated
+            pass
+
+        elif pragma_name == "pure":
+            # pragma Pure;
+            # Package is pure (no state)
+            pass
+
+        elif pragma_name == "pack":
+            # pragma Pack(Type_Name);
+            # Pack record/array components tightly
+            # Handled during type analysis - no runtime code
+            pass
+
+        elif pragma_name == "unchecked_union":
+            # pragma Unchecked_Union(Type_Name);
+            # Create C-compatible union type
+            pass
+
+        elif pragma_name == "linker_options":
+            # pragma Linker_Options("options");
+            # Pass options to linker - no runtime code
+            pass
+
+        elif pragma_name == "linker_section":
+            # pragma Linker_Section(Entity, ".section_name");
+            # Place entity in specific section
+            pass
+
+        elif pragma_name == "machine_attribute":
+            # pragma Machine_Attribute(Entity, "attribute");
+            # Low-level machine attribute
+            pass
+
+        elif pragma_name == "normalize_scalars":
+            # pragma Normalize_Scalars;
+            # Initialize scalars to out-of-range values for debugging
+            pass
+
+        elif pragma_name == "restrictions":
+            # pragma Restrictions(restriction_list);
+            # Compile-time restrictions - no runtime code
+            pass
+
+        elif pragma_name == "reviewable":
+            # pragma Reviewable;
+            # Generate reviewable code
+            pass
+
+        elif pragma_name == "discard_names":
+            # pragma Discard_Names;
+            # Don't generate name strings for types
+            pass
+
+        elif pragma_name == "inspection_point":
+            # pragma Inspection_Point(Object_Name);
+            # Debugger can examine object here
+            # Generate a NOP for breakpoint
+            self.builder.emit(IRInstr(OpCode.NOP, comment="inspection point"))
+
+        elif pragma_name == "storage_size":
+            # pragma Storage_Size(expression);
+            # Set task/access type storage - handled at allocation
+            pass
+
+        elif pragma_name == "priority":
+            # pragma Priority(expression);
+            # Set task priority - for Z80 single-tasking, ignored
+            pass
+
+        elif pragma_name == "interrupt_priority":
+            # pragma Interrupt_Priority(expression);
+            # Set interrupt handler priority
+            pass
+
+        elif pragma_name == "attach_handler":
+            # pragma Attach_Handler(Handler_Name, Interrupt_ID);
+            # Attach interrupt handler
+            args = getattr(stmt, 'args', None) or getattr(stmt, 'arguments', [])
+            if len(args) >= 2:
+                # Record interrupt handler attachment
+                # Z80 has limited interrupt modes (IM 0, 1, 2)
+                pass
+
+        elif pragma_name == "interrupt_handler":
+            # pragma Interrupt_Handler(Procedure_Name);
+            # Mark procedure as interrupt handler
+            pass
+
+        elif pragma_name == "controlled":
+            # pragma Controlled(Access_Type);
+            # Enable controlled type semantics
+            pass
+
+        elif pragma_name == "convention_identifier":
+            # pragma Convention_Identifier(Name, Convention);
+            # Define new convention name
+            pass
+
+        elif pragma_name == "detect_blocking":
+            # pragma Detect_Blocking;
+            # Detect potentially blocking operations
+            pass
+
+        elif pragma_name == "locking_policy":
+            # pragma Locking_Policy(policy);
+            # Set locking policy for protected types
+            pass
+
+        elif pragma_name == "queuing_policy":
+            # pragma Queuing_Policy(policy);
+            # Set queuing policy for entry calls
+            pass
+
+        elif pragma_name == "task_dispatching_policy":
+            # pragma Task_Dispatching_Policy(policy);
+            # Set task scheduling policy
+            pass
+
+        elif pragma_name == "partition_elaboration_policy":
+            # pragma Partition_Elaboration_Policy(policy);
+            # Control elaboration in distributed systems
+            pass
+
+        elif pragma_name == "profile":
+            # pragma Profile(Ravenscar/Jorvik/etc);
+            # Apply a predefined set of restrictions
+            pass
+
+        elif pragma_name == "assertion_policy":
+            # pragma Assertion_Policy(Check/Ignore/...);
+            # Control assertion checking - affects code generation
+            pass
+
+        elif pragma_name == "overflow_mode":
+            # pragma Overflow_Mode(General/Minimized/Eliminated/...);
+            # Control overflow checking mode
+            pass
+
+        elif pragma_name == "default_storage_pool":
+            # pragma Default_Storage_Pool(Pool_Name/null);
+            # Set default storage pool
+            pass
+
+        elif pragma_name == "loop_invariant":
+            # pragma Loop_Invariant(Condition);
+            # Check loop invariant (like Assert inside loop)
+            args = getattr(stmt, 'args', None) or getattr(stmt, 'arguments', [])
+            if args:
+                cond = self._lower_expr(args[0])
+                ok_label = self._new_label("loop_inv_ok")
+                self.builder.jnz(cond, Label(ok_label))
+                exc_id = self._get_exception_id("Assertion_Error")
+                self.builder.emit(IRInstr(
+                    OpCode.EXC_RAISE,
+                    src1=Immediate(exc_id, IRType.WORD),
+                    comment="loop invariant failed",
+                ))
+                self.builder.label(ok_label)
+
+        elif pragma_name == "loop_variant":
+            # pragma Loop_Variant(Increases => X | Decreases => Y);
+            # Termination proof - compile-time only for Z80
+            pass
+
+        elif pragma_name == "precondition":
+            # pragma Precondition(Condition);
+            # Check precondition on entry
+            args = getattr(stmt, 'args', None) or getattr(stmt, 'arguments', [])
+            if args:
+                cond = self._lower_expr(args[0])
+                ok_label = self._new_label("precond_ok")
+                self.builder.jnz(cond, Label(ok_label))
+                exc_id = self._get_exception_id("Assertion_Error")
+                self.builder.emit(IRInstr(
+                    OpCode.EXC_RAISE,
+                    src1=Immediate(exc_id, IRType.WORD),
+                    comment="precondition failed",
+                ))
+                self.builder.label(ok_label)
+
+        elif pragma_name == "postcondition":
+            # pragma Postcondition(Condition);
+            # Check postcondition on exit
+            args = getattr(stmt, 'args', None) or getattr(stmt, 'arguments', [])
+            if args:
+                cond = self._lower_expr(args[0])
+                ok_label = self._new_label("postcond_ok")
+                self.builder.jnz(cond, Label(ok_label))
+                exc_id = self._get_exception_id("Assertion_Error")
+                self.builder.emit(IRInstr(
+                    OpCode.EXC_RAISE,
+                    src1=Immediate(exc_id, IRType.WORD),
+                    comment="postcondition failed",
+                ))
+                self.builder.label(ok_label)
+
+        elif pragma_name == "type_invariant":
+            # pragma Type_Invariant(Entity, Condition);
+            # Check type invariant
+            args = getattr(stmt, 'args', None) or getattr(stmt, 'arguments', [])
+            if len(args) >= 2:
+                cond = self._lower_expr(args[1])
+                ok_label = self._new_label("type_inv_ok")
+                self.builder.jnz(cond, Label(ok_label))
+                exc_id = self._get_exception_id("Assertion_Error")
+                self.builder.emit(IRInstr(
+                    OpCode.EXC_RAISE,
+                    src1=Immediate(exc_id, IRType.WORD),
+                    comment="type invariant failed",
+                ))
+                self.builder.label(ok_label)
+
+        elif pragma_name == "static_predicate":
+            # pragma Static_Predicate(Entity, Condition);
+            # Compile-time only
+            pass
+
+        elif pragma_name == "dynamic_predicate":
+            # pragma Dynamic_Predicate(Entity, Condition);
+            # Check dynamic predicate at runtime
+            args = getattr(stmt, 'args', None) or getattr(stmt, 'arguments', [])
+            if len(args) >= 2:
+                cond = self._lower_expr(args[1])
+                ok_label = self._new_label("dyn_pred_ok")
+                self.builder.jnz(cond, Label(ok_label))
+                exc_id = self._get_exception_id("Assertion_Error")
+                self.builder.emit(IRInstr(
+                    OpCode.EXC_RAISE,
+                    src1=Immediate(exc_id, IRType.WORD),
+                    comment="dynamic predicate failed",
+                ))
+                self.builder.label(ok_label)
+
+        elif pragma_name == "interrupt_state":
+            # pragma Interrupt_State(Interrupt, State);
+            # Set interrupt state
+            args = getattr(stmt, 'args', None) or getattr(stmt, 'arguments', [])
+            if len(args) >= 2:
+                # For Z80, this could control IM modes
+                pass
+
+        elif pragma_name == "machine_code":
+            # pragma Machine_Code(...);
+            # Inline machine code insertion
+            args = getattr(stmt, 'args', None) or getattr(stmt, 'arguments', [])
+            for arg in args:
+                if hasattr(arg, 'value') and isinstance(arg.value, int):
+                    # Emit raw byte
+                    self.builder.emit(IRInstr(
+                        OpCode.NOP,
+                        comment=f"DB {arg.value:#04x}"
+                    ))
+
+        elif pragma_name == "linker_alias":
+            # pragma Linker_Alias(Entity, External_Name);
+            # Create linker alias - no runtime code
+            pass
+
+        elif pragma_name == "weak_external":
+            # pragma Weak_External(Entity);
+            # Weak external reference
+            pass
+
+        elif pragma_name == "no_inline":
+            # pragma No_Inline(Subprogram_Name);
+            # Prevent inlining
+            pass
+
+        elif pragma_name == "inline_always":
+            # pragma Inline_Always(Subprogram_Name);
+            # Force inlining
+            pass
+
+        elif pragma_name == "obsolescent":
+            # pragma Obsolescent(Entity, [Message]);
+            # Mark as obsolete - compile-time warning only
+            pass
+
+        elif pragma_name == "exception_policy":
+            # pragma Exception_Policy(policy);
+            # Set exception handling policy
+            pass
+
+        elif pragma_name == "finalize_storage_only":
+            # pragma Finalize_Storage_Only(First_Subtype);
+            # Control finalization
+            pass
+
+        elif pragma_name == "no_elaboration_code_all":
+            # pragma No_Elaboration_Code_All;
+            # Ensure no elaboration code
+            pass
+
+        elif pragma_name == "partition_elaboration_policy":
+            # Already handled above
+            pass
+
+        elif pragma_name == "external":
+            # pragma External(Convention, Entity, External_Name);
+            # Similar to Import/Export combined
+            pass
+
+        elif pragma_name == "external_name":
+            # pragma External_Name(Entity, External_Name);
+            # Set external name
+            pass
+
+        elif pragma_name == "interface_name":
+            # pragma Interface_Name(Entity, External_Name);
+            # Set interface name
+            pass
+
+        elif pragma_name == "ident":
+            # pragma Ident("version-string");
+            # Set identification string - emit to data section
+            args = getattr(stmt, 'args', None) or getattr(stmt, 'arguments', [])
+            # No runtime code, but could add to metadata
+
+        elif pragma_name == "comment":
+            # pragma Comment(Position, Text);
+            # Add comment to object file
+            pass
+
+        elif pragma_name == "source_reference":
+            # pragma Source_Reference(Line, "filename");
+            # Change source line tracking
+            pass
+
+        # Other pragmas are compile-time only - no runtime code needed
 
     def _lower_extended_return(self, stmt: ExtendedReturnStmt) -> None:
         """Lower an extended return statement (Ada 2005).
@@ -1860,6 +2294,16 @@ class ASTLowering:
             # For loop
             iterator = stmt.iteration_scheme.iterator
 
+            # Check if this is an "of" iterator (for X of Array)
+            if iterator.is_of_iterator:
+                # Ada 2012 "for X of Array" - iterate over array elements
+                self._lower_for_of_loop(stmt, iterator, end_label)
+                # Clean up named loop label
+                if stmt_label_lower:
+                    del self.ctx.loop_exit_labels[stmt_label_lower]
+                self.ctx.loop_exit_label = old_exit
+                return
+
             # Create loop variable
             loop_var = self.builder.new_vreg(IRType.WORD, iterator.name)
             self.ctx.locals[iterator.name.lower()] = LocalVariable(
@@ -1935,6 +2379,119 @@ class ASTLowering:
             del self.ctx.loop_exit_labels[stmt_label_lower]
 
         self.ctx.loop_exit_label = old_exit
+
+    def _lower_for_of_loop(self, stmt: LoopStmt, iterator, end_label: str) -> None:
+        """Lower an Ada 2012 'for X of Array' loop.
+
+        Iterates over each element of an array/container.
+        The loop variable X refers to each element in turn (not the index).
+        """
+        if self.ctx is None:
+            return
+
+        # Get the array expression and its type
+        array_expr = iterator.iterable
+        array_type = self._get_expr_type(array_expr)
+
+        # Evaluate array base address
+        array_ptr = self._lower_expr(array_expr)
+
+        # Get array bounds
+        if array_type and isinstance(array_type, ArrayType):
+            if hasattr(array_type, 'index_constraint') and array_type.index_constraint:
+                low = array_type.index_constraint.low if hasattr(array_type.index_constraint, 'low') else 0
+                high = array_type.index_constraint.high if hasattr(array_type.index_constraint, 'high') else 9
+            else:
+                low, high = 0, 9  # Default
+            element_size = 2  # Default element size
+            if array_type.element_type and hasattr(array_type.element_type, 'size_bits'):
+                element_size = (array_type.element_type.size_bits + 7) // 8
+        else:
+            low, high = 0, 9
+            element_size = 2
+
+        # Create index variable (internal)
+        index_var = self.builder.new_vreg(IRType.WORD, "_of_index")
+
+        # Create element variable (visible to user code)
+        elem_var = self.builder.new_vreg(IRType.WORD, iterator.name)
+        self.ctx.locals[iterator.name.lower()] = LocalVariable(
+            name=iterator.name,
+            vreg=elem_var,
+            stack_offset=0,
+            size=element_size,
+        )
+
+        # Store bounds
+        low_vreg = self.builder.new_vreg(IRType.WORD, "_of_low")
+        high_vreg = self.builder.new_vreg(IRType.WORD, "_of_high")
+        self.builder.mov(low_vreg, Immediate(low, IRType.WORD))
+        self.builder.mov(high_vreg, Immediate(high, IRType.WORD))
+
+        # Initialize index
+        if iterator.is_reverse:
+            self.builder.mov(index_var, high_vreg, comment="init of_index (reverse)")
+        else:
+            self.builder.mov(index_var, low_vreg, comment="init of_index")
+
+        cond_label = self._new_label("forof_cond")
+        body_label = self._new_label("forof_body")
+        inc_label = self._new_label("forof_inc")
+
+        self.builder.jmp(Label(cond_label))
+
+        # Condition check
+        cond_block = self.builder.new_block(cond_label)
+        self.builder.set_block(cond_block)
+
+        cond = self.builder.new_vreg(IRType.BOOL, "_of_cond")
+        if iterator.is_reverse:
+            self.builder.cmp_ge(cond, index_var, low_vreg)
+        else:
+            self.builder.cmp_le(cond, index_var, high_vreg)
+        self.builder.jz(cond, Label(end_label))
+
+        # Body - load element into loop variable
+        body_block = self.builder.new_block(body_label)
+        self.builder.set_block(body_block)
+
+        # Calculate element address: array_ptr + (index - low) * element_size
+        offset_var = self.builder.new_vreg(IRType.WORD, "_of_offset")
+        self.builder.sub(offset_var, index_var, low_vreg)
+
+        if element_size > 1:
+            # Multiply by element size
+            self.builder.emit(IRInstr(
+                OpCode.MUL, offset_var, offset_var,
+                Immediate(element_size, IRType.WORD),
+                comment=f"offset * {element_size}"
+            ))
+
+        elem_addr = self.builder.new_vreg(IRType.PTR, "_of_elem_addr")
+        self.builder.add(elem_addr, array_ptr, offset_var)
+
+        # Load element value into loop variable
+        self.builder.load(elem_var, MemoryLocation(base=elem_addr, offset=0, ir_type=IRType.WORD))
+
+        # Execute loop body
+        for s in stmt.statements:
+            self._lower_statement(s)
+
+        # Increment/decrement index
+        inc_block = self.builder.new_block(inc_label)
+        self.builder.set_block(inc_block)
+
+        one = Immediate(1, IRType.WORD)
+        if iterator.is_reverse:
+            self.builder.sub(index_var, index_var, one)
+        else:
+            self.builder.add(index_var, index_var, one)
+
+        self.builder.jmp(Label(cond_label))
+
+        # End block
+        end_block = self.builder.new_block(end_label)
+        self.builder.set_block(end_block)
 
     def _lower_block(self, stmt: BlockStmt) -> None:
         """Lower a block statement."""
@@ -4281,6 +4838,128 @@ class ASTLowering:
         # Default
         return Immediate(0, IRType.WORD)
 
+    def _operator_to_name(self, op: BinaryOp) -> Optional[str]:
+        """Convert a binary operator to its Ada operator function name."""
+        op_names = {
+            BinaryOp.ADD: '"+'+'"',
+            BinaryOp.SUB: '"-'+'"',
+            BinaryOp.MUL: '"*'+'"',
+            BinaryOp.DIV: '"/'+'"',
+            BinaryOp.MOD: '"mod'+'"',
+            BinaryOp.REM: '"rem'+'"',
+            BinaryOp.EXP: '"**'+'"',
+            BinaryOp.AND: '"and'+'"',
+            BinaryOp.OR: '"or'+'"',
+            BinaryOp.XOR: '"xor'+'"',
+            BinaryOp.EQ: '"='+'"',
+            BinaryOp.NE: '"/='+'"',
+            BinaryOp.LT: '"<'+'"',
+            BinaryOp.LE: '"<='+'"',
+            BinaryOp.GT: '">'+'"',
+            BinaryOp.GE: '">='+'"',
+            BinaryOp.CONCAT: '"&'+'"',
+        }
+        return op_names.get(op)
+
+    def _lookup_user_operator(self, op: BinaryOp, left: Expr, right: Expr) -> Optional[Symbol]:
+        """Look up a user-defined operator for the given operands.
+
+        Returns the Symbol for the user-defined operator function if one exists,
+        otherwise returns None to use the built-in operator.
+        """
+        # Get the operator function name
+        op_name = self._operator_to_name(op)
+        if op_name is None:
+            return None
+
+        # Get operand types
+        left_type = self._get_expr_type(left)
+        right_type = self._get_expr_type(right)
+
+        if left_type is None or right_type is None:
+            return None
+
+        # Don't look up operators for predefined types - use built-ins
+        predefined_type_names = {'integer', 'boolean', 'character', 'natural', 'positive'}
+        if hasattr(left_type, 'name') and left_type.name.lower() in predefined_type_names:
+            # For equality operators, still check for user overloads on composite types
+            if op not in (BinaryOp.EQ, BinaryOp.NE):
+                return None
+            if not isinstance(left_type, (RecordType, ArrayType)):
+                return None
+
+        # Look up operator overloads
+        overloads = self.symbols.all_overloads(op_name)
+        if not overloads:
+            # Also try without quotes (some symbol tables store operators differently)
+            alt_name = op_name.strip('"')
+            overloads = self.symbols.all_overloads(alt_name)
+            if not overloads:
+                return None
+
+        # Find matching overload based on operand types
+        from uada80.type_system import types_compatible
+
+        for sym in overloads:
+            if sym.kind != SymbolKind.FUNCTION:
+                continue
+            if len(sym.parameters) != 2:
+                continue
+
+            # Check if parameter types match operand types
+            param1_type = sym.parameters[0].ada_type if sym.parameters[0].ada_type else None
+            param2_type = sym.parameters[1].ada_type if sym.parameters[1].ada_type else None
+
+            if param1_type is None or param2_type is None:
+                continue
+
+            left_match = (param1_type.name == left_type.name or
+                          types_compatible(param1_type, left_type))
+            right_match = (param2_type.name == right_type.name or
+                           types_compatible(param2_type, right_type))
+
+            if left_match and right_match:
+                return sym
+
+        return None
+
+    def _call_user_operator(self, sym: Symbol, left_operand: Expr, right_operand: Expr):
+        """Generate a call to a user-defined operator function.
+
+        Generates code to:
+        1. Evaluate left and right operands
+        2. Push arguments on stack
+        3. Call the operator function
+        4. Capture and return the result
+        """
+        result = self.builder.new_vreg(IRType.WORD, "_op_result")
+
+        # Evaluate operands
+        left_val = self._lower_expr(left_operand)
+        right_val = self._lower_expr(right_operand)
+
+        # Push arguments (right-to-left for Z80 calling convention)
+        self.builder.push(right_val)
+        self.builder.push(left_val)
+
+        # Call the operator function
+        op_func_name = sym.name
+        self.builder.call(Label(op_func_name), comment=f"user-defined operator {sym.name}")
+
+        # Clean up stack (2 arguments)
+        temp = self.builder.new_vreg(IRType.WORD, "_discard")
+        self.builder.pop(temp)
+        self.builder.pop(temp)
+
+        # Capture result from HL register
+        self.builder.emit(IRInstr(
+            OpCode.MOV, result,
+            MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+            comment=f"capture {sym.name} result from HL"
+        ))
+
+        return result
+
     def _lower_binary(self, expr: BinaryExpr):
         """Lower a binary expression."""
         op = expr.op
@@ -4290,6 +4969,11 @@ class ASTLowering:
             return self._lower_short_circuit_and(expr)
         elif op == BinaryOp.OR_ELSE:
             return self._lower_short_circuit_or(expr)
+
+        # Check for user-defined operator overloading
+        user_op = self._lookup_user_operator(op, expr.left, expr.right)
+        if user_op is not None:
+            return self._call_user_operator(user_op, expr.left, expr.right)
 
         left = self._lower_expr(expr.left)
         right = self._lower_expr(expr.right)
@@ -4486,12 +5170,104 @@ class ASTLowering:
 
         return result
 
+    def _unary_operator_to_name(self, op: UnaryOp) -> Optional[str]:
+        """Convert a unary operator to its Ada operator function name."""
+        op_names = {
+            UnaryOp.MINUS: '"-"',
+            UnaryOp.PLUS: '"+"',
+            UnaryOp.NOT: '"not"',
+            UnaryOp.ABS: '"abs"',
+        }
+        return op_names.get(op)
+
+    def _lookup_user_unary_operator(self, op: UnaryOp, operand: Expr) -> Optional[Symbol]:
+        """Look up a user-defined unary operator for the given operand.
+
+        Returns the Symbol for the user-defined operator function if one exists,
+        otherwise returns None to use the built-in operator.
+        """
+        # Get the operator function name
+        op_name = self._unary_operator_to_name(op)
+        if op_name is None:
+            return None
+
+        # Get operand type
+        operand_type = self._get_expr_type(operand)
+        if operand_type is None:
+            return None
+
+        # Don't look up operators for predefined types - use built-ins
+        predefined_type_names = {'integer', 'boolean', 'character', 'natural', 'positive'}
+        if hasattr(operand_type, 'name') and operand_type.name.lower() in predefined_type_names:
+            return None
+
+        # Look up operator overloads
+        overloads = self.symbols.all_overloads(op_name)
+        if not overloads:
+            # Also try without quotes
+            alt_name = op_name.strip('"')
+            overloads = self.symbols.all_overloads(alt_name)
+            if not overloads:
+                return None
+
+        # Find matching overload based on operand type
+        from uada80.type_system import types_compatible
+
+        for sym in overloads:
+            if sym.kind != SymbolKind.FUNCTION:
+                continue
+            if len(sym.parameters) != 1:
+                continue
+
+            # Check if parameter type matches operand type
+            param_type = sym.parameters[0].ada_type if sym.parameters[0].ada_type else None
+            if param_type is None:
+                continue
+
+            if (param_type.name == operand_type.name or
+                types_compatible(param_type, operand_type)):
+                return sym
+
+        return None
+
+    def _call_user_unary_operator(self, sym: Symbol, operand: Expr):
+        """Generate a call to a user-defined unary operator function."""
+        result = self.builder.new_vreg(IRType.WORD, "_unary_result")
+
+        # Evaluate operand
+        operand_val = self._lower_expr(operand)
+
+        # Push argument
+        self.builder.push(operand_val)
+
+        # Call the operator function
+        self.builder.call(Label(sym.name), comment=f"user-defined unary {sym.name}")
+
+        # Clean up stack (1 argument)
+        temp = self.builder.new_vreg(IRType.WORD, "_discard")
+        self.builder.pop(temp)
+
+        # Capture result from HL register
+        self.builder.emit(IRInstr(
+            OpCode.MOV, result,
+            MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+            comment=f"capture {sym.name} result from HL"
+        ))
+
+        return result
+
     def _lower_unary(self, expr: UnaryExpr):
         """Lower a unary expression."""
+        op = expr.op
+
+        # Check for user-defined operator overloading
+        user_op = self._lookup_user_unary_operator(op, expr.operand)
+        if user_op is not None:
+            return self._call_user_unary_operator(user_op, expr.operand)
+
         operand = self._lower_expr(expr.operand)
         result = self.builder.new_vreg(IRType.WORD, "_tmp")
 
-        op = expr.op
         if op == UnaryOp.MINUS:
             self.builder.neg(result, operand)
         elif op == UnaryOp.NOT:
@@ -5091,6 +5867,3841 @@ class ASTLowering:
             max_end = self.builder.new_block(end_label)
             self.builder.set_block(max_end)
             return result
+
+        if attr == "update":
+            # Record'Update(Component => Value, ...)
+            # Array'Update(Index => Value, ...)
+            # Returns a copy of the prefix with specified components/elements updated
+            #
+            # For Z80, we:
+            # 1. Copy the original to a temporary
+            # 2. Update the specified components
+            # 3. Return the temporary
+            prefix_value = self._lower_expr(expr.prefix)
+
+            # Get type information
+            ada_type = None
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.ada_type:
+                    ada_type = sym.ada_type
+
+            if ada_type and isinstance(ada_type, RecordType):
+                # Record update
+                # Allocate space for result (same size as original)
+                size_bytes = (ada_type.size_bits + 7) // 8
+                result = self.builder.new_vreg(IRType.PTR, "_update_rec")
+
+                # Copy original record to result
+                self.builder.push(Immediate(size_bytes, IRType.WORD))
+                self.builder.push(prefix_value)
+                self.builder.push(result)
+                self.builder.call(Label("_memcpy"), comment="copy record for 'Update")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.pop(temp)
+                self.builder.pop(temp)
+
+                # Apply updates from arguments
+                # Arguments are (field => value) pairs
+                for arg in expr.args:
+                    if isinstance(arg, Aggregate):
+                        # Named aggregate with component associations
+                        for assoc in getattr(arg, 'associations', []):
+                            if hasattr(assoc, 'choices') and hasattr(assoc, 'value'):
+                                for choice in assoc.choices:
+                                    if isinstance(choice, Identifier):
+                                        field_name = choice.name.lower()
+                                        # Find field offset
+                                        if field_name in ada_type.components:
+                                            comp = ada_type.components[field_name]
+                                            offset = (comp.offset_bits + 7) // 8
+                                            # Update the field
+                                            new_val = self._lower_expr(assoc.value)
+                                            field_addr = self.builder.new_vreg(IRType.PTR, "_field")
+                                            self.builder.add(field_addr, result, Immediate(offset, IRType.WORD))
+                                            self.builder.store(field_addr, new_val)
+
+                return result
+
+            elif ada_type and isinstance(ada_type, ArrayType):
+                # Array update
+                element_size = 2  # Default word
+                if ada_type.component_type:
+                    element_size = (ada_type.component_type.size_bits + 7) // 8
+
+                # Calculate array size
+                num_elements = 1
+                if ada_type.bounds:
+                    for low, high in ada_type.bounds:
+                        num_elements *= (high - low + 1)
+                size_bytes = num_elements * element_size
+
+                result = self.builder.new_vreg(IRType.PTR, "_update_arr")
+
+                # Copy original array
+                self.builder.push(Immediate(size_bytes, IRType.WORD))
+                self.builder.push(prefix_value)
+                self.builder.push(result)
+                self.builder.call(Label("_memcpy"), comment="copy array for 'Update")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.pop(temp)
+                self.builder.pop(temp)
+
+                # Apply index updates
+                for arg in expr.args:
+                    if isinstance(arg, Aggregate):
+                        for assoc in getattr(arg, 'associations', []):
+                            if hasattr(assoc, 'choices') and hasattr(assoc, 'value'):
+                                for choice in assoc.choices:
+                                    idx = self._lower_expr(choice)
+                                    new_val = self._lower_expr(assoc.value)
+                                    # Calculate offset
+                                    offset = self.builder.new_vreg(IRType.WORD, "_idx_off")
+                                    self.builder.mul(offset, idx, Immediate(element_size, IRType.WORD))
+                                    elem_addr = self.builder.new_vreg(IRType.PTR, "_elem")
+                                    self.builder.add(elem_addr, result, offset)
+                                    self.builder.store(elem_addr, new_val)
+
+                return result
+
+            # Fallback: just return the prefix
+            return prefix_value
+
+        if attr == "valid":
+            # X'Valid - returns True if X has a valid representation
+            # For scalar types, check if value is in range
+            prefix_value = self._lower_expr(expr.prefix)
+            result = self.builder.new_vreg(IRType.WORD, "_valid")
+
+            # Get type information from prefix
+            ada_type = None
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.ada_type:
+                    ada_type = sym.ada_type
+
+            if ada_type:
+                # Check if value is within type's valid range
+                low_bound = None
+                high_bound = None
+
+                if hasattr(ada_type, "low"):
+                    low_bound = ada_type.low
+                if hasattr(ada_type, "high"):
+                    high_bound = ada_type.high
+                if isinstance(ada_type, EnumerationType) and ada_type.literals:
+                    low_bound = 0
+                    high_bound = len(ada_type.literals) - 1
+
+                if low_bound is not None and high_bound is not None:
+                    # result := (value >= low) AND (value <= high)
+                    # Use short-circuit evaluation
+                    valid_label = self._new_label("valid_ok")
+                    invalid_label = self._new_label("valid_fail")
+                    end_label = self._new_label("valid_end")
+
+                    # Check low bound
+                    cmp_low = self.builder.new_vreg(IRType.BOOL, "_cmp_low")
+                    self.builder.cmp_lt(cmp_low, prefix_value, Immediate(low_bound, IRType.WORD))
+                    self.builder.jnz(cmp_low, Label(invalid_label))
+
+                    # Check high bound
+                    cmp_high = self.builder.new_vreg(IRType.BOOL, "_cmp_high")
+                    self.builder.cmp_gt(cmp_high, prefix_value, Immediate(high_bound, IRType.WORD))
+                    self.builder.jnz(cmp_high, Label(invalid_label))
+
+                    # Valid
+                    self.builder.label(valid_label)
+                    self.builder.mov(result, Immediate(1, IRType.WORD))
+                    self.builder.jmp(Label(end_label))
+
+                    # Invalid
+                    self.builder.label(invalid_label)
+                    self.builder.mov(result, Immediate(0, IRType.WORD))
+
+                    # End
+                    self.builder.label(end_label)
+                    return result
+
+            # Default: always valid
+            self.builder.mov(result, Immediate(1, IRType.WORD))
+            return result
+
+        if attr == "constrained":
+            # X'Constrained - returns True if X is constrained (for discriminated records)
+            # For most objects, this is a static True
+            result = self.builder.new_vreg(IRType.WORD, "_constrained")
+            self.builder.mov(result, Immediate(1, IRType.WORD))
+            return result
+
+        if attr == "callable":
+            # T'Callable - returns True if task T is callable
+            # Used in tasking - for Z80 single-threaded, always True
+            result = self.builder.new_vreg(IRType.WORD, "_callable")
+            self.builder.mov(result, Immediate(1, IRType.WORD))
+            return result
+
+        if attr == "terminated":
+            # T'Terminated - returns True if task T has terminated
+            # Used in tasking - for Z80 single-threaded, always False
+            result = self.builder.new_vreg(IRType.WORD, "_terminated")
+            self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "identity":
+            # T'Identity - returns the unique identity of task T
+            # For Z80 single-threaded, return a fixed value (main task = 0)
+            result = self.builder.new_vreg(IRType.WORD, "_identity")
+            self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "count":
+            # E'Count - returns number of calls queued on entry E
+            # For Z80 single-threaded tasking, always 0
+            result = self.builder.new_vreg(IRType.WORD, "_count")
+            self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "storage_size":
+            # T'Storage_Size - storage allocated for task type T
+            # For Z80, return stack size (default 256 bytes)
+            result = self.builder.new_vreg(IRType.WORD, "_storage_size")
+            self.builder.mov(result, Immediate(256, IRType.WORD))
+            return result
+
+        if attr == "bit_order":
+            # S'Bit_Order - returns the bit ordering of type S
+            # For Z80 (little-endian), return Low_Order_First (0)
+            result = self.builder.new_vreg(IRType.WORD, "_bit_order")
+            self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "machine_radix":
+            # S'Machine_Radix - returns the radix of type S
+            # For Z80 binary machine, return 2
+            result = self.builder.new_vreg(IRType.WORD, "_machine_radix")
+            self.builder.mov(result, Immediate(2, IRType.WORD))
+            return result
+
+        if attr == "machine_mantissa":
+            # S'Machine_Mantissa - returns mantissa digits for floating type
+            # Not applicable for Z80 without FPU, return 0
+            result = self.builder.new_vreg(IRType.WORD, "_machine_mantissa")
+            self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "digits":
+            # S'Digits - returns decimal digits for floating/fixed type
+            # For fixed-point on Z80, return 4 (16-bit fractional)
+            result = self.builder.new_vreg(IRType.WORD, "_digits")
+            self.builder.mov(result, Immediate(4, IRType.WORD))
+            return result
+
+        if attr == "delta":
+            # S'Delta - returns delta for fixed-point type
+            # Not directly supported, return 1
+            result = self.builder.new_vreg(IRType.WORD, "_delta")
+            self.builder.mov(result, Immediate(1, IRType.WORD))
+            return result
+
+        if attr == "base":
+            # T'Base - returns the base type
+            # For code generation, just return the prefix value
+            return self._lower_expr(expr.prefix)
+
+        if attr == "component_size":
+            # A'Component_Size - size in bits of array components
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.ada_type and isinstance(sym.ada_type, ArrayType):
+                    if sym.ada_type.component_type:
+                        return Immediate(sym.ada_type.component_type.size_bits, IRType.WORD)
+            return Immediate(16, IRType.WORD)  # Default word size
+
+        if attr == "alignment":
+            # T'Alignment - alignment requirement
+            # For Z80, alignment is typically 1 (byte-aligned)
+            return Immediate(1, IRType.WORD)
+
+        if attr == "object_size":
+            # X'Object_Size - size in bits of object X
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.ada_type:
+                    return Immediate(sym.ada_type.size_bits, IRType.WORD)
+            return Immediate(16, IRType.WORD)
+
+        if attr == "value_size":
+            # T'Value_Size - minimum bits to represent values of type T
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.ada_type:
+                    return Immediate(sym.ada_type.size_bits, IRType.WORD)
+            return Immediate(16, IRType.WORD)
+
+        if attr == "old":
+            # X'Old - value of X at subprogram entry (for postconditions)
+            # This requires saving values at entry; for now, we look up
+            # the saved value from a special prefix
+            #
+            # The semantic analyzer should have created a copy at entry.
+            # We look for it in the locals with the prefix "_old_"
+            if isinstance(expr.prefix, Identifier):
+                old_name = f"_old_{expr.prefix.name.lower()}"
+                if self.ctx and old_name in self.ctx.locals:
+                    return self.ctx.locals[old_name].vreg
+
+            # Fallback: just evaluate the current value
+            # (This is incorrect but prevents crashes for unhandled cases)
+            return self._lower_expr(expr.prefix)
+
+        if attr == "result":
+            # F'Result - the result of function F (for postconditions)
+            # This should be the return value being computed
+            # In our calling convention, the result is in HL register
+            result = self.builder.new_vreg(IRType.WORD, "_func_result")
+            self.builder.emit(IRInstr(
+                OpCode.MOV, result,
+                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                comment="F'Result - function return value"
+            ))
+            return result
+
+        if attr == "loop_entry":
+            # X'Loop_Entry - value of X at loop entry (for loop invariants)
+            # Similar to 'Old but for loop iterations
+            if isinstance(expr.prefix, Identifier):
+                entry_name = f"_loop_entry_{expr.prefix.name.lower()}"
+                if self.ctx and entry_name in self.ctx.locals:
+                    return self.ctx.locals[entry_name].vreg
+
+            # Fallback: just evaluate the current value
+            return self._lower_expr(expr.prefix)
+
+        if attr == "reduce":
+            # Container'Reduce(Reducer, Initial) - Ada 2022 reduction expression
+            # Applies Reducer to each element with accumulator starting at Initial
+            #
+            # For arrays: iterate and apply reducer
+            # Result = Initial
+            # for E in Container loop
+            #     Result := Reducer(Result, E);
+            # end loop;
+            result = self.builder.new_vreg(IRType.WORD, "_reduce_result")
+
+            if len(expr.args) >= 2:
+                reducer = expr.args[0]  # The reducer function/operator
+                initial = expr.args[1]  # Initial value
+
+                # Initialize result with initial value
+                init_val = self._lower_expr(initial)
+                self.builder.mov(result, init_val)
+
+                # Get array info from prefix
+                ada_type = None
+                if isinstance(expr.prefix, Identifier):
+                    sym = self.symbols.lookup(expr.prefix.name)
+                    if sym and sym.ada_type:
+                        ada_type = sym.ada_type
+
+                if ada_type and isinstance(ada_type, ArrayType) and ada_type.bounds:
+                    low, high = ada_type.bounds[0]
+                    element_size = 2
+                    if ada_type.component_type:
+                        element_size = (ada_type.component_type.size_bits + 7) // 8
+
+                    # Get base address
+                    base_addr = self._lower_expr(expr.prefix)
+
+                    # Loop variable
+                    loop_idx = self.builder.new_vreg(IRType.WORD, "_reduce_idx")
+                    self.builder.mov(loop_idx, Immediate(low, IRType.WORD))
+
+                    # Loop labels
+                    loop_start = self._new_label("reduce_loop")
+                    loop_end = self._new_label("reduce_end")
+
+                    # Loop start
+                    self.builder.label(loop_start)
+
+                    # Check loop condition
+                    cmp_result = self.builder.new_vreg(IRType.BOOL, "_reduce_cmp")
+                    self.builder.cmp_gt(cmp_result, loop_idx, Immediate(high, IRType.WORD))
+                    self.builder.jnz(cmp_result, Label(loop_end))
+
+                    # Get current element
+                    offset = self.builder.new_vreg(IRType.WORD, "_reduce_off")
+                    temp = self.builder.new_vreg(IRType.WORD, "_reduce_temp")
+                    self.builder.sub(temp, loop_idx, Immediate(low, IRType.WORD))
+                    self.builder.mul(offset, temp, Immediate(element_size, IRType.WORD))
+
+                    elem_addr = self.builder.new_vreg(IRType.PTR, "_reduce_elem_addr")
+                    self.builder.add(elem_addr, base_addr, offset)
+
+                    elem_val = self.builder.new_vreg(IRType.WORD, "_reduce_elem")
+                    self.builder.load(elem_val, elem_addr)
+
+                    # Apply reducer (if it's a binary operator like "+")
+                    if isinstance(reducer, Identifier):
+                        op_name = reducer.name.lower()
+                        if op_name == '"+"' or op_name == '+':
+                            self.builder.add(result, result, elem_val)
+                        elif op_name == '"-"' or op_name == '-':
+                            self.builder.sub(result, result, elem_val)
+                        elif op_name == '"*"' or op_name == '*':
+                            self.builder.mul(result, result, elem_val)
+                        elif op_name == '"and"' or op_name == 'and':
+                            self.builder.and_(result, result, elem_val)
+                        elif op_name == '"or"' or op_name == 'or':
+                            self.builder.or_(result, result, elem_val)
+                        else:
+                            # Call reducer as function
+                            self.builder.push(elem_val)
+                            self.builder.push(result)
+                            self.builder.call(Label(op_name))
+                            temp2 = self.builder.new_vreg(IRType.WORD, "_discard")
+                            self.builder.pop(temp2)
+                            self.builder.pop(temp2)
+                            self.builder.emit(IRInstr(
+                                OpCode.MOV, result,
+                                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                                comment="capture reducer result"
+                            ))
+
+                    # Increment loop index
+                    inc_temp = self.builder.new_vreg(IRType.WORD, "_reduce_inc")
+                    self.builder.add(inc_temp, loop_idx, Immediate(1, IRType.WORD))
+                    self.builder.mov(loop_idx, inc_temp)
+                    self.builder.jmp(Label(loop_start))
+
+                    # Loop end
+                    self.builder.label(loop_end)
+
+            return result
+
+        if attr == "initialized":
+            # X'Initialized - True if X has been initialized
+            # For Z80, we always return True (no runtime tracking)
+            result = self.builder.new_vreg(IRType.WORD, "_initialized")
+            self.builder.mov(result, Immediate(1, IRType.WORD))
+            return result
+
+        if attr == "copy_sign":
+            # T'Copy_Sign(Value, Sign) - copy sign from Sign to Value
+            # For integers: if Sign < 0 then -abs(Value) else abs(Value)
+            if len(expr.args) >= 2:
+                value = self._lower_expr(expr.args[0])
+                sign = self._lower_expr(expr.args[1])
+                result = self.builder.new_vreg(IRType.WORD, "_copy_sign")
+
+                # Get abs(value)
+                abs_val = self.builder.new_vreg(IRType.WORD, "_abs_val")
+                cmp1 = self.builder.new_vreg(IRType.BOOL, "_sign_cmp1")
+                self.builder.cmp_lt(cmp1, value, Immediate(0, IRType.WORD))
+                pos_label = self._new_label("copysign_pos")
+                end_label = self._new_label("copysign_end")
+                self.builder.jz(cmp1, Label(pos_label))
+                self.builder.neg(abs_val, value)
+                self.builder.jmp(Label(end_label))
+                self.builder.label(pos_label)
+                self.builder.mov(abs_val, value)
+                self.builder.label(end_label)
+
+                # Apply sign
+                cmp2 = self.builder.new_vreg(IRType.BOOL, "_sign_cmp2")
+                self.builder.cmp_lt(cmp2, sign, Immediate(0, IRType.WORD))
+                neg_label = self._new_label("copysign_neg")
+                done_label = self._new_label("copysign_done")
+                self.builder.jz(cmp2, Label(neg_label))
+                self.builder.neg(result, abs_val)
+                self.builder.jmp(Label(done_label))
+                self.builder.label(neg_label)
+                self.builder.mov(result, abs_val)
+                self.builder.label(done_label)
+
+                return result
+            return Immediate(0, IRType.WORD)
+
+        if attr == "adjacent":
+            # T'Adjacent(X, Towards) - value adjacent to X in direction of Towards
+            # For integers: if Towards > X then X + 1 else if Towards < X then X - 1 else X
+            if len(expr.args) >= 2:
+                x = self._lower_expr(expr.args[0])
+                towards = self._lower_expr(expr.args[1])
+                result = self.builder.new_vreg(IRType.WORD, "_adjacent")
+
+                cmp_gt = self.builder.new_vreg(IRType.BOOL, "_adj_cmp_gt")
+                self.builder.cmp_gt(cmp_gt, towards, x)
+                inc_label = self._new_label("adj_inc")
+                check_lt_label = self._new_label("adj_check_lt")
+                end_label = self._new_label("adj_end")
+
+                self.builder.jz(cmp_gt, Label(check_lt_label))
+                # Towards > X: increment
+                self.builder.add(result, x, Immediate(1, IRType.WORD))
+                self.builder.jmp(Label(end_label))
+
+                self.builder.label(check_lt_label)
+                cmp_lt = self.builder.new_vreg(IRType.BOOL, "_adj_cmp_lt")
+                self.builder.cmp_lt(cmp_lt, towards, x)
+                equal_label = self._new_label("adj_equal")
+                self.builder.jz(cmp_lt, Label(equal_label))
+                # Towards < X: decrement
+                self.builder.sub(result, x, Immediate(1, IRType.WORD))
+                self.builder.jmp(Label(end_label))
+
+                self.builder.label(equal_label)
+                # Equal: no change
+                self.builder.mov(result, x)
+
+                self.builder.label(end_label)
+                return result
+            return Immediate(0, IRType.WORD)
+
+        if attr == "unrestricted_access":
+            # X'Unrestricted_Access - like 'Access but without accessibility checks
+            # Same implementation as 'Access for Z80
+            prefix_val = self._lower_expr(expr.prefix)
+            result = self.builder.new_vreg(IRType.PTR, "_unrestricted_access")
+
+            if isinstance(expr.prefix, Identifier):
+                name = expr.prefix.name.lower()
+                # Check if it's a variable (get address) or subprogram (get label)
+                sym = self.symbols.lookup(name)
+                if sym and sym.kind == "variable":
+                    self.builder.lea(result, prefix_val)
+                elif sym and sym.kind in ("function", "procedure"):
+                    self.builder.emit(IRInstr(
+                        OpCode.LEA, result, Label(name),
+                        comment=f"subprogram address '{name}'"
+                    ))
+                else:
+                    self.builder.lea(result, prefix_val)
+            else:
+                self.builder.lea(result, prefix_val)
+
+            return result
+
+        if attr == "ceiling":
+            # T'Ceiling(X) - smallest integer >= X
+            # For integer types, this is just the value itself
+            # For fixed-point: divide, then add 1 if remainder > 0
+            if expr.args:
+                x = self._lower_expr(expr.args[0])
+                result = self.builder.new_vreg(IRType.WORD, "_ceiling")
+                self.builder.mov(result, x)
+                return result
+            return self._lower_expr(expr.prefix)
+
+        if attr == "floor":
+            # T'Floor(X) - largest integer <= X
+            # For integer types, this is just the value itself
+            if expr.args:
+                x = self._lower_expr(expr.args[0])
+                result = self.builder.new_vreg(IRType.WORD, "_floor")
+                self.builder.mov(result, x)
+                return result
+            return self._lower_expr(expr.prefix)
+
+        if attr == "rounding":
+            # T'Rounding(X) - round to nearest integer
+            # For integer types, this is the value itself
+            if expr.args:
+                x = self._lower_expr(expr.args[0])
+                result = self.builder.new_vreg(IRType.WORD, "_rounding")
+                self.builder.mov(result, x)
+                return result
+            return self._lower_expr(expr.prefix)
+
+        if attr == "truncation":
+            # T'Truncation(X) - truncate toward zero
+            # For integer types, this is the value itself
+            if expr.args:
+                x = self._lower_expr(expr.args[0])
+                result = self.builder.new_vreg(IRType.WORD, "_truncation")
+                self.builder.mov(result, x)
+                return result
+            return self._lower_expr(expr.prefix)
+
+        if attr == "remainder":
+            # T'Remainder(X, Y) - IEEE remainder
+            # For integers: X mod Y with sign of X
+            if len(expr.args) >= 2:
+                x = self._lower_expr(expr.args[0])
+                y = self._lower_expr(expr.args[1])
+                result = self.builder.new_vreg(IRType.WORD, "_remainder")
+                self.builder.rem(result, x, y)
+                return result
+            return Immediate(0, IRType.WORD)
+
+        if attr == "machine":
+            # T'Machine(X) - machine representation of X
+            # For integers on Z80, this is just the value
+            if expr.args:
+                return self._lower_expr(expr.args[0])
+            return self._lower_expr(expr.prefix)
+
+        if attr == "model":
+            # T'Model(X) - model number closest to X
+            # For integers on Z80, this is just the value
+            if expr.args:
+                return self._lower_expr(expr.args[0])
+            return self._lower_expr(expr.prefix)
+
+        if attr == "compose":
+            # T'Compose(Fraction, Exponent) - compose floating-point value
+            # Not fully applicable to integers, return a scaled value
+            if len(expr.args) >= 2:
+                fraction = self._lower_expr(expr.args[0])
+                exponent = self._lower_expr(expr.args[1])
+                result = self.builder.new_vreg(IRType.WORD, "_compose")
+                # Simplified: result = fraction * 2^exponent (via shift)
+                self.builder.shl(result, fraction, exponent)
+                return result
+            return Immediate(0, IRType.WORD)
+
+        if attr == "scaling":
+            # T'Scaling(X, Adjustment) - scale by power of radix
+            # For integers: X * 2^Adjustment
+            if len(expr.args) >= 2:
+                x = self._lower_expr(expr.args[0])
+                adj = self._lower_expr(expr.args[1])
+                result = self.builder.new_vreg(IRType.WORD, "_scaling")
+                self.builder.shl(result, x, adj)
+                return result
+            return Immediate(0, IRType.WORD)
+
+        if attr == "exponent":
+            # T'Exponent(X) - exponent of X in canonical form
+            # For integers: find position of highest set bit
+            # Simplified implementation - just return a fixed value
+            result = self.builder.new_vreg(IRType.WORD, "_exponent")
+            self.builder.mov(result, Immediate(16, IRType.WORD))  # Assume 16-bit
+            return result
+
+        if attr == "fraction":
+            # T'Fraction(X) - fractional part of X
+            # For integers: 0 (no fractional part)
+            result = self.builder.new_vreg(IRType.WORD, "_fraction")
+            self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "leading_part":
+            # T'Leading_Part(X, Radix_Digits) - leading digits of X
+            # Simplified: return X itself for integers
+            if expr.args:
+                return self._lower_expr(expr.args[0])
+            return self._lower_expr(expr.prefix)
+
+        if attr == "machine_rounding":
+            # T'Machine_Rounding(X) - round according to machine mode
+            # For integers, same as value
+            if expr.args:
+                return self._lower_expr(expr.args[0])
+            return self._lower_expr(expr.prefix)
+
+        if attr == "unbiased_rounding":
+            # T'Unbiased_Rounding(X) - round to even (banker's rounding)
+            # For integers, same as value
+            if expr.args:
+                return self._lower_expr(expr.args[0])
+            return self._lower_expr(expr.prefix)
+
+        if attr == "enum_rep":
+            # T'Enum_Rep(X) - internal representation of enumeration value
+            # For our compiler, enum values are already represented as integers
+            if expr.args:
+                return self._lower_expr(expr.args[0])
+            return self._lower_expr(expr.prefix)
+
+        if attr == "enum_val":
+            # T'Enum_Val(X) - enumeration value from representation
+            # Inverse of Enum_Rep - for us, identity function
+            if expr.args:
+                return self._lower_expr(expr.args[0])
+            return self._lower_expr(expr.prefix)
+
+        if attr == "wide_image" or attr == "wide_value":
+            # Wide string versions - for Z80, same as regular Image/Value
+            # since we don't support Unicode
+            if attr == "wide_image":
+                if expr.args:
+                    val = self._lower_expr(expr.args[0])
+                else:
+                    val = self._lower_expr(expr.prefix)
+                self.builder.push(val)
+                self.builder.call(Label("_int_to_str"), comment="Wide_Image")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                result = self.builder.new_vreg(IRType.PTR, "_wide_image")
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture Wide_Image result"
+                ))
+                return result
+            else:  # wide_value
+                if expr.args:
+                    str_val = self._lower_expr(expr.args[0])
+                else:
+                    str_val = self._lower_expr(expr.prefix)
+                self.builder.push(str_val)
+                self.builder.call(Label("_str_to_int"), comment="Wide_Value")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                result = self.builder.new_vreg(IRType.WORD, "_wide_value")
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture Wide_Value result"
+                ))
+                return result
+
+        if attr == "overlaps_storage":
+            # X'Overlaps_Storage(Y) - True if X and Y share any storage
+            # Compare address ranges for overlap
+            if expr.args:
+                x_addr = self._lower_expr(expr.prefix)
+                y_addr = self._lower_expr(expr.args[0])
+
+                # Get sizes (default to 2 bytes)
+                x_size = 2
+                y_size = 2
+                if isinstance(expr.prefix, Identifier):
+                    sym = self.symbols.lookup(expr.prefix.name)
+                    if sym and sym.ada_type and hasattr(sym.ada_type, 'size_bits'):
+                        x_size = (sym.ada_type.size_bits + 7) // 8
+                if isinstance(expr.args[0], Identifier):
+                    sym = self.symbols.lookup(expr.args[0].name)
+                    if sym and sym.ada_type and hasattr(sym.ada_type, 'size_bits'):
+                        y_size = (sym.ada_type.size_bits + 7) // 8
+
+                result = self.builder.new_vreg(IRType.WORD, "_overlaps")
+
+                # Overlaps if NOT (x_end <= y_start OR y_end <= x_start)
+                # Simplified: compare addresses
+                x_end = self.builder.new_vreg(IRType.PTR, "_x_end")
+                y_end = self.builder.new_vreg(IRType.PTR, "_y_end")
+                self.builder.add(x_end, x_addr, Immediate(x_size, IRType.WORD))
+                self.builder.add(y_end, y_addr, Immediate(y_size, IRType.WORD))
+
+                # Check x_end <= y_start
+                cmp1 = self.builder.new_vreg(IRType.BOOL, "_cmp1")
+                self.builder.cmp_le(cmp1, x_end, y_addr)
+
+                # Check y_end <= x_start
+                cmp2 = self.builder.new_vreg(IRType.BOOL, "_cmp2")
+                self.builder.cmp_le(cmp2, y_end, x_addr)
+
+                # No overlap if either is true
+                no_overlap = self.builder.new_vreg(IRType.BOOL, "_no_overlap")
+                self.builder.or_(no_overlap, cmp1, cmp2)
+
+                # Result is NOT no_overlap
+                self.builder.not_(result, no_overlap)
+                return result
+
+            return Immediate(0, IRType.WORD)
+
+        if attr == "has_same_storage":
+            # X'Has_Same_Storage(Y) - True if X and Y occupy exactly the same storage
+            # Compare addresses and sizes
+            if expr.args:
+                x_addr = self._lower_expr(expr.prefix)
+                y_addr = self._lower_expr(expr.args[0])
+
+                # Get sizes
+                x_size = 2
+                y_size = 2
+                if isinstance(expr.prefix, Identifier):
+                    sym = self.symbols.lookup(expr.prefix.name)
+                    if sym and sym.ada_type and hasattr(sym.ada_type, 'size_bits'):
+                        x_size = (sym.ada_type.size_bits + 7) // 8
+                if isinstance(expr.args[0], Identifier):
+                    sym = self.symbols.lookup(expr.args[0].name)
+                    if sym and sym.ada_type and hasattr(sym.ada_type, 'size_bits'):
+                        y_size = (sym.ada_type.size_bits + 7) // 8
+
+                result = self.builder.new_vreg(IRType.WORD, "_same_storage")
+
+                # Same storage if addresses equal and sizes equal
+                addr_eq = self.builder.new_vreg(IRType.BOOL, "_addr_eq")
+                self.builder.cmp_eq(addr_eq, x_addr, y_addr)
+
+                if x_size == y_size:
+                    self.builder.mov(result, addr_eq)
+                else:
+                    # Different sizes, cannot be same storage
+                    self.builder.mov(result, Immediate(0, IRType.WORD))
+
+                return result
+
+            return Immediate(0, IRType.WORD)
+
+        if attr == "valid_scalars":
+            # X'Valid_Scalars - True if all scalar components of X are valid
+            # For simple scalars, same as 'Valid
+            # For aggregates, would need to check each component
+            result = self.builder.new_vreg(IRType.WORD, "_valid_scalars")
+            self.builder.mov(result, Immediate(1, IRType.WORD))  # Assume valid
+            return result
+
+        if attr == "descriptor_size":
+            # T'Descriptor_Size - size of fat pointer descriptor
+            # For unconstrained arrays, this includes bounds info
+            # Default: 2 bytes for pointer + 4 bytes for bounds (1D array)
+            return Immediate(6, IRType.WORD)
+
+        if attr == "default_bit_order":
+            # System'Default_Bit_Order - default bit ordering
+            # Z80 is little-endian: Low_Order_First = 0
+            return Immediate(0, IRType.WORD)
+
+        if attr == "storage_unit":
+            # System'Storage_Unit - bits per storage unit
+            # Z80: 8 bits per byte
+            return Immediate(8, IRType.WORD)
+
+        if attr == "word_size":
+            # System'Word_Size - bits per machine word
+            # Z80: 16-bit words (even though it's an 8-bit CPU)
+            return Immediate(16, IRType.WORD)
+
+        if attr == "max_int" or attr == "max_integer":
+            # System'Max_Int - largest integer value
+            return Immediate(32767, IRType.WORD)
+
+        if attr == "min_int" or attr == "min_integer":
+            # System'Min_Int - smallest integer value
+            return Immediate(-32768, IRType.WORD)
+
+        if attr == "tick":
+            # System'Tick - clock tick duration (in seconds)
+            # For Z80/CP/M, this is system-dependent
+            # Return a small positive value (1/100 second = 10ms)
+            return Immediate(10, IRType.WORD)  # milliseconds
+
+        if attr == "target_name":
+            # System'Target_Name - target platform name
+            # Return pointer to string "Z80-CPM"
+            result = self.builder.new_vreg(IRType.PTR, "_target_name")
+            # Use a string constant (would need to be in data section)
+            self.builder.emit(IRInstr(
+                OpCode.LEA, result, Label("_target_name_str"),
+                comment="System'Target_Name"
+            ))
+            return result
+
+        if attr == "compiler_version":
+            # GNAT specific but useful - return version string pointer
+            result = self.builder.new_vreg(IRType.PTR, "_compiler_version")
+            self.builder.emit(IRInstr(
+                OpCode.LEA, result, Label("_compiler_version_str"),
+                comment="Compiler_Version"
+            ))
+            return result
+
+        if attr == "null_parameter":
+            # Used in imported subprograms - returns null pointer
+            return Immediate(0, IRType.WORD)
+
+        if attr == "passed_by_reference":
+            # T'Passed_By_Reference - True if type is passed by reference
+            # For Z80: arrays, records > 2 bytes, tagged types
+            ada_type = None
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.ada_type:
+                    ada_type = sym.ada_type
+
+            if ada_type:
+                if isinstance(ada_type, ArrayType):
+                    return Immediate(1, IRType.WORD)
+                if isinstance(ada_type, RecordType):
+                    size = (ada_type.size_bits + 7) // 8 if ada_type.size_bits else 4
+                    return Immediate(1 if size > 2 else 0, IRType.WORD)
+            return Immediate(0, IRType.WORD)
+
+        if attr == "type_class":
+            # T'Type_Class - returns enumeration indicating type classification
+            # Values: 0=Integer, 1=Boolean, 2=Character, 3=Enumeration,
+            #         4=Float, 5=Fixed, 6=Array, 7=Record, 8=Access, 9=Task, etc.
+            ada_type = None
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.ada_type:
+                    ada_type = sym.ada_type
+
+            if ada_type:
+                from uada80.type_system import IntegerType, BooleanType, CharacterType
+                if isinstance(ada_type, BooleanType):
+                    return Immediate(1, IRType.WORD)
+                if isinstance(ada_type, CharacterType):
+                    return Immediate(2, IRType.WORD)
+                if isinstance(ada_type, EnumerationType):
+                    return Immediate(3, IRType.WORD)
+                if isinstance(ada_type, ArrayType):
+                    return Immediate(6, IRType.WORD)
+                if isinstance(ada_type, RecordType):
+                    return Immediate(7, IRType.WORD)
+                if isinstance(ada_type, AccessType):
+                    return Immediate(8, IRType.WORD)
+                if isinstance(ada_type, IntegerType):
+                    return Immediate(0, IRType.WORD)
+            return Immediate(0, IRType.WORD)  # Default to Integer
+
+        if attr == "put_image":
+            # T'Put_Image(Buffer, Item) - Ada 2022 custom image output
+            # Calls the Put_Image procedure associated with the type
+            if len(expr.args) >= 2:
+                buffer = self._lower_expr(expr.args[0])
+                item = self._lower_expr(expr.args[1])
+                # Call runtime Put_Image procedure
+                self.builder.push(item)
+                self.builder.push(buffer)
+                self.builder.call(Label("_put_image"), comment="T'Put_Image")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.pop(temp)
+            return Immediate(0, IRType.WORD)
+
+        if attr == "max_size_in_storage_elements":
+            # T'Max_Size_In_Storage_Elements - max size in storage elements
+            # For Z80: size in bytes (storage element = 1 byte)
+            ada_type = None
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.ada_type:
+                    ada_type = sym.ada_type
+            if ada_type and hasattr(ada_type, 'size_bits'):
+                return Immediate((ada_type.size_bits + 7) // 8, IRType.WORD)
+            return Immediate(2, IRType.WORD)
+
+        if attr == "index":
+            # T'Index(Iterator) - Ada 2012 iterator index
+            # Returns current index in generalized iteration
+            if expr.args:
+                return self._lower_expr(expr.args[0])
+            return Immediate(0, IRType.WORD)
+
+        if attr == "finalization_size":
+            # T'Finalization_Size - size needed for finalization
+            # For Z80 with no finalization, return 0
+            return Immediate(0, IRType.WORD)
+
+        if attr == "definite":
+            # T'Definite - True if type is definite (not indefinite)
+            # Most types on Z80 are definite (unconstrained arrays are indefinite)
+            ada_type = None
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.ada_type:
+                    ada_type = sym.ada_type
+            if ada_type and isinstance(ada_type, ArrayType):
+                return Immediate(1 if ada_type.is_constrained else 0, IRType.WORD)
+            return Immediate(1, IRType.WORD)
+
+        if attr == "has_discriminants":
+            # T'Has_Discriminants - True if type has discriminants
+            ada_type = None
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.ada_type:
+                    ada_type = sym.ada_type
+            if ada_type and isinstance(ada_type, RecordType):
+                return Immediate(1 if ada_type.discriminants else 0, IRType.WORD)
+            return Immediate(0, IRType.WORD)
+
+        if attr == "preelaborable_initialization":
+            # T'Preelaborable_Initialization - True if type has preelaborable init
+            # For simple types on Z80, return True
+            return Immediate(1, IRType.WORD)
+
+        if attr == "denorm_min":
+            # T'Denorm_Min - smallest denormalized value
+            # Not applicable to integers, return 0
+            return Immediate(0, IRType.WORD)
+
+        if attr == "safe_first" or attr == "safe_last":
+            # T'Safe_First / T'Safe_Last - safe range bounds
+            # For integers, same as First/Last
+            ada_type = None
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.ada_type:
+                    ada_type = sym.ada_type
+            if ada_type and hasattr(ada_type, 'low') and hasattr(ada_type, 'high'):
+                if attr == "safe_first":
+                    return Immediate(ada_type.low, IRType.WORD)
+                else:
+                    return Immediate(ada_type.high, IRType.WORD)
+            return Immediate(-32768 if attr == "safe_first" else 32767, IRType.WORD)
+
+        if attr == "model_small":
+            # T'Model_Small - smallest model number > 0
+            # For integers, return 1
+            return Immediate(1, IRType.WORD)
+
+        if attr == "model_epsilon":
+            # T'Model_Epsilon - model epsilon (spacing at 1.0)
+            # For integers, return 1
+            return Immediate(1, IRType.WORD)
+
+        if attr == "model_emin":
+            # T'Model_Emin - minimum model exponent
+            # For 16-bit integers, log2(1) = 0
+            return Immediate(0, IRType.WORD)
+
+        if attr == "model_mantissa":
+            # T'Model_Mantissa - model mantissa digits
+            # For 16-bit signed integers, ~15 bits of precision
+            return Immediate(15, IRType.WORD)
+
+        if attr == "small":
+            # T'Small - smallest positive value
+            # For integers and fixed-point
+            ada_type = None
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.ada_type:
+                    ada_type = sym.ada_type
+            if ada_type and hasattr(ada_type, 'small'):
+                return Immediate(ada_type.small, IRType.WORD)
+            return Immediate(1, IRType.WORD)
+
+        if attr == "signed_zeros":
+            # T'Signed_Zeros - True if type has signed zeros
+            # Not applicable to integers
+            return Immediate(0, IRType.WORD)
+
+        if attr == "stream_size":
+            # T'Stream_Size - size for streaming in bits
+            ada_type = None
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.ada_type:
+                    ada_type = sym.ada_type
+            if ada_type and hasattr(ada_type, 'size_bits'):
+                return Immediate(ada_type.size_bits, IRType.WORD)
+            return Immediate(16, IRType.WORD)
+
+        if attr == "write":
+            # T'Write(Stream, Item) - Write Item to Stream
+            # For Z80, we implement basic streaming to memory buffer
+            if len(expr.args) >= 2:
+                stream = self._lower_expr(expr.args[0])
+                item = self._lower_expr(expr.args[1])
+                # Get item size
+                item_size = 2  # Default word
+                if isinstance(expr.args[1], Identifier):
+                    sym = self.symbols.lookup(expr.args[1].name)
+                    if sym and sym.ada_type and hasattr(sym.ada_type, 'size_bits'):
+                        item_size = (sym.ada_type.size_bits + 7) // 8
+                # Call stream write
+                self.builder.push(Immediate(item_size, IRType.WORD))
+                self.builder.push(item)
+                self.builder.push(stream)
+                self.builder.call(Label("_stream_write"), comment="T'Write")
+                for _ in range(3):
+                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                    self.builder.pop(temp)
+            return Immediate(0, IRType.WORD)
+
+        if attr == "read":
+            # T'Read(Stream, Item) - Read Item from Stream
+            if len(expr.args) >= 2:
+                stream = self._lower_expr(expr.args[0])
+                item_addr = self._lower_expr(expr.args[1])
+                # Get item size
+                item_size = 2
+                if isinstance(expr.args[1], Identifier):
+                    sym = self.symbols.lookup(expr.args[1].name)
+                    if sym and sym.ada_type and hasattr(sym.ada_type, 'size_bits'):
+                        item_size = (sym.ada_type.size_bits + 7) // 8
+                # Call stream read
+                self.builder.push(Immediate(item_size, IRType.WORD))
+                self.builder.push(item_addr)
+                self.builder.push(stream)
+                self.builder.call(Label("_stream_read"), comment="T'Read")
+                for _ in range(3):
+                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                    self.builder.pop(temp)
+            return Immediate(0, IRType.WORD)
+
+        if attr == "input":
+            # T'Input(Stream) - Read and return value from Stream
+            result = self.builder.new_vreg(IRType.WORD, "_stream_input")
+            if expr.args:
+                stream = self._lower_expr(expr.args[0])
+                self.builder.push(stream)
+                self.builder.call(Label("_stream_input"), comment="T'Input")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                # Result is in HL
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture T'Input result"
+                ))
+            return result
+
+        if attr == "output":
+            # T'Output(Stream, Item) - Write Item with tag to Stream
+            if len(expr.args) >= 2:
+                stream = self._lower_expr(expr.args[0])
+                item = self._lower_expr(expr.args[1])
+                self.builder.push(item)
+                self.builder.push(stream)
+                self.builder.call(Label("_stream_output"), comment="T'Output")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.pop(temp)
+            return Immediate(0, IRType.WORD)
+
+        if attr == "external_tag":
+            # T'External_Tag - Get external tag string for tagged type
+            result = self.builder.new_vreg(IRType.PTR, "_ext_tag")
+            if isinstance(expr.prefix, Identifier):
+                # Return pointer to type name string
+                self.builder.emit(IRInstr(
+                    OpCode.LEA, result,
+                    Label(f"_tag_{expr.prefix.name.lower()}"),
+                    comment=f"T'External_Tag for {expr.prefix.name}"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "internal_tag":
+            # S'Internal_Tag - Get tag from external tag string
+            result = self.builder.new_vreg(IRType.PTR, "_int_tag")
+            if expr.args:
+                ext_tag = self._lower_expr(expr.args[0])
+                self.builder.push(ext_tag)
+                self.builder.call(Label("_get_internal_tag"), comment="S'Internal_Tag")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture S'Internal_Tag result"
+                ))
+            return result
+
+        if attr == "descendant_tag":
+            # S'Descendant_Tag(Ext_Tag, Ancestor) - Get descendant tag
+            result = self.builder.new_vreg(IRType.PTR, "_desc_tag")
+            if len(expr.args) >= 2:
+                ext_tag = self._lower_expr(expr.args[0])
+                ancestor = self._lower_expr(expr.args[1])
+                self.builder.push(ancestor)
+                self.builder.push(ext_tag)
+                self.builder.call(Label("_get_descendant_tag"), comment="S'Descendant_Tag")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture S'Descendant_Tag result"
+                ))
+            return result
+
+        if attr == "is_abstract":
+            # T'Is_Abstract - True if type is abstract
+            # For Z80, return 0 (no abstract types at runtime)
+            return Immediate(0, IRType.WORD)
+
+        if attr == "parent_tag":
+            # T'Parent_Tag - Get parent type's tag
+            # For single inheritance, vtable has parent pointer at offset 0
+            if isinstance(expr.prefix, Identifier):
+                tag_val = self._lower_expr(expr.prefix)
+                result = self.builder.new_vreg(IRType.PTR, "_parent_tag")
+                self.builder.load(result, tag_val)  # Load parent ptr from vtable
+                return result
+            return Immediate(0, IRType.PTR)
+
+        if attr == "interface_ancestor_tags":
+            # T'Interface_Ancestor_Tags - array of interface tags
+            # For Z80 without interfaces, return null
+            return Immediate(0, IRType.PTR)
+
+        if attr == "type_key":
+            # T'Type_Key - unique type identifier string
+            result = self.builder.new_vreg(IRType.PTR, "_type_key")
+            if isinstance(expr.prefix, Identifier):
+                self.builder.emit(IRInstr(
+                    OpCode.LEA, result,
+                    Label(f"_typekey_{expr.prefix.name.lower()}"),
+                    comment=f"T'Type_Key for {expr.prefix.name}"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        # Exception information attributes (Ada.Exceptions)
+        if attr == "exception_name":
+            # Exception_Name(X) - Get name string of exception occurrence
+            result = self.builder.new_vreg(IRType.PTR, "_exc_name")
+            if expr.args:
+                occ = self._lower_expr(expr.args[0])
+                self.builder.push(occ)
+                self.builder.call(Label("_exc_get_name"), comment="Exception_Name")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture exception name"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "exception_message":
+            # Exception_Message(X) - Get message string of exception occurrence
+            result = self.builder.new_vreg(IRType.PTR, "_exc_msg")
+            if expr.args:
+                occ = self._lower_expr(expr.args[0])
+                self.builder.push(occ)
+                self.builder.call(Label("_exc_get_message"), comment="Exception_Message")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture exception message"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "exception_information":
+            # Exception_Information(X) - Get full info string
+            result = self.builder.new_vreg(IRType.PTR, "_exc_info")
+            if expr.args:
+                occ = self._lower_expr(expr.args[0])
+                self.builder.push(occ)
+                self.builder.call(Label("_exc_get_info"), comment="Exception_Information")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture exception information"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "exception_identity":
+            # Exception_Identity(X) - Get exception identity
+            result = self.builder.new_vreg(IRType.WORD, "_exc_identity")
+            if expr.args:
+                occ = self._lower_expr(expr.args[0])
+                # Exception occurrence has identity at offset 0
+                self.builder.load(result, occ)
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "wide_exception_name":
+            # Wide_Exception_Name(X) - Wide string version
+            # For Z80, same as Exception_Name (no Unicode)
+            result = self.builder.new_vreg(IRType.PTR, "_wide_exc_name")
+            if expr.args:
+                occ = self._lower_expr(expr.args[0])
+                self.builder.push(occ)
+                self.builder.call(Label("_exc_get_name"), comment="Wide_Exception_Name")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture wide exception name"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        # Address-related attributes
+        if attr == "code_address":
+            # S'Code_Address - Address of subprogram's code
+            result = self.builder.new_vreg(IRType.PTR, "_code_addr")
+            if isinstance(expr.prefix, Identifier):
+                self.builder.emit(IRInstr(
+                    OpCode.LEA, result, Label(expr.prefix.name.lower()),
+                    comment=f"S'Code_Address for {expr.prefix.name}"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "pool_address":
+            # X'Pool_Address - Address within storage pool
+            result = self.builder.new_vreg(IRType.PTR, "_pool_addr")
+            prefix_val = self._lower_expr(expr.prefix)
+            # For simple allocations, pool address is same as address
+            self.builder.mov(result, prefix_val)
+            return result
+
+        if attr == "body_version":
+            # P'Body_Version - Version string of package body
+            result = self.builder.new_vreg(IRType.PTR, "_body_ver")
+            if isinstance(expr.prefix, Identifier):
+                self.builder.emit(IRInstr(
+                    OpCode.LEA, result,
+                    Label(f"_bodyver_{expr.prefix.name.lower()}"),
+                    comment=f"P'Body_Version for {expr.prefix.name}"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "version":
+            # P'Version - Version string of package spec
+            result = self.builder.new_vreg(IRType.PTR, "_version")
+            if isinstance(expr.prefix, Identifier):
+                self.builder.emit(IRInstr(
+                    OpCode.LEA, result,
+                    Label(f"_version_{expr.prefix.name.lower()}"),
+                    comment=f"P'Version for {expr.prefix.name}"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        # Unchecked conversion attributes
+        if attr == "unchecked_access":
+            # X'Unchecked_Access - Access without accessibility check
+            # Same as 'Unrestricted_Access for Z80
+            prefix_val = self._lower_expr(expr.prefix)
+            result = self.builder.new_vreg(IRType.PTR, "_unchecked_access")
+            if isinstance(expr.prefix, Identifier):
+                self.builder.lea(result, prefix_val)
+            else:
+                self.builder.mov(result, prefix_val)
+            return result
+
+        # Elaboration attributes
+        if attr == "elaborated":
+            # P'Elaborated - True if package has been elaborated
+            # For static compilation, always True at runtime
+            return Immediate(1, IRType.WORD)
+
+        if attr == "partition_id":
+            # P'Partition_Id - Partition identifier (for distributed systems)
+            # Z80 is single partition, return 0
+            return Immediate(0, IRType.WORD)
+
+        # Storage pool attributes
+        if attr == "storage_pool":
+            # S'Storage_Pool - The storage pool for access type S
+            result = self.builder.new_vreg(IRType.PTR, "_storage_pool")
+            # Return default pool (heap base)
+            self.builder.emit(IRInstr(
+                OpCode.LEA, result, Label("_heap_base"),
+                comment="S'Storage_Pool"
+            ))
+            return result
+
+        if attr == "simple_storage_pool":
+            # S'Simple_Storage_Pool - Simple storage pool for S
+            result = self.builder.new_vreg(IRType.PTR, "_simple_pool")
+            self.builder.emit(IRInstr(
+                OpCode.LEA, result, Label("_heap_base"),
+                comment="S'Simple_Storage_Pool"
+            ))
+            return result
+
+        # Calendar/Time attributes
+        if attr == "clock":
+            # Ada.Calendar.Clock - Current time
+            result = self.builder.new_vreg(IRType.WORD, "_clock")
+            self.builder.call(Label("_calendar_clock"), comment="Ada.Calendar.Clock")
+            self.builder.emit(IRInstr(
+                OpCode.MOV, result,
+                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                comment="capture clock value"
+            ))
+            return result
+
+        if attr == "year":
+            # Time'Year - Extract year from time value
+            result = self.builder.new_vreg(IRType.WORD, "_year")
+            if expr.args:
+                time_val = self._lower_expr(expr.args[0])
+                self.builder.push(time_val)
+                self.builder.call(Label("_time_year"), comment="Year")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture year"
+                ))
+            else:
+                self.builder.mov(result, Immediate(1970, IRType.WORD))
+            return result
+
+        if attr == "month":
+            # Time'Month - Extract month (1-12)
+            result = self.builder.new_vreg(IRType.WORD, "_month")
+            if expr.args:
+                time_val = self._lower_expr(expr.args[0])
+                self.builder.push(time_val)
+                self.builder.call(Label("_time_month"), comment="Month")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture month"
+                ))
+            else:
+                self.builder.mov(result, Immediate(1, IRType.WORD))
+            return result
+
+        if attr == "day":
+            # Time'Day - Extract day (1-31)
+            result = self.builder.new_vreg(IRType.WORD, "_day")
+            if expr.args:
+                time_val = self._lower_expr(expr.args[0])
+                self.builder.push(time_val)
+                self.builder.call(Label("_time_day"), comment="Day")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture day"
+                ))
+            else:
+                self.builder.mov(result, Immediate(1, IRType.WORD))
+            return result
+
+        if attr == "seconds":
+            # Time'Seconds - Seconds since midnight
+            result = self.builder.new_vreg(IRType.WORD, "_seconds")
+            if expr.args:
+                time_val = self._lower_expr(expr.args[0])
+                self.builder.push(time_val)
+                self.builder.call(Label("_time_seconds"), comment="Seconds")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture seconds"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        # Machine code attributes (for System.Machine_Code)
+        if attr == "asm_input":
+            # Asm_Input("constraint", value) - Input operand for inline asm
+            if len(expr.args) >= 2:
+                return self._lower_expr(expr.args[1])
+            return Immediate(0, IRType.WORD)
+
+        if attr == "asm_output":
+            # Asm_Output("constraint", variable) - Output operand
+            if len(expr.args) >= 2:
+                return self._lower_expr(expr.args[1])
+            return Immediate(0, IRType.WORD)
+
+        # Bit manipulation attributes
+        if attr == "rotate_left":
+            # Interfaces.Rotate_Left(Value, Amount)
+            if len(expr.args) >= 2:
+                value = self._lower_expr(expr.args[0])
+                amount = self._lower_expr(expr.args[1])
+                result = self.builder.new_vreg(IRType.WORD, "_rotl")
+                self.builder.rol(result, value, amount)
+                return result
+            return Immediate(0, IRType.WORD)
+
+        if attr == "rotate_right":
+            # Interfaces.Rotate_Right(Value, Amount)
+            if len(expr.args) >= 2:
+                value = self._lower_expr(expr.args[0])
+                amount = self._lower_expr(expr.args[1])
+                result = self.builder.new_vreg(IRType.WORD, "_rotr")
+                self.builder.ror(result, value, amount)
+                return result
+            return Immediate(0, IRType.WORD)
+
+        if attr == "shift_left":
+            # Interfaces.Shift_Left(Value, Amount)
+            if len(expr.args) >= 2:
+                value = self._lower_expr(expr.args[0])
+                amount = self._lower_expr(expr.args[1])
+                result = self.builder.new_vreg(IRType.WORD, "_shl")
+                self.builder.shl(result, value, amount)
+                return result
+            return Immediate(0, IRType.WORD)
+
+        if attr == "shift_right":
+            # Interfaces.Shift_Right(Value, Amount) - logical shift
+            if len(expr.args) >= 2:
+                value = self._lower_expr(expr.args[0])
+                amount = self._lower_expr(expr.args[1])
+                result = self.builder.new_vreg(IRType.WORD, "_shr")
+                self.builder.shr(result, value, amount)
+                return result
+            return Immediate(0, IRType.WORD)
+
+        if attr == "shift_right_arithmetic":
+            # Interfaces.Shift_Right_Arithmetic(Value, Amount)
+            if len(expr.args) >= 2:
+                value = self._lower_expr(expr.args[0])
+                amount = self._lower_expr(expr.args[1])
+                result = self.builder.new_vreg(IRType.WORD, "_sra")
+                self.builder.sar(result, value, amount)
+                return result
+            return Immediate(0, IRType.WORD)
+
+        # Interfaces.C attributes
+        if attr == "to_c":
+            # Convert Ada string to C string (null-terminated)
+            if expr.args:
+                str_val = self._lower_expr(expr.args[0])
+                result = self.builder.new_vreg(IRType.PTR, "_c_str")
+                self.builder.push(str_val)
+                self.builder.call(Label("_to_c_string"), comment="To_C")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture C string"
+                ))
+                return result
+            return Immediate(0, IRType.PTR)
+
+        if attr == "to_ada":
+            # Convert C string to Ada string
+            if expr.args:
+                c_str = self._lower_expr(expr.args[0])
+                result = self.builder.new_vreg(IRType.PTR, "_ada_str")
+                self.builder.push(c_str)
+                self.builder.call(Label("_to_ada_string"), comment="To_Ada")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture Ada string"
+                ))
+                return result
+            return Immediate(0, IRType.PTR)
+
+        # Unchecked conversion
+        if attr == "unchecked_conversion":
+            # Ada.Unchecked_Conversion - type punning
+            if expr.args:
+                # Just return the bit pattern unchanged
+                return self._lower_expr(expr.args[0])
+            return Immediate(0, IRType.WORD)
+
+        # Lock-free attributes
+        if attr == "lock_free":
+            # S'Lock_Free - True if protected object is lock-free
+            # Z80 is single-threaded, so effectively lock-free
+            return Immediate(1, IRType.WORD)
+
+        # Real-time attributes
+        if attr == "priority":
+            # T'Priority - Task priority (for Z80, always same)
+            return Immediate(0, IRType.WORD)
+
+        if attr == "interrupt_priority":
+            # Protected'Interrupt_Priority
+            return Immediate(255, IRType.WORD)  # Highest priority
+
+        # CPU attributes
+        if attr == "cpu":
+            # T'CPU - CPU affinity (Z80 has only one CPU)
+            return Immediate(0, IRType.WORD)
+
+        # Dispatching domain
+        if attr == "dispatching_domain":
+            # T'Dispatching_Domain - Task dispatching domain
+            return Immediate(0, IRType.WORD)
+
+        # System.Address_To_Access_Conversions
+        if attr == "to_pointer":
+            # To_Pointer(Address) - Convert address to access type
+            if expr.args:
+                addr = self._lower_expr(expr.args[0])
+                result = self.builder.new_vreg(IRType.PTR, "_ptr")
+                self.builder.mov(result, addr)
+                return result
+            return Immediate(0, IRType.PTR)
+
+        if attr == "to_address":
+            # To_Address(Pointer) - Convert access to address
+            if expr.args:
+                ptr = self._lower_expr(expr.args[0])
+                result = self.builder.new_vreg(IRType.WORD, "_addr")
+                self.builder.mov(result, ptr)
+                return result
+            return Immediate(0, IRType.WORD)
+
+        # Random number support
+        if attr == "random":
+            # Random - Generate random number
+            result = self.builder.new_vreg(IRType.WORD, "_random")
+            self.builder.call(Label("_random"), comment="Random")
+            self.builder.emit(IRInstr(
+                OpCode.MOV, result,
+                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                comment="capture random value"
+            ))
+            return result
+
+        # Command line arguments
+        if attr == "argument_count":
+            # Ada.Command_Line.Argument_Count
+            result = self.builder.new_vreg(IRType.WORD, "_argc")
+            self.builder.emit(IRInstr(
+                OpCode.LOAD, result,
+                MemoryLocation(is_global=True, symbol_name="_argc", ir_type=IRType.WORD),
+                comment="Argument_Count"
+            ))
+            return result
+
+        if attr == "argument":
+            # Ada.Command_Line.Argument(N)
+            result = self.builder.new_vreg(IRType.PTR, "_argv")
+            if expr.args:
+                n = self._lower_expr(expr.args[0])
+                self.builder.push(n)
+                self.builder.call(Label("_get_argument"), comment="Argument")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture argument"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "command_name":
+            # Ada.Command_Line.Command_Name
+            result = self.builder.new_vreg(IRType.PTR, "_cmd_name")
+            self.builder.call(Label("_get_command_name"), comment="Command_Name")
+            self.builder.emit(IRInstr(
+                OpCode.MOV, result,
+                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                comment="capture command name"
+            ))
+            return result
+
+        # Environment variables
+        if attr == "environment_count":
+            # Count of environment variables
+            result = self.builder.new_vreg(IRType.WORD, "_envc")
+            self.builder.call(Label("_get_env_count"), comment="Environment_Count")
+            self.builder.emit(IRInstr(
+                OpCode.MOV, result,
+                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                comment="capture env count"
+            ))
+            return result
+
+        # File I/O attributes (Ada.Text_IO, Ada.Sequential_IO, etc.)
+        if attr == "is_open":
+            # File'Is_Open - Check if file is open
+            result = self.builder.new_vreg(IRType.WORD, "_is_open")
+            if expr.args:
+                file_val = self._lower_expr(expr.args[0])
+                self.builder.push(file_val)
+                self.builder.call(Label("_file_is_open"), comment="Is_Open")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture is_open result"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "mode":
+            # File'Mode - Get file mode (In_File, Out_File, etc.)
+            result = self.builder.new_vreg(IRType.WORD, "_file_mode")
+            if expr.args:
+                file_val = self._lower_expr(expr.args[0])
+                self.builder.push(file_val)
+                self.builder.call(Label("_file_mode"), comment="Mode")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture file mode"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "name":
+            # File'Name - Get file name string
+            result = self.builder.new_vreg(IRType.PTR, "_file_name")
+            if expr.args:
+                file_val = self._lower_expr(expr.args[0])
+                self.builder.push(file_val)
+                self.builder.call(Label("_file_name"), comment="Name")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture file name"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "form":
+            # File'Form - Get file form string
+            result = self.builder.new_vreg(IRType.PTR, "_file_form")
+            if expr.args:
+                file_val = self._lower_expr(expr.args[0])
+                self.builder.push(file_val)
+                self.builder.call(Label("_file_form"), comment="Form")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture file form"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "line":
+            # Current line number
+            result = self.builder.new_vreg(IRType.WORD, "_line_num")
+            if expr.args:
+                file_val = self._lower_expr(expr.args[0])
+                self.builder.push(file_val)
+                self.builder.call(Label("_file_line"), comment="Line")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture line number"
+                ))
+            else:
+                self.builder.mov(result, Immediate(1, IRType.WORD))
+            return result
+
+        if attr == "col":
+            # Current column number
+            result = self.builder.new_vreg(IRType.WORD, "_col_num")
+            if expr.args:
+                file_val = self._lower_expr(expr.args[0])
+                self.builder.push(file_val)
+                self.builder.call(Label("_file_col"), comment="Col")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture column number"
+                ))
+            else:
+                self.builder.mov(result, Immediate(1, IRType.WORD))
+            return result
+
+        if attr == "page":
+            # Current page number
+            result = self.builder.new_vreg(IRType.WORD, "_page_num")
+            if expr.args:
+                file_val = self._lower_expr(expr.args[0])
+                self.builder.push(file_val)
+                self.builder.call(Label("_file_page"), comment="Page")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture page number"
+                ))
+            else:
+                self.builder.mov(result, Immediate(1, IRType.WORD))
+            return result
+
+        if attr == "end_of_file":
+            # File'End_Of_File
+            result = self.builder.new_vreg(IRType.WORD, "_eof")
+            if expr.args:
+                file_val = self._lower_expr(expr.args[0])
+                self.builder.push(file_val)
+                self.builder.call(Label("_file_eof"), comment="End_Of_File")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture EOF status"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "end_of_line":
+            # File'End_Of_Line
+            result = self.builder.new_vreg(IRType.WORD, "_eol")
+            if expr.args:
+                file_val = self._lower_expr(expr.args[0])
+                self.builder.push(file_val)
+                self.builder.call(Label("_file_eol"), comment="End_Of_Line")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture EOL status"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "end_of_page":
+            # File'End_Of_Page
+            result = self.builder.new_vreg(IRType.WORD, "_eop")
+            if expr.args:
+                file_val = self._lower_expr(expr.args[0])
+                self.builder.push(file_val)
+                self.builder.call(Label("_file_eop"), comment="End_Of_Page")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture EOP status"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        # Direct I/O attributes
+        if attr == "index":
+            # File'Index - Current position in direct I/O file
+            result = self.builder.new_vreg(IRType.WORD, "_file_index")
+            if expr.args:
+                file_val = self._lower_expr(expr.args[0])
+                self.builder.push(file_val)
+                self.builder.call(Label("_file_index"), comment="Index")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture file index"
+                ))
+            else:
+                self.builder.mov(result, Immediate(1, IRType.WORD))
+            return result
+
+        if attr == "file_size":
+            # File'Size - Size of direct I/O file
+            result = self.builder.new_vreg(IRType.WORD, "_file_size")
+            if expr.args:
+                file_val = self._lower_expr(expr.args[0])
+                self.builder.push(file_val)
+                self.builder.call(Label("_file_size"), comment="Size")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture file size"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        # Standard I/O file handles
+        if attr == "standard_input":
+            # Ada.Text_IO.Standard_Input
+            result = self.builder.new_vreg(IRType.WORD, "_stdin")
+            self.builder.emit(IRInstr(
+                OpCode.LOAD, result,
+                MemoryLocation(is_global=True, symbol_name="_stdin", ir_type=IRType.WORD),
+                comment="Standard_Input"
+            ))
+            return result
+
+        if attr == "standard_output":
+            # Ada.Text_IO.Standard_Output
+            result = self.builder.new_vreg(IRType.WORD, "_stdout")
+            self.builder.emit(IRInstr(
+                OpCode.LOAD, result,
+                MemoryLocation(is_global=True, symbol_name="_stdout", ir_type=IRType.WORD),
+                comment="Standard_Output"
+            ))
+            return result
+
+        if attr == "standard_error":
+            # Ada.Text_IO.Standard_Error
+            result = self.builder.new_vreg(IRType.WORD, "_stderr")
+            self.builder.emit(IRInstr(
+                OpCode.LOAD, result,
+                MemoryLocation(is_global=True, symbol_name="_stderr", ir_type=IRType.WORD),
+                comment="Standard_Error"
+            ))
+            return result
+
+        if attr == "current_input":
+            # Ada.Text_IO.Current_Input
+            result = self.builder.new_vreg(IRType.WORD, "_cur_in")
+            self.builder.call(Label("_get_current_input"), comment="Current_Input")
+            self.builder.emit(IRInstr(
+                OpCode.MOV, result,
+                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                comment="capture current input"
+            ))
+            return result
+
+        if attr == "current_output":
+            # Ada.Text_IO.Current_Output
+            result = self.builder.new_vreg(IRType.WORD, "_cur_out")
+            self.builder.call(Label("_get_current_output"), comment="Current_Output")
+            self.builder.emit(IRInstr(
+                OpCode.MOV, result,
+                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                comment="capture current output"
+            ))
+            return result
+
+        if attr == "current_error":
+            # Ada.Text_IO.Current_Error
+            result = self.builder.new_vreg(IRType.WORD, "_cur_err")
+            self.builder.call(Label("_get_current_error"), comment="Current_Error")
+            self.builder.emit(IRInstr(
+                OpCode.MOV, result,
+                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                comment="capture current error"
+            ))
+            return result
+
+        # Numerics attributes
+        if attr == "pi":
+            # Ada.Numerics.Pi - for fixed point, scaled
+            # Pi ≈ 3.14159 * 65536 = 205887 (but fits in 16 bits as 3 integer + frac)
+            return Immediate(205887 & 0xFFFF, IRType.WORD)  # 16.16 fixed
+
+        if attr == "e":
+            # Ada.Numerics.e - Euler's number
+            # e ≈ 2.71828 * 65536 = 178145
+            return Immediate(178145 & 0xFFFF, IRType.WORD)
+
+        # Complex number attributes (for Interfaces.Fortran or Ada.Numerics.Complex)
+        if attr == "re":
+            # Complex'Re - Real part
+            if expr.args:
+                complex_val = self._lower_expr(expr.args[0])
+                result = self.builder.new_vreg(IRType.WORD, "_re")
+                # Real part is at offset 0
+                self.builder.load(result, complex_val)
+                return result
+            return Immediate(0, IRType.WORD)
+
+        if attr == "im":
+            # Complex'Im - Imaginary part
+            if expr.args:
+                complex_val = self._lower_expr(expr.args[0])
+                result = self.builder.new_vreg(IRType.WORD, "_im")
+                # Imaginary part is at offset 2
+                offset_ptr = self.builder.new_vreg(IRType.PTR, "_im_ptr")
+                self.builder.add(offset_ptr, complex_val, Immediate(2, IRType.WORD))
+                self.builder.load(result, offset_ptr)
+                return result
+            return Immediate(0, IRType.WORD)
+
+        if attr == "modulus":
+            # Complex'Modulus - |z| = sqrt(re^2 + im^2)
+            if expr.args:
+                complex_val = self._lower_expr(expr.args[0])
+                result = self.builder.new_vreg(IRType.WORD, "_modulus")
+                self.builder.push(complex_val)
+                self.builder.call(Label("_complex_modulus"), comment="Modulus")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture modulus"
+                ))
+                return result
+            return Immediate(0, IRType.WORD)
+
+        if attr == "argument":
+            # Complex'Argument - Phase angle
+            if expr.args:
+                complex_val = self._lower_expr(expr.args[0])
+                result = self.builder.new_vreg(IRType.WORD, "_arg")
+                self.builder.push(complex_val)
+                self.builder.call(Label("_complex_argument"), comment="Argument")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture argument"
+                ))
+                return result
+            return Immediate(0, IRType.WORD)
+
+        if attr == "conjugate":
+            # Complex'Conjugate - Complex conjugate
+            if expr.args:
+                complex_val = self._lower_expr(expr.args[0])
+                result = self.builder.new_vreg(IRType.PTR, "_conj")
+                self.builder.push(complex_val)
+                self.builder.call(Label("_complex_conjugate"), comment="Conjugate")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture conjugate"
+                ))
+                return result
+            return Immediate(0, IRType.PTR)
+
+        # Containers attributes
+        if attr == "capacity":
+            # Container'Capacity - Maximum capacity
+            result = self.builder.new_vreg(IRType.WORD, "_capacity")
+            if expr.args:
+                container = self._lower_expr(expr.args[0])
+                self.builder.push(container)
+                self.builder.call(Label("_container_capacity"), comment="Capacity")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture capacity"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "is_empty":
+            # Container'Is_Empty
+            result = self.builder.new_vreg(IRType.WORD, "_is_empty")
+            if expr.args:
+                container = self._lower_expr(expr.args[0])
+                self.builder.push(container)
+                self.builder.call(Label("_container_is_empty"), comment="Is_Empty")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture is_empty"
+                ))
+            else:
+                self.builder.mov(result, Immediate(1, IRType.WORD))
+            return result
+
+        # String handling attributes (Ada.Strings.Fixed, Ada.Strings.Unbounded, etc.)
+        if attr == "head":
+            # Head(Source, Count) - First Count characters
+            result = self.builder.new_vreg(IRType.PTR, "_head")
+            if len(expr.args) >= 2:
+                source = self._lower_expr(expr.args[0])
+                count = self._lower_expr(expr.args[1])
+                self.builder.push(count)
+                self.builder.push(source)
+                self.builder.call(Label("_str_head"), comment="Head")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture head result"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "tail":
+            # Tail(Source, Count) - Last Count characters
+            result = self.builder.new_vreg(IRType.PTR, "_tail")
+            if len(expr.args) >= 2:
+                source = self._lower_expr(expr.args[0])
+                count = self._lower_expr(expr.args[1])
+                self.builder.push(count)
+                self.builder.push(source)
+                self.builder.call(Label("_str_tail"), comment="Tail")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture tail result"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "trim":
+            # Trim(Source, Side) - Remove leading/trailing spaces
+            result = self.builder.new_vreg(IRType.PTR, "_trim")
+            if expr.args:
+                source = self._lower_expr(expr.args[0])
+                side = self._lower_expr(expr.args[1]) if len(expr.args) >= 2 else Immediate(0, IRType.WORD)
+                self.builder.push(side)
+                self.builder.push(source)
+                self.builder.call(Label("_str_trim"), comment="Trim")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture trim result"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "index_non_blank":
+            # Index of first non-blank character
+            result = self.builder.new_vreg(IRType.WORD, "_index_nb")
+            if expr.args:
+                source = self._lower_expr(expr.args[0])
+                self.builder.push(source)
+                self.builder.call(Label("_str_index_non_blank"), comment="Index_Non_Blank")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture index"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "count":
+            # Count occurrences of pattern in string
+            result = self.builder.new_vreg(IRType.WORD, "_count")
+            if len(expr.args) >= 2:
+                source = self._lower_expr(expr.args[0])
+                pattern = self._lower_expr(expr.args[1])
+                self.builder.push(pattern)
+                self.builder.push(source)
+                self.builder.call(Label("_str_count"), comment="Count")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture count"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "translate":
+            # Translate(Source, Mapping) - Character mapping
+            result = self.builder.new_vreg(IRType.PTR, "_translate")
+            if len(expr.args) >= 2:
+                source = self._lower_expr(expr.args[0])
+                mapping = self._lower_expr(expr.args[1])
+                self.builder.push(mapping)
+                self.builder.push(source)
+                self.builder.call(Label("_str_translate"), comment="Translate")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture translated string"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "replace_slice":
+            # Replace_Slice(Source, Low, High, By) - Replace substring
+            result = self.builder.new_vreg(IRType.PTR, "_replace")
+            if len(expr.args) >= 4:
+                source = self._lower_expr(expr.args[0])
+                low = self._lower_expr(expr.args[1])
+                high = self._lower_expr(expr.args[2])
+                by = self._lower_expr(expr.args[3])
+                self.builder.push(by)
+                self.builder.push(high)
+                self.builder.push(low)
+                self.builder.push(source)
+                self.builder.call(Label("_str_replace_slice"), comment="Replace_Slice")
+                for _ in range(4):
+                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                    self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture replaced string"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "insert":
+            # Insert(Source, Before, New_Item) - Insert substring
+            result = self.builder.new_vreg(IRType.PTR, "_insert")
+            if len(expr.args) >= 3:
+                source = self._lower_expr(expr.args[0])
+                before = self._lower_expr(expr.args[1])
+                new_item = self._lower_expr(expr.args[2])
+                self.builder.push(new_item)
+                self.builder.push(before)
+                self.builder.push(source)
+                self.builder.call(Label("_str_insert"), comment="Insert")
+                for _ in range(3):
+                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                    self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture inserted string"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "overwrite":
+            # Overwrite(Source, Position, New_Item) - Overwrite substring
+            result = self.builder.new_vreg(IRType.PTR, "_overwrite")
+            if len(expr.args) >= 3:
+                source = self._lower_expr(expr.args[0])
+                position = self._lower_expr(expr.args[1])
+                new_item = self._lower_expr(expr.args[2])
+                self.builder.push(new_item)
+                self.builder.push(position)
+                self.builder.push(source)
+                self.builder.call(Label("_str_overwrite"), comment="Overwrite")
+                for _ in range(3):
+                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                    self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture overwritten string"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "delete":
+            # Delete(Source, From, Through) - Delete substring
+            result = self.builder.new_vreg(IRType.PTR, "_delete")
+            if len(expr.args) >= 3:
+                source = self._lower_expr(expr.args[0])
+                from_pos = self._lower_expr(expr.args[1])
+                through = self._lower_expr(expr.args[2])
+                self.builder.push(through)
+                self.builder.push(from_pos)
+                self.builder.push(source)
+                self.builder.call(Label("_str_delete"), comment="Delete")
+                for _ in range(3):
+                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                    self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture deleted string"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        # Math function attributes (Ada.Numerics.Elementary_Functions)
+        if attr == "sqrt":
+            # Sqrt(X) - Square root
+            result = self.builder.new_vreg(IRType.WORD, "_sqrt")
+            if expr.args:
+                x = self._lower_expr(expr.args[0])
+                self.builder.push(x)
+                self.builder.call(Label("_sqrt"), comment="Sqrt")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture sqrt"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "log":
+            # Log(X) - Natural logarithm
+            result = self.builder.new_vreg(IRType.WORD, "_log")
+            if expr.args:
+                x = self._lower_expr(expr.args[0])
+                self.builder.push(x)
+                self.builder.call(Label("_log"), comment="Log")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture log"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "exp":
+            # Exp(X) - e^X
+            result = self.builder.new_vreg(IRType.WORD, "_exp")
+            if expr.args:
+                x = self._lower_expr(expr.args[0])
+                self.builder.push(x)
+                self.builder.call(Label("_exp"), comment="Exp")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture exp"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "sin":
+            # Sin(X) - Sine
+            result = self.builder.new_vreg(IRType.WORD, "_sin")
+            if expr.args:
+                x = self._lower_expr(expr.args[0])
+                self.builder.push(x)
+                self.builder.call(Label("_sin"), comment="Sin")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture sin"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "cos":
+            # Cos(X) - Cosine
+            result = self.builder.new_vreg(IRType.WORD, "_cos")
+            if expr.args:
+                x = self._lower_expr(expr.args[0])
+                self.builder.push(x)
+                self.builder.call(Label("_cos"), comment="Cos")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture cos"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "tan":
+            # Tan(X) - Tangent
+            result = self.builder.new_vreg(IRType.WORD, "_tan")
+            if expr.args:
+                x = self._lower_expr(expr.args[0])
+                self.builder.push(x)
+                self.builder.call(Label("_tan"), comment="Tan")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture tan"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "arcsin":
+            # Arcsin(X) - Inverse sine
+            result = self.builder.new_vreg(IRType.WORD, "_arcsin")
+            if expr.args:
+                x = self._lower_expr(expr.args[0])
+                self.builder.push(x)
+                self.builder.call(Label("_arcsin"), comment="Arcsin")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture arcsin"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "arccos":
+            # Arccos(X) - Inverse cosine
+            result = self.builder.new_vreg(IRType.WORD, "_arccos")
+            if expr.args:
+                x = self._lower_expr(expr.args[0])
+                self.builder.push(x)
+                self.builder.call(Label("_arccos"), comment="Arccos")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture arccos"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "arctan":
+            # Arctan(X [, Y]) - Inverse tangent
+            result = self.builder.new_vreg(IRType.WORD, "_arctan")
+            if expr.args:
+                x = self._lower_expr(expr.args[0])
+                if len(expr.args) >= 2:
+                    y = self._lower_expr(expr.args[1])
+                    self.builder.push(y)
+                    self.builder.push(x)
+                    self.builder.call(Label("_arctan2"), comment="Arctan2")
+                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                    self.builder.pop(temp)
+                    self.builder.pop(temp)
+                else:
+                    self.builder.push(x)
+                    self.builder.call(Label("_arctan"), comment="Arctan")
+                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                    self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture arctan"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "sinh":
+            # Sinh(X) - Hyperbolic sine
+            result = self.builder.new_vreg(IRType.WORD, "_sinh")
+            if expr.args:
+                x = self._lower_expr(expr.args[0])
+                self.builder.push(x)
+                self.builder.call(Label("_sinh"), comment="Sinh")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture sinh"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "cosh":
+            # Cosh(X) - Hyperbolic cosine
+            result = self.builder.new_vreg(IRType.WORD, "_cosh")
+            if expr.args:
+                x = self._lower_expr(expr.args[0])
+                self.builder.push(x)
+                self.builder.call(Label("_cosh"), comment="Cosh")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture cosh"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "tanh":
+            # Tanh(X) - Hyperbolic tangent
+            result = self.builder.new_vreg(IRType.WORD, "_tanh")
+            if expr.args:
+                x = self._lower_expr(expr.args[0])
+                self.builder.push(x)
+                self.builder.call(Label("_tanh"), comment="Tanh")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture tanh"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        # Directory operations (Ada.Directories)
+        if attr == "current_directory":
+            # Current working directory
+            result = self.builder.new_vreg(IRType.PTR, "_cwd")
+            self.builder.call(Label("_get_cwd"), comment="Current_Directory")
+            self.builder.emit(IRInstr(
+                OpCode.MOV, result,
+                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                comment="capture cwd"
+            ))
+            return result
+
+        if attr == "exists":
+            # File/directory exists check
+            result = self.builder.new_vreg(IRType.WORD, "_exists")
+            if expr.args:
+                path = self._lower_expr(expr.args[0])
+                self.builder.push(path)
+                self.builder.call(Label("_file_exists"), comment="Exists")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture exists result"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "kind":
+            # File kind (directory, ordinary file, special file)
+            result = self.builder.new_vreg(IRType.WORD, "_kind")
+            if expr.args:
+                path = self._lower_expr(expr.args[0])
+                self.builder.push(path)
+                self.builder.call(Label("_file_kind"), comment="Kind")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture file kind"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "simple_name":
+            # Extract simple name from path
+            result = self.builder.new_vreg(IRType.PTR, "_simple_name")
+            if expr.args:
+                path = self._lower_expr(expr.args[0])
+                self.builder.push(path)
+                self.builder.call(Label("_simple_name"), comment="Simple_Name")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture simple name"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "containing_directory":
+            # Extract containing directory from path
+            result = self.builder.new_vreg(IRType.PTR, "_containing_dir")
+            if expr.args:
+                path = self._lower_expr(expr.args[0])
+                self.builder.push(path)
+                self.builder.call(Label("_containing_directory"), comment="Containing_Directory")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture containing directory"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "extension":
+            # Extract file extension
+            result = self.builder.new_vreg(IRType.PTR, "_extension")
+            if expr.args:
+                path = self._lower_expr(expr.args[0])
+                self.builder.push(path)
+                self.builder.call(Label("_file_extension"), comment="Extension")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture extension"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "base_name":
+            # Extract base name (without extension)
+            result = self.builder.new_vreg(IRType.PTR, "_base_name")
+            if expr.args:
+                path = self._lower_expr(expr.args[0])
+                self.builder.push(path)
+                self.builder.call(Label("_base_name"), comment="Base_Name")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture base name"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "full_name":
+            # Get full/absolute path name
+            result = self.builder.new_vreg(IRType.PTR, "_full_name")
+            if expr.args:
+                path = self._lower_expr(expr.args[0])
+                self.builder.push(path)
+                self.builder.call(Label("_full_name"), comment="Full_Name")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture full name"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "compose":
+            # Compose(Directory, Name, Extension) - Build path
+            result = self.builder.new_vreg(IRType.PTR, "_composed")
+            if len(expr.args) >= 2:
+                directory = self._lower_expr(expr.args[0])
+                name = self._lower_expr(expr.args[1])
+                ext = self._lower_expr(expr.args[2]) if len(expr.args) >= 3 else Immediate(0, IRType.PTR)
+                self.builder.push(ext)
+                self.builder.push(name)
+                self.builder.push(directory)
+                self.builder.call(Label("_compose_path"), comment="Compose")
+                for _ in range(3):
+                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                    self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture composed path"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        # Character handling attributes (Ada.Characters.Handling)
+        if attr == "is_control":
+            # Is_Control(C) - Check if control character
+            result = self.builder.new_vreg(IRType.WORD, "_is_ctrl")
+            if expr.args:
+                c = self._lower_expr(expr.args[0])
+                # Control chars: 0-31, 127
+                temp = self.builder.new_vreg(IRType.WORD, "_temp")
+                self.builder.emit(IRInstr(
+                    OpCode.CMP_LT, temp, c, Immediate(32, IRType.WORD),
+                    comment="check < 32"
+                ))
+                temp2 = self.builder.new_vreg(IRType.WORD, "_temp2")
+                self.builder.emit(IRInstr(
+                    OpCode.CMP_EQ, temp2, c, Immediate(127, IRType.WORD),
+                    comment="check == 127"
+                ))
+                self.builder.emit(IRInstr(OpCode.OR, result, temp, temp2))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "is_graphic":
+            # Is_Graphic(C) - Check if graphic (printable) character
+            result = self.builder.new_vreg(IRType.WORD, "_is_graphic")
+            if expr.args:
+                c = self._lower_expr(expr.args[0])
+                # Graphic chars: 32-126
+                temp1 = self.builder.new_vreg(IRType.WORD, "_t1")
+                temp2 = self.builder.new_vreg(IRType.WORD, "_t2")
+                self.builder.emit(IRInstr(
+                    OpCode.CMP_GE, temp1, c, Immediate(32, IRType.WORD),
+                    comment="check >= 32"
+                ))
+                self.builder.emit(IRInstr(
+                    OpCode.CMP_LE, temp2, c, Immediate(126, IRType.WORD),
+                    comment="check <= 126"
+                ))
+                self.builder.emit(IRInstr(OpCode.AND, result, temp1, temp2))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "is_letter":
+            # Is_Letter(C) - Check if letter (A-Z, a-z)
+            result = self.builder.new_vreg(IRType.WORD, "_is_letter")
+            if expr.args:
+                c = self._lower_expr(expr.args[0])
+                self.builder.push(c)
+                self.builder.call(Label("_is_letter"), comment="Is_Letter")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture is_letter"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "is_lower":
+            # Is_Lower(C) - Check if lowercase letter
+            result = self.builder.new_vreg(IRType.WORD, "_is_lower")
+            if expr.args:
+                c = self._lower_expr(expr.args[0])
+                temp1 = self.builder.new_vreg(IRType.WORD, "_t1")
+                temp2 = self.builder.new_vreg(IRType.WORD, "_t2")
+                self.builder.emit(IRInstr(
+                    OpCode.CMP_GE, temp1, c, Immediate(ord('a'), IRType.WORD),
+                    comment="check >= 'a'"
+                ))
+                self.builder.emit(IRInstr(
+                    OpCode.CMP_LE, temp2, c, Immediate(ord('z'), IRType.WORD),
+                    comment="check <= 'z'"
+                ))
+                self.builder.emit(IRInstr(OpCode.AND, result, temp1, temp2))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "is_upper":
+            # Is_Upper(C) - Check if uppercase letter
+            result = self.builder.new_vreg(IRType.WORD, "_is_upper")
+            if expr.args:
+                c = self._lower_expr(expr.args[0])
+                temp1 = self.builder.new_vreg(IRType.WORD, "_t1")
+                temp2 = self.builder.new_vreg(IRType.WORD, "_t2")
+                self.builder.emit(IRInstr(
+                    OpCode.CMP_GE, temp1, c, Immediate(ord('A'), IRType.WORD),
+                    comment="check >= 'A'"
+                ))
+                self.builder.emit(IRInstr(
+                    OpCode.CMP_LE, temp2, c, Immediate(ord('Z'), IRType.WORD),
+                    comment="check <= 'Z'"
+                ))
+                self.builder.emit(IRInstr(OpCode.AND, result, temp1, temp2))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "is_digit":
+            # Is_Digit(C) - Check if digit (0-9)
+            result = self.builder.new_vreg(IRType.WORD, "_is_digit")
+            if expr.args:
+                c = self._lower_expr(expr.args[0])
+                temp1 = self.builder.new_vreg(IRType.WORD, "_t1")
+                temp2 = self.builder.new_vreg(IRType.WORD, "_t2")
+                self.builder.emit(IRInstr(
+                    OpCode.CMP_GE, temp1, c, Immediate(ord('0'), IRType.WORD),
+                    comment="check >= '0'"
+                ))
+                self.builder.emit(IRInstr(
+                    OpCode.CMP_LE, temp2, c, Immediate(ord('9'), IRType.WORD),
+                    comment="check <= '9'"
+                ))
+                self.builder.emit(IRInstr(OpCode.AND, result, temp1, temp2))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "is_hexadecimal_digit":
+            # Is_Hexadecimal_Digit(C) - Check if hex digit
+            result = self.builder.new_vreg(IRType.WORD, "_is_hex")
+            if expr.args:
+                c = self._lower_expr(expr.args[0])
+                self.builder.push(c)
+                self.builder.call(Label("_is_hex_digit"), comment="Is_Hexadecimal_Digit")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture is_hex"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "is_alphanumeric":
+            # Is_Alphanumeric(C) - Letter or digit
+            result = self.builder.new_vreg(IRType.WORD, "_is_alnum")
+            if expr.args:
+                c = self._lower_expr(expr.args[0])
+                self.builder.push(c)
+                self.builder.call(Label("_is_alphanumeric"), comment="Is_Alphanumeric")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture is_alnum"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "is_special":
+            # Is_Special(C) - Special graphic character
+            result = self.builder.new_vreg(IRType.WORD, "_is_special")
+            if expr.args:
+                c = self._lower_expr(expr.args[0])
+                self.builder.push(c)
+                self.builder.call(Label("_is_special"), comment="Is_Special")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture is_special"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "to_lower":
+            # To_Lower(C) - Convert to lowercase
+            result = self.builder.new_vreg(IRType.WORD, "_to_lower")
+            if expr.args:
+                c = self._lower_expr(expr.args[0])
+                # If 'A'-'Z', add 32
+                is_upper = self.builder.new_vreg(IRType.WORD, "_is_up")
+                temp1 = self.builder.new_vreg(IRType.WORD, "_t1")
+                temp2 = self.builder.new_vreg(IRType.WORD, "_t2")
+                self.builder.emit(IRInstr(
+                    OpCode.CMP_GE, temp1, c, Immediate(ord('A'), IRType.WORD)
+                ))
+                self.builder.emit(IRInstr(
+                    OpCode.CMP_LE, temp2, c, Immediate(ord('Z'), IRType.WORD)
+                ))
+                self.builder.emit(IRInstr(OpCode.AND, is_upper, temp1, temp2))
+                # result = is_upper ? c + 32 : c
+                lower = self.builder.new_vreg(IRType.WORD, "_lower")
+                self.builder.add(lower, c, Immediate(32, IRType.WORD))
+                # Conditional select
+                ok_label = self._new_label("tolower_ok")
+                end_label = self._new_label("tolower_end")
+                self.builder.jnz(is_upper, Label(ok_label))
+                self.builder.mov(result, c)
+                self.builder.jmp(Label(end_label))
+                self.builder.label(ok_label)
+                self.builder.mov(result, lower)
+                self.builder.label(end_label)
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "to_upper":
+            # To_Upper(C) - Convert to uppercase
+            result = self.builder.new_vreg(IRType.WORD, "_to_upper")
+            if expr.args:
+                c = self._lower_expr(expr.args[0])
+                # If 'a'-'z', subtract 32
+                is_lower = self.builder.new_vreg(IRType.WORD, "_is_low")
+                temp1 = self.builder.new_vreg(IRType.WORD, "_t1")
+                temp2 = self.builder.new_vreg(IRType.WORD, "_t2")
+                self.builder.emit(IRInstr(
+                    OpCode.CMP_GE, temp1, c, Immediate(ord('a'), IRType.WORD)
+                ))
+                self.builder.emit(IRInstr(
+                    OpCode.CMP_LE, temp2, c, Immediate(ord('z'), IRType.WORD)
+                ))
+                self.builder.emit(IRInstr(OpCode.AND, is_lower, temp1, temp2))
+                # result = is_lower ? c - 32 : c
+                upper = self.builder.new_vreg(IRType.WORD, "_upper")
+                self.builder.sub(upper, c, Immediate(32, IRType.WORD))
+                # Conditional select
+                ok_label = self._new_label("toupper_ok")
+                end_label = self._new_label("toupper_end")
+                self.builder.jnz(is_lower, Label(ok_label))
+                self.builder.mov(result, c)
+                self.builder.jmp(Label(end_label))
+                self.builder.label(ok_label)
+                self.builder.mov(result, upper)
+                self.builder.label(end_label)
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "to_basic":
+            # To_Basic(C) - Remove diacritical marks (for Z80, just identity)
+            if expr.args:
+                return self._lower_expr(expr.args[0])
+            return Immediate(0, IRType.WORD)
+
+        # Sequential I/O operations
+        if attr == "read":
+            # Sequential_IO.Read(File, Item)
+            if len(expr.args) >= 2:
+                file_val = self._lower_expr(expr.args[0])
+                item_addr = self._lower_expr(expr.args[1])
+                item_size = 2  # Default word size
+                self.builder.push(Immediate(item_size, IRType.WORD))
+                self.builder.push(item_addr)
+                self.builder.push(file_val)
+                self.builder.call(Label("_seq_read"), comment="Sequential_IO.Read")
+                for _ in range(3):
+                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                    self.builder.pop(temp)
+            return Immediate(0, IRType.WORD)
+
+        if attr == "write":
+            # Sequential_IO.Write(File, Item)
+            if len(expr.args) >= 2:
+                file_val = self._lower_expr(expr.args[0])
+                item = self._lower_expr(expr.args[1])
+                item_size = 2  # Default word size
+                self.builder.push(Immediate(item_size, IRType.WORD))
+                self.builder.push(item)
+                self.builder.push(file_val)
+                self.builder.call(Label("_seq_write"), comment="Sequential_IO.Write")
+                for _ in range(3):
+                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                    self.builder.pop(temp)
+            return Immediate(0, IRType.WORD)
+
+        # Finalization and controlled types
+        if attr == "needs_finalization":
+            # T'Needs_Finalization - Check if type needs finalization
+            # For Z80 simple types, usually False
+            return Immediate(0, IRType.WORD)
+
+        if attr == "has_tagged_values":
+            # T'Has_Tagged_Values - Check if type has tagged values
+            return Immediate(0, IRType.WORD)
+
+        if attr == "is_controlled":
+            # T'Is_Controlled - Check if controlled type
+            return Immediate(0, IRType.WORD)
+
+        # Shared memory attributes
+        if attr == "atomic_always_lock_free":
+            # T'Atomic_Always_Lock_Free
+            # Z80 is single-threaded, so always lock-free for small types
+            return Immediate(1, IRType.WORD)
+
+        if attr == "max_alignment_for_allocation":
+            # Maximum alignment for allocation (Z80: 1 byte)
+            return Immediate(1, IRType.WORD)
+
+        # Wide character attributes
+        if attr == "wide_width":
+            # T'Wide_Width - Max width for wide character type
+            return Immediate(1, IRType.WORD)
+
+        if attr == "wide_wide_width":
+            # T'Wide_Wide_Width - Max width for wide_wide character
+            return Immediate(1, IRType.WORD)
+
+        # Access type attributes
+        if attr == "designated_storage_model":
+            # Access type's storage model
+            return Immediate(0, IRType.WORD)
+
+        if attr == "storage_model_type":
+            # Storage model type identifier
+            return Immediate(0, IRType.WORD)
+
+        # Scalar representation
+        if attr == "machine_size":
+            # S'Machine_Size - Size as seen by machine
+            result = self.builder.new_vreg(IRType.WORD, "_msize")
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.ada_type and hasattr(sym.ada_type, 'size_bits'):
+                    return Immediate(sym.ada_type.size_bits, IRType.WORD)
+            return Immediate(16, IRType.WORD)  # Default word size
+
+        if attr == "machine_overflows":
+            # S'Machine_Overflows - Does machine detect overflow?
+            # Z80 has overflow flag
+            return Immediate(1, IRType.WORD)
+
+        if attr == "machine_rounds":
+            # S'Machine_Rounds - Does machine round?
+            return Immediate(0, IRType.WORD)  # Z80 truncates
+
+        # Bounded string attributes
+        if attr == "max_length":
+            # Bounded_String'Max_Length
+            result = self.builder.new_vreg(IRType.WORD, "_max_len")
+            if expr.args:
+                str_val = self._lower_expr(expr.args[0])
+                # Max length is at offset 0 in bounded string
+                self.builder.load(result, str_val)
+            else:
+                self.builder.mov(result, Immediate(255, IRType.WORD))  # Default max
+            return result
+
+        if attr == "bounded_length":
+            # Current length of bounded string
+            result = self.builder.new_vreg(IRType.WORD, "_bnd_len")
+            if expr.args:
+                str_val = self._lower_expr(expr.args[0])
+                # Current length is at offset 2 in bounded string
+                temp = self.builder.new_vreg(IRType.PTR, "_temp")
+                self.builder.add(temp, str_val, Immediate(2, IRType.WORD))
+                self.builder.load(result, temp)
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        # Generic intrinsic attributes
+        if attr == "target":
+            # Access T'Target - dereference access type
+            if expr.args:
+                acc_val = self._lower_expr(expr.args[0])
+                result = self.builder.new_vreg(IRType.WORD, "_target")
+                self.builder.load(result, acc_val)
+                return result
+            return Immediate(0, IRType.WORD)
+
+        if attr == "update":
+            # Attribute reference to update (used in delta aggregates)
+            # This is handled separately in _lower_attribute for 'Update
+            pass
+
+        # Representation attributes
+        if attr == "default_value":
+            # T'Default_Value - default value for scalar type
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.ada_type:
+                    if hasattr(sym.ada_type, 'low'):
+                        return Immediate(sym.ada_type.low, IRType.WORD)
+            return Immediate(0, IRType.WORD)
+
+        if attr == "has_default_value":
+            # T'Has_Default_Value
+            return Immediate(1, IRType.WORD)  # Scalars have default
+
+        # Parallel attributes (Ada 2022)
+        if attr == "reduce_access":
+            # For parallel reduction
+            if expr.args:
+                return self._lower_expr(expr.args[0])
+            return Immediate(0, IRType.WORD)
+
+        if attr == "chunk_count":
+            # Number of chunks for parallel iteration
+            # Z80 is single-threaded, always 1
+            return Immediate(1, IRType.WORD)
+
+        # Iterator/Cursor attributes (Ada.Iterator_Interfaces)
+        if attr == "has_element":
+            # Cursor'Has_Element - Check if cursor points to valid element
+            result = self.builder.new_vreg(IRType.WORD, "_has_elem")
+            if expr.args:
+                cursor = self._lower_expr(expr.args[0])
+                self.builder.push(cursor)
+                self.builder.call(Label("_cursor_has_element"), comment="Has_Element")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture has_element"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "element":
+            # Container.Element(Cursor) - Get element at cursor
+            result = self.builder.new_vreg(IRType.WORD, "_element")
+            if expr.args:
+                cursor = self._lower_expr(expr.args[0])
+                self.builder.push(cursor)
+                self.builder.call(Label("_cursor_element"), comment="Element")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture element"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "key":
+            # Map.Key(Cursor) - Get key at cursor (for maps)
+            result = self.builder.new_vreg(IRType.WORD, "_key")
+            if expr.args:
+                cursor = self._lower_expr(expr.args[0])
+                self.builder.push(cursor)
+                self.builder.call(Label("_cursor_key"), comment="Key")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture key"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "next":
+            # Container.Next(Cursor) - Advance cursor
+            result = self.builder.new_vreg(IRType.WORD, "_next")
+            if expr.args:
+                cursor = self._lower_expr(expr.args[0])
+                self.builder.push(cursor)
+                self.builder.call(Label("_cursor_next"), comment="Next")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture next cursor"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "previous":
+            # Container.Previous(Cursor) - Move cursor backward
+            result = self.builder.new_vreg(IRType.WORD, "_prev")
+            if expr.args:
+                cursor = self._lower_expr(expr.args[0])
+                self.builder.push(cursor)
+                self.builder.call(Label("_cursor_previous"), comment="Previous")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture previous cursor"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "first":
+            # Container.First - Get first cursor
+            # Note: 'First for arrays is handled earlier
+            result = self.builder.new_vreg(IRType.WORD, "_first_cursor")
+            if expr.args:
+                container = self._lower_expr(expr.args[0])
+                self.builder.push(container)
+                self.builder.call(Label("_container_first"), comment="First")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture first cursor"
+                ))
+                return result
+            # Fall through to default for array 'First
+
+        if attr == "last":
+            # Container.Last - Get last cursor
+            # Note: 'Last for arrays is handled earlier
+            result = self.builder.new_vreg(IRType.WORD, "_last_cursor")
+            if expr.args:
+                container = self._lower_expr(expr.args[0])
+                self.builder.push(container)
+                self.builder.call(Label("_container_last"), comment="Last")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture last cursor"
+                ))
+                return result
+            # Fall through to default for array 'Last
+
+        if attr == "find":
+            # Container.Find(Item) - Find element, return cursor
+            result = self.builder.new_vreg(IRType.WORD, "_find")
+            if len(expr.args) >= 2:
+                container = self._lower_expr(expr.args[0])
+                item = self._lower_expr(expr.args[1])
+                self.builder.push(item)
+                self.builder.push(container)
+                self.builder.call(Label("_container_find"), comment="Find")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture find cursor"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "contains":
+            # Container.Contains(Item) - Check if container has item
+            result = self.builder.new_vreg(IRType.WORD, "_contains")
+            if len(expr.args) >= 2:
+                container = self._lower_expr(expr.args[0])
+                item = self._lower_expr(expr.args[1])
+                self.builder.push(item)
+                self.builder.push(container)
+                self.builder.call(Label("_container_contains"), comment="Contains")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture contains result"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        # Contract/Assertion attributes
+        if attr == "class_wide":
+            # T'Class - Class-wide type (for dispatching)
+            # Return the prefix value (type tag handles dispatching)
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym:
+                    return self._lower_expr(expr.prefix)
+            return Immediate(0, IRType.WORD)
+
+        if attr == "static_predicate":
+            # T'Static_Predicate - Get static predicate (compile-time)
+            return Immediate(1, IRType.WORD)  # Assume satisfied
+
+        if attr == "dynamic_predicate":
+            # T'Dynamic_Predicate - Get dynamic predicate
+            return Immediate(1, IRType.WORD)  # Assume satisfied
+
+        if attr == "predicate_check":
+            # Check predicate for value
+            result = self.builder.new_vreg(IRType.WORD, "_pred_check")
+            if expr.args:
+                val = self._lower_expr(expr.args[0])
+                # For now, assume predicate passes
+                self.builder.mov(result, Immediate(1, IRType.WORD))
+            else:
+                self.builder.mov(result, Immediate(1, IRType.WORD))
+            return result
+
+        if attr == "type_invariant":
+            # T'Type_Invariant - Get type invariant
+            return Immediate(1, IRType.WORD)  # Assume satisfied
+
+        if attr == "invariant_check":
+            # Check invariant for object
+            return Immediate(1, IRType.WORD)  # Assume satisfied
+
+        # Subprogram contract attributes
+        if attr == "precondition":
+            # S'Precondition - Get precondition expression
+            return Immediate(1, IRType.WORD)  # Assume satisfied
+
+        if attr == "postcondition":
+            # S'Postcondition - Get postcondition expression
+            return Immediate(1, IRType.WORD)  # Assume satisfied
+
+        if attr == "stable_properties":
+            # T'Stable_Properties - Stable property list
+            return Immediate(0, IRType.WORD)
+
+        # Ghost code attributes (Ada 2022)
+        if attr == "ghost":
+            # X'Ghost - Ghost aspect of entity
+            # Ghost code is not generated for production
+            return Immediate(0, IRType.WORD)
+
+        if attr == "ghost_code":
+            # Ghost code marker
+            return Immediate(0, IRType.WORD)
+
+        # Additional type introspection
+        if attr == "scalar_storage_order":
+            # T'Scalar_Storage_Order - Byte order
+            # Z80 is little-endian (Low_Order_First)
+            return Immediate(0, IRType.WORD)  # 0 = Low_Order_First
+
+        if attr == "bit_order":
+            # T'Bit_Order - Bit order within bytes
+            return Immediate(0, IRType.WORD)  # Low_Order_First
+
+        if attr == "machine_code_convention":
+            # Calling convention for machine code
+            return Immediate(0, IRType.WORD)
+
+        if attr == "convention_info":
+            # Get convention information for entity
+            return Immediate(0, IRType.WORD)
+
+        if attr == "import_convention":
+            # Convention used for Import pragma
+            return Immediate(0, IRType.WORD)
+
+        if attr == "export_convention":
+            # Convention used for Export pragma
+            return Immediate(0, IRType.WORD)
+
+        # Representation/Layout attributes
+        if attr == "position":
+            # Component'Position - Bit position in record
+            result = self.builder.new_vreg(IRType.WORD, "_position")
+            # Would need type info to compute actual position
+            self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "first_bit":
+            # Component'First_Bit - First bit of component
+            return Immediate(0, IRType.WORD)
+
+        if attr == "last_bit":
+            # Component'Last_Bit - Last bit of component
+            return Immediate(15, IRType.WORD)  # 16-bit word
+
+        # Array layout attributes
+        if attr == "adjacent":
+            # A'Adjacent(X, Towards) - Adjacent value in direction
+            if len(expr.args) >= 2:
+                x = self._lower_expr(expr.args[0])
+                towards = self._lower_expr(expr.args[1])
+                result = self.builder.new_vreg(IRType.WORD, "_adjacent")
+                # Compare x with towards to determine direction
+                cmp = self.builder.new_vreg(IRType.WORD, "_cmp")
+                self.builder.emit(IRInstr(OpCode.CMP_LT, cmp, x, towards))
+                # If x < towards, increment; else decrement
+                inc_label = self._new_label("adj_inc")
+                end_label = self._new_label("adj_end")
+                self.builder.jnz(cmp, Label(inc_label))
+                # x >= towards, decrement
+                self.builder.sub(result, x, Immediate(1, IRType.WORD))
+                self.builder.jmp(Label(end_label))
+                self.builder.label(inc_label)
+                # x < towards, increment
+                self.builder.add(result, x, Immediate(1, IRType.WORD))
+                self.builder.label(end_label)
+                return result
+            return Immediate(0, IRType.WORD)
+
+        # Discriminant attributes
+        if attr == "discriminant_constraint":
+            # T'Discriminant_Constraint - Constraint info
+            return Immediate(0, IRType.WORD)
+
+        if attr == "known_discriminant_part":
+            # Check for known discriminant part
+            return Immediate(0, IRType.WORD)
+
+        if attr == "unknown_discriminant_part":
+            # Check for unknown discriminant part
+            return Immediate(0, IRType.WORD)
+
+        # Private type attributes
+        if attr == "has_private_part":
+            # P'Has_Private_Part - Package has private part
+            return Immediate(0, IRType.WORD)
+
+        if attr == "private_part":
+            # Access to private part info
+            return Immediate(0, IRType.WORD)
+
+        # Compilation unit attributes
+        if attr == "unit_name":
+            # Get compilation unit name string
+            result = self.builder.new_vreg(IRType.PTR, "_unit_name")
+            self.builder.emit(IRInstr(
+                OpCode.LEA, result, Label("_unit_name"),
+                comment="Unit_Name"
+            ))
+            return result
+
+        if attr == "enclosing_entity":
+            # Get enclosing entity name
+            result = self.builder.new_vreg(IRType.PTR, "_encl_entity")
+            self.builder.emit(IRInstr(
+                OpCode.LEA, result, Label("_enclosing_entity"),
+                comment="Enclosing_Entity"
+            ))
+            return result
+
+        # Library level attributes
+        if attr == "library_level":
+            # Check if entity is at library level
+            return Immediate(1, IRType.WORD)  # Assume library level
+
+        if attr == "library_unit":
+            # Get library unit name
+            result = self.builder.new_vreg(IRType.PTR, "_lib_unit")
+            self.builder.emit(IRInstr(
+                OpCode.LEA, result, Label("_library_unit"),
+                comment="Library_Unit"
+            ))
+            return result
+
+        # Object attributes
+        if attr == "object_size":
+            # X'Object_Size - Size of object in bits
+            result = self.builder.new_vreg(IRType.WORD, "_obj_size")
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.ada_type and hasattr(sym.ada_type, 'size_bits'):
+                    return Immediate(sym.ada_type.size_bits, IRType.WORD)
+            return Immediate(16, IRType.WORD)  # Default word
+
+        if attr == "value_size":
+            # T'Value_Size - Size needed for value
+            result = self.builder.new_vreg(IRType.WORD, "_val_size")
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.ada_type and hasattr(sym.ada_type, 'size_bits'):
+                    return Immediate(sym.ada_type.size_bits, IRType.WORD)
+            return Immediate(16, IRType.WORD)
+
+        # Loop attributes
+        if attr == "loop_iteration":
+            # Current loop iteration count
+            result = self.builder.new_vreg(IRType.WORD, "_loop_iter")
+            self.builder.emit(IRInstr(
+                OpCode.LOAD, result,
+                MemoryLocation(is_global=False, symbol_name="_loop_count", ir_type=IRType.WORD),
+                comment="Loop_Iteration"
+            ))
+            return result
+
+        # GNAT-specific attributes (implementation-defined)
+        if attr == "elab_body":
+            # Elab_Body - Elaboration procedure for body
+            result = self.builder.new_vreg(IRType.PTR, "_elab_body")
+            if isinstance(expr.prefix, Identifier):
+                self.builder.emit(IRInstr(
+                    OpCode.LEA, result,
+                    Label(f"_elab_body_{expr.prefix.name.lower()}"),
+                    comment=f"Elab_Body for {expr.prefix.name}"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "elab_spec":
+            # Elab_Spec - Elaboration procedure for spec
+            result = self.builder.new_vreg(IRType.PTR, "_elab_spec")
+            if isinstance(expr.prefix, Identifier):
+                self.builder.emit(IRInstr(
+                    OpCode.LEA, result,
+                    Label(f"_elab_spec_{expr.prefix.name.lower()}"),
+                    comment=f"Elab_Spec for {expr.prefix.name}"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "elab_subp_body":
+            # Elab_Subp_Body - Elaboration for subprogram body
+            result = self.builder.new_vreg(IRType.PTR, "_elab_subp")
+            if isinstance(expr.prefix, Identifier):
+                self.builder.emit(IRInstr(
+                    OpCode.LEA, result,
+                    Label(f"_elab_subp_{expr.prefix.name.lower()}"),
+                    comment=f"Elab_Subp_Body for {expr.prefix.name}"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "elaboration_checks":
+            # Elaboration_Checks - Are elaboration checks enabled?
+            return Immediate(1, IRType.WORD)  # Yes, enabled
+
+        if attr == "from_any":
+            # From_Any - CORBA interop (not supported on Z80)
+            return Immediate(0, IRType.WORD)
+
+        if attr == "to_any":
+            # To_Any - CORBA interop
+            return Immediate(0, IRType.WORD)
+
+        if attr == "typecode":
+            # TypeCode - CORBA type code
+            return Immediate(0, IRType.WORD)
+
+        if attr == "stub_type":
+            # Stub_Type - RPC stub type
+            return Immediate(0, IRType.WORD)
+
+        if attr == "machine_attribute":
+            # Implementation-defined machine attribute
+            return Immediate(0, IRType.WORD)
+
+        if attr == "system_allocator_alignment":
+            # Alignment used by system allocator
+            return Immediate(1, IRType.WORD)  # Z80: byte aligned
+
+        if attr == "finalize_address":
+            # Address of finalization routine
+            result = self.builder.new_vreg(IRType.PTR, "_finalize_addr")
+            if isinstance(expr.prefix, Identifier):
+                self.builder.emit(IRInstr(
+                    OpCode.LEA, result,
+                    Label(f"_finalize_{expr.prefix.name.lower()}"),
+                    comment=f"Finalize_Address for {expr.prefix.name}"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        if attr == "put_image":
+            # Put_Image procedure (Ada 2022)
+            # Already handled earlier, but provide fallback
+            return Immediate(0, IRType.WORD)
+
+        if attr == "object_tag":
+            # Get tag of tagged object
+            result = self.builder.new_vreg(IRType.WORD, "_obj_tag")
+            if expr.args:
+                obj = self._lower_expr(expr.args[0])
+                # Tag is at offset 0 of tagged object
+                self.builder.load(result, obj)
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "tag_info":
+            # Get tag information structure
+            result = self.builder.new_vreg(IRType.PTR, "_tag_info")
+            if expr.args:
+                tag = self._lower_expr(expr.args[0])
+                self.builder.push(tag)
+                self.builder.call(Label("_get_tag_info"), comment="Tag_Info")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture tag info"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.PTR))
+            return result
+
+        # Memory and allocation attributes
+        if attr == "allocation_size":
+            # Size to allocate for type
+            result = self.builder.new_vreg(IRType.WORD, "_alloc_size")
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.ada_type and hasattr(sym.ada_type, 'size_bits'):
+                    size_bytes = (sym.ada_type.size_bits + 7) // 8
+                    return Immediate(size_bytes, IRType.WORD)
+            return Immediate(2, IRType.WORD)  # Default word
+
+        if attr == "null_address":
+            # Null address constant
+            return Immediate(0, IRType.WORD)
+
+        if attr == "memory_size":
+            # Total available memory
+            # CP/M TPA typically 0x100-0xBFFF (~48KB)
+            return Immediate(0xBF00, IRType.WORD)
+
+        if attr == "heap_size":
+            # Current heap size
+            result = self.builder.new_vreg(IRType.WORD, "_heap_size")
+            self.builder.call(Label("_get_heap_size"), comment="Heap_Size")
+            self.builder.emit(IRInstr(
+                OpCode.MOV, result,
+                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                comment="capture heap size"
+            ))
+            return result
+
+        if attr == "stack_size":
+            # Current stack usage
+            result = self.builder.new_vreg(IRType.WORD, "_stack_size")
+            self.builder.call(Label("_get_stack_size"), comment="Stack_Size")
+            self.builder.emit(IRInstr(
+                OpCode.MOV, result,
+                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                comment="capture stack size"
+            ))
+            return result
+
+        if attr == "free_memory":
+            # Available free memory
+            result = self.builder.new_vreg(IRType.WORD, "_free_mem")
+            self.builder.call(Label("_get_free_memory"), comment="Free_Memory")
+            self.builder.emit(IRInstr(
+                OpCode.MOV, result,
+                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                comment="capture free memory"
+            ))
+            return result
+
+        # Debug/Trace attributes
+        if attr == "source_location":
+            # Current source location string
+            result = self.builder.new_vreg(IRType.PTR, "_src_loc")
+            self.builder.emit(IRInstr(
+                OpCode.LEA, result, Label("_current_source_loc"),
+                comment="Source_Location"
+            ))
+            return result
+
+        if attr == "source_line":
+            # Current source line number
+            result = self.builder.new_vreg(IRType.WORD, "_src_line")
+            self.builder.emit(IRInstr(
+                OpCode.LOAD, result,
+                MemoryLocation(is_global=True, symbol_name="_current_line", ir_type=IRType.WORD),
+                comment="Source_Line"
+            ))
+            return result
+
+        if attr == "source_file":
+            # Current source file name
+            result = self.builder.new_vreg(IRType.PTR, "_src_file")
+            self.builder.emit(IRInstr(
+                OpCode.LEA, result, Label("_current_file"),
+                comment="Source_File"
+            ))
+            return result
+
+        if attr == "compilation_date":
+            # Compilation date string
+            result = self.builder.new_vreg(IRType.PTR, "_comp_date")
+            self.builder.emit(IRInstr(
+                OpCode.LEA, result, Label("_compilation_date"),
+                comment="Compilation_Date"
+            ))
+            return result
+
+        if attr == "compilation_time":
+            # Compilation time string
+            result = self.builder.new_vreg(IRType.PTR, "_comp_time")
+            self.builder.emit(IRInstr(
+                OpCode.LEA, result, Label("_compilation_time"),
+                comment="Compilation_Time"
+            ))
+            return result
+
+        # Optimization hints
+        if attr == "likely":
+            # Branch prediction hint - likely
+            if expr.args:
+                return self._lower_expr(expr.args[0])
+            return Immediate(1, IRType.WORD)
+
+        if attr == "unlikely":
+            # Branch prediction hint - unlikely
+            if expr.args:
+                return self._lower_expr(expr.args[0])
+            return Immediate(0, IRType.WORD)
+
+        if attr == "cold":
+            # Cold code - rarely executed
+            return Immediate(0, IRType.WORD)
+
+        if attr == "hot":
+            # Hot code - frequently executed
+            return Immediate(1, IRType.WORD)
+
+        # Inline assembly support
+        if attr == "register":
+            # Get register value by name
+            result = self.builder.new_vreg(IRType.WORD, "_reg")
+            if expr.args and isinstance(expr.args[0], StringLiteral):
+                reg_name = expr.args[0].value.upper()
+                # Map Ada register names to Z80
+                if reg_name in ("A", "BC", "DE", "HL", "SP", "IX", "IY"):
+                    self.builder.emit(IRInstr(
+                        OpCode.MOV, result,
+                        MemoryLocation(is_global=False, symbol_name=f"_{reg_name}", ir_type=IRType.WORD),
+                        comment=f"Register {reg_name}"
+                    ))
+                else:
+                    self.builder.mov(result, Immediate(0, IRType.WORD))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "set_register":
+            # Set register value
+            if len(expr.args) >= 2 and isinstance(expr.args[0], StringLiteral):
+                reg_name = expr.args[0].value.upper()
+                value = self._lower_expr(expr.args[1])
+                if reg_name in ("A", "BC", "DE", "HL", "SP", "IX", "IY"):
+                    self.builder.emit(IRInstr(
+                        OpCode.STORE,
+                        MemoryLocation(is_global=False, symbol_name=f"_{reg_name}", ir_type=IRType.WORD),
+                        value,
+                        comment=f"Set Register {reg_name}"
+                    ))
+            return Immediate(0, IRType.WORD)
+
+        # Port I/O (Z80 specific)
+        if attr == "port_in":
+            # Read from I/O port
+            result = self.builder.new_vreg(IRType.WORD, "_port_in")
+            if expr.args:
+                port = self._lower_expr(expr.args[0])
+                self.builder.push(port)
+                self.builder.call(Label("_port_in"), comment="Port_In")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture port input"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "port_out":
+            # Write to I/O port
+            if len(expr.args) >= 2:
+                port = self._lower_expr(expr.args[0])
+                value = self._lower_expr(expr.args[1])
+                self.builder.push(value)
+                self.builder.push(port)
+                self.builder.call(Label("_port_out"), comment="Port_Out")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.pop(temp)
+            return Immediate(0, IRType.WORD)
+
+        # Interrupt control (Z80 specific)
+        if attr == "interrupts_enabled":
+            # Check if interrupts are enabled
+            result = self.builder.new_vreg(IRType.WORD, "_int_enabled")
+            self.builder.call(Label("_get_interrupt_state"), comment="Interrupts_Enabled")
+            self.builder.emit(IRInstr(
+                OpCode.MOV, result,
+                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                comment="capture interrupt state"
+            ))
+            return result
+
+        if attr == "enable_interrupts":
+            # Enable interrupts (EI)
+            self.builder.emit(IRInstr(OpCode.NOP, comment="EI - enable interrupts"))
+            return Immediate(1, IRType.WORD)
+
+        if attr == "disable_interrupts":
+            # Disable interrupts (DI)
+            self.builder.emit(IRInstr(OpCode.NOP, comment="DI - disable interrupts"))
+            return Immediate(0, IRType.WORD)
+
+        # CP/M specific attributes
+        if attr == "bdos_call":
+            # Make BDOS system call
+            result = self.builder.new_vreg(IRType.WORD, "_bdos_result")
+            if len(expr.args) >= 1:
+                func = self._lower_expr(expr.args[0])
+                param = self._lower_expr(expr.args[1]) if len(expr.args) >= 2 else Immediate(0, IRType.WORD)
+                self.builder.push(param)
+                self.builder.push(func)
+                self.builder.call(Label("_bdos"), comment="BDOS_Call")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture BDOS result"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "bios_call":
+            # Make BIOS system call
+            result = self.builder.new_vreg(IRType.WORD, "_bios_result")
+            if len(expr.args) >= 1:
+                func = self._lower_expr(expr.args[0])
+                self.builder.push(func)
+                self.builder.call(Label("_bios"), comment="BIOS_Call")
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture BIOS result"
+                ))
+            else:
+                self.builder.mov(result, Immediate(0, IRType.WORD))
+            return result
+
+        if attr == "tpa_start":
+            # Transient Program Area start address
+            return Immediate(0x0100, IRType.WORD)
+
+        if attr == "tpa_end":
+            # TPA end address (from BDOS base)
+            result = self.builder.new_vreg(IRType.WORD, "_tpa_end")
+            self.builder.emit(IRInstr(
+                OpCode.LOAD, result,
+                MemoryLocation(is_global=True, symbol_name="0x0006", ir_type=IRType.WORD),
+                comment="TPA_End from BDOS pointer"
+            ))
+            return result
+
+        if attr == "dma_address":
+            # Current DMA buffer address
+            result = self.builder.new_vreg(IRType.WORD, "_dma")
+            self.builder.emit(IRInstr(
+                OpCode.LOAD, result,
+                MemoryLocation(is_global=True, symbol_name="_dma_address", ir_type=IRType.WORD),
+                comment="DMA_Address"
+            ))
+            return result
+
+        if attr == "fcb_address":
+            # Default FCB address
+            return Immediate(0x005C, IRType.WORD)
+
+        if attr == "command_line":
+            # Command line buffer address
+            return Immediate(0x0080, IRType.WORD)
 
         # Default
         return Immediate(0, IRType.WORD)

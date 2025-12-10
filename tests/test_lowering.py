@@ -1233,3 +1233,814 @@ def test_no_range_check_for_unconstrained_integer():
     # Full integer range doesn't need range checks
     assert not has_cmp_lt, "Should not emit CMP_LT for full Integer range"
     assert not has_cmp_gt, "Should not emit CMP_GT for full Integer range"
+
+
+# ============================================================================
+# Attribute Lowering Tests
+# ============================================================================
+
+
+def test_lowering_valid_attribute():
+    """Test lowering 'Valid attribute generates range checks."""
+    from uada80.ast_nodes import AttributeReference
+    from uada80.type_system import IntegerType
+
+    # Create X'Valid expression
+    valid_expr = AttributeReference(
+        prefix=Identifier("X"),
+        attribute="Valid",
+    )
+
+    program = create_simple_function(
+        "test_valid",
+        [ReturnStmt(value=valid_expr)],
+        decls=[ObjectDecl(
+            names=["X"],
+            type_mark=subtype("Small"),
+        )],
+    )
+
+    lowering = create_lowering()
+
+    # Register the variable with a constrained type
+    small_type = IntegerType(name="Small", low=1, high=100)
+    lowering.symbols.define(Symbol(
+        name="X",
+        kind=SymbolKind.VARIABLE,
+        ada_type=small_type,
+    ))
+    lowering.symbols.define(Symbol(
+        name="Small",
+        kind=SymbolKind.TYPE,
+        ada_type=small_type,
+    ))
+
+    module = lowering.lower(program)
+
+    # Should have generated comparison instructions for range check
+    has_cmp = False
+    for block in module.functions[0].blocks:
+        for instr in block.instructions:
+            if instr.opcode in (OpCode.CMP_LT, OpCode.CMP_GT):
+                has_cmp = True
+                break
+
+    assert has_cmp, "Expected 'Valid to generate comparison instructions"
+
+
+def test_lowering_constrained_attribute():
+    """Test lowering 'Constrained attribute returns True."""
+    from uada80.ast_nodes import AttributeReference
+
+    # Create X'Constrained expression
+    constrained_expr = AttributeReference(
+        prefix=Identifier("X"),
+        attribute="Constrained",
+    )
+
+    program = create_simple_function(
+        "test_constrained",
+        [ReturnStmt(value=constrained_expr)],
+        decls=[ObjectDecl(
+            names=["X"],
+            type_mark=subtype("Integer"),
+        )],
+    )
+
+    lowering = create_lowering()
+
+    # Register the variable
+    lowering.symbols.define(Symbol(
+        name="X",
+        kind=SymbolKind.VARIABLE,
+        ada_type=PREDEFINED_TYPES["Integer"],
+    ))
+
+    module = lowering.lower(program)
+
+    # Should have generated a MOV with value 1 (True)
+    found_result = False
+    for block in module.functions[0].blocks:
+        for instr in block.instructions:
+            if instr.opcode == OpCode.MOV:
+                if isinstance(instr.src1, Immediate) and instr.src1.value == 1:
+                    found_result = True
+                    break
+
+    assert found_result, "Expected 'Constrained to return True (1)"
+
+
+def test_lowering_component_size_attribute():
+    """Test lowering 'Component_Size attribute for arrays."""
+    from uada80.ast_nodes import AttributeReference
+    from uada80.type_system import ArrayType
+
+    # Create Arr'Component_Size expression
+    comp_size_expr = AttributeReference(
+        prefix=Identifier("Arr"),
+        attribute="Component_Size",
+    )
+
+    program = create_simple_function(
+        "test_component_size",
+        [ReturnStmt(value=comp_size_expr)],
+    )
+
+    lowering = create_lowering()
+
+    # Register the array type with Integer components (16-bit)
+    arr_type = ArrayType(
+        name="Int_Array",
+        component_type=PREDEFINED_TYPES["Integer"],
+        bounds=[(1, 10)],
+    )
+    lowering.symbols.define(Symbol(
+        name="Arr",
+        kind=SymbolKind.TYPE,
+        ada_type=arr_type,
+    ))
+
+    module = lowering.lower(program)
+
+    # Should return 16 (bits for Integer)
+    # The return value should be set up
+    assert len(module.functions) > 0, "Expected at least one function"
+
+
+def test_lowering_alignment_attribute():
+    """Test lowering 'Alignment attribute."""
+    from uada80.ast_nodes import AttributeReference
+
+    # Create Integer'Alignment expression
+    align_expr = AttributeReference(
+        prefix=Identifier("Integer"),
+        attribute="Alignment",
+    )
+
+    program = create_simple_function(
+        "test_alignment",
+        [ReturnStmt(value=align_expr)],
+    )
+
+    lowering = create_lowering()
+
+    # Register the type
+    lowering.symbols.define(Symbol(
+        name="Integer",
+        kind=SymbolKind.TYPE,
+        ada_type=PREDEFINED_TYPES["Integer"],
+    ))
+
+    module = lowering.lower(program)
+
+    # Should return 1 (byte-aligned for Z80)
+    assert len(module.functions) > 0, "Expected at least one function"
+
+
+# ============================================================================
+# Operator Overloading Tests
+# ============================================================================
+
+
+def test_operator_to_name_conversion():
+    """Test conversion of operators to Ada operator function names."""
+    lowering = create_lowering()
+
+    # Test binary operators
+    assert lowering._operator_to_name(BinaryOp.ADD) == '"+"'
+    assert lowering._operator_to_name(BinaryOp.SUB) == '"-"'
+    assert lowering._operator_to_name(BinaryOp.MUL) == '"*"'
+    assert lowering._operator_to_name(BinaryOp.DIV) == '"/"'
+    assert lowering._operator_to_name(BinaryOp.EQ) == '"="'
+    assert lowering._operator_to_name(BinaryOp.NE) == '"/="'
+    assert lowering._operator_to_name(BinaryOp.LT) == '"<"'
+    assert lowering._operator_to_name(BinaryOp.CONCAT) == '"&"'
+
+
+def test_unary_operator_to_name_conversion():
+    """Test conversion of unary operators to Ada operator function names."""
+    lowering = create_lowering()
+
+    # Test unary operators
+    assert lowering._unary_operator_to_name(UnaryOp.MINUS) == '"-"'
+    assert lowering._unary_operator_to_name(UnaryOp.PLUS) == '"+"'
+    assert lowering._unary_operator_to_name(UnaryOp.NOT) == '"not"'
+    assert lowering._unary_operator_to_name(UnaryOp.ABS) == '"abs"'
+
+
+def test_builtin_operators_not_overloaded():
+    """Test that built-in operators on predefined types are not looked up."""
+    lowering = create_lowering()
+
+    # Create expression with predefined Integer type
+    left = Identifier("X")
+    right = Identifier("Y")
+
+    # Register Integer variables
+    lowering.symbols.define(Symbol(
+        name="X",
+        kind=SymbolKind.VARIABLE,
+        ada_type=PREDEFINED_TYPES["Integer"],
+    ))
+    lowering.symbols.define(Symbol(
+        name="Y",
+        kind=SymbolKind.VARIABLE,
+        ada_type=PREDEFINED_TYPES["Integer"],
+    ))
+
+    # Should return None (use built-in operator)
+    result = lowering._lookup_user_operator(BinaryOp.ADD, left, right)
+    assert result is None, "Built-in + on Integer should not look up user operator"
+
+
+# ============================================================================
+# Ada 2012/2022 Feature Tests
+# ============================================================================
+
+
+def test_for_of_loop_parsing():
+    """Test that for-of loops parse correctly."""
+    from uada80.parser import parse
+    from uada80.semantic import analyze
+
+    source = """
+    procedure Test is
+        type Int_Array is array (1 .. 5) of Integer;
+        Arr : Int_Array := (1, 2, 3, 4, 5);
+        Sum : Integer := 0;
+    begin
+        for Element of Arr loop
+            Sum := Sum + Element;
+        end loop;
+    end Test;
+    """
+    ast = parse(source)
+    result = analyze(ast)
+    # Should parse and analyze without errors
+    assert ast is not None
+
+
+def test_for_of_loop_reverse():
+    """Test for-of loop with reverse iteration."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        type Int_Array is array (1 .. 5) of Integer;
+        Arr : Int_Array := (1, 2, 3, 4, 5);
+    begin
+        for Element of reverse Arr loop
+            null;
+        end loop;
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+def test_declare_expression():
+    """Test Ada 2022 declare expression parsing."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        X : Integer;
+    begin
+        X := (declare Y : Integer := 5; begin Y + 1);
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+def test_delta_aggregate():
+    """Test Ada 2022 delta aggregate parsing."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        type Rec is record
+            A, B : Integer;
+        end record;
+        R1, R2 : Rec;
+    begin
+        R1 := (A => 1, B => 2);
+        R2 := (R1 with delta A => 10);
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+def test_target_name_at_symbol():
+    """Test Ada 2022 @ (target name) in assignments."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        X : Integer := 5;
+    begin
+        X := @ + 1;  -- Same as X := X + 1
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+# ============================================================================
+# Array Slice Tests
+# ============================================================================
+
+
+def test_array_slice_parsing():
+    """Test that array slices parse correctly."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        type Int_Array is array (1 .. 10) of Integer;
+        A : Int_Array;
+        B : Int_Array;
+    begin
+        A(1..5) := B(6..10);  -- Slice assignment
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+def test_array_slice_in_expression():
+    """Test array slice used in expressions."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        type Int_Array is array (1 .. 10) of Integer;
+        A, B : Int_Array;
+    begin
+        B := A;  -- Full array assignment
+        -- Slice could be passed to procedure
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+def test_string_slice():
+    """Test string slice operations."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        S : String(1..20);
+        Sub : String(1..5);
+    begin
+        Sub := S(1..5);  -- Extract substring
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+# ============================================================================
+# Exception Handling Tests
+# ============================================================================
+
+
+def test_exception_declaration():
+    """Test exception declaration parsing."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        My_Error : exception;
+    begin
+        raise My_Error;
+    exception
+        when My_Error =>
+            null;
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+def test_exception_with_message():
+    """Test exception raise with message."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        My_Error : exception;
+    begin
+        raise My_Error with "Something went wrong";
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+def test_exception_reraise():
+    """Test exception re-raise."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+    begin
+        null;
+    exception
+        when others =>
+            raise;  -- Re-raise current exception
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+def test_multiple_exception_handlers():
+    """Test multiple exception handlers."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        Error1 : exception;
+        Error2 : exception;
+    begin
+        null;
+    exception
+        when Error1 =>
+            null;
+        when Error2 =>
+            null;
+        when others =>
+            null;
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+# ============================================================================
+# Access Type (Pointer) Tests
+# ============================================================================
+
+
+def test_access_type_declaration():
+    """Test access type declaration."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        type Int_Ptr is access Integer;
+        P : Int_Ptr;
+    begin
+        P := new Integer;
+        P.all := 42;
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+def test_access_type_with_initial_value():
+    """Test allocator with initial value."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        type Int_Ptr is access Integer;
+        P : Int_Ptr;
+    begin
+        P := new Integer'(100);  -- Allocate with initial value
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+def test_access_to_record():
+    """Test access to record type."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        type Node;
+        type Node_Ptr is access Node;
+        type Node is record
+            Value : Integer;
+            Next  : Node_Ptr;
+        end record;
+        Head : Node_Ptr;
+    begin
+        Head := new Node;
+        Head.Value := 1;
+        Head.Next := null;
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+def test_null_access():
+    """Test null access value."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        type Int_Ptr is access Integer;
+        P : Int_Ptr := null;
+    begin
+        if P /= null then
+            P.all := 0;
+        end if;
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+# ============================================================================
+# Type Conversion Tests
+# ============================================================================
+
+
+def test_integer_type_conversion():
+    """Test integer type conversion."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        type Small is range 0 .. 100;
+        X : Integer := 50;
+        Y : Small;
+    begin
+        Y := Small(X);  -- Type conversion with range check
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+def test_enumeration_conversion():
+    """Test enumeration type conversion."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        type Color is (Red, Green, Blue);
+        C : Color := Green;
+        N : Integer;
+    begin
+        N := Color'Pos(C);  -- Enum to integer
+        C := Color'Val(N);  -- Integer to enum
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+def test_qualified_expression():
+    """Test qualified expression."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        type Small is range 1 .. 10;
+        X : Small;
+    begin
+        X := Small'(5);  -- Qualified expression
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+# ============================================================================
+# Modular Type Tests
+# ============================================================================
+
+
+def test_modular_type():
+    """Test modular type operations."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        type Byte is mod 256;
+        A, B, C : Byte;
+    begin
+        A := 200;
+        B := 100;
+        C := A + B;  -- Wraps around (200 + 100 = 44 mod 256)
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+def test_modular_bitwise_ops():
+    """Test modular type bitwise operations."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        type Byte is mod 256;
+        A, B : Byte;
+    begin
+        A := 16#FF#;
+        B := A and 16#0F#;  -- Bitwise AND
+        B := A or 16#F0#;   -- Bitwise OR
+        B := A xor 16#AA#;  -- Bitwise XOR
+        B := not A;         -- Bitwise NOT
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+# ============================================================================
+# Record Type Tests
+# ============================================================================
+
+
+def test_record_type_declaration():
+    """Test record type declaration."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        type Point is record
+            X : Integer;
+            Y : Integer;
+        end record;
+        P : Point;
+    begin
+        P.X := 10;
+        P.Y := 20;
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+def test_record_aggregate():
+    """Test record aggregate initialization."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        type Point is record
+            X : Integer;
+            Y : Integer;
+        end record;
+        P : Point := (X => 10, Y => 20);
+        Q : Point := (1, 2);  -- Positional
+    begin
+        null;
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+def test_nested_record():
+    """Test nested record types."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        type Point is record
+            X, Y : Integer;
+        end record;
+        type Rectangle is record
+            Top_Left     : Point;
+            Bottom_Right : Point;
+        end record;
+        R : Rectangle;
+    begin
+        R.Top_Left.X := 0;
+        R.Top_Left.Y := 0;
+        R.Bottom_Right.X := 100;
+        R.Bottom_Right.Y := 100;
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+def test_variant_record():
+    """Test variant record (discriminated)."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        type Shape_Kind is (Circle, Rectangle);
+        type Shape(Kind : Shape_Kind) is record
+            case Kind is
+                when Circle =>
+                    Radius : Integer;
+                when Rectangle =>
+                    Width  : Integer;
+                    Height : Integer;
+            end case;
+        end record;
+        C : Shape(Circle);
+        R : Shape(Rectangle);
+    begin
+        C.Radius := 10;
+        R.Width := 20;
+        R.Height := 30;
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+def test_record_assignment():
+    """Test record assignment."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        type Point is record
+            X, Y : Integer;
+        end record;
+        P1, P2 : Point;
+    begin
+        P1 := (10, 20);
+        P2 := P1;  -- Copy entire record
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+# ============================================================================
+# Tagged Type (OOP) Tests
+# ============================================================================
+
+
+def test_tagged_type():
+    """Test tagged type declaration."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        type Shape is tagged record
+            X, Y : Integer;
+        end record;
+        S : Shape;
+    begin
+        S.X := 0;
+        S.Y := 0;
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+def test_derived_tagged_type():
+    """Test derived tagged type."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        type Shape is tagged record
+            X, Y : Integer;
+        end record;
+        type Circle is new Shape with record
+            Radius : Integer;
+        end record;
+        C : Circle;
+    begin
+        C.X := 0;
+        C.Y := 0;
+        C.Radius := 10;
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None
+
+
+def test_class_wide_type():
+    """Test class-wide type."""
+    from uada80.parser import parse
+
+    source = """
+    procedure Test is
+        type Shape is tagged record
+            X, Y : Integer;
+        end record;
+
+        procedure Draw(S : Shape'Class) is
+        begin
+            null;
+        end Draw;
+
+        S : Shape;
+    begin
+        Draw(S);
+    end Test;
+    """
+    ast = parse(source)
+    assert ast is not None

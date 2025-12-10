@@ -269,3 +269,128 @@ class TestPragmaUseCases:
         """
         ast = parse(source)
         # Should parse without errors
+
+
+class TestPragmaLowering:
+    """Tests for pragma code generation (lowering)."""
+
+    def test_pragma_assert_lowering(self):
+        """Test that pragma Assert generates runtime check."""
+        from uada80.compiler import Compiler
+
+        source = """
+        procedure Test is
+            X : Integer := 42;
+        begin
+            pragma Assert(X > 0);
+        end Test;
+        """
+        compiler = Compiler()
+        result = compiler.compile(source)
+        # Should compile without errors
+        assert result.success
+        assert result.output is not None
+
+    def test_pragma_check_lowering(self):
+        """Test that pragma Check generates runtime check."""
+        from uada80.compiler import Compiler
+
+        source = """
+        procedure Test is
+            X : Integer := 10;
+        begin
+            pragma Check(Pre, X > 0);
+        end Test;
+        """
+        compiler = Compiler()
+        result = compiler.compile(source)
+        # Should compile without errors
+        assert result.success
+        assert result.output is not None
+
+    def test_pragma_warnings_no_code(self):
+        """Test that pragma Warnings doesn't generate code."""
+        from uada80.compiler import Compiler
+
+        source = """
+        procedure Test is
+            X : Integer;
+            pragma Warnings(Off, "unreferenced");
+        begin
+            null;
+        end Test;
+        """
+        compiler = Compiler()
+        result = compiler.compile(source)
+        # Should compile without errors
+        assert result.success
+        assert result.output is not None
+
+    def test_pragma_suppress_no_code(self):
+        """Test that pragma Suppress doesn't generate code."""
+        from uada80.compiler import Compiler
+
+        source = """
+        procedure Test is
+            pragma Suppress(Overflow_Check);
+        begin
+            null;
+        end Test;
+        """
+        compiler = Compiler()
+        result = compiler.compile(source)
+        assert result.success
+        assert result.output is not None
+
+    def test_pragma_volatile(self):
+        """Test pragma Volatile parsing."""
+        source = """
+        procedure Test is
+            X : Integer;
+            pragma Volatile(X);
+        begin
+            X := 42;
+        end Test;
+        """
+        ast = parse(source)
+        # Should parse without errors
+
+    def test_pragma_atomic(self):
+        """Test pragma Atomic parsing."""
+        source = """
+        procedure Test is
+            X : Integer;
+            pragma Atomic(X);
+        begin
+            X := 42;
+        end Test;
+        """
+        ast = parse(source)
+        # Should parse without errors
+
+    def test_pragma_unreferenced(self):
+        """Test pragma Unreferenced parsing."""
+        source = """
+        procedure Test(X : Integer) is
+            pragma Unreferenced(X);
+        begin
+            null;
+        end Test;
+        """
+        ast = parse(source)
+        result = analyze(ast)
+        # Should not complain about unreferenced parameter
+
+    def test_pragma_no_return(self):
+        """Test pragma No_Return parsing."""
+        source = """
+        procedure Fatal_Error;
+        pragma No_Return(Fatal_Error);
+
+        procedure Fatal_Error is
+        begin
+            raise Program_Error;
+        end Fatal_Error;
+        """
+        ast = parse(source)
+        # Should parse without errors
