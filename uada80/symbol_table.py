@@ -736,10 +736,9 @@ class SymbolTable:
         # Generic_Bounded_Length is a generic package that creates bounded strings
         # For our simplified implementation, we provide a fixed max length type
         # Bounded_String type (record with max length and current content)
-        bounded_str_type = AdaType(
-            kind="record",
+        bounded_str_type = RecordType(
             name="Bounded_String",
-            size=258,  # 2 bytes for length + 256 max chars
+            size_bits=258 * 8,  # 2 bytes for length + 256 max chars
         )
         bounded_str_sym = Symbol(
             name="Bounded_String",
@@ -1375,7 +1374,7 @@ class SymbolTable:
 
         # Vector type (opaque - pointer to runtime structure)
         from uada80.type_system import AccessType, RecordType
-        vector_record = RecordType(name="Vector", fields=[], is_tagged=False)
+        vector_record = RecordType(name="Vector", components=[], is_tagged=False)
         vector_type = AccessType(name="Vector", designated_type=vector_record)
 
         # Cursor type (index into vector, 0xFFFF = No_Element)
@@ -1676,7 +1675,7 @@ class SymbolTable:
         lists_pkg.container_kind = "list"
 
         # List type (opaque - pointer to runtime structure)
-        list_record = RecordType(name="List", fields=[], is_tagged=False)
+        list_record = RecordType(name="List", components=[], is_tagged=False)
         list_type = AccessType(name="List", designated_type=list_record)
 
         # Cursor type (pointer to list node, 0xFFFF = No_Element)
