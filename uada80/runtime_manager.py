@@ -63,6 +63,38 @@ RUNTIME_CATALOG = {
     "_max16": RuntimeRoutine("_max16", RuntimeCategory.MATH, "16-bit maximum"),
 
     # =========================================================================
+    # 48-bit floating point operations (z88dk math48 library)
+    # Library: libmath48.lib
+    # Uses BCDEHL for primary accumulator (L = exponent)
+    # Uses B'C'D'E'H'L' for secondary accumulator
+    # =========================================================================
+    "mm48_fpadd": RuntimeRoutine("mm48_fpadd", RuntimeCategory.FLOAT48, "Float add: AC' = AC' + AC"),
+    "mm48_fpsub": RuntimeRoutine("mm48_fpsub", RuntimeCategory.FLOAT48, "Float subtract: AC' = AC' - AC"),
+    "mm48_fpmul": RuntimeRoutine("mm48_fpmul", RuntimeCategory.FLOAT48, "Float multiply: AC' = AC' * AC"),
+    "mm48_fpdiv": RuntimeRoutine("mm48_fpdiv", RuntimeCategory.FLOAT48, "Float divide: AC' = AC' / AC"),
+    "mm48_negate": RuntimeRoutine("mm48_negate", RuntimeCategory.FLOAT48, "Float negate: AC' = -AC'"),
+    "mm48_cmp": RuntimeRoutine("mm48_cmp", RuntimeCategory.FLOAT48, "Float compare: AC' <=> AC"),
+    "mm48_equal": RuntimeRoutine("mm48_equal", RuntimeCategory.FLOAT48, "Float equality test"),
+    "mm48_int": RuntimeRoutine("mm48_int", RuntimeCategory.FLOAT48, "Float to integer"),
+    "mm48_frac": RuntimeRoutine("mm48_frac", RuntimeCategory.FLOAT48, "Fractional part"),
+    "mm48_mod": RuntimeRoutine("mm48_mod", RuntimeCategory.FLOAT48, "Float modulo"),
+    "mm48_sqr": RuntimeRoutine("mm48_sqr", RuntimeCategory.FLOAT48, "Square root"),
+    "mm48_sin": RuntimeRoutine("mm48_sin", RuntimeCategory.FLOAT48, "Sine"),
+    "mm48_cos": RuntimeRoutine("mm48_cos", RuntimeCategory.FLOAT48, "Cosine"),
+    "mm48_tan": RuntimeRoutine("mm48_tan", RuntimeCategory.FLOAT48, "Tangent"),
+    "mm48_atn": RuntimeRoutine("mm48_atn", RuntimeCategory.FLOAT48, "Arctangent"),
+    "mm48_exp": RuntimeRoutine("mm48_exp", RuntimeCategory.FLOAT48, "Exponential"),
+    "mm48_ln": RuntimeRoutine("mm48_ln", RuntimeCategory.FLOAT48, "Natural logarithm"),
+    "mm48_log": RuntimeRoutine("mm48_log", RuntimeCategory.FLOAT48, "Base-10 logarithm"),
+    "mm48_pwr": RuntimeRoutine("mm48_pwr", RuntimeCategory.FLOAT48, "Power: AC'^AC"),
+    "mm48_mul10": RuntimeRoutine("mm48_mul10", RuntimeCategory.FLOAT48, "Multiply by 10"),
+    "mm48_tenf": RuntimeRoutine("mm48_tenf", RuntimeCategory.FLOAT48, "Power of 10"),
+    # Support routines
+    "am48_dfix16": RuntimeRoutine("am48_dfix16", RuntimeCategory.FLOAT48, "Float to 16-bit int in HL"),
+    "am48_double16": RuntimeRoutine("am48_double16", RuntimeCategory.FLOAT48, "16-bit int to float"),
+    "am48_dneg": RuntimeRoutine("am48_dneg", RuntimeCategory.FLOAT48, "Negate AC'"),
+
+    # =========================================================================
     # Fixed-point operations (math.asm)
     # =========================================================================
     "_fix_add": RuntimeRoutine("_fix_add", RuntimeCategory.FIXED, "Fixed-point add"),
@@ -234,6 +266,8 @@ class RuntimeManager:
         lines.append("; =========================================")
         lines.append("; External runtime library references")
         lines.append("; Link with: ul80 program.rel -l libada.lib")
+        if RuntimeCategory.FLOAT48 in self._categories_needed:
+            lines.append(";            ul80 program.rel -l libmath48.lib")
         lines.append("; =========================================")
         lines.append("")
 
