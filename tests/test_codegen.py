@@ -29,7 +29,7 @@ def test_empty_module():
     code = generate_z80(module)
 
     assert "empty" in code or "Generated" in code
-    assert ".code" in code
+    assert "CSEG" in code or ".code" in code  # Accept either MACRO-80 or generic syntax
 
 
 def test_empty_function():
@@ -57,7 +57,7 @@ def test_globals():
 
     assert "counter:" in code
     assert "flag:" in code
-    assert ".data" in code
+    assert "DSEG" in code or ".data" in code  # Accept either MACRO-80 or generic syntax
 
 
 def test_string_literals():
