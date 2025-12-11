@@ -70,7 +70,9 @@ class Symbol:
 
     # Pragma-related attributes
     is_imported: bool = False  # pragma Import
-    external_name: Optional[str] = None  # External name from pragma Import
+    is_exported: bool = False  # pragma Export
+    external_name: Optional[str] = None  # External name from pragma Import/Export
+    calling_convention: str = "ada"  # Calling convention: "ada", "c", "intrinsic", "asm"
     is_inline: bool = False  # pragma Inline
     is_volatile: bool = False  # pragma Volatile
     is_atomic: bool = False  # pragma Atomic (use DI/EI on Z80)
@@ -82,9 +84,25 @@ class Symbol:
     requires_body: bool = False  # pragma Elaborate_Body
     is_withed: bool = False  # Package from with clause (not fully loaded)
 
+    # Representation clause attributes
+    explicit_address: Optional[int] = None  # for Obj'Address use N; - fixed memory location
+    explicit_size: Optional[int] = None  # for Type'Size use N; - explicit size in bits
+
     # For primitive operations of tagged types (OOP dispatching)
     primitive_of: Optional["RecordType"] = None  # Tagged type this is a primitive of
     vtable_slot: int = -1  # Slot index in vtable (-1 = not a primitive)
+
+    # For generic instantiations
+    generic_instance_of: Optional["Symbol"] = None  # The generic we're an instance of
+    generic_actuals: list = field(default_factory=list)  # Actual parameters
+    is_builtin_generic: bool = False  # Built-in generic (Unchecked_Deallocation, etc.)
+    is_deallocation: bool = False  # Instance of Ada.Unchecked_Deallocation
+    is_unchecked_conversion: bool = False  # Instance of Ada.Unchecked_Conversion
+
+    # For built-in container operations
+    runtime_name: Optional[str] = None  # Runtime function name (e.g., "_vec_append")
+    is_container_op: bool = False  # True if this is a container operation
+    container_kind: Optional[str] = None  # "vector", "list", "map", "set"
 
 
 @dataclass
@@ -484,6 +502,7 @@ class SymbolTable:
                 Symbol("Target", SymbolKind.PARAMETER, str_type, mode="out"),
             ],
         )
+        move_proc.runtime_name = "_str_move"
 
         # Index function: Index(Source, Pattern, Going) return Natural
         index_func = Symbol(
@@ -496,6 +515,7 @@ class SymbolTable:
                 Symbol("Pattern", SymbolKind.PARAMETER, str_type, mode="in"),
             ],
         )
+        index_func.runtime_name = "_str_index"
 
         # Index function with character: Index(Source, Set, Test, Going)
         index_char_func = Symbol(
@@ -509,6 +529,7 @@ class SymbolTable:
             ],
             overloaded_next=index_func,
         )
+        index_char_func.runtime_name = "_str_index_char"
 
         # Count function
         count_func = Symbol(
@@ -521,6 +542,7 @@ class SymbolTable:
                 Symbol("Pattern", SymbolKind.PARAMETER, str_type, mode="in"),
             ],
         )
+        count_func.runtime_name = "_str_count"
 
         # Head function
         head_func = Symbol(
@@ -533,6 +555,7 @@ class SymbolTable:
                 Symbol("Count", SymbolKind.PARAMETER, nat_type, mode="in"),
             ],
         )
+        head_func.runtime_name = "_str_head"
 
         # Tail function
         tail_func = Symbol(
@@ -545,6 +568,7 @@ class SymbolTable:
                 Symbol("Count", SymbolKind.PARAMETER, nat_type, mode="in"),
             ],
         )
+        tail_func.runtime_name = "_str_tail"
 
         # Trim function
         trim_func = Symbol(
@@ -556,6 +580,7 @@ class SymbolTable:
                 Symbol("Source", SymbolKind.PARAMETER, str_type, mode="in"),
             ],
         )
+        trim_func.runtime_name = "_str_trim"
 
         # Overwrite procedure
         overwrite_proc = Symbol(
@@ -568,6 +593,7 @@ class SymbolTable:
                 Symbol("New_Item", SymbolKind.PARAMETER, str_type, mode="in"),
             ],
         )
+        overwrite_proc.runtime_name = "_str_overwrite"
 
         # Delete procedure
         delete_proc = Symbol(
@@ -580,6 +606,7 @@ class SymbolTable:
                 Symbol("Through", SymbolKind.PARAMETER, int_type, mode="in"),
             ],
         )
+        delete_proc.runtime_name = "_str_delete"
 
         # Insert function
         insert_func = Symbol(
@@ -593,6 +620,7 @@ class SymbolTable:
                 Symbol("New_Item", SymbolKind.PARAMETER, str_type, mode="in"),
             ],
         )
+        insert_func.runtime_name = "_str_insert"
 
         # Replace_Slice function
         replace_slice_func = Symbol(
@@ -607,6 +635,7 @@ class SymbolTable:
                 Symbol("By", SymbolKind.PARAMETER, str_type, mode="in"),
             ],
         )
+        replace_slice_func.runtime_name = "_str_replace_slice"
 
         # Translate function (with mapping)
         translate_func = Symbol(
@@ -618,6 +647,7 @@ class SymbolTable:
                 Symbol("Source", SymbolKind.PARAMETER, str_type, mode="in"),
             ],
         )
+        translate_func.runtime_name = "_str_translate"
 
         fixed_pkg.public_symbols = {
             "move": move_proc,
@@ -693,6 +723,208 @@ class SymbolTable:
         }
 
         strings_pkg.public_symbols["maps"] = maps_pkg
+
+        # =====================================================================
+        # Ada.Strings.Bounded - Bounded-length strings
+        # =====================================================================
+        bounded_pkg = Symbol(
+            name="Bounded",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Generic_Bounded_Length is a generic package that creates bounded strings
+        # For our simplified implementation, we provide a fixed max length type
+        # Bounded_String type (record with max length and current content)
+        bounded_str_type = AdaType(
+            kind="record",
+            name="Bounded_String",
+            size=258,  # 2 bytes for length + 256 max chars
+        )
+        bounded_str_sym = Symbol(
+            name="Bounded_String",
+            kind=SymbolKind.TYPE,
+            ada_type=bounded_str_type,
+            scope_level=0,
+        )
+
+        # Max_Length constant (default 256 for our implementation)
+        max_length_sym = Symbol(
+            name="Max_Length",
+            kind=SymbolKind.VARIABLE,
+            ada_type=nat_type,
+            is_constant=True,
+            scope_level=0,
+        )
+        max_length_sym.const_value = 256
+
+        # Null_Bounded_String constant
+        null_bounded_sym = Symbol(
+            name="Null_Bounded_String",
+            kind=SymbolKind.VARIABLE,
+            ada_type=bounded_str_type,
+            is_constant=True,
+            scope_level=0,
+        )
+
+        # Length function
+        bnd_length_func = Symbol(
+            name="Length",
+            kind=SymbolKind.FUNCTION,
+            return_type=nat_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Source", SymbolKind.PARAMETER, bounded_str_type, mode="in"),
+            ],
+        )
+        bnd_length_func.runtime_name = "_bnd_length"
+
+        # To_Bounded_String function (String -> Bounded_String)
+        to_bounded_func = Symbol(
+            name="To_Bounded_String",
+            kind=SymbolKind.FUNCTION,
+            return_type=bounded_str_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Source", SymbolKind.PARAMETER, str_type, mode="in"),
+            ],
+        )
+        to_bounded_func.runtime_name = "_bnd_from_str"
+
+        # To_String function (Bounded_String -> String)
+        to_string_func = Symbol(
+            name="To_String",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Source", SymbolKind.PARAMETER, bounded_str_type, mode="in"),
+            ],
+        )
+        to_string_func.runtime_name = "_bnd_to_str"
+
+        # Append procedure (Bounded_String += String)
+        bnd_append_proc = Symbol(
+            name="Append",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Source", SymbolKind.PARAMETER, bounded_str_type, mode="in out"),
+                Symbol("New_Item", SymbolKind.PARAMETER, str_type, mode="in"),
+            ],
+        )
+        bnd_append_proc.runtime_name = "_bnd_append"
+
+        # Element function (get character at position)
+        bnd_element_func = Symbol(
+            name="Element",
+            kind=SymbolKind.FUNCTION,
+            return_type=char_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Source", SymbolKind.PARAMETER, bounded_str_type, mode="in"),
+                Symbol("Index", SymbolKind.PARAMETER, int_type, mode="in"),
+            ],
+        )
+        bnd_element_func.runtime_name = "_bnd_element"
+
+        # Replace_Element procedure
+        bnd_replace_elem_proc = Symbol(
+            name="Replace_Element",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Source", SymbolKind.PARAMETER, bounded_str_type, mode="in out"),
+                Symbol("Index", SymbolKind.PARAMETER, int_type, mode="in"),
+                Symbol("By", SymbolKind.PARAMETER, char_type, mode="in"),
+            ],
+        )
+        bnd_replace_elem_proc.runtime_name = "_bnd_replace_element"
+
+        # Slice function
+        bnd_slice_func = Symbol(
+            name="Slice",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Source", SymbolKind.PARAMETER, bounded_str_type, mode="in"),
+                Symbol("Low", SymbolKind.PARAMETER, int_type, mode="in"),
+                Symbol("High", SymbolKind.PARAMETER, int_type, mode="in"),
+            ],
+        )
+        bnd_slice_func.runtime_name = "_bnd_slice"
+
+        # Index function (find pattern in bounded string)
+        bnd_index_func = Symbol(
+            name="Index",
+            kind=SymbolKind.FUNCTION,
+            return_type=nat_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Source", SymbolKind.PARAMETER, bounded_str_type, mode="in"),
+                Symbol("Pattern", SymbolKind.PARAMETER, str_type, mode="in"),
+            ],
+        )
+        bnd_index_func.runtime_name = "_bnd_index"
+
+        # Head function
+        bnd_head_func = Symbol(
+            name="Head",
+            kind=SymbolKind.FUNCTION,
+            return_type=bounded_str_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Source", SymbolKind.PARAMETER, bounded_str_type, mode="in"),
+                Symbol("Count", SymbolKind.PARAMETER, nat_type, mode="in"),
+            ],
+        )
+        bnd_head_func.runtime_name = "_bnd_head"
+
+        # Tail function
+        bnd_tail_func = Symbol(
+            name="Tail",
+            kind=SymbolKind.FUNCTION,
+            return_type=bounded_str_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Source", SymbolKind.PARAMETER, bounded_str_type, mode="in"),
+                Symbol("Count", SymbolKind.PARAMETER, nat_type, mode="in"),
+            ],
+        )
+        bnd_tail_func.runtime_name = "_bnd_tail"
+
+        # "&" operator (concatenation) - handled via Append
+        bnd_concat_func = Symbol(
+            name="&",
+            kind=SymbolKind.FUNCTION,
+            return_type=bounded_str_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Left", SymbolKind.PARAMETER, bounded_str_type, mode="in"),
+                Symbol("Right", SymbolKind.PARAMETER, bounded_str_type, mode="in"),
+            ],
+        )
+        bnd_concat_func.runtime_name = "_bnd_concat"
+
+        bounded_pkg.public_symbols = {
+            "bounded_string": bounded_str_sym,
+            "max_length": max_length_sym,
+            "null_bounded_string": null_bounded_sym,
+            "length": bnd_length_func,
+            "to_bounded_string": to_bounded_func,
+            "to_string": to_string_func,
+            "append": bnd_append_proc,
+            "element": bnd_element_func,
+            "replace_element": bnd_replace_elem_proc,
+            "slice": bnd_slice_func,
+            "index": bnd_index_func,
+            "head": bnd_head_func,
+            "tail": bnd_tail_func,
+            "&": bnd_concat_func,
+        }
+
+        strings_pkg.public_symbols["bounded"] = bounded_pkg
 
         # Add Strings to Ada package
         ada_pkg.public_symbols["strings"] = strings_pkg
@@ -1136,8 +1368,302 @@ class SymbolTable:
             scope_level=0,
         )
         vectors_pkg.is_builtin_generic = True
-        # Key operations: Append, Prepend, Insert, Delete, Element, Replace_Element,
-        # Length, Is_Empty, Clear, First, Last, Next, Previous, etc.
+        vectors_pkg.container_kind = "vector"  # Mark for code generation
+
+        # Generic formal: type Element_Type is private;
+        # These will be substituted during instantiation
+
+        # Vector type (opaque - pointer to runtime structure)
+        from uada80.type_system import AccessType, RecordType
+        vector_record = RecordType(name="Vector", fields=[], is_tagged=False)
+        vector_type = AccessType(name="Vector", designated_type=vector_record)
+
+        # Cursor type (index into vector, 0xFFFF = No_Element)
+        cursor_type = IntegerType(name="Cursor", low=0, high=0xFFFF)
+
+        # No_Element constant
+        no_element_sym = Symbol(
+            name="No_Element",
+            kind=SymbolKind.VARIABLE,
+            ada_type=cursor_type,
+            is_constant=True,
+            value=0xFFFF,
+            scope_level=0,
+        )
+
+        # Empty_Vector constant
+        empty_vector_sym = Symbol(
+            name="Empty_Vector",
+            kind=SymbolKind.VARIABLE,
+            ada_type=vector_type,
+            is_constant=True,
+            value=0,
+            scope_level=0,
+        )
+
+        # Define operations
+        nat_type = IntegerType(name="Natural", low=0, high=32767)
+        bool_type = PREDEFINED_TYPES["Boolean"]
+
+        # Length function
+        length_func = Symbol(
+            name="Length",
+            kind=SymbolKind.FUNCTION,
+            return_type=count_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, vector_type, mode="in"),
+            ],
+        )
+        length_func.runtime_name = "_vec_length"
+
+        # Is_Empty function
+        is_empty_func = Symbol(
+            name="Is_Empty",
+            kind=SymbolKind.FUNCTION,
+            return_type=bool_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, vector_type, mode="in"),
+            ],
+        )
+        is_empty_func.runtime_name = "_vec_is_empty"
+
+        # Clear procedure
+        clear_proc = Symbol(
+            name="Clear",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, vector_type, mode="in out"),
+            ],
+        )
+        clear_proc.runtime_name = "_vec_clear"
+
+        # Append procedure (element)
+        append_proc = Symbol(
+            name="Append",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, vector_type, mode="in out"),
+                Symbol("New_Item", SymbolKind.PARAMETER, None, mode="in"),  # Element_Type
+            ],
+        )
+        append_proc.runtime_name = "_vec_append"
+        append_proc.is_container_op = True
+
+        # Prepend procedure
+        prepend_proc = Symbol(
+            name="Prepend",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, vector_type, mode="in out"),
+                Symbol("New_Item", SymbolKind.PARAMETER, None, mode="in"),
+            ],
+        )
+        prepend_proc.runtime_name = "_vec_prepend"
+        prepend_proc.is_container_op = True
+
+        # First_Element function
+        first_elem_func = Symbol(
+            name="First_Element",
+            kind=SymbolKind.FUNCTION,
+            return_type=None,  # Element_Type
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, vector_type, mode="in"),
+            ],
+        )
+        first_elem_func.runtime_name = "_vec_first_element"
+
+        # Last_Element function
+        last_elem_func = Symbol(
+            name="Last_Element",
+            kind=SymbolKind.FUNCTION,
+            return_type=None,  # Element_Type
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, vector_type, mode="in"),
+            ],
+        )
+        last_elem_func.runtime_name = "_vec_last_element"
+
+        # Element function (by cursor)
+        element_func = Symbol(
+            name="Element",
+            kind=SymbolKind.FUNCTION,
+            return_type=None,  # Element_Type
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, vector_type, mode="in"),
+                Symbol("Position", SymbolKind.PARAMETER, cursor_type, mode="in"),
+            ],
+        )
+        element_func.runtime_name = "_vec_element"
+
+        # Replace_Element procedure
+        replace_elem_proc = Symbol(
+            name="Replace_Element",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, vector_type, mode="in out"),
+                Symbol("Position", SymbolKind.PARAMETER, cursor_type, mode="in"),
+                Symbol("New_Item", SymbolKind.PARAMETER, None, mode="in"),
+            ],
+        )
+        replace_elem_proc.runtime_name = "_vec_replace"
+        replace_elem_proc.is_container_op = True
+
+        # First function (returns cursor)
+        first_func = Symbol(
+            name="First",
+            kind=SymbolKind.FUNCTION,
+            return_type=cursor_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, vector_type, mode="in"),
+            ],
+        )
+        first_func.runtime_name = "_vec_first"
+
+        # Last function (returns cursor)
+        last_func = Symbol(
+            name="Last",
+            kind=SymbolKind.FUNCTION,
+            return_type=cursor_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, vector_type, mode="in"),
+            ],
+        )
+        last_func.runtime_name = "_vec_last"
+
+        # Next function
+        next_func = Symbol(
+            name="Next",
+            kind=SymbolKind.FUNCTION,
+            return_type=cursor_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Position", SymbolKind.PARAMETER, cursor_type, mode="in"),
+            ],
+        )
+        next_func.runtime_name = "_cursor_next"
+
+        # Previous function
+        prev_func = Symbol(
+            name="Previous",
+            kind=SymbolKind.FUNCTION,
+            return_type=cursor_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Position", SymbolKind.PARAMETER, cursor_type, mode="in"),
+            ],
+        )
+        prev_func.runtime_name = "_cursor_previous"
+
+        # Has_Element function
+        has_elem_func = Symbol(
+            name="Has_Element",
+            kind=SymbolKind.FUNCTION,
+            return_type=bool_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Position", SymbolKind.PARAMETER, cursor_type, mode="in"),
+            ],
+        )
+        has_elem_func.runtime_name = "_cursor_has_element"
+
+        # Delete procedure (by cursor)
+        delete_proc = Symbol(
+            name="Delete",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, vector_type, mode="in out"),
+                Symbol("Position", SymbolKind.PARAMETER, cursor_type, mode="in out"),
+            ],
+        )
+        delete_proc.runtime_name = "_vec_delete"
+
+        # Delete_First procedure
+        delete_first_proc = Symbol(
+            name="Delete_First",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, vector_type, mode="in out"),
+            ],
+        )
+        delete_first_proc.runtime_name = "_vec_delete_first"
+
+        # Delete_Last procedure
+        delete_last_proc = Symbol(
+            name="Delete_Last",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, vector_type, mode="in out"),
+            ],
+        )
+        delete_last_proc.runtime_name = "_vec_delete_last"
+
+        # Find function
+        find_func = Symbol(
+            name="Find",
+            kind=SymbolKind.FUNCTION,
+            return_type=cursor_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, vector_type, mode="in"),
+                Symbol("Item", SymbolKind.PARAMETER, None, mode="in"),
+            ],
+        )
+        find_func.runtime_name = "_container_find"
+
+        # Contains function
+        contains_func = Symbol(
+            name="Contains",
+            kind=SymbolKind.FUNCTION,
+            return_type=bool_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, vector_type, mode="in"),
+                Symbol("Item", SymbolKind.PARAMETER, None, mode="in"),
+            ],
+        )
+        contains_func.runtime_name = "_container_contains"
+
+        # Add types and operations to package
+        vectors_pkg.public_symbols = {
+            "vector": Symbol("Vector", SymbolKind.TYPE, vector_type, scope_level=0),
+            "cursor": Symbol("Cursor", SymbolKind.TYPE, cursor_type, scope_level=0),
+            "no_element": no_element_sym,
+            "empty_vector": empty_vector_sym,
+            "length": length_func,
+            "is_empty": is_empty_func,
+            "clear": clear_proc,
+            "append": append_proc,
+            "prepend": prepend_proc,
+            "first_element": first_elem_func,
+            "last_element": last_elem_func,
+            "element": element_func,
+            "replace_element": replace_elem_proc,
+            "first": first_func,
+            "last": last_func,
+            "next": next_func,
+            "previous": prev_func,
+            "has_element": has_elem_func,
+            "delete": delete_proc,
+            "delete_first": delete_first_proc,
+            "delete_last": delete_last_proc,
+            "find": find_func,
+            "contains": contains_func,
+        }
+
         containers_pkg.public_symbols["vectors"] = vectors_pkg
 
         # Add generic Doubly_Linked_Lists package
@@ -1147,6 +1673,243 @@ class SymbolTable:
             scope_level=0,
         )
         lists_pkg.is_builtin_generic = True
+        lists_pkg.container_kind = "list"
+
+        # List type (opaque - pointer to runtime structure)
+        list_record = RecordType(name="List", fields=[], is_tagged=False)
+        list_type = AccessType(name="List", designated_type=list_record)
+
+        # Cursor type (pointer to list node, 0xFFFF = No_Element)
+        list_cursor_type = IntegerType(name="Cursor", low=0, high=0xFFFF)
+
+        # No_Element constant for lists
+        list_no_element_sym = Symbol(
+            name="No_Element",
+            kind=SymbolKind.VARIABLE,
+            ada_type=list_cursor_type,
+            is_constant=True,
+            value=0xFFFF,
+            scope_level=0,
+        )
+
+        # Empty_List constant
+        empty_list_sym = Symbol(
+            name="Empty_List",
+            kind=SymbolKind.VARIABLE,
+            ada_type=list_type,
+            is_constant=True,
+            value=0,
+            scope_level=0,
+        )
+
+        # List operations
+        # Length function
+        list_length_func = Symbol(
+            name="Length",
+            kind=SymbolKind.FUNCTION,
+            return_type=count_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, list_type, mode="in"),
+            ],
+        )
+        list_length_func.runtime_name = "_list_length"
+
+        # Is_Empty function
+        list_is_empty_func = Symbol(
+            name="Is_Empty",
+            kind=SymbolKind.FUNCTION,
+            return_type=bool_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, list_type, mode="in"),
+            ],
+        )
+        list_is_empty_func.runtime_name = "_list_is_empty"
+
+        # Clear procedure
+        list_clear_proc = Symbol(
+            name="Clear",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, list_type, mode="in out"),
+            ],
+        )
+        list_clear_proc.runtime_name = "_list_clear"
+
+        # Append procedure
+        list_append_proc = Symbol(
+            name="Append",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, list_type, mode="in out"),
+                Symbol("New_Item", SymbolKind.PARAMETER, None, mode="in"),
+            ],
+        )
+        list_append_proc.runtime_name = "_list_append"
+        list_append_proc.is_container_op = True
+
+        # Prepend procedure
+        list_prepend_proc = Symbol(
+            name="Prepend",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, list_type, mode="in out"),
+                Symbol("New_Item", SymbolKind.PARAMETER, None, mode="in"),
+            ],
+        )
+        list_prepend_proc.runtime_name = "_list_prepend"
+        list_prepend_proc.is_container_op = True
+
+        # First function (returns cursor)
+        list_first_func = Symbol(
+            name="First",
+            kind=SymbolKind.FUNCTION,
+            return_type=list_cursor_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, list_type, mode="in"),
+            ],
+        )
+        list_first_func.runtime_name = "_list_first"
+
+        # Last function (returns cursor)
+        list_last_func = Symbol(
+            name="Last",
+            kind=SymbolKind.FUNCTION,
+            return_type=list_cursor_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, list_type, mode="in"),
+            ],
+        )
+        list_last_func.runtime_name = "_list_last"
+
+        # Next function
+        list_next_func = Symbol(
+            name="Next",
+            kind=SymbolKind.FUNCTION,
+            return_type=list_cursor_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Position", SymbolKind.PARAMETER, list_cursor_type, mode="in"),
+            ],
+        )
+        list_next_func.runtime_name = "_list_next"
+
+        # Previous function
+        list_prev_func = Symbol(
+            name="Previous",
+            kind=SymbolKind.FUNCTION,
+            return_type=list_cursor_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Position", SymbolKind.PARAMETER, list_cursor_type, mode="in"),
+            ],
+        )
+        list_prev_func.runtime_name = "_list_prev"
+
+        # Element function (by cursor)
+        list_element_func = Symbol(
+            name="Element",
+            kind=SymbolKind.FUNCTION,
+            return_type=None,  # Element_Type
+            scope_level=0,
+            parameters=[
+                Symbol("Position", SymbolKind.PARAMETER, list_cursor_type, mode="in"),
+            ],
+        )
+        list_element_func.runtime_name = "_list_element"
+
+        # Has_Element function
+        list_has_elem_func = Symbol(
+            name="Has_Element",
+            kind=SymbolKind.FUNCTION,
+            return_type=bool_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Position", SymbolKind.PARAMETER, list_cursor_type, mode="in"),
+            ],
+        )
+        list_has_elem_func.runtime_name = "_cursor_has_element"
+
+        # Delete procedure (by cursor)
+        list_delete_proc = Symbol(
+            name="Delete",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, list_type, mode="in out"),
+                Symbol("Position", SymbolKind.PARAMETER, list_cursor_type, mode="in out"),
+            ],
+        )
+        list_delete_proc.runtime_name = "_list_delete"
+
+        # Replace_Element procedure
+        list_replace_proc = Symbol(
+            name="Replace_Element",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, list_type, mode="in out"),
+                Symbol("Position", SymbolKind.PARAMETER, list_cursor_type, mode="in"),
+                Symbol("New_Item", SymbolKind.PARAMETER, None, mode="in"),
+            ],
+        )
+        list_replace_proc.runtime_name = "_list_replace"
+        list_replace_proc.is_container_op = True
+
+        # Insert_Before procedure
+        list_insert_proc = Symbol(
+            name="Insert",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, list_type, mode="in out"),
+                Symbol("Before", SymbolKind.PARAMETER, list_cursor_type, mode="in"),
+                Symbol("New_Item", SymbolKind.PARAMETER, None, mode="in"),
+            ],
+        )
+        list_insert_proc.runtime_name = "_list_insert"
+        list_insert_proc.is_container_op = True
+
+        # Reverse_Elements procedure
+        list_reverse_proc = Symbol(
+            name="Reverse_Elements",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Container", SymbolKind.PARAMETER, list_type, mode="in out"),
+            ],
+        )
+        list_reverse_proc.runtime_name = "_list_reverse"
+
+        # Add types and operations to package
+        lists_pkg.public_symbols = {
+            "list": Symbol("List", SymbolKind.TYPE, list_type, scope_level=0),
+            "cursor": Symbol("Cursor", SymbolKind.TYPE, list_cursor_type, scope_level=0),
+            "no_element": list_no_element_sym,
+            "empty_list": empty_list_sym,
+            "length": list_length_func,
+            "is_empty": list_is_empty_func,
+            "clear": list_clear_proc,
+            "append": list_append_proc,
+            "prepend": list_prepend_proc,
+            "first": list_first_func,
+            "last": list_last_func,
+            "next": list_next_func,
+            "previous": list_prev_func,
+            "element": list_element_func,
+            "has_element": list_has_elem_func,
+            "delete": list_delete_proc,
+            "replace_element": list_replace_proc,
+            "insert": list_insert_proc,
+            "reverse_elements": list_reverse_proc,
+        }
+
         containers_pkg.public_symbols["doubly_linked_lists"] = lists_pkg
 
         # Add generic Hashed_Maps package

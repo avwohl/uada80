@@ -661,22 +661,27 @@ class SemanticAnalyzer:
             self.error(f"'{generic_name}' is not a generic subprogram", inst.generic_name)
             return
 
-        # Get the generic declaration
-        generic_decl = getattr(generic_sym, 'generic_decl', None)
-        if generic_decl is None:
-            self.error(f"generic '{generic_name}' has no declaration", inst.generic_name)
-            return
+        # Check if this is a built-in generic (like Ada.Unchecked_Deallocation)
+        is_builtin = getattr(generic_sym, 'is_builtin_generic', False)
 
-        # Check number of actual parameters
-        num_formals = len(generic_decl.formals)
-        num_actuals = len(inst.actual_parameters)
+        # For non-builtin generics, check declaration and formal parameters
+        if not is_builtin:
+            # Get the generic declaration
+            generic_decl = getattr(generic_sym, 'generic_decl', None)
+            if generic_decl is None:
+                self.error(f"generic '{generic_name}' has no declaration", inst.generic_name)
+                return
 
-        if num_actuals != num_formals:
-            self.error(
-                f"wrong number of generic parameters for '{generic_name}': "
-                f"expected {num_formals}, got {num_actuals}",
-                inst
-            )
+            # Check number of actual parameters
+            num_formals = len(generic_decl.formals)
+            num_actuals = len(inst.actual_parameters)
+
+            if num_actuals != num_formals:
+                self.error(
+                    f"wrong number of generic parameters for '{generic_name}': "
+                    f"expected {num_formals}, got {num_actuals}",
+                    inst
+                )
 
         # Create the instantiated subprogram
         is_function = generic_sym.kind == SymbolKind.GENERIC_FUNCTION
@@ -688,6 +693,16 @@ class SemanticAnalyzer:
         inst_symbol.generic_instance_of = generic_sym
         inst_symbol.generic_actuals = inst.actual_parameters
         inst_symbol.return_type = generic_sym.return_type
+
+        # Check if this is Ada.Unchecked_Deallocation instantiation
+        generic_name_lower = generic_name.lower()
+        if generic_name_lower in ("ada.unchecked_deallocation", "unchecked_deallocation"):
+            inst_symbol.is_deallocation = True
+
+        # Check if this is Ada.Unchecked_Conversion instantiation
+        if generic_name_lower in ("ada.unchecked_conversion", "unchecked_conversion"):
+            inst_symbol.is_unchecked_conversion = True
+
         self.symbols.define(inst_symbol)
 
     def _analyze_package_body(self, body: PackageBody) -> None:
@@ -1062,35 +1077,57 @@ class SemanticAnalyzer:
     def _analyze_attribute_definition_clause(
         self, decl: AttributeDefinitionClause
     ) -> None:
-        """Analyze an attribute definition clause (Type'Size use N)."""
-        # Get the type being modified
-        type_name = ""
+        """Analyze an attribute definition clause.
+
+        Handles:
+        - for Type'Size use N;
+        - for Type'Alignment use N;
+        - for Object'Address use N;
+        - for Type'Component_Size use N;
+        """
+        # Get the name being modified
+        obj_name = ""
         if isinstance(decl.name, Identifier):
-            type_name = decl.name.name
+            obj_name = decl.name.name
         elif hasattr(decl.name, "name"):
-            type_name = decl.name.name
+            obj_name = decl.name.name
 
-        sym = self.symbols.lookup(type_name)
+        sym = self.symbols.lookup(obj_name)
         if sym is None:
-            self.error(f"unknown type '{type_name}'", decl)
-            return
-
-        if sym.kind != SymbolKind.TYPE:
-            self.error(f"'{type_name}' is not a type", decl)
+            self.error(f"unknown identifier '{obj_name}'", decl)
             return
 
         # Evaluate the value expression
         value = self._eval_static_expr(decl.value)
 
-        # Apply the attribute
+        # Apply the attribute based on what it is and what kind of entity
         attr = decl.attribute.lower()
+
         if attr == "size":
-            if sym.ada_type:
+            if sym.kind == SymbolKind.TYPE and sym.ada_type:
                 sym.ada_type.size_bits = value
+            elif sym.kind == SymbolKind.VARIABLE:
+                sym.explicit_size = value
         elif attr == "alignment":
-            if sym.ada_type:
-                # Store alignment (would need to add field to AdaType)
-                pass
+            if sym.kind == SymbolKind.TYPE and sym.ada_type:
+                sym.ada_type.alignment = value
+        elif attr == "address":
+            # for Object'Address use N; - place object at specific address
+            if sym.kind == SymbolKind.VARIABLE:
+                sym.explicit_address = value
+            else:
+                self.error(f"Address clause only applies to variables", decl)
+        elif attr == "component_size":
+            # for Array_Type'Component_Size use N;
+            if sym.kind == SymbolKind.TYPE and sym.ada_type:
+                from uada80.type_system import ArrayType
+                if isinstance(sym.ada_type, ArrayType):
+                    # Store component size (would need to add field)
+                    sym.ada_type.element_type.size_bits = value
+        elif attr == "storage_size":
+            # for Access_Type'Storage_Size use N;
+            # for Task_Type'Storage_Size use N;
+            pass  # Handled in access type or task type declaration
         elif attr == "":
             # Direct value clause (for Type use value)
             pass
@@ -1540,7 +1577,10 @@ class SemanticAnalyzer:
                     RecordComponent(name=comp_name, component_type=comp_type)
                 )
 
-        return RecordType(name=name, size_bits=0, components=components)
+        # Check if record is limited
+        is_limited = getattr(type_def, 'is_limited', False)
+
+        return RecordType(name=name, size_bits=0, components=components, is_limited=is_limited)
 
     def _build_access_type(
         self, name: str, type_def: AccessTypeDef
@@ -1624,6 +1664,9 @@ class SemanticAnalyzer:
             is_controlled = parent.is_controlled or parent.needs_finalization()
             is_limited_controlled = parent.is_limited_controlled
 
+            # Propagate limited status from parent or from explicit declaration
+            is_limited = getattr(type_def, 'is_limited', False) or parent.is_limited or parent.is_limited_type()
+
             return RecordType(
                 name=name,
                 is_tagged=True,
@@ -1632,6 +1675,7 @@ class SemanticAnalyzer:
                 interfaces=interfaces,
                 is_controlled=is_controlled,
                 is_limited_controlled=is_limited_controlled,
+                is_limited=is_limited,
             )
 
         return parent
@@ -1861,6 +1905,24 @@ class SemanticAnalyzer:
                             f"cannot assign to 'in' parameter '{symbol.name}'",
                             stmt,
                         )
+
+        # Check for limited type - cannot assign limited types
+        if target_type:
+            if hasattr(target_type, 'is_limited_type') and target_type.is_limited_type():
+                self.error(
+                    f"cannot assign to variable of limited type '{target_type.name}'",
+                    stmt,
+                )
+            elif hasattr(target_type, 'is_limited') and target_type.is_limited:
+                self.error(
+                    f"cannot assign to variable of limited type '{target_type.name}'",
+                    stmt,
+                )
+            elif hasattr(target_type, 'is_limited_controlled') and target_type.is_limited_controlled:
+                self.error(
+                    f"cannot assign to variable of limited controlled type '{target_type.name}'",
+                    stmt,
+                )
 
         # Type check
         if target_type and value_type:

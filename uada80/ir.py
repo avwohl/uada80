@@ -23,6 +23,7 @@ class IRType(Enum):
     VOID = auto()  # No value (for procedures)
     PTR = auto()  # 16-bit pointer
     FIXED = auto()  # 16.16 fixed-point (32-bit)
+    FLOAT48 = auto()  # 48-bit floating point (z88dk math48 format)
 
 
 @dataclass
@@ -172,6 +173,26 @@ class OpCode(Enum):
     EXC_POP = auto()  # pop exception handler (normal exit)
     EXC_RAISE = auto()  # raise exception (src1=exc_id, src2=message_ptr or None)
     EXC_RERAISE = auto()  # re-raise current exception
+
+    # 48-bit floating point operations (z88dk math48 format)
+    FADD = auto()  # dst = src1 + src2 (float)
+    FSUB = auto()  # dst = src1 - src2 (float)
+    FMUL = auto()  # dst = src1 * src2 (float)
+    FDIV = auto()  # dst = src1 / src2 (float)
+    FNEG = auto()  # dst = -src (float)
+    FCMP = auto()  # compare floats, set flags
+    FABS = auto()  # dst = |src| (float absolute value)
+    ITOF = auto()  # dst = float(src) (int to float)
+    FTOI = auto()  # dst = int(src) (float to int, truncate)
+
+    # Tasking operations
+    TASK_CREATE = auto()  # create new task (dst=task_id, src1=entry_point)
+    TASK_YIELD = auto()  # yield to scheduler
+    TASK_TERMINATE = auto()  # terminate current task
+    TASK_DELAY = auto()  # delay for src1 ticks
+    TASK_DELAY_UNTIL = auto()  # delay until src1 time
+    ENTRY_CALL = auto()  # call task entry (src1=task_id, src2=entry_id)
+    ENTRY_ACCEPT = auto()  # accept entry call (src1=entry_id)
 
 
 @dataclass
@@ -474,6 +495,72 @@ class IRBuilder:
         """Emit a label pseudo-instruction."""
         self.emit(IRInstr(OpCode.LABEL, Label(name), comment=name))
 
+    # 48-bit floating point operations
+    def fadd(self, dst: VReg, src1: IRValue, src2: IRValue, comment: str = "") -> None:
+        """Emit a floating-point add instruction."""
+        self.emit(IRInstr(OpCode.FADD, dst, src1, src2, comment=comment))
+
+    def fsub(self, dst: VReg, src1: IRValue, src2: IRValue, comment: str = "") -> None:
+        """Emit a floating-point subtract instruction."""
+        self.emit(IRInstr(OpCode.FSUB, dst, src1, src2, comment=comment))
+
+    def fmul(self, dst: VReg, src1: IRValue, src2: IRValue, comment: str = "") -> None:
+        """Emit a floating-point multiply instruction."""
+        self.emit(IRInstr(OpCode.FMUL, dst, src1, src2, comment=comment))
+
+    def fdiv(self, dst: VReg, src1: IRValue, src2: IRValue, comment: str = "") -> None:
+        """Emit a floating-point divide instruction."""
+        self.emit(IRInstr(OpCode.FDIV, dst, src1, src2, comment=comment))
+
+    def fneg(self, dst: VReg, src: IRValue, comment: str = "") -> None:
+        """Emit a floating-point negate instruction."""
+        self.emit(IRInstr(OpCode.FNEG, dst, src, comment=comment))
+
+    def fcmp(self, dst: VReg, src1: IRValue, src2: IRValue, comment: str = "") -> None:
+        """Emit a floating-point compare instruction."""
+        self.emit(IRInstr(OpCode.FCMP, dst, src1, src2, comment=comment))
+
+    def fabs(self, dst: VReg, src: IRValue, comment: str = "") -> None:
+        """Emit a floating-point absolute value instruction."""
+        self.emit(IRInstr(OpCode.FABS, dst, src, comment=comment))
+
+    def itof(self, dst: VReg, src: IRValue, comment: str = "") -> None:
+        """Emit an integer-to-float conversion instruction."""
+        self.emit(IRInstr(OpCode.ITOF, dst, src, comment=comment))
+
+    def ftoi(self, dst: VReg, src: IRValue, comment: str = "") -> None:
+        """Emit a float-to-integer conversion instruction."""
+        self.emit(IRInstr(OpCode.FTOI, dst, src, comment=comment))
+
+    # Tasking operations
+    def task_create(self, dst: VReg, entry_point: Label, comment: str = "") -> None:
+        """Emit a task creation instruction."""
+        self.emit(IRInstr(OpCode.TASK_CREATE, dst, entry_point, comment=comment))
+
+    def task_yield(self, comment: str = "") -> None:
+        """Emit a task yield instruction."""
+        self.emit(IRInstr(OpCode.TASK_YIELD, comment=comment))
+
+    def task_terminate(self, comment: str = "") -> None:
+        """Emit a task termination instruction."""
+        self.emit(IRInstr(OpCode.TASK_TERMINATE, comment=comment))
+
+    def task_delay(self, ticks: IRValue, comment: str = "") -> None:
+        """Emit a task delay instruction."""
+        self.emit(IRInstr(OpCode.TASK_DELAY, src1=ticks, comment=comment))
+
+    def task_delay_until(self, time: IRValue, comment: str = "") -> None:
+        """Emit a task delay-until instruction."""
+        self.emit(IRInstr(OpCode.TASK_DELAY_UNTIL, src1=time, comment=comment))
+
+    def entry_call(self, task_id: IRValue, entry_id: IRValue, comment: str = "") -> None:
+        """Emit an entry call instruction."""
+        self.emit(IRInstr(OpCode.ENTRY_CALL, src1=task_id, src2=entry_id, comment=comment))
+
+    def entry_accept(self, entry_id: IRValue, comment: str = "") -> None:
+        """Emit an entry accept instruction."""
+        self.emit(IRInstr(OpCode.ENTRY_ACCEPT, src1=entry_id, comment=comment))
+
 
 # ============================================================================
 # Utility Functions
@@ -490,6 +577,12 @@ def ir_type_size(ir_type: IRType) -> int:
         return 2
     if ir_type == IRType.PTR:
         return 2
+    if ir_type == IRType.DWORD:
+        return 4
+    if ir_type == IRType.FIXED:
+        return 4  # 16.16 fixed point
+    if ir_type == IRType.FLOAT48:
+        return 6  # 48-bit z88dk format
     return 0
 
 
@@ -497,4 +590,10 @@ def ir_type_from_bits(bits: int, signed: bool = True) -> IRType:
     """Get IR type from size in bits."""
     if bits <= 8:
         return IRType.BYTE
-    return IRType.WORD
+    if bits <= 16:
+        return IRType.WORD
+    if bits <= 32:
+        return IRType.DWORD
+    if bits <= 48:
+        return IRType.FLOAT48
+    return IRType.WORD  # Default fallback

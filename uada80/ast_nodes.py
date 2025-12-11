@@ -967,6 +967,22 @@ class EntryDecl(Decl):
 
 
 @dataclass
+class EntryBody(Decl):
+    """Entry body in a protected type (entry E when Barrier is ...).
+
+    Protected entries have a barrier condition that must be true for
+    callers to proceed. If the barrier is false, callers are queued.
+    """
+
+    name: str
+    parameters: list[ParameterSpec] = field(default_factory=list)
+    barrier: Optional[Expr] = None  # The "when Condition" barrier expression
+    family_index: Optional[str] = None  # For entry family: "for I in Range"
+    decls: list["Decl"] = field(default_factory=list)
+    stmts: list["Stmt"] = field(default_factory=list)
+
+
+@dataclass
 class ProtectedTypeDecl(Decl):
     """Protected type declaration."""
 
