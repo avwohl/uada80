@@ -12,9 +12,9 @@ from typing import Optional
 
 from uada80.ast_nodes import Program
 from uada80.parser import parse, ParseError
-from uada80.semantic import analyze, SemanticError, SemanticResult
+from uada80.semantic import analyze, SemanticResult
 from uada80.lowering import lower_to_ir
-from uada80.codegen import generate_z80
+from uada80.codegen import generate_z80, Z80CodeGen
 from uada80.ir import IRModule
 from uada80.optimizer import ASTOptimizer, OptimizerConfig, OptimizationStats
 
@@ -90,12 +90,14 @@ class Compiler:
         debug: bool = False,
         optimize: bool = True,
         optimization_level: int = 2,
+        emit_inline_runtime: bool = False,
     ):
         self.output_format = output_format
         self.debug = debug
         self.optimize = optimize
         self.optimization_level = optimization_level
         self.peephole_optimize = optimize and HAS_PEEPHOLE
+        self.emit_inline_runtime = emit_inline_runtime  # False = use libada.lib
 
     def compile(
         self,
@@ -136,7 +138,7 @@ class Compiler:
         # Phase 2: Semantic analysis
         try:
             semantic_result = analyze(ast)
-        except SemanticError as e:
+        except Exception as e:
             result.errors.append(
                 CompilerError(
                     phase="semantic",
@@ -193,7 +195,7 @@ class Compiler:
 
         # Phase 5: Code generation
         try:
-            asm = generate_z80(ir)
+            asm = generate_z80(ir, emit_inline_runtime=self.emit_inline_runtime)
         except Exception as e:
             result.errors.append(
                 CompilerError(
@@ -318,7 +320,7 @@ class Compiler:
         # Phase 2: Semantic analysis on combined AST
         try:
             semantic_result = analyze(combined_ast)
-        except SemanticError as e:
+        except Exception as e:
             result.errors.append(
                 CompilerError(
                     phase="semantic",
@@ -372,7 +374,7 @@ class Compiler:
 
         # Phase 5: Code generation
         try:
-            asm = generate_z80(ir)
+            asm = generate_z80(ir, emit_inline_runtime=self.emit_inline_runtime)
         except Exception as e:
             result.errors.append(
                 CompilerError(

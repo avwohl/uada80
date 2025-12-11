@@ -289,6 +289,7 @@ class IRModule:
     globals: dict[str, tuple[IRType, int]] = field(default_factory=dict)  # name -> (type, size)
     string_literals: dict[str, str] = field(default_factory=dict)  # label -> value
     vtables: dict[str, list[str]] = field(default_factory=dict)  # vtable_name -> [proc_names]
+    runtime_deps: set[str] = field(default_factory=set)  # Runtime routines needed from libada.lib
 
     def add_function(self, func: IRFunction) -> None:
         """Add a function to the module."""
@@ -301,6 +302,10 @@ class IRModule:
     def add_string(self, label: str, value: str) -> None:
         """Add a string literal."""
         self.string_literals[label] = value
+
+    def need_runtime(self, routine_name: str) -> None:
+        """Mark a runtime library routine as needed."""
+        self.runtime_deps.add(routine_name)
 
     def __repr__(self) -> str:
         lines = [f"module {self.name}"]
