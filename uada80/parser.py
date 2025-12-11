@@ -1826,10 +1826,14 @@ class Parser:
         # Check for record representation clause
         if self.match(TokenType.RECORD):
             component_clauses = []
-            while not self.check(TokenType.END):
+            while not self.check(TokenType.END, TokenType.EOF):
+                start_pos = self.pos
                 comp = self.parse_component_clause()
                 if comp:
                     component_clauses.append(comp)
+                elif self.pos == start_pos:
+                    # No progress - skip token to avoid infinite loop
+                    self.advance()
             self.expect(TokenType.END)
             self.expect(TokenType.RECORD)
             self.expect(TokenType.SEMICOLON)
@@ -2042,13 +2046,18 @@ class Parser:
             components = []
             variant_part = None
 
-            while not self.check(TokenType.END):
+            while not self.check(TokenType.END, TokenType.EOF):
+                start_pos = self.pos
                 if self.match(TokenType.CASE):
                     variant_part = self.parse_variant_part()
                     break
                 else:
                     comp = self.parse_component_declaration()
-                    components.append(comp)
+                    if comp:
+                        components.append(comp)
+                    elif self.pos == start_pos:
+                        # No progress - skip to avoid infinite loop
+                        self.advance()
 
             self.expect(TokenType.END)
             self.expect(TokenType.RECORD)
@@ -2111,8 +2120,14 @@ class Parser:
                 self.advance()  # consume WITH
                 self.advance()  # consume RECORD
                 components = []
-                while not self.check(TokenType.END):
-                    components.append(self.parse_component_declaration())
+                while not self.check(TokenType.END, TokenType.EOF):
+                    start_pos = self.pos
+                    comp = self.parse_component_declaration()
+                    if comp:
+                        components.append(comp)
+                    elif self.pos == start_pos:
+                        # No progress - skip to avoid infinite loop
+                        self.advance()
                 self.expect(TokenType.END)
                 self.expect(TokenType.RECORD)
                 record_extension = RecordTypeDef(components=components)
@@ -2188,8 +2203,14 @@ class Parser:
             if self.match(TokenType.NULL):
                 self.expect(TokenType.SEMICOLON)
             else:
-                while not self.check(TokenType.WHEN, TokenType.END):
-                    components.append(self.parse_component_declaration())
+                while not self.check(TokenType.WHEN, TokenType.END, TokenType.EOF):
+                    start_pos = self.pos
+                    comp = self.parse_component_declaration()
+                    if comp:
+                        components.append(comp)
+                    elif self.pos == start_pos:
+                        # No progress - skip to avoid infinite loop
+                        self.advance()
 
             variants.append(Variant(choices=choices, components=components))
 

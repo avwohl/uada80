@@ -87,6 +87,7 @@ from uada80.ast_nodes import (
     TargetName,
     ProtectedTypeDecl,
     ProtectedBody,
+    EntryBody,
 )
 from uada80.ir import (
     IRType,
@@ -176,6 +177,50 @@ class ASTLowering:
         # Procedures marked as interrupt handlers (need special prologue/epilogue)
         self._is_interrupt_handler: set[str] = set()
 
+    def _make_memory_location(
+        self,
+        symbol_name: str,
+        is_global: bool = False,
+        offset: int = 0,
+        base: Optional[VReg] = None,
+        ir_type: IRType = IRType.WORD,
+        symbol: Optional[Symbol] = None
+    ) -> MemoryLocation:
+        """Create a MemoryLocation with atomic/volatile flags from symbol.
+
+        This helper ensures that when we access variables marked with pragma Atomic
+        or pragma Volatile, the MemoryLocation has the appropriate flags set so that
+        codegen can emit DI/EI brackets for atomic access or avoid caching for volatile.
+
+        Also handles explicit address clauses (for Obj'Address use N;) for
+        memory-mapped hardware registers.
+        """
+        is_atomic = False
+        is_volatile = False
+        actual_symbol_name = symbol_name
+
+        # Get atomic/volatile from provided symbol
+        if symbol is None:
+            symbol = self.symbols.lookup(symbol_name)
+
+        if symbol:
+            is_atomic = symbol.is_atomic
+            is_volatile = symbol.is_volatile
+            # Check for explicit address clause
+            if symbol.explicit_address is not None:
+                # Use the explicit address as the symbol name (numeric address)
+                actual_symbol_name = f"0x{symbol.explicit_address:04X}"
+
+        return MemoryLocation(
+            base=base,
+            offset=offset,
+            is_global=is_global,
+            symbol_name=actual_symbol_name,
+            is_atomic=is_atomic,
+            is_volatile=is_volatile,
+            ir_type=ir_type,
+        )
+
     def lower(self, program: Program) -> IRModule:
         """Lower an entire program to IR."""
         module = self.builder.new_module("main")
@@ -211,20 +256,61 @@ class ASTLowering:
             self._generate_vtable(tagged_type)
 
     def _generate_vtable(self, tagged_type: RecordType) -> None:
-        """Generate a vtable for a tagged type."""
+        """Generate a vtable for a tagged type.
+
+        The vtable layout is:
+        - Offset 0: Parent vtable pointer (null for root types) - for 'in T'Class' check
+        - Offset 2+: Primitive operation addresses (one 16-bit address per slot)
+
+        Each primitive operation has a fixed slot index that's consistent across
+        the inheritance hierarchy, so derived types override at the same slot.
+        """
         vtable_name = f"_vtable_{tagged_type.name}"
         primitives = tagged_type.all_primitives()
-
-        if not primitives:
-            return
 
         # Add vtable as a global with procedure addresses
         # Each entry is 2 bytes (16-bit address on Z80)
         vtable_data: list[str] = []
+
+        # First entry: parent vtable pointer (for membership tests like "X in T'Class")
+        if tagged_type.parent_type and tagged_type.parent_type.is_tagged:
+            parent_vtable = f"_vtable_{tagged_type.parent_type.name}"
+        else:
+            parent_vtable = "0"  # Null for root tagged types
+        vtable_data.append(parent_vtable)
+
+        # Build a map of operation names to their implementing type
+        # This handles inheritance: use overridden version if present,
+        # otherwise use inherited version
         for op in primitives:
-            # The procedure name is just the operation name
-            # In a full implementation, we'd need the mangled name
-            vtable_data.append(op.name)
+            # Find the actual implementation - check if this type overrides it
+            impl_name = None
+            found_local = False
+
+            # Check if this type has its own implementation
+            for local_op in tagged_type.primitive_ops:
+                if local_op.name.lower() == op.name.lower():
+                    impl_name = f"{tagged_type.name}_{op.name}"
+                    found_local = True
+                    break
+
+            if not found_local:
+                # Use inherited implementation - walk up to find it
+                search_type = tagged_type.parent_type
+                while search_type and isinstance(search_type, RecordType):
+                    for parent_op in search_type.primitive_ops:
+                        if parent_op.name.lower() == op.name.lower():
+                            impl_name = f"{search_type.name}_{op.name}"
+                            break
+                    if impl_name:
+                        break
+                    search_type = getattr(search_type, 'parent_type', None)
+
+            if impl_name:
+                vtable_data.append(impl_name)
+            else:
+                # Fallback to just the operation name
+                vtable_data.append(op.name)
 
         # Store vtable info in the module for codegen
         self.builder.module.vtables[vtable_name] = vtable_data
@@ -590,11 +676,9 @@ class ASTLowering:
             for global_name, init_expr in self._pending_pkg_inits:
                 # Evaluate the initializer
                 value = self._lower_expr(init_expr)
-                # Store to global variable
-                global_mem = MemoryLocation(
-                    is_global=True,
-                    symbol_name=global_name,
-                    ir_type=IRType.WORD
+                # Store to global variable (with atomic/volatile flags)
+                global_mem = self._make_memory_location(
+                    global_name, is_global=True, ir_type=IRType.WORD
                 )
                 self.builder.emit(IRInstr(
                     OpCode.STORE, global_mem, value,
@@ -717,18 +801,60 @@ class ASTLowering:
         self._generic_prefix = None
 
     def _build_generic_type_map(self, formals: list, actuals: list) -> dict[str, str]:
-        """Build a mapping from formal generic parameters to actual parameters."""
+        """Build a mapping from formal generic parameters to actual parameters.
+
+        Handles:
+        - Type parameters: formal type -> actual type name
+        - Subprogram parameters: formal subprogram -> actual subprogram name
+        - Object parameters: formal object -> actual object
+        """
         type_map: dict[str, str] = {}
-        for i, formal in enumerate(formals):
-            if i < len(actuals):
-                formal_name = formal.name if hasattr(formal, "name") else str(formal)
-                actual = actuals[i]
+        actual_idx = 0
+
+        for formal in formals:
+            if actual_idx >= len(actuals):
+                break
+
+            formal_name = formal.name if hasattr(formal, "name") else str(formal)
+            actual = actuals[actual_idx]
+
+            # Get actual parameter name (handles both positional and named)
+            if hasattr(actual, 'selector') and actual.selector:
+                # Named association: Formal => Actual
                 actual_name = (
                     actual.value.name
                     if hasattr(actual.value, "name")
                     else str(actual.value)
                 )
+            else:
+                # Positional association
+                actual_name = (
+                    actual.value.name
+                    if hasattr(actual.value, "name")
+                    else str(actual.value)
+                )
+
+            # Handle different kinds of generic formals
+            from uada80.ast_nodes import GenericSubprogramDecl, GenericTypeDecl, GenericObjectDecl
+
+            if isinstance(formal, GenericSubprogramDecl):
+                # Formal subprogram -> actual subprogram mapping
+                # The actual is a subprogram name to call instead of the formal
                 type_map[formal_name.lower()] = actual_name
+                # Also store with _subp suffix for disambiguation during call lowering
+                type_map[f"_subp_{formal_name.lower()}"] = actual_name
+            elif isinstance(formal, GenericTypeDecl):
+                # Formal type -> actual type mapping
+                type_map[formal_name.lower()] = actual_name
+            elif isinstance(formal, GenericObjectDecl):
+                # Formal object -> actual value/variable
+                type_map[formal_name.lower()] = actual_name
+            else:
+                # Default: just map the name
+                type_map[formal_name.lower()] = actual_name
+
+            actual_idx += 1
+
         return type_map
 
     def _block_has_return(self, block: Optional[BasicBlock]) -> bool:
@@ -1031,24 +1157,57 @@ class ASTLowering:
         self.builder.pop(temp)
 
     def _register_for_finalization(self, name: str, local, ada_type) -> None:
-        """Register a controlled object for finalization at scope exit."""
+        """Register a controlled object for finalization at scope exit.
+
+        Uses the runtime finalization chain (_fin_register) so that
+        finalization happens correctly even on exceptions.
+        """
         if self.ctx is None:
             return
-        # Store info for finalization when scope exits
-        if not hasattr(self.ctx, 'finalization_list'):
-            self.ctx.finalization_list = []
-        self.ctx.finalization_list.append((name, local, ada_type))
+
+        # Get object address
+        obj_addr = self.builder.new_vreg(IRType.PTR, "_fin_obj")
+        obj_mem = MemoryLocation(base=local.vreg, offset=0, ir_type=IRType.PTR)
+        self.builder.lea(obj_addr, obj_mem, comment=f"addr of {name}")
+
+        # Get finalize procedure address
+        fin_name = f"{ada_type.name}_Finalize"
+        fin_addr = self.builder.new_vreg(IRType.PTR, "_fin_proc")
+        fin_mem = MemoryLocation(is_global=True, symbol_name=fin_name, ir_type=IRType.PTR)
+        self.builder.lea(fin_addr, fin_mem, comment=f"Finalize proc for {ada_type.name}")
+
+        # Call _fin_register(obj_addr, fin_addr)
+        # Calling convention: HL = obj_ptr, DE = fin_proc
+        # Store obj_addr to HL
+        self.builder.emit(IRInstr(
+            OpCode.MOV,
+            MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+            obj_addr,
+            comment="obj ptr to HL"
+        ))
+        # Store fin_addr to DE
+        self.builder.emit(IRInstr(
+            OpCode.MOV,
+            MemoryLocation(is_global=False, symbol_name="_DE", ir_type=IRType.WORD),
+            fin_addr,
+            comment="fin proc to DE"
+        ))
+        self.builder.call(Label("_fin_register"), comment="register for finalization")
+
+    def _emit_scope_push(self) -> None:
+        """Emit a scope push for controlled types finalization."""
+        self.builder.call(Label("_fin_push_scope"), comment="push finalization scope")
+
+    def _emit_scope_pop(self) -> None:
+        """Emit a scope pop that finalizes all controlled objects in current scope."""
+        self.builder.call(Label("_fin_pop_scope"), comment="pop finalization scope")
 
     def _generate_finalizations(self) -> None:
-        """Generate finalization calls for all registered controlled objects."""
+        """Generate finalization by popping the scope (calls all Finalize in reverse order)."""
         if self.ctx is None:
             return
-        if not hasattr(self.ctx, 'finalization_list'):
-            return
-
-        # Finalize in reverse order of declaration (LIFO)
-        for name, local, ada_type in reversed(self.ctx.finalization_list):
-            self._call_finalize(local.vreg, ada_type)
+        # The scope-based finalization handles the LIFO ordering automatically
+        self._emit_scope_pop()
 
     def _check_discriminant_constraints(self, obj_ptr, ada_type, disc_values: dict) -> None:
         """Check discriminant constraints for a record object.
@@ -1226,6 +1385,8 @@ class ASTLowering:
         for item in decl.items:
             if isinstance(item, SubprogramBody):
                 self._lower_protected_operation(decl.name, item, prot_sym.ada_type)
+            elif isinstance(item, EntryBody):
+                self._lower_protected_entry(decl.name, item, prot_sym.ada_type)
 
     def _lower_protected_operation(self, prot_name: str, body: SubprogramBody, prot_type: ProtectedType) -> None:
         """Lower a protected operation (procedure/function) body.
@@ -1288,6 +1449,168 @@ class ASTLowering:
             result_local = self.ctx.locals.get("_result")
             if result_local:
                 self.builder.push(result_local.vreg)
+        self.builder.ret()
+
+        # Restore context
+        self.ctx = old_ctx
+
+    def _lower_protected_entry(self, prot_name: str, entry: EntryBody, prot_type: ProtectedType) -> None:
+        """Lower a protected entry body with barrier.
+
+        Protected entries have a barrier condition that must be true for callers
+        to be served. If the barrier is false, callers are queued and serviced
+        later when the barrier becomes true (re-evaluated on each exit from a
+        protected operation).
+
+        Entry families are entries indexed by a discrete range:
+            entry Get_Item(for I in 1..10) when Ready(I) is ...
+
+        Each index value has its own queue and barrier condition that may
+        depend on the index.
+
+        Generated code:
+        1. Entry point that checks barrier (with index for families)
+        2. If barrier false, queue caller and yield
+        3. If barrier true, acquire lock and execute body
+        4. Release lock and return
+        """
+        # Save current context
+        old_ctx = self.ctx
+
+        # Create the entry name (Protected_Name.Entry_Name)
+        entry_name = f"{prot_name}_{entry.name}"
+
+        # Create IR function for this entry
+        ir_func = IRFunction(name=entry_name)
+        if self.builder.module:
+            self.builder.module.functions.append(ir_func)
+
+        # Create entry block
+        entry_block = BasicBlock(name=f"L_{entry_name}_start")
+        ir_func.blocks.append(entry_block)
+        self.builder.set_function(ir_func)
+        self.builder.set_block(entry_block)
+
+        # Create new context
+        self.ctx = LoweringContext(function=ir_func)
+
+        # The protected object address is passed as first implicit parameter
+        prot_obj = self.builder.new_vreg(IRType.PTR, "_protected_obj")
+        self.builder.pop(prot_obj)
+
+        # Handle entry family index if present
+        # For entry families, the index is passed as the second implicit parameter
+        family_index_vreg = None
+        if entry.family_index:
+            # Pop the family index from stack
+            family_index_vreg = self.builder.new_vreg(IRType.WORD, "_family_index")
+            self.builder.pop(family_index_vreg)
+            # Make the family index available as a local variable
+            # so it can be used in the barrier expression and body
+            family_local = LocalVariable(
+                name=entry.family_index,
+                vreg=family_index_vreg,
+                size=2,
+                offset=self.ctx.locals_size if self.ctx else 0,
+                ada_type=None  # Type from family_index range
+            )
+            if self.ctx:
+                self.ctx.locals[entry.family_index.lower()] = family_local
+
+        # Check barrier if present
+        barrier_recheck_label = self._new_label("barrier_recheck")
+        barrier_ok_label = self._new_label("barrier_ok")
+
+        # Entry point for barrier rechecking
+        barrier_block = self.builder.new_block(barrier_recheck_label)
+        self.builder.jmp(Label(barrier_recheck_label))
+        self.builder.set_block(barrier_block)
+
+        if entry.barrier:
+            # Acquire lock briefly to evaluate barrier
+            self.builder.push(prot_obj)
+            self.builder.call(Label("_protected_lock"))
+            temp = self.builder.new_vreg(IRType.WORD, "_discard")
+            self.builder.pop(temp)
+
+            # Evaluate barrier condition (may reference family index)
+            barrier_val = self._lower_expr(entry.barrier)
+
+            # Release lock after barrier evaluation
+            self.builder.push(prot_obj)
+            self.builder.call(Label("_protected_unlock"))
+            self.builder.pop(temp)
+
+            # If barrier true, continue; else queue and wait
+            self.builder.jnz(barrier_val, Label(barrier_ok_label))
+
+            # Barrier is false - queue this call and yield
+            queue_label = self._new_label("entry_queue")
+            queue_block = self.builder.new_block(queue_label)
+            self.builder.set_block(queue_block)
+
+            # Queue the entry call (runtime will re-evaluate barrier later)
+            # For entry families, we need to store the family index with the queue entry
+            self.builder.push(prot_obj)
+            # Entry ID combines base entry ID with family index
+            base_entry_id = hash(entry.name) & 0xFFFF
+            if family_index_vreg:
+                # entry_id = base_id * 256 + family_index
+                # This allows up to 256 indices per family (adjustable)
+                scaled_base = self.builder.new_vreg(IRType.WORD, "_entry_id")
+                self.builder.emit(IRInstr(
+                    OpCode.MUL, scaled_base,
+                    Immediate(base_entry_id, IRType.WORD),
+                    Immediate(256, IRType.WORD),
+                    comment="scale base entry id"
+                ))
+                combined_id = self.builder.new_vreg(IRType.WORD, "_combined_id")
+                self.builder.emit(IRInstr(
+                    OpCode.ADD, combined_id, scaled_base, family_index_vreg,
+                    comment="combine with family index"
+                ))
+                self.builder.push(combined_id)
+            else:
+                self.builder.push(Immediate(base_entry_id, IRType.WORD))
+            self.builder.call(Label("_protected_entry_queue"))
+            self.builder.pop(temp)
+            self.builder.pop(temp)
+
+            # Jump back to recheck barrier
+            self.builder.jmp(Label(barrier_recheck_label))
+
+        # Barrier OK block - acquire lock and execute
+        ok_block = self.builder.new_block(barrier_ok_label)
+        self.builder.set_block(ok_block)
+
+        # Acquire lock for body execution
+        self.builder.push(prot_obj)
+        self.builder.call(Label("_protected_lock"))
+        temp = self.builder.new_vreg(IRType.WORD, "_temp")
+        self.builder.pop(temp)
+
+        # Set up parameters
+        self._setup_parameters(entry.parameters)
+
+        # Lower declarations
+        for d in entry.decls:
+            self._lower_declaration(d)
+
+        # Lower statements
+        for stmt in entry.stmts:
+            self._lower_statement(stmt)
+
+        # Release lock
+        self.builder.push(prot_obj)
+        self.builder.call(Label("_protected_unlock"))
+        self.builder.pop(temp)
+
+        # Re-evaluate all entry barriers (someone may now be able to proceed)
+        self.builder.push(prot_obj)
+        self.builder.call(Label("_protected_reeval_barriers"))
+        self.builder.pop(temp)
+
+        # Return
         self.builder.ret()
 
         # Restore context
@@ -1693,18 +2016,55 @@ class ASTLowering:
 
         elif pragma_name == "import":
             # pragma Import(Convention, Entity, External_Name);
-            # Link external routine - handled during linking
-            pass
+            # Link external routine - mark symbol as imported
+            args = getattr(stmt, 'args', None) or getattr(stmt, 'arguments', [])
+            if len(args) >= 2:
+                # args[0] = convention (C, Ada, Intrinsic, etc.)
+                # args[1] = entity name
+                # args[2] = optional external name
+                conv = args[0].name.lower() if isinstance(args[0], Identifier) else "c"
+                entity_name = args[1].name if isinstance(args[1], Identifier) else str(args[1])
+                external = None
+                if len(args) >= 3:
+                    if isinstance(args[2], StringLiteral):
+                        external = args[2].value
+                    elif isinstance(args[2], Identifier):
+                        external = args[2].name
+                sym = self.symbols.lookup(entity_name) if hasattr(self, 'symbols') else None
+                if sym:
+                    sym.is_imported = True
+                    sym.calling_convention = conv
+                    sym.external_name = external if external else entity_name
 
         elif pragma_name == "export":
             # pragma Export(Convention, Entity, External_Name);
             # Export routine for external linking
-            pass
+            args = getattr(stmt, 'args', None) or getattr(stmt, 'arguments', [])
+            if len(args) >= 2:
+                conv = args[0].name.lower() if isinstance(args[0], Identifier) else "c"
+                entity_name = args[1].name if isinstance(args[1], Identifier) else str(args[1])
+                external = None
+                if len(args) >= 3:
+                    if isinstance(args[2], StringLiteral):
+                        external = args[2].value
+                    elif isinstance(args[2], Identifier):
+                        external = args[2].name
+                sym = self.symbols.lookup(entity_name) if hasattr(self, 'symbols') else None
+                if sym:
+                    sym.is_exported = True
+                    sym.calling_convention = conv
+                    sym.external_name = external if external else entity_name
 
         elif pragma_name == "convention":
             # pragma Convention(Convention, Entity);
-            # Specify calling convention
-            pass
+            # Specify calling convention without import/export
+            args = getattr(stmt, 'args', None) or getattr(stmt, 'arguments', [])
+            if len(args) >= 2:
+                conv = args[0].name.lower() if isinstance(args[0], Identifier) else "ada"
+                entity_name = args[1].name if isinstance(args[1], Identifier) else str(args[1])
+                sym = self.symbols.lookup(entity_name) if hasattr(self, 'symbols') else None
+                if sym:
+                    sym.calling_convention = conv
 
         elif pragma_name == "volatile":
             # pragma Volatile(Object);
@@ -1921,8 +2281,66 @@ class ASTLowering:
 
         elif pragma_name == "loop_variant":
             # pragma Loop_Variant(Increases => X | Decreases => Y);
-            # Termination proof - compile-time only for Z80
-            pass
+            # Runtime check that variant changes in expected direction
+            # This helps catch infinite loops during debugging
+            args = getattr(stmt, 'args', None) or getattr(stmt, 'arguments', [])
+            for arg in args:
+                selector = getattr(arg, 'selector', None)
+                value_expr = getattr(arg, 'value', arg)
+
+                # Get the previous value (stored at end of last iteration)
+                var_name = self._expr_to_name(value_expr)
+                prev_name = f"_variant_prev_{var_name}"
+
+                # Get current value
+                current_val = self._lower_expr(value_expr)
+
+                # Check if previous value was initialized
+                if prev_name.lower() in (self.ctx.locals if self.ctx else {}):
+                    prev_local = self.ctx.locals[prev_name.lower()]
+                    prev_val = prev_local.vreg
+
+                    ok_label = self._new_label("variant_ok")
+
+                    if selector and selector.lower() == "decreases":
+                        # Current should be < previous
+                        self.builder.cmp(current_val, prev_val)
+                        self.builder.jl(Label(ok_label))  # OK if current < prev
+                    elif selector and selector.lower() == "increases":
+                        # Current should be > previous
+                        self.builder.cmp(current_val, prev_val)
+                        self.builder.jg(Label(ok_label))  # OK if current > prev
+                    else:
+                        # Default: decreases
+                        self.builder.cmp(current_val, prev_val)
+                        self.builder.jl(Label(ok_label))
+
+                    # Variant didn't change as expected - raise exception
+                    exc_id = self._get_exception_id("Assertion_Error")
+                    self.builder.emit(IRInstr(
+                        OpCode.EXC_RAISE,
+                        src1=Immediate(exc_id, IRType.WORD),
+                        comment="loop variant check failed",
+                    ))
+                    self.builder.label(ok_label)
+
+                    # Update previous value for next iteration
+                    self.builder.mov(prev_val, current_val)
+                else:
+                    # First iteration - store initial value as previous
+                    prev_vreg = self.builder.new_vreg(IRType.WORD, prev_name)
+                    self.builder.mov(prev_vreg, current_val)
+                    # Register it as a local for next iteration
+                    if self.ctx:
+                        prev_local = LocalVariable(
+                            name=prev_name,
+                            vreg=prev_vreg,
+                            size=2,
+                            offset=self.ctx.locals_size,
+                            ada_type=None
+                        )
+                        self.ctx.locals[prev_name.lower()] = prev_local
+                        self.ctx.locals_size += 2
 
         elif pragma_name == "precondition":
             # pragma Precondition(Condition);
@@ -2710,6 +3128,21 @@ class ASTLowering:
             # Handle Ada.Text_IO.Put_Line etc.
             proc_name = stmt.name.selector.lower()
 
+        # Check for generic formal subprogram substitution
+        # If we're inside a generic instantiation and the called name is a formal subprogram,
+        # replace it with the actual subprogram
+        if self._generic_type_map:
+            subp_key = f"_subp_{proc_name}"
+            if subp_key in self._generic_type_map:
+                # This is a call to a generic formal subprogram - substitute the actual
+                actual_name = self._generic_type_map[subp_key]
+                proc_name = actual_name.lower()
+                # Update stmt.name to point to actual subprogram
+                stmt = ProcedureCallStmt(
+                    name=Identifier(actual_name),
+                    args=stmt.args
+                )
+
         # Check for Text_IO built-in procedures
         if proc_name in ("put", "put_line", "new_line", "get", "get_line"):
             self._lower_text_io_call(proc_name, stmt.args)
@@ -2725,9 +3158,13 @@ class ASTLowering:
             sym = self._resolve_overload(stmt.name.name, stmt.args)
 
             # Determine the call target - use external name if imported
+            # or runtime_name for built-in container operations
             call_target = stmt.name.name
             if sym:
-                if sym.is_imported and sym.external_name:
+                if sym.runtime_name:
+                    # Built-in container/library operation
+                    call_target = sym.runtime_name
+                elif sym.is_imported and sym.external_name:
                     call_target = sym.external_name
                 else:
                     call_target = sym.name
@@ -2775,12 +3212,13 @@ class ASTLowering:
         # Look up the symbol to check if it's a deallocation procedure
         sym = self.symbols.lookup(proc_name)
         if sym:
-            # Check if marked as a deallocation procedure
-            if hasattr(sym, 'is_deallocation') and sym.is_deallocation:
+            # Check if marked as a deallocation procedure (from generic instantiation)
+            if sym.is_deallocation:
                 return True
 
-        # Also check for common names used for Free
-        if proc_name in ("free", "deallocate", "release"):
+        # Also check for common names used for Free (heuristic fallback)
+        lower_name = proc_name.lower()
+        if lower_name in ("free", "deallocate", "release"):
             return True
 
         return False
@@ -2845,6 +3283,109 @@ class ASTLowering:
                     return True
 
         return False
+
+    def _can_inline(self, sym: Symbol, args: list) -> bool:
+        """Check if a function call can be inlined.
+
+        Inlining is possible when:
+        1. The function has a definition we can access
+        2. The function is not recursive
+        3. The function body is simple enough (few statements)
+        4. We're not already inlining (prevent infinite recursion)
+        """
+        # Check for function definition
+        func_def = getattr(sym, 'definition', None)
+        if func_def is None:
+            return False
+
+        # Check if we're already inlining to prevent infinite recursion
+        if hasattr(self, '_inline_depth') and self._inline_depth > 3:
+            return False
+
+        # Import here to avoid circular imports
+        from uada80.parser import SubprogramBody
+
+        if not isinstance(func_def, SubprogramBody):
+            return False
+
+        # Check statement count - only inline small functions
+        body_stmts = getattr(func_def, 'statements', [])
+        if len(body_stmts) > 10:
+            return False
+
+        # Don't inline functions with local declarations (variables, nested subprograms)
+        decls = getattr(func_def, 'declarations', [])
+        if len(decls) > 5:
+            return False
+
+        # Don't inline functions with exception handlers
+        if getattr(func_def, 'handlers', None):
+            return False
+
+        return True
+
+    def _inline_function_call(self, sym: Symbol, args: list, result_vreg) -> None:
+        """Inline a function call by generating its body directly.
+
+        This replaces the call instruction with the function's body statements,
+        with parameters replaced by the actual arguments.
+        """
+        from uada80.parser import SubprogramBody, ReturnStmt
+
+        # Track inline depth
+        if not hasattr(self, '_inline_depth'):
+            self._inline_depth = 0
+        self._inline_depth += 1
+
+        try:
+            func_def = sym.definition
+            if not isinstance(func_def, SubprogramBody):
+                # Fall back to regular call
+                self.builder.call(Label(sym.name))
+                return
+
+            # Save current context
+            old_ctx = self.ctx
+            old_inline_params = getattr(self, '_inline_params', {})
+
+            # Create mapping from parameter names to argument values
+            self._inline_params = {}
+            for i, param in enumerate(sym.parameters):
+                if i < len(args) and args[i].value:
+                    param_name = param.name.lower()
+                    arg_value = self._lower_expr(args[i].value)
+                    self._inline_params[param_name] = arg_value
+
+            # Generate unique labels for this inline instance
+            inline_id = self._get_unique_label()
+            inline_end_label = f"_inline_end_{inline_id}"
+
+            self.builder.emit(IRInstr(OpCode.NOP, comment=f"begin inline {sym.name}"))
+
+            # Process function body statements
+            for stmt in func_def.statements:
+                if isinstance(stmt, ReturnStmt):
+                    # For return statements, evaluate expression and store to result
+                    if stmt.expression:
+                        ret_val = self._lower_expr(stmt.expression)
+                        self.builder.mov(result_vreg, ret_val,
+                                        comment=f"inline return value")
+                    # Jump to end of inline block
+                    self.builder.emit(IRInstr(OpCode.JMP, dst=Label(inline_end_label),
+                                             comment="exit inline"))
+                else:
+                    # Lower other statements normally
+                    self._lower_statement(stmt)
+
+            # Emit end label
+            self.builder.emit(IRInstr(OpCode.LABEL, dst=Label(inline_end_label)))
+            self.builder.emit(IRInstr(OpCode.NOP, comment=f"end inline {sym.name}"))
+
+            # Restore context
+            self._inline_params = old_inline_params
+
+        finally:
+            self._inline_depth -= 1
 
     def _is_unconstrained_array_arg(self, sym: Optional[Symbol], arg_idx: int) -> bool:
         """Check if a parameter at given index expects an unconstrained array.
@@ -3185,7 +3726,9 @@ class ASTLowering:
                 self.builder.emit(IRInstr(
                     OpCode.LEA,
                     dst=addr,
-                    src1=MemoryLocation(is_global=True, symbol_name=name, ir_type=IRType.PTR),
+                    src1=self._make_memory_location(
+                        name, is_global=True, ir_type=IRType.PTR, symbol=sym
+                    ),
                 ))
                 return addr
 
@@ -3363,7 +3906,9 @@ class ASTLowering:
                 self.builder.emit(IRInstr(
                     OpCode.LEA,
                     dst=addr,
-                    src1=MemoryLocation(is_global=True, symbol_name=name, ir_type=IRType.PTR),
+                    src1=self._make_memory_location(
+                        name, is_global=True, ir_type=IRType.PTR, symbol=sym
+                    ),
                 ))
                 return addr
 
@@ -3633,24 +4178,58 @@ class ASTLowering:
         designated_type = self._resolve_type(expr.type_mark)
         if designated_type:
             size = designated_type.size_bytes()
+            # Tagged types need an extra 2 bytes at offset 0 for the tag (vtable ptr)
+            is_tagged = (isinstance(designated_type, RecordType) and
+                        designated_type.is_tagged and
+                        not designated_type.is_class_wide)
+            if is_tagged:
+                size += 2  # Add space for tag
         else:
             size = 2  # Default to word size
+            is_tagged = False
 
-        # Allocate heap memory using calling convention:
-        # 1. Push size argument
-        # 2. Call _heap_alloc
-        # 3. Result returned in designated vreg (convention: function returns in first vreg)
-        # 4. Clean up stack
+        # Check for custom storage pool
+        # Access types can have a storage pool specified via representation clause
+        storage_pool = None
+        if hasattr(expr, 'subtype_mark'):
+            access_type_name = self._get_type_name_from_expr(expr.subtype_mark) if expr.subtype_mark else None
+            if access_type_name:
+                access_sym = self.symbols.lookup(access_type_name)
+                if access_sym and isinstance(access_sym.ada_type, AccessType):
+                    storage_pool = access_sym.ada_type.storage_pool
 
+        # Allocate using storage pool
         size_val = Immediate(size, IRType.WORD)
-        self.builder.push(size_val, comment=f"alloc size {size}")
 
-        # Call heap allocator
-        self.builder.call(Label("_heap_alloc"), comment="allocate heap memory")
+        if storage_pool:
+            # Use custom storage pool
+            # Load pool dispatch table address
+            pool_addr = self.builder.new_vreg(IRType.PTR, "_pool_addr")
+            pool_mem = MemoryLocation(is_global=True, symbol_name=f"_{storage_pool}_pool", ir_type=IRType.PTR)
+            self.builder.lea(pool_addr, pool_mem, comment=f"pool {storage_pool}")
 
-        # Clean up stack (pop the size argument)
-        temp = self.builder.new_vreg(IRType.WORD, "_discard")
-        self.builder.pop(temp)
+            # Store size in DE, pool addr in HL
+            self.builder.emit(IRInstr(
+                OpCode.MOV,
+                MemoryLocation(is_global=False, symbol_name="_DE", ir_type=IRType.WORD),
+                size_val,
+                comment="size to DE"
+            ))
+            self.builder.emit(IRInstr(
+                OpCode.MOV,
+                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                pool_addr,
+                comment="pool to HL"
+            ))
+            self.builder.call(Label("_pool_alloc"), comment=f"alloc from {storage_pool}")
+            # No stack cleanup needed - _pool_alloc uses registers
+        else:
+            # Default: use _heap_alloc directly
+            self.builder.push(size_val, comment=f"alloc size {size}")
+            self.builder.call(Label("_heap_alloc"), comment="allocate heap memory")
+            # Clean up stack (pop the size argument)
+            temp = self.builder.new_vreg(IRType.WORD, "_discard")
+            self.builder.pop(temp)
 
         # Result is returned in HL (Z80 convention), capture it in a vreg
         result = self.builder.new_vreg(IRType.PTR, "_alloc_ptr")
@@ -3661,10 +4240,24 @@ class ASTLowering:
             comment="capture heap result from HL"
         ))
 
+        # Initialize tag for tagged types (vtable pointer at offset 0)
+        if is_tagged:
+            vtable_name = f"_vtable_{designated_type.name}"
+            vtable_addr = MemoryLocation(
+                is_global=True, symbol_name=vtable_name, ir_type=IRType.PTR
+            )
+            tag_loc = MemoryLocation(base=result, offset=0, ir_type=IRType.PTR)
+            # Load vtable address and store as tag
+            vtable_val = self.builder.new_vreg(IRType.PTR, "_vtable_addr")
+            self.builder.lea(vtable_val, vtable_addr, comment=f"vtable addr for {designated_type.name}")
+            self.builder.store(tag_loc, vtable_val, comment="init tag (vtable ptr)")
+
         # If there's an initial value, store it
         if expr.initial_value:
             init_val = self._lower_expr(expr.initial_value)
-            mem = MemoryLocation(base=result, offset=0, ir_type=IRType.WORD)
+            # For tagged types, data starts at offset 2 (after the tag)
+            data_offset = 2 if is_tagged else 0
+            mem = MemoryLocation(base=result, offset=data_offset, ir_type=IRType.WORD)
             self.builder.store(mem, init_val)
 
         return result
@@ -4029,6 +4622,49 @@ class ASTLowering:
                         self.builder.jmp(match_label)
                         self.builder.label(next_choice.name)
                         continue
+
+                # Check for T'Class attribute (class-wide membership test)
+                if isinstance(choice.expr, AttributeRef) and choice.expr.attribute.lower() == "class":
+                    # X in T'Class - check if X's tag is in T's class hierarchy
+                    base_type_name = self._get_type_name_from_expr(choice.expr.prefix)
+                    if base_type_name:
+                        type_sym = self.symbols.lookup(base_type_name)
+                        if type_sym and isinstance(type_sym.ada_type, RecordType) and type_sym.ada_type.is_tagged:
+                            # Get object's tag (vtable pointer at offset 0)
+                            obj_tag = self.builder.new_vreg(IRType.PTR, "_obj_tag")
+                            obj_mem = MemoryLocation(base=test_val, offset=0, ir_type=IRType.PTR)
+                            self.builder.load(obj_tag, obj_mem, comment="get object's tag")
+
+                            # Get target type's vtable address
+                            vtable_name = f"_vtable_{type_sym.ada_type.name}"
+                            vtable_addr = self.builder.new_vreg(IRType.PTR, "_target_vtable")
+                            vtable_mem = MemoryLocation(is_global=True, symbol_name=vtable_name, ir_type=IRType.PTR)
+                            self.builder.lea(vtable_addr, vtable_mem, comment="target type vtable")
+
+                            # Push args for _class_membership: obj_tag in HL, target in DE
+                            # Call returns 1 if in class, 0 if not
+                            self.builder.push(vtable_addr, comment="target vtable")
+                            self.builder.push(obj_tag, comment="object tag")
+                            self.builder.call(Label("_class_membership"), comment="check class membership")
+
+                            # Clean stack
+                            temp1 = self.builder.new_vreg(IRType.WORD, "_discard1")
+                            temp2 = self.builder.new_vreg(IRType.WORD, "_discard2")
+                            self.builder.pop(temp1)
+                            self.builder.pop(temp2)
+
+                            # Capture result from HL
+                            membership_result = self.builder.new_vreg(IRType.WORD, "_cm_result")
+                            self.builder.emit(IRInstr(
+                                OpCode.MOV, membership_result,
+                                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                                comment="capture class membership result"
+                            ))
+
+                            # Branch based on result
+                            self.builder.jnz(membership_result, match_label)
+                            self.builder.label(next_choice.name)
+                            continue
 
                 # Single value test (equality)
                 choice_val = self._lower_expr(choice.expr)
@@ -4961,6 +5597,10 @@ class ASTLowering:
 
         name = expr.name.lower()
 
+        # Check inline parameters first (for inlined function calls)
+        if hasattr(self, '_inline_params') and name in self._inline_params:
+            return self._inline_params[name]
+
         # Check locals
         if name in self.ctx.locals:
             return self.ctx.locals[name].vreg
@@ -5487,6 +6127,32 @@ class ASTLowering:
 
         return best_match if best_match else overloads[0]
 
+    def _get_type_name_from_expr(self, expr: Expr) -> Optional[str]:
+        """Get the type name from an expression (for type references)."""
+        if isinstance(expr, Identifier):
+            return expr.name
+        elif isinstance(expr, SelectedName):
+            # Package.Type -> Type
+            return expr.selector
+        elif isinstance(expr, AttributeRef):
+            # T'Base, T'Class etc. -> T
+            return self._get_type_name_from_expr(expr.prefix)
+        return None
+
+    def _expr_to_name(self, expr) -> str:
+        """Convert an expression to a string name (for generating unique identifiers)."""
+        if isinstance(expr, Identifier):
+            return expr.name
+        elif isinstance(expr, SelectedName):
+            return f"{self._expr_to_name(expr.prefix)}_{expr.selector}"
+        elif isinstance(expr, IndexedComponent):
+            return f"{self._expr_to_name(expr.prefix)}_idx"
+        elif isinstance(expr, IntegerLiteral):
+            return f"lit_{expr.value}"
+        else:
+            # Fallback - use hash to generate unique name
+            return f"expr_{hash(str(expr)) & 0xFFFF:04x}"
+
     def _get_expr_type(self, expr: Expr) -> Optional[AdaType]:
         """Get the Ada type of an expression."""
         if isinstance(expr, IntegerLiteral):
@@ -5520,6 +6186,27 @@ class ASTLowering:
             func_name = expr.name.name.lower()
         elif isinstance(expr.name, SelectedName):
             func_name = expr.name.selector.lower()
+
+        # Check for generic formal subprogram substitution
+        # If we're inside a generic instantiation and the called name is a formal function,
+        # replace it with the actual function
+        if self._generic_type_map:
+            subp_key = f"_subp_{func_name}"
+            if subp_key in self._generic_type_map:
+                # This is a call to a generic formal function - substitute the actual
+                actual_name = self._generic_type_map[subp_key]
+                func_name = actual_name.lower()
+                # Update expr.name to point to actual function
+                expr = FunctionCall(
+                    name=Identifier(actual_name),
+                    args=expr.args
+                )
+
+        # Check for Unchecked_Conversion instantiation call
+        sym = self.symbols.lookup(func_name)
+        if sym and sym.is_unchecked_conversion and len(expr.args) >= 1:
+            # Unchecked_Conversion just returns the bit pattern unchanged
+            return self._lower_expr(expr.args[0].value)
 
         # Handle Shift_Left intrinsic
         if func_name == "shift_left" and len(expr.args) >= 2:
@@ -5603,9 +6290,13 @@ class ASTLowering:
                     return self._lower_indirect_call(expr, sym)
 
             # Determine the call target - use external name if imported
+            # or runtime_name for built-in container operations
             call_target = expr.name.name
             if sym:
-                if sym.is_imported and sym.external_name:
+                if sym.runtime_name:
+                    # Built-in container/library operation
+                    call_target = sym.runtime_name
+                elif sym.is_imported and sym.external_name:
                     call_target = sym.external_name
                 else:
                     call_target = sym.name
@@ -5646,6 +6337,16 @@ class ASTLowering:
                         src2=Immediate(sym.vtable_slot, IRType.WORD),
                         comment=f"dispatch {sym.name}"
                     ))
+            elif sym and sym.is_inline and self._can_inline(sym, expr.args):
+                # Inline expansion for pragma Inline functions
+                self._inline_function_call(sym, expr.args, result)
+                # For inline calls, result is already set - just skip normal call path
+                # by returning early after cleanup
+                if stack_slots > 0:
+                    for _ in range(stack_slots):
+                        temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                        self.builder.pop(temp)
+                return result
             else:
                 # Static call (using external name for imported functions)
                 self.builder.call(Label(call_target))

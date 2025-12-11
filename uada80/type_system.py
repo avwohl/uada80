@@ -426,6 +426,8 @@ class RecordType(AdaType):
     # Controlled type support (Ada.Finalization)
     is_controlled: bool = False  # Derives from Controlled
     is_limited_controlled: bool = False  # Derives from Limited_Controlled
+    # Limited types - cannot be assigned or copied
+    is_limited: bool = False  # Explicitly declared as limited
     # Variant part for discriminated records
     variant_part: Optional[VariantPartInfo] = None
 
@@ -621,6 +623,31 @@ class RecordType(AdaType):
             self.parent_type.needs_adjustment()
         )
 
+    def is_limited_type(self) -> bool:
+        """Check if this type is limited (cannot be assigned or copied).
+
+        A type is limited if:
+        - It is explicitly declared as 'limited'
+        - It derives from Limited_Controlled
+        - It has limited components
+        - Its parent type is limited
+        """
+        if self.is_limited or self.is_limited_controlled:
+            return True
+        # Check parent
+        if self.parent_type and isinstance(self.parent_type, RecordType):
+            if self.parent_type.is_limited_type():
+                return True
+        # Check if any component is limited
+        for comp in self.components:
+            if comp.component_type and hasattr(comp.component_type, 'is_limited_type'):
+                if comp.component_type.is_limited_type():
+                    return True
+            elif isinstance(comp.component_type, RecordType):
+                if comp.component_type.is_limited_type():
+                    return True
+        return False
+
 
 @dataclass
 class AccessType(AdaType):
@@ -630,6 +657,7 @@ class AccessType(AdaType):
     is_access_all: bool = False  # 'access all' can point to aliased objects
     is_access_constant: bool = False  # 'access constant' for read-only
     is_not_null: bool = False  # 'not null access' cannot be null
+    storage_pool: Optional[str] = None  # Name of storage pool (None = default pool)
 
     def __post_init__(self) -> None:
         self.kind = TypeKind.ACCESS
