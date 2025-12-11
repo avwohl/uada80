@@ -235,12 +235,12 @@ def test_output_has_header():
 
 
 def test_output_has_code_section():
-    """Test that output has .code section."""
+    """Test that output has code section."""
     source = "procedure Test is begin null; end Test;"
     result = compile_source(source)
 
     assert result.success
-    assert ".code" in result.output
+    assert "CSEG" in result.output or ".code" in result.output  # MACRO-80 or generic syntax
 
 
 def test_function_generates_ret():
