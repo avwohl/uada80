@@ -3586,8 +3586,14 @@ class SemanticAnalyzer:
             )
             return None
 
-        # Return the designated type
-        return prefix_type.designated_type
+        # Return the designated type, resolving incomplete types
+        designated = prefix_type.designated_type
+        if designated and designated.kind == TypeKind.INCOMPLETE:
+            # Try to find the completed type
+            completed = self.symbols.lookup_type(designated.name)
+            if completed:
+                designated = completed
+        return designated
 
     def _analyze_identifier(self, expr: Identifier, expected_type: Optional[AdaType] = None) -> Optional[AdaType]:
         """Analyze an identifier expression.
