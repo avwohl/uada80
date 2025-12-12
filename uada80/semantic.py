@@ -1223,6 +1223,13 @@ class SemanticAnalyzer:
         # Enter package scope
         self.symbols.enter_scope(body.name)
 
+        # Make package specification symbols visible in the body
+        # This includes both public and private declarations from the spec
+        for sym in pkg_symbol.public_symbols.values():
+            self.symbols.define(sym)
+        for sym in pkg_symbol.private_symbols.values():
+            self.symbols.define(sym)
+
         # Process declarations
         for decl in body.declarations:
             self._analyze_declaration(decl)
