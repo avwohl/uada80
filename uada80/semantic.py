@@ -1492,7 +1492,8 @@ class SemanticAnalyzer:
                 existing.ada_type and
                 existing.ada_type.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE)):
                 # This is completing an incomplete or private type - update the existing symbol
-                ada_type = self._build_type(decl.name, decl.type_def)
+                is_tagged = getattr(decl, 'is_tagged', False)
+                ada_type = self._build_type(decl.name, decl.type_def, is_tagged)
 
                 # Add discriminants to record types
                 if isinstance(ada_type, RecordType) and decl.discriminants:
@@ -1517,7 +1518,8 @@ class SemanticAnalyzer:
                 return
         else:
             # Build the type
-            ada_type = self._build_type(decl.name, decl.type_def)
+            is_tagged = getattr(decl, 'is_tagged', False)
+            ada_type = self._build_type(decl.name, decl.type_def, is_tagged)
 
             # Add discriminants to record types
             if isinstance(ada_type, RecordType) and decl.discriminants:
@@ -2154,7 +2156,7 @@ class SemanticAnalyzer:
     # Type Building
     # =========================================================================
 
-    def _build_type(self, name: str, type_def: Optional[TypeDef]) -> Optional[AdaType]:
+    def _build_type(self, name: str, type_def: Optional[TypeDef], is_tagged: bool = False) -> Optional[AdaType]:
         """Build an AdaType from a type definition."""
         if type_def is None:
             # Incomplete type
@@ -2169,7 +2171,7 @@ class SemanticAnalyzer:
         elif isinstance(type_def, ArrayTypeDef):
             return self._build_array_type(name, type_def)
         elif isinstance(type_def, RecordTypeDef):
-            return self._build_record_type(name, type_def)
+            return self._build_record_type(name, type_def, is_tagged)
         elif isinstance(type_def, AccessTypeDef):
             return self._build_access_type(name, type_def)
         elif isinstance(type_def, AccessSubprogramTypeDef):
@@ -2279,7 +2281,7 @@ class SemanticAnalyzer:
         )
 
     def _build_record_type(
-        self, name: str, type_def: RecordTypeDef
+        self, name: str, type_def: RecordTypeDef, is_tagged: bool = False
     ) -> RecordType:
         """Build a record type."""
         components: list[RecordComponent] = []
@@ -2319,7 +2321,8 @@ class SemanticAnalyzer:
         is_limited = getattr(type_def, 'is_limited', False)
 
         return RecordType(name=name, size_bits=0, components=components,
-                          variant_part=variant_part, is_limited=is_limited)
+                          variant_part=variant_part, is_limited=is_limited,
+                          is_tagged=is_tagged)
 
     def _build_access_type(
         self, name: str, type_def: AccessTypeDef
@@ -2387,6 +2390,9 @@ class SemanticAnalyzer:
             if type_def.record_extension:
                 for comp_decl in type_def.record_extension.components:
                     comp_type = self._resolve_type(comp_decl.type_mark)
+                    # If type couldn't be resolved, use a placeholder type
+                    if comp_type is None:
+                        comp_type = IntegerType(name="_unknown", size_bits=16, low=0, high=0)
                     for comp_name in comp_decl.names:
                         components.append(
                             RecordComponent(name=comp_name, component_type=comp_type)
