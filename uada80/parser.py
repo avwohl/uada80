@@ -155,14 +155,33 @@ class Parser:
         )
 
     def parse_context_clause(self) -> list[WithClause | UseClause]:
-        """Parse context clause (with and use clauses)."""
-        clauses = []
+        """Parse context clause (with, use clauses, and context pragmas).
 
-        while self.check(TokenType.WITH, TokenType.USE):
+        In Ada, pragmas like ELABORATE, ELABORATE_ALL, and ELABORATE_BODY
+        can appear in the context clause area before a library unit.
+        """
+        clauses: list[WithClause | UseClause] = []
+
+        while self.check(TokenType.WITH, TokenType.USE, TokenType.PRAGMA):
             if self.match(TokenType.WITH):
                 clauses.append(self.parse_with_clause())
             elif self.match(TokenType.USE):
                 clauses.append(self.parse_use_clause())
+            elif self.match(TokenType.PRAGMA):
+                # Skip context pragmas (ELABORATE, ELABORATE_ALL, etc.)
+                # They don't affect visibility, only elaboration order
+                self.expect_identifier()  # pragma name
+                if self.match(TokenType.LEFT_PAREN):
+                    # Skip pragma arguments
+                    depth = 1
+                    while depth > 0 and not self.check(TokenType.EOF):
+                        if self.match(TokenType.LEFT_PAREN):
+                            depth += 1
+                        elif self.match(TokenType.RIGHT_PAREN):
+                            depth -= 1
+                        else:
+                            self.advance()
+                self.expect(TokenType.SEMICOLON)
 
         return clauses
 
