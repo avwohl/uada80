@@ -34,6 +34,7 @@ from uada80.ast_nodes import (
     TaskTypeDecl,
     TaskBody,
     EntryDecl,
+    EntryBody,
     ProtectedTypeDecl,
     ProtectedBody,
     # Statements
@@ -2143,12 +2144,77 @@ class SemanticAnalyzer:
                 )
                 self.symbols.define(comp_sym)
 
+        # Add entries to scope (for requeue targets)
+        if prot_type and hasattr(prot_type, 'entries'):
+            for entry in prot_type.entries:
+                entry_sym = Symbol(
+                    name=entry.name,
+                    kind=SymbolKind.ENTRY,
+                )
+                self.symbols.define(entry_sym)
+
+        # Get entry names from the protected type to identify entry bodies
+        entry_names = set()
+        if prot_type and hasattr(prot_type, 'entries'):
+            for entry in prot_type.entries:
+                entry_names.add(entry.name.lower())
+
         # Analyze each item in the body
         for item in body.items:
-            if isinstance(item, SubprogramBody):
-                self._analyze_subprogram_body(item)
+            if isinstance(item, EntryBody):
+                self._analyze_entry_body(item)
+            elif isinstance(item, SubprogramBody):
+                # Check if this is an entry body (matched by name)
+                subprog_name = item.spec.name.lower() if item.spec else ""
+                if subprog_name in entry_names:
+                    # Entry body - set flag for requeue
+                    old_in_accept_or_entry = self.in_accept_or_entry
+                    self.in_accept_or_entry = True
+                    self._analyze_subprogram_body(item)
+                    self.in_accept_or_entry = old_in_accept_or_entry
+                else:
+                    self._analyze_subprogram_body(item)
             else:
                 self._analyze_declaration(item)
+
+        self.symbols.leave_scope()
+
+    def _analyze_entry_body(self, body: EntryBody) -> None:
+        """Analyze an entry body in a protected type."""
+        # Analyze the barrier condition if present
+        if body.barrier:
+            barrier_type = self._analyze_expr(body.barrier)
+            if barrier_type:
+                bool_type = PREDEFINED_TYPES.get("Boolean")
+                if bool_type and not types_compatible(barrier_type, bool_type):
+                    self.error(
+                        f"entry barrier must be Boolean, got '{barrier_type.name}'",
+                        body.barrier,
+                    )
+
+        # Enter entry body scope
+        self.symbols.enter_scope(body.name)
+
+        # Add parameters to scope
+        for param in body.parameters:
+            param_type = self._resolve_param_type(param.type_mark, param.mode)
+            for name in param.names:
+                self.symbols.define(Symbol(
+                    name=name,
+                    kind=SymbolKind.VARIABLE,
+                    ada_type=param_type,
+                ))
+
+        # Analyze declarations
+        for decl in body.decls:
+            self._analyze_declaration(decl)
+
+        # Analyze statements with in_accept_or_entry set (for requeue)
+        old_in_accept_or_entry = self.in_accept_or_entry
+        self.in_accept_or_entry = True
+        for stmt in body.stmts:
+            self._analyze_statement(stmt)
+        self.in_accept_or_entry = old_in_accept_or_entry
 
         self.symbols.leave_scope()
 
