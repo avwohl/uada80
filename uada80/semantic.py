@@ -1075,10 +1075,11 @@ class SemanticAnalyzer:
         # Check number of actual parameters (accounting for defaults)
         num_formals = len(generic_decl.generic_formals)
         num_actuals = len(inst.actual_parameters)
-        # Count formals with default values
+        # Count formals with default values (including 'is <>' box defaults)
         num_with_defaults = sum(
             1 for f in generic_decl.generic_formals
-            if hasattr(f, 'default_value') and f.default_value is not None
+            if (hasattr(f, 'default_value') and f.default_value is not None) or
+               (hasattr(f, 'is_box') and f.is_box)
         )
         min_required = num_formals - num_with_defaults
 
@@ -1226,10 +1227,11 @@ class SemanticAnalyzer:
             # Check number of actual parameters (accounting for defaults)
             num_formals = len(generic_decl.formals)
             num_actuals = len(inst.actual_parameters)
-            # Count formals with default values
+            # Count formals with default values (including 'is <>' box defaults)
             num_with_defaults = sum(
                 1 for f in generic_decl.formals
-                if hasattr(f, 'default_value') and f.default_value is not None
+                if (hasattr(f, 'default_value') and f.default_value is not None) or
+                   (hasattr(f, 'is_box') and f.is_box)
             )
             min_required = num_formals - num_with_defaults
 
