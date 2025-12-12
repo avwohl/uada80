@@ -785,6 +785,14 @@ class SemanticAnalyzer:
         """Analyze a parameter specification."""
         param_type = self._resolve_type(param.type_mark)
 
+        # Access parameters have access mode - wrap type in AccessType
+        if param.mode == "access" and param_type:
+            param_type = AccessType(
+                name=f"access_{param_type.name}",
+                designated_type=param_type,
+                is_access_all=True,  # Access parameters can access aliased objects
+            )
+
         for name in param.names:
             param_symbol = Symbol(
                 name=name,
