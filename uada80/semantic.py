@@ -3101,6 +3101,34 @@ class SemanticAnalyzer:
                             arg.value,
                         )
 
+    def _check_access_subprogram_call_expr(
+        self, access_type: AccessSubprogramType, args: list, node: ASTNode
+    ) -> None:
+        """Check arguments for a function call through access type in expression context.
+
+        Unlike _check_access_subprogram_call, the args here are raw expressions
+        (from IndexedComponent.indices), not ArgumentAssociation objects.
+        """
+        num_params = len(access_type.parameter_types)
+        num_args = len(args)
+
+        if num_args != num_params:
+            self.error(
+                f"wrong number of arguments: expected {num_params}, got {num_args}",
+                node,
+            )
+            return
+
+        for i, (arg, param_type) in enumerate(zip(args, access_type.parameter_types)):
+            arg_type = self._analyze_expr(arg)
+            if arg_type and param_type:
+                if not types_compatible(param_type, arg_type):
+                    self.error(
+                        f"type mismatch for parameter {i + 1}: "
+                        f"expected '{param_type.name}', got '{arg_type.name}'",
+                        arg,
+                    )
+
     def _check_boolean(self, t: Optional[AdaType], node: ASTNode) -> None:
         """Check that a type is Boolean."""
         if t is None:
@@ -3743,6 +3771,23 @@ class SemanticAnalyzer:
                             expr
                         )
                 return target_type
+
+            # Check if prefix is an access-to-function variable (function pointer call)
+            if symbol and symbol.kind in (SymbolKind.VARIABLE, SymbolKind.CONSTANT):
+                if isinstance(symbol.ada_type, AccessSubprogramType):
+                    if symbol.ada_type.is_function:
+                        # This is a function call through access type: Func_Ptr(args)
+                        self._check_access_subprogram_call_expr(
+                            symbol.ada_type, expr.indices, expr
+                        )
+                        return symbol.ada_type.return_type
+                    else:
+                        self.error(
+                            f"'{expr.prefix.name}' is an access-to-procedure, "
+                            "cannot be used in an expression",
+                            expr,
+                        )
+                        return None
 
         # Otherwise, it's array indexing
         prefix_type = self._analyze_expr(expr.prefix)
