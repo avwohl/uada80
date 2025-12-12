@@ -916,7 +916,7 @@ class SemanticAnalyzer:
 
         # Process generic formal parameters first
         for formal in pkg.generic_formals:
-            self._analyze_generic_formal(formal)
+            self._analyze_generic_formal(formal, pkg_symbol)
 
         # Process public declarations
         for decl in pkg.declarations:
@@ -962,9 +962,18 @@ class SemanticAnalyzer:
         if "." in parent_name:
             self._import_parent_package_symbols(parent_name)
 
-    def _analyze_generic_formal(self, formal) -> None:
-        """Analyze a generic formal parameter."""
+    def _analyze_generic_formal(self, formal, owner_symbol: Optional[Symbol] = None) -> None:
+        """Analyze a generic formal parameter.
+
+        Args:
+            formal: The generic formal AST node
+            owner_symbol: Optional symbol of the generic package/subprogram that owns this formal.
+                         If provided, the formal symbol is stored on this symbol for later
+                         retrieval when analyzing the generic body.
+        """
         from uada80.ast_nodes import GenericObjectDecl, GenericSubprogramDecl
+
+        sym = None  # The symbol we'll create for this formal
 
         if isinstance(formal, GenericTypeDecl):
             # Create a placeholder type for the generic type formal
@@ -1001,6 +1010,7 @@ class SemanticAnalyzer:
                 name=formal.name,
             )
             self.symbols.define(type_sym)
+            sym = type_sym
 
         elif isinstance(formal, GenericObjectDecl):
             # Generic formal object: X : in Integer := 0
@@ -1018,21 +1028,30 @@ class SemanticAnalyzer:
                 if type_sym and type_sym.ada_type:
                     obj_sym.ada_type = type_sym.ada_type
             self.symbols.define(obj_sym)
+            sym = obj_sym
 
         elif hasattr(formal, '__class__') and formal.__class__.__name__ == 'GenericSubprogramDecl':
             # Generic formal subprogram
             # The formal subprogram declares a subprogram name that will be
             # substituted with an actual subprogram at instantiation
-            subp_spec = getattr(formal, 'spec', None) or getattr(formal, 'subprogram', None)
-            if subp_spec:
-                subp_name = getattr(subp_spec, 'name', 'unknown')
-                is_function = getattr(subp_spec, 'is_function', False)
+            # GenericSubprogramDecl has: name, kind (function/procedure), params, return_type
+            subp_name = getattr(formal, 'name', None)
+            if subp_name:
+                is_function = getattr(formal, 'kind', 'procedure') == 'function'
                 subp_sym = Symbol(
                     name=subp_name,
                     kind=SymbolKind.FUNCTION if is_function else SymbolKind.PROCEDURE,
                 )
                 subp_sym.is_generic_formal = True
+                # Store return type for functions
+                if is_function and hasattr(formal, 'return_type'):
+                    subp_sym.return_type = self._resolve_type(formal.return_type)
                 self.symbols.define(subp_sym)
+                sym = subp_sym
+
+        # Store the formal symbol on the owner for later retrieval in body analysis
+        if sym is not None and owner_symbol is not None:
+            owner_symbol.generic_formal_symbols[sym.name.lower()] = sym
 
     def _analyze_generic_instantiation(self, inst: GenericInstantiation) -> None:
         """Analyze a generic instantiation."""
@@ -1281,6 +1300,10 @@ class SemanticAnalyzer:
 
         # Enter package scope
         self.symbols.enter_scope(body.name)
+
+        # Make generic formal symbols visible in the body (for generic packages)
+        for sym in pkg_symbol.generic_formal_symbols.values():
+            self.symbols.define(sym)
 
         # Make package specification symbols visible in the body
         # This includes both public and private declarations from the spec
@@ -2608,6 +2631,38 @@ class SemanticAnalyzer:
                 interfaces=interfaces,
                 is_controlled=is_controlled,
                 is_limited_controlled=is_limited_controlled,
+                is_limited=is_limited,
+            )
+
+        # Handle derivation from interface type with record extension
+        # e.g., type Circle is new Shape with record Radius : Float; end record;
+        if isinstance(parent, InterfaceType) and type_def.record_extension:
+            # Build components from record extension
+            components: list[RecordComponent] = []
+            for comp_decl in type_def.record_extension.components:
+                comp_type = self._resolve_type(comp_decl.type_mark)
+                if comp_type is None:
+                    comp_type = IntegerType(name="_unknown", size_bits=16, low=0, high=0)
+                for comp_name in comp_decl.names:
+                    components.append(
+                        RecordComponent(name=comp_name, component_type=comp_type)
+                    )
+
+            # Resolve additional interfaces
+            interfaces: list[InterfaceType] = [parent]  # The parent interface
+            for iface_expr in type_def.interfaces:
+                iface_type = self._resolve_type(iface_expr)
+                if isinstance(iface_type, InterfaceType):
+                    interfaces.append(iface_type)
+
+            is_limited = getattr(type_def, 'is_limited', False) or parent.is_limited
+
+            return RecordType(
+                name=name,
+                is_tagged=True,
+                parent_type=None,  # No record parent, only interfaces
+                components=components,
+                interfaces=interfaces,
                 is_limited=is_limited,
             )
 

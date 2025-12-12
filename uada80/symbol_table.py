@@ -100,6 +100,9 @@ class Symbol:
     is_deallocation: bool = False  # Instance of Ada.Unchecked_Deallocation
     is_unchecked_conversion: bool = False  # Instance of Ada.Unchecked_Conversion
 
+    # For generic packages/subprograms: store the formal parameter symbols
+    generic_formal_symbols: dict[str, "Symbol"] = field(default_factory=dict)
+
     # For built-in container operations
     runtime_name: Optional[str] = None  # Runtime function name (e.g., "_vec_append")
     is_container_op: bool = False  # True if this is a container operation
