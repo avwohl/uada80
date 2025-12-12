@@ -3236,8 +3236,75 @@ class SemanticAnalyzer:
                 self.error(f"'{stmt.name.name}' is not a procedure", stmt)
                 return
 
+            # Try to resolve overloaded call
+            overloads = self.symbols.all_overloads(stmt.name.name)
+            overloads = [o for o in overloads if o.kind in (SymbolKind.PROCEDURE, SymbolKind.FUNCTION)]
+
+            if len(overloads) > 1:
+                # Multiple overloads - find the best match
+                best_match = self._resolve_overloaded_call(overloads, stmt.args, stmt)
+                if best_match:
+                    symbol = best_match
+
             # Check arguments
             self._check_call_arguments(symbol, stmt.args, stmt)
+
+    def _resolve_overloaded_call(
+        self, overloads: list[Symbol], args: list, node: ASTNode
+    ) -> Optional[Symbol]:
+        """Resolve an overloaded call to the best matching subprogram.
+
+        Returns the best matching symbol, or None if no match found.
+        """
+        # Analyze argument types first
+        arg_types = []
+        for arg in args:
+            if arg.value:
+                arg_type = self._analyze_expr(arg.value)
+                arg_types.append(arg_type)
+            else:
+                arg_types.append(None)
+
+        # Find matching overloads
+        matches = []
+        for candidate in overloads:
+            num_params = len(candidate.parameters)
+            num_args = len(args)
+
+            # Count default parameters
+            num_with_defaults = sum(
+                1 for p in candidate.parameters if p.default_value is not None
+            )
+            min_required = num_params - num_with_defaults
+
+            if num_args < min_required or num_args > num_params:
+                continue  # Wrong number of arguments
+
+            # Check type compatibility for each argument
+            all_match = True
+            exact_matches = 0
+            for i, (arg_type, param) in enumerate(zip(arg_types, candidate.parameters)):
+                if arg_type is None or param.ada_type is None:
+                    continue
+                if not types_compatible(param.ada_type, arg_type):
+                    all_match = False
+                    break
+                # Count exact type matches for preference
+                if arg_type.name == param.ada_type.name:
+                    exact_matches += 1
+
+            if all_match:
+                matches.append((candidate, exact_matches))
+
+        if not matches:
+            return None  # No match found, will report error later
+
+        if len(matches) == 1:
+            return matches[0][0]
+
+        # Prefer the one with most exact matches
+        matches.sort(key=lambda x: x[1], reverse=True)
+        return matches[0][0]
 
     def _check_call_arguments(
         self, subprog: Symbol, args: list, node: ASTNode
