@@ -38,7 +38,7 @@ def test_ir_type_from_bits():
     assert ir_type_from_bits(1) == IRType.BYTE
     assert ir_type_from_bits(8) == IRType.BYTE
     assert ir_type_from_bits(16) == IRType.WORD
-    assert ir_type_from_bits(32) == IRType.WORD
+    assert ir_type_from_bits(32) == IRType.DWORD  # 32-bit values use DWORD
 
 
 # ============================================================================

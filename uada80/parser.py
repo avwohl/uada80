@@ -256,6 +256,26 @@ class Parser:
     # Names and Expressions
     # ========================================================================
 
+    def parse_dotted_name(self) -> str:
+        """
+        Parse a dotted name and return it as a string.
+
+        Used for package names which can be child packages like Ada.Text_IO.
+        """
+        parts = [self.expect_identifier()]
+        while self.match(TokenType.DOT):
+            parts.append(self.expect_identifier())
+        return ".".join(parts)
+
+    def name_to_string(self, name: Expr) -> str:
+        """Convert a name expression (Identifier or SelectedName) to a string."""
+        if isinstance(name, Identifier):
+            return name.name
+        elif isinstance(name, SelectedName):
+            return self.name_to_string(name.prefix) + "." + name.selector
+        else:
+            return str(name)
+
     def parse_qualified_name(self) -> Expr:
         """
         Parse a qualified name (identifier or selected component only).
@@ -371,6 +391,18 @@ class Parser:
             attr = keyword_attributes[self.current.type]
             self.advance()
             return attr
+        else:
+            return self.expect_identifier()
+
+    def _parse_enumeration_literal(self) -> str:
+        """Parse an enumeration literal (identifier or character literal).
+
+        Ada enumeration types can contain both identifiers and character literals:
+            type Mixed is (Red, 'R', Green, 'G', Blue, 'B');
+        """
+        if self.check(TokenType.CHARACTER_LITERAL):
+            token = self.advance()
+            return token.value  # Return the character literal including quotes
         else:
             return self.expect_identifier()
 
@@ -2012,9 +2044,9 @@ class Parser:
         # Enumeration type
         if self.match(TokenType.LEFT_PAREN):
             literals = []
-            literals.append(self.expect_identifier())
+            literals.append(self._parse_enumeration_literal())
             while self.match(TokenType.COMMA):
-                literals.append(self.expect_identifier())
+                literals.append(self._parse_enumeration_literal())
             self.expect(TokenType.RIGHT_PAREN)
             return EnumerationTypeDef(literals=literals)
 
@@ -2109,6 +2141,14 @@ class Parser:
             parent_type = self.parse_name()
             record_extension = None
             interfaces: list[Expr] = []
+            constraint = None
+
+            # Check for range constraint: range Low .. High
+            if self.match(TokenType.RANGE):
+                low = self.parse_expression()
+                self.expect(TokenType.DOUBLE_DOT)
+                high = self.parse_expression()
+                constraint = RangeExpr(low=low, high=high)
 
             # Parse implemented interfaces: and Interface1 and Interface2
             while self.match(TokenType.AND):
@@ -2132,7 +2172,7 @@ class Parser:
                 self.expect(TokenType.RECORD)
                 record_extension = RecordTypeDef(components=components)
 
-            return DerivedTypeDef(parent_type=parent_type, record_extension=record_extension, interfaces=interfaces)
+            return DerivedTypeDef(parent_type=parent_type, record_extension=record_extension, interfaces=interfaces, constraint=constraint)
 
         # Private type
         if self.match(TokenType.PRIVATE):
@@ -2598,12 +2638,15 @@ class Parser:
     parse_formal_parameters = parse_parameter_specifications
 
     def parse_package(self) -> PackageDecl | PackageBody:
-        """Parse package declaration or body."""
+        """Parse package declaration or body.
+
+        Supports child packages with dotted names like Ada.Text_IO.
+        """
         start = self.current
         self.expect(TokenType.PACKAGE)
 
         is_body = self.match(TokenType.BODY)
-        name = self.expect_identifier()
+        name = self.parse_dotted_name()  # Support dotted names for child packages
 
         if is_body:
             return self.parse_package_body(name, start)
@@ -2631,8 +2674,9 @@ class Parser:
             private_declarations = self.parse_declarative_part()
 
         self.expect(TokenType.END)
+        # Skip optional end name (can be dotted like Ada.Text_IO)
         if self.check(TokenType.IDENTIFIER):
-            self.advance()  # Optional package name
+            self.parse_dotted_name()  # Consume the end name
         self.expect(TokenType.SEMICOLON)
 
         return PackageDecl(
@@ -2659,8 +2703,9 @@ class Parser:
                 handlers = self.parse_exception_handlers()
 
         self.expect(TokenType.END)
+        # Skip optional end name (can be dotted like Ada.Text_IO)
         if self.check(TokenType.IDENTIFIER):
-            self.advance()
+            self.parse_dotted_name()  # Consume the end name
         self.expect(TokenType.SEMICOLON)
 
         return PackageBody(
@@ -2687,6 +2732,7 @@ class Parser:
             name = self.expect_identifier()
             pkg = self.parse_package_specification(name, start)
             pkg.generic_formals = formals
+            pkg.is_generic = True  # Mark as generic even if no formals
             return pkg
         else:
             # Generic subprogram (procedure or function)
@@ -2874,17 +2920,60 @@ class Parser:
 
             elif self.match(TokenType.PACKAGE):
                 # Generic package formal: with package X is new Generic_Pkg(<>)
+                # or: with package X is new Generic_Pkg (formal => actual, ...)
                 name = self.expect_identifier()
                 self.expect(TokenType.IS)
                 self.expect(TokenType.NEW)
                 generic_ref = self.parse_name()
-                self.expect(TokenType.LEFT_PAREN)
-                self.expect(TokenType.BOX)  # (<>)
-                self.expect(TokenType.RIGHT_PAREN)
-                self.expect(TokenType.SEMICOLON)
-                return GenericPackageDecl(name=name, generic_ref=generic_ref)
 
-        raise ParseError("Generic formal parsing incomplete", self.current)
+                # Parse optional formal parameters
+                actuals = []
+                if self.match(TokenType.LEFT_PAREN):
+                    if self.match(TokenType.BOX):
+                        # (<>) means any instantiation is valid
+                        pass
+                    else:
+                        # Parse actual parameter associations
+                        while True:
+                            if self.match(TokenType.BOX):
+                                actuals.append(("", None))  # Box placeholder
+                            else:
+                                # Named or positional
+                                param = self.parse_expression()
+                                actuals.append(("", param))
+                            if not self.match(TokenType.COMMA):
+                                break
+                    self.expect(TokenType.RIGHT_PAREN)
+                self.expect(TokenType.SEMICOLON)
+                return GenericPackageDecl(name=name, generic_ref=generic_ref, actuals=actuals)
+
+            # Handle 'with type' - formal incomplete type
+            elif self.match(TokenType.TYPE):
+                name = self.expect_identifier()
+                self.expect(TokenType.SEMICOLON)
+                return GenericTypeDecl(name=name, constraint="incomplete")
+
+        # If we get here with an identifier that wasn't handled by 'type', try generic object
+        if self.check(TokenType.IDENTIFIER):
+            # This is a fallback for generic object without explicit 'type' keyword
+            obj_name = self.expect_identifier()
+            if self.match(TokenType.COLON):
+                mode = "in"
+                if self.match(TokenType.IN):
+                    if self.match(TokenType.OUT):
+                        mode = "in out"
+                elif self.match(TokenType.OUT):
+                    mode = "out"
+                type_ref = self.parse_name()
+                default_value = None
+                if self.match(TokenType.ASSIGN):
+                    default_value = self.parse_expression()
+                self.expect(TokenType.SEMICOLON)
+                return GenericObjectDecl(
+                    name=obj_name, mode=mode, type_ref=type_ref, default_value=default_value
+                )
+
+        raise ParseError(f"Unexpected token in generic formal: {self.current.type}", self.current)
 
     def parse_generic_instantiation(self, kind: str, name: str, start: Token) -> GenericInstantiation:
         """Parse generic instantiation: is new Generic_Name(actuals)."""

@@ -13,14 +13,15 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Optional
 
-from uada80.type_system import AdaType, PREDEFINED_TYPES, IntegerType, RecordType
+from uada80.type_system import AdaType, PREDEFINED_TYPES, IntegerType, RecordType, TypeKind
 from uada80.ast_nodes import ASTNode
 
 
 class SymbolKind(Enum):
     """Classification of symbols."""
 
-    VARIABLE = auto()  # Variable or constant
+    VARIABLE = auto()  # Variable
+    CONSTANT = auto()  # Named constant
     TYPE = auto()  # Type declaration
     SUBTYPE = auto()  # Subtype declaration
     PROCEDURE = auto()  # Procedure
@@ -125,15 +126,28 @@ class Scope:
         """Define a symbol in this scope."""
         name_lower = symbol.name.lower()
 
-        # Check for overloading (only allowed for subprograms)
+        # Helper to check if a symbol is an enumeration literal
+        def is_enum_literal(sym: Symbol) -> bool:
+            return (sym.is_constant and
+                    sym.ada_type is not None and
+                    sym.ada_type.kind == TypeKind.ENUMERATION)
+
+        # Check for overloading (allowed for subprograms and enum literals)
         if name_lower in self.symbols:
             existing = self.symbols[name_lower]
+            # Subprogram overloading
             if symbol.kind in (SymbolKind.PROCEDURE, SymbolKind.FUNCTION):
                 if existing.kind in (SymbolKind.PROCEDURE, SymbolKind.FUNCTION):
                     # Add to overload chain
                     symbol.overloaded_next = existing
                     self.symbols[name_lower] = symbol
                     return
+            # Enumeration literal overloading (Ada allows same literal in different enum types)
+            elif is_enum_literal(symbol) and is_enum_literal(existing):
+                # Add to overload chain
+                symbol.overloaded_next = existing
+                self.symbols[name_lower] = symbol
+                return
             # Not overloadable - this is an error caught by semantic analyzer
             # For now, just replace (semantic analyzer will report the error)
 
@@ -1055,6 +1069,24 @@ class SymbolTable:
 
         ada_pkg.public_symbols["unchecked_conversion"] = unchecked_conv
         ada_pkg.public_symbols["unchecked_deallocation"] = unchecked_dealloc
+
+        # Also register at root level - Ada allows direct WITH of these generics
+        # e.g., "with Unchecked_Deallocation;" without the Ada. prefix
+        root_unchecked_conv = Symbol(
+            name="Unchecked_Conversion",
+            kind=SymbolKind.GENERIC_FUNCTION,
+            scope_level=0,
+        )
+        root_unchecked_conv.is_builtin_generic = True
+        self.current_scope.define(root_unchecked_conv)
+
+        root_unchecked_dealloc = Symbol(
+            name="Unchecked_Deallocation",
+            kind=SymbolKind.GENERIC_PROCEDURE,
+            scope_level=0,
+        )
+        root_unchecked_dealloc.is_builtin_generic = True
+        self.current_scope.define(root_unchecked_dealloc)
 
     def _init_calendar(self) -> None:
         """Add Ada.Calendar package for time handling."""
@@ -2057,7 +2089,7 @@ class SymbolTable:
 
     def add_use_clause(self, package_symbol: Symbol) -> None:
         """Add a use clause to the current scope."""
-        if package_symbol.kind != SymbolKind.PACKAGE:
+        if package_symbol.kind not in (SymbolKind.PACKAGE, SymbolKind.GENERIC_PACKAGE):
             raise ValueError(f"'{package_symbol.name}' is not a package")
         self.current_scope.use_clauses.append(package_symbol)
 

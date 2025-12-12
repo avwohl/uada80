@@ -88,6 +88,11 @@ from uada80.ast_nodes import (
     ProtectedTypeDecl,
     ProtectedBody,
     EntryBody,
+    TaskTypeDecl,
+    TaskBody,
+    EntryDecl,
+    SubtypeIndication,
+    ArrayTypeDef,
 )
 from uada80.ir import (
     IRType,
@@ -145,6 +150,10 @@ class LoweringContext:
     assignment_target: Optional[Any] = None  # AST node (Identifier, IndexedComponent, etc.)
     # Named numbers (compile-time constants) in scope
     named_numbers: dict[str, int] = field(default_factory=dict)
+    # For task bodies: the task's ID (for Current_Task attribute, etc.)
+    task_id: Optional[VReg] = None
+    # Stack size for locals
+    locals_size: int = 0
 
 
 class ASTLowering:
@@ -556,6 +565,10 @@ class ASTLowering:
             type_name = param.type_mark
             if isinstance(type_name, Identifier):
                 type_name = type_name.name
+            elif isinstance(type_name, SelectedName):
+                type_name = type_name.selector  # Use just the type name part
+            else:
+                type_name = str(type_name)
             type_sym = self.symbols.lookup(type_name)
             if type_sym and type_sym.ada_type:
                 param_type = type_sym.ada_type
@@ -644,8 +657,8 @@ class ASTLowering:
 
             # Determine size from type
             size = 2  # Default to word
-            if decl.type_expr:
-                ada_type = self._resolve_type(decl.type_expr)
+            if decl.type_mark:
+                ada_type = self._resolve_type(decl.type_mark)
                 if ada_type:
                     size = (ada_type.size_bits + 7) // 8
 
@@ -888,6 +901,10 @@ class ASTLowering:
             self._lower_protected_type_decl(decl)
         elif isinstance(decl, ProtectedBody):
             self._lower_protected_body(decl)
+        elif isinstance(decl, TaskTypeDecl):
+            self._lower_task_type_decl(decl)
+        elif isinstance(decl, TaskBody):
+            self._lower_task_body(decl)
         # Representation clauses are processed during type analysis
         # and affect memory layout, not code generation directly
 
@@ -903,9 +920,19 @@ class ASTLowering:
 
         # Get the type for controlled type checks
         ada_type = None
-        if decl.type_mark and decl.type_mark.type_mark:
-            if isinstance(decl.type_mark.type_mark, Identifier):
-                type_sym = self.symbols.lookup(decl.type_mark.type_mark.name)
+        if decl.type_mark:
+            # Handle SubtypeIndication (normal case) vs ArrayTypeDef (anonymous array)
+            if isinstance(decl.type_mark, SubtypeIndication) and decl.type_mark.type_mark:
+                if isinstance(decl.type_mark.type_mark, Identifier):
+                    type_sym = self.symbols.lookup(decl.type_mark.type_mark.name)
+                    if type_sym:
+                        ada_type = type_sym.ada_type
+            elif isinstance(decl.type_mark, ArrayTypeDef):
+                # Anonymous array type - no controlled type handling needed
+                pass
+            elif isinstance(decl.type_mark, Identifier):
+                # Direct type name
+                type_sym = self.symbols.lookup(decl.type_mark.name)
                 if type_sym:
                     ada_type = type_sym.ada_type
 
@@ -925,7 +952,7 @@ class ASTLowering:
                         self._call_adjust(local.vreg, ada_type)
 
                     # Check type invariant after initialization
-                    if decl.type_mark and decl.type_mark.type_mark:
+                    if decl.type_mark and isinstance(decl.type_mark, SubtypeIndication) and decl.type_mark.type_mark:
                         self._check_type_invariant(local.vreg, decl.type_mark.type_mark)
         else:
             # Default initialization - call Initialize for controlled types
@@ -1048,7 +1075,7 @@ class ASTLowering:
             if self.builder.module:
                 exc_label = f"_exc_{name.lower()}"
                 # Exception info: ID (2 bytes) + name pointer
-                self.builder.module.add_global(exc_label, exc_id)
+                self.builder.module.add_global(exc_label, IRType.WORD, 2)
 
     def _lower_generic_renaming(self, decl: RenamingDecl) -> None:
         """Lower a general renaming declaration.
@@ -1637,6 +1664,201 @@ class ASTLowering:
                                 comment=f"rename {name}")
 
     # =========================================================================
+    # Task Types
+    # =========================================================================
+
+    def _lower_task_type_decl(self, decl: TaskTypeDecl) -> None:
+        """Lower a task type declaration.
+
+        Task types create concurrent units of execution. Each task object
+        has an associated Task Control Block (TCB) that tracks:
+        - Stack pointer and base
+        - Task state (ready, waiting, terminated)
+        - Priority
+        - Entry queue pointers
+
+        The type declaration itself generates no code - it just defines
+        the task's entry points. The task body generates the actual code.
+
+        Single tasks (task T;) are both a type and an object declaration.
+        Task types (task type T;) can have multiple instances.
+        """
+        # Task type declarations are handled during semantic analysis.
+        # The entry points are registered there.
+        # We just need to ensure the task initialization code will be called
+        # when a task object is created (handled in _lower_task_object_decl).
+        pass
+
+    def _lower_task_body(self, decl: TaskBody) -> None:
+        """Lower a task body (implementation of task execution).
+
+        A task body is similar to a procedure body but:
+        1. Runs concurrently with other tasks
+        2. Can contain accept statements for entries
+        3. Continues until it reaches 'end' (termination)
+
+        Generated code:
+        1. Task entry point (called by runtime when task starts)
+        2. Task body statements
+        3. Implicit task termination at end
+        """
+        # Save current context
+        old_ctx = self.ctx
+
+        # Create the task body procedure name
+        task_name = f"_task_body_{decl.name}"
+
+        # Create IR function for this task body (tasks are void procedures)
+        ir_func = IRFunction(name=task_name, return_type=IRType.VOID)
+        if self.builder.module:
+            self.builder.module.functions.append(ir_func)
+
+        # Create entry block
+        entry_block = BasicBlock(label=f"L_{task_name}_start")
+        ir_func.blocks.append(entry_block)
+        self.builder.function = ir_func  # Set current function for builder
+        self.builder.set_block(entry_block)
+
+        # Create new context
+        self.ctx = LoweringContext(function=ir_func)
+
+        # Task body receives task ID as implicit parameter
+        task_id_vreg = self.builder.new_vreg(IRType.WORD, "_task_id")
+        self.builder.pop(task_id_vreg)
+
+        # Store task ID for use by task attributes
+        if self.ctx:
+            self.ctx.task_id = task_id_vreg
+
+        # Lower local declarations
+        for d in decl.declarations:
+            self._lower_declaration(d)
+
+        # Lower task body statements
+        for stmt in decl.statements:
+            self._lower_statement(stmt)
+
+        # Handle exception handlers if present
+        if decl.handled_exception_handlers:
+            self._lower_exception_handlers(decl.handled_exception_handlers)
+
+        # At end of task body, call task termination
+        self.builder.call(Label("_TASK_TERMINATE"))
+
+        # Return (though task terminate doesn't return)
+        self.builder.ret()
+
+        # Restore context
+        self.ctx = old_ctx
+
+        # Generate entry stub functions for each entry in this task
+        # The stubs call the entry queue mechanism
+        self._generate_task_entry_stubs(decl)
+
+    def _generate_task_entry_stubs(self, task_body: TaskBody) -> None:
+        """Generate entry call stub functions for a task's entries.
+
+        When caller does: My_Task.Some_Entry(Params);
+        This calls the stub which:
+        1. Queues the entry call
+        2. Blocks until the task accepts the call
+        3. Returns when the accept body completes
+        """
+        # Look up the task type to get entry declarations
+        if not self.symbols:
+            return
+
+        task_sym = self.symbols.lookup(task_body.name)
+        if not task_sym or not hasattr(task_sym, 'entries'):
+            return
+
+        # For each entry, generate a callable stub
+        entries = getattr(task_sym, 'entries', [])
+        for entry in entries:
+            if isinstance(entry, EntryDecl):
+                self._generate_entry_stub(task_body.name, entry)
+
+    def _generate_entry_stub(self, task_name: str, entry: EntryDecl) -> None:
+        """Generate a single entry call stub function.
+
+        Entry call sequence:
+        1. Push parameters onto stack
+        2. Push entry ID
+        3. Push target task ID
+        4. Call _ENTRY_CALL runtime
+        5. Runtime blocks caller until accept completes
+        """
+        # Save context
+        old_ctx = self.ctx
+
+        # Create stub name (Task_Name_Entry_Name)
+        stub_name = f"{task_name}_{entry.name}"
+
+        # Create IR function (entry stubs are void procedures)
+        ir_func = IRFunction(name=stub_name, return_type=IRType.VOID)
+        if self.builder.module:
+            self.builder.module.functions.append(ir_func)
+
+        # Create entry block
+        entry_block = BasicBlock(label=f"L_{stub_name}_start")
+        ir_func.blocks.append(entry_block)
+        self.builder.function = ir_func  # Set current function for builder
+        self.builder.set_block(entry_block)
+
+        # Create context
+        self.ctx = LoweringContext(function=ir_func)
+
+        # Parameters:
+        # - First implicit param: target task object (contains task ID)
+        # - Then the entry's formal parameters
+
+        # Pop target task object pointer
+        task_obj = self.builder.new_vreg(IRType.PTR, "_task_obj")
+        self.builder.pop(task_obj)
+
+        # Get task ID from task object (stored at offset 0 of task object)
+        task_id = self.builder.new_vreg(IRType.WORD, "_task_id")
+        self.builder.load_mem(task_id, task_obj, 0, IRType.WORD,
+                             comment="get task ID from object")
+
+        # Set up entry parameters if any
+        params_ptr = self.builder.new_vreg(IRType.PTR, "_params_ptr")
+        if entry.parameters:
+            # Allocate parameter block on stack
+            total_param_size = sum(2 for _ in entry.parameters)  # Assume 2 bytes each
+            # Use SP as parameter block pointer
+            self.builder.emit(IRInstr(
+                OpCode.MOV, params_ptr, VReg(0, IRType.PTR, "SP"),
+                comment="params at current SP"
+            ))
+        else:
+            # No parameters - use null pointer
+            self.builder.mov(params_ptr, Immediate(0, IRType.PTR))
+
+        # Compute entry ID (hash of entry name for uniqueness)
+        entry_id = hash(entry.name) & 0xFFFF
+
+        # Push parameters for _ENTRY_CALL: params_ptr, task_id, entry_id
+        self.builder.push(params_ptr)
+        self.builder.push(task_id)
+        self.builder.push(Immediate(entry_id, IRType.WORD))
+
+        # Call runtime entry call
+        self.builder.call(Label("_ENTRY_CALL"))
+
+        # Clean up stack (3 * 2 = 6 bytes)
+        temp = self.builder.new_vreg(IRType.WORD, "_temp")
+        self.builder.pop(temp)
+        self.builder.pop(temp)
+        self.builder.pop(temp)
+
+        # Return
+        self.builder.ret()
+
+        # Restore context
+        self.ctx = old_ctx
+
+    # =========================================================================
     # Statements
     # =========================================================================
 
@@ -1789,8 +2011,9 @@ class ASTLowering:
         # Generate code for each alternative (jump table style)
         for i, alt in enumerate(stmt.alternatives):
             next_label = alt_labels[i + 1] if i + 1 < len(alt_labels) else end_label
-            self.builder.cmp(selected, Immediate(i, IRType.WORD))
-            self.builder.jnz(Label(next_label))
+            cmp_result = self.builder.new_vreg(IRType.WORD, f"cmp_{i}")
+            self.builder.cmp_ne(cmp_result, selected, Immediate(i, IRType.WORD))
+            self.builder.jnz(cmp_result, Label(next_label))
 
             self.builder.label(alt_labels[i])
             # Lower the statements for this alternative
@@ -2421,15 +2644,41 @@ class ASTLowering:
 
         elif pragma_name == "machine_code":
             # pragma Machine_Code(...);
-            # Inline machine code insertion
+            # Inline machine code insertion - multiple forms supported:
+            #   pragma Machine_Code(16#CD#, 16#00#, 16#00#);  -- Raw bytes
+            #   pragma Machine_Code("ld hl, 0");              -- Assembly string
+            #   pragma Machine_Code(Asm("nop"));              -- Asm record
             args = getattr(stmt, 'args', None) or getattr(stmt, 'arguments', [])
             for arg in args:
-                if hasattr(arg, 'value') and isinstance(arg.value, int):
-                    # Emit raw byte
+                if hasattr(arg, 'value'):
+                    if isinstance(arg.value, int):
+                        # Emit raw byte using special inline asm instruction
+                        self.builder.emit(IRInstr(
+                            OpCode.INLINE_ASM,
+                            comment=f".db {arg.value:#04x}"
+                        ))
+                    elif isinstance(arg.value, str):
+                        # Emit assembly string directly
+                        self.builder.emit(IRInstr(
+                            OpCode.INLINE_ASM,
+                            comment=arg.value
+                        ))
+                elif isinstance(arg, StringLiteral):
+                    # String literal containing assembly
                     self.builder.emit(IRInstr(
-                        OpCode.NOP,
-                        comment=f"DB {arg.value:#04x}"
+                        OpCode.INLINE_ASM,
+                        comment=arg.value
                     ))
+                elif isinstance(arg, FunctionCall) and hasattr(arg, 'name'):
+                    # Asm() or other machine code record
+                    name = arg.name.name if hasattr(arg.name, 'name') else str(arg.name)
+                    if name.lower() == 'asm' and arg.args:
+                        for asm_arg in arg.args:
+                            if hasattr(asm_arg, 'value'):
+                                self.builder.emit(IRInstr(
+                                    OpCode.INLINE_ASM,
+                                    comment=str(asm_arg.value)
+                                ))
 
         elif pragma_name == "linker_alias":
             # pragma Linker_Alias(Entity, External_Name);
@@ -4370,8 +4619,7 @@ class ASTLowering:
 
             self.builder.label(elsif_then_label.name)
             elsif_cond_val = self._lower_expr(elsif_cond)
-            self.builder.cmp(elsif_cond_val, Immediate(0, IRType.WORD))
-            self.builder.jz(next_label)
+            self.builder.jz(elsif_cond_val, next_label)
 
             elsif_val = self._lower_expr(elsif_expr)
             self.builder.mov(result, elsif_val)
@@ -4466,17 +4714,16 @@ class ASTLowering:
 
         if expr.is_for_all:
             # for all: if predicate is false, set result to false and exit
-            self.builder.cmp(pred_val, Immediate(0, IRType.WORD))
             early_exit = self.builder.new_label("quant_early_exit")
-            self.builder.jnz(early_exit)  # predicate was true, continue
+            is_true = self.builder.cmp_ne(pred_val, Immediate(0, IRType.WORD))
+            self.builder.jnz(is_true, early_exit)  # predicate was true, continue
             self.builder.mov(result, Immediate(0, IRType.WORD))
             self.builder.jmp(loop_end)
             self.builder.label(early_exit.name)
         else:
             # for some: if predicate is true, set result to true and exit
-            self.builder.cmp(pred_val, Immediate(0, IRType.WORD))
             continue_loop = self.builder.new_label("quant_continue")
-            self.builder.jz(continue_loop)  # predicate was false, continue
+            self.builder.jz(pred_val, continue_loop)  # predicate was false, continue
             self.builder.mov(result, Immediate(1, IRType.WORD))
             self.builder.jmp(loop_end)
             self.builder.label(continue_loop.name)
@@ -4624,7 +4871,7 @@ class ASTLowering:
                         continue
 
                 # Check for T'Class attribute (class-wide membership test)
-                if isinstance(choice.expr, AttributeRef) and choice.expr.attribute.lower() == "class":
+                if isinstance(choice.expr, AttributeReference) and choice.expr.attribute.lower() == "class":
                     # X in T'Class - check if X's tag is in T's class hierarchy
                     base_type_name = self._get_type_name_from_expr(choice.expr.prefix)
                     if base_type_name:
@@ -4668,8 +4915,9 @@ class ASTLowering:
 
                 # Single value test (equality)
                 choice_val = self._lower_expr(choice.expr)
-                self.builder.cmp(test_val, choice_val)
-                self.builder.jz(match_label)  # X == choice
+                cmp_result = self.builder.new_vreg(IRType.WORD, "_eq")
+                self.builder.cmp_eq(cmp_result, test_val, choice_val)
+                self.builder.jnz(cmp_result, match_label)  # X == choice
 
             elif isinstance(choice, OthersChoice):
                 # Others always matches
@@ -4739,8 +4987,9 @@ class ASTLowering:
                 elif isinstance(choice, ExprChoice):
                     # Single value choice
                     choice_val = self._lower_expr(choice.expr)
-                    self.builder.cmp(selector, choice_val)
-                    self.builder.jz(match_label)
+                    cmp_result = self.builder.new_vreg(IRType.WORD, "_eq")
+                    self.builder.cmp_eq(cmp_result, selector, choice_val)
+                    self.builder.jnz(cmp_result, match_label)
 
             # No match in this alternative, try next
             self.builder.jmp(next_alt)
@@ -5852,8 +6101,8 @@ class ASTLowering:
         left = self._lower_expr(expr.left)
 
         # Check if left is false (0)
-        self.builder.cmp(left, Immediate(0, IRType.WORD))
-        self.builder.jz(short_circuit)  # If false, short-circuit
+        is_false = self.builder.cmp_eq(left, Immediate(0, IRType.WORD))
+        self.builder.jnz(is_false, short_circuit)  # If false, short-circuit
 
         # Left was true, evaluate right
         self.builder.label(eval_right.name)
@@ -5885,8 +6134,8 @@ class ASTLowering:
         left = self._lower_expr(expr.left)
 
         # Check if left is true (non-zero)
-        self.builder.cmp(left, Immediate(0, IRType.WORD))
-        self.builder.jnz(short_circuit)  # If true, short-circuit
+        is_true = self.builder.cmp_ne(left, Immediate(0, IRType.WORD))
+        self.builder.jnz(is_true, short_circuit)  # If true, short-circuit
 
         # Left was false, evaluate right
         self.builder.label(eval_right.name)
@@ -6134,7 +6383,7 @@ class ASTLowering:
         elif isinstance(expr, SelectedName):
             # Package.Type -> Type
             return expr.selector
-        elif isinstance(expr, AttributeRef):
+        elif isinstance(expr, AttributeReference):
             # T'Base, T'Class etc. -> T
             return self._get_type_name_from_expr(expr.prefix)
         return None

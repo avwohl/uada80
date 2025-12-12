@@ -7,7 +7,7 @@ Based on Ada Reference Manual structure.
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 
 @dataclass
@@ -571,6 +571,7 @@ class DerivedTypeDef(TypeDef):
     is_limited: bool = False
     record_extension: Optional[RecordTypeDef] = None  # For tagged types
     interfaces: list[Expr] = field(default_factory=list)  # Implemented interfaces (Ada 2005)
+    constraint: Optional[Expr] = None  # Range constraint for scalar derived types
 
 
 @dataclass
@@ -766,6 +767,7 @@ class PackageDecl(Decl):
     declarations: list[Decl] = field(default_factory=list)
     private_declarations: list[Decl] = field(default_factory=list)
     renames: Optional[Expr] = None  # Package renaming declaration
+    is_generic: bool = False  # True if declared with GENERIC keyword
 
 
 @dataclass
@@ -862,6 +864,7 @@ class GenericPackageDecl(GenericFormal):
     name: str
     generic_ref: Expr  # The generic package reference
     is_box: bool = False
+    actuals: List = field(default_factory=list)  # Actual parameters for signature
 
 
 @dataclass

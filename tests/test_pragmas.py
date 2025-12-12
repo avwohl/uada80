@@ -394,3 +394,64 @@ class TestPragmaLowering:
         """
         ast = parse(source)
         # Should parse without errors
+
+
+class TestPragmaMachineCode:
+    """Tests for pragma Machine_Code (inline assembly)."""
+
+    def test_pragma_machine_code_string(self):
+        """Test pragma Machine_Code with assembly string."""
+        source = """
+        procedure Test is
+        begin
+            pragma Machine_Code("nop");
+        end Test;
+        """
+        ast = parse(source)
+        # Should parse without errors
+
+    def test_pragma_machine_code_multiple(self):
+        """Test pragma Machine_Code with multiple instructions."""
+        source = """
+        procedure Disable_Interrupts is
+        begin
+            pragma Machine_Code("di");
+            pragma Machine_Code("nop");
+            pragma Machine_Code("nop");
+        end Disable_Interrupts;
+        """
+        ast = parse(source)
+        # Should parse without errors
+
+    def test_pragma_machine_code_codegen(self):
+        """Test that pragma Machine_Code generates inline assembly."""
+        from uada80.compiler import Compiler
+
+        source = """
+        procedure Test is
+        begin
+            pragma Machine_Code("di");
+            pragma Machine_Code("nop");
+            pragma Machine_Code("ei");
+        end Test;
+        """
+        compiler = Compiler()
+        result = compiler.compile(source)
+        assert result.success
+        assert result.output is not None
+        # Check that the assembly instructions appear in output
+        output = result.output
+        assert "di" in output
+        assert "nop" in output
+        assert "ei" in output
+
+    def test_pragma_machine_code_hex_bytes(self):
+        """Test pragma Machine_Code with raw byte values."""
+        source = """
+        procedure Test is
+        begin
+            pragma Machine_Code(16#00#);  -- NOP opcode
+        end Test;
+        """
+        ast = parse(source)
+        # Should parse without errors
