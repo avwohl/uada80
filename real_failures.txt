@@ -1,0 +1,170 @@
+# ACATS Real Semantic Failures
+# (Excludes GNAT library dependency errors)
+
+Total errors: 11107
+
+## Error Categories
+
+ 8787 - not found
+ 1004 - not a X
+  432 - static
+  283 - other
+  208 - expected X
+  188 - type mismatch
+  159 - incompatible
+   42 - already defined
+    4 - cannot convert
+
+## Sample Errors by Category
+
+### not found (8787 errors)
+
+a35801f.ada: <input>:45:19-26: error: 'SURREAL' not found
+a35801f.ada: <input>:46:19-26: error: 'SURREAL' not found
+a49027c.ada: <input>:54:24-27: error: generic 'GP' not found
+a71004a.ada: error: package specification for 'P1' not found
+a83009a.ada: <input>:161:20-27: error: generic 'G_PACK' not found
+a83009a.ada: <input>:180:25-32: error: generic 'G_PACK' not found
+a83009b.ada: <input>:178:25-32: error: generic 'G_PACK' not found
+a83a08a.ada: <input>:72:24-31: error: 'PASSES' not found
+a83a08a.ada: <input>:73:26-33: error: 'PASSES' not found
+a83a08a.ada: <input>:73:36-43: error: 'PASSES' not found
+a87b59a.ada: <input>:213:31-33: error: generic 'P' not found
+a87b59a.ada: <input>:214:31-33: error: generic 'P' not found
+a87b59a.ada: <input>:238:21-23: error: 'F1' not found
+a87b59a.ada: <input>:239:21-24: error: 'F2' not found
+a95074d.ada: <input>:59:26-28: error: 'C2' not found
+
+### not a X (1004 errors)
+
+a49027c.ada: <input>:57:6-62:1: error: 'NR' is not a record type
+a87b59a.ada: <input>:242:31-33: error: 'P' is not a generic
+ac1015b.ada: <input>:50:30-31: error: 'T' is not a generic
+ac1015b.ada: <input>:69:29-30: error: 'A' is not a generic
+ada101a.ada: <input>:80:28-50: error: 'UNCHECKED_DEALLOCATION' is not a generic
+ada101a.ada: <input>:81:28-50: error: 'UNCHECKED_DEALLOCATION' is not a generic
+ada101a.ada: <input>:82:28-50: error: 'UNCHECKED_DEALLOCATION' is not a generic
+ada101a.ada: <input>:83:28-50: error: 'UNCHECKED_DEALLOCATION' is not a generic
+ada101a.ada: <input>:84:28-50: error: 'UNCHECKED_DEALLOCATION' is not a generic
+ada101a.ada: <input>:85:28-50: error: 'UNCHECKED_DEALLOCATION' is not a generic
+ada101a.ada: <input>:86:28-50: error: 'UNCHECKED_DEALLOCATION' is not a generic
+ada101a.ada: <input>:87:28-50: error: 'UNCHECKED_DEALLOCATION' is not a generic
+ada101a.ada: <input>:88:28-50: error: 'UNCHECKED_DEALLOCATION' is not a generic
+ada101a.ada: <input>:89:28-50: error: 'UNCHECKED_DEALLOCATION' is not a generic
+ada101a.ada: <input>:90:29-51: error: 'UNCHECKED_DEALLOCATION' is not a generic
+
+### static (432 errors)
+
+a35402a.ada: <input>:50:35-38: error: expression is not static
+a35402a.ada: <input>:50:41-43: error: expression is not static
+a35402a.ada: <input>:52:35-38: error: expression is not static
+a35402a.ada: <input>:52:41-43: error: expression is not static
+a35402a.ada: <input>:54:35-38: error: expression is not static
+a35402a.ada: <input>:54:41-43: error: expression is not static
+a35402a.ada: <input>:56:35-38: error: expression is not static
+a35402a.ada: <input>:56:41-42: error: expression is not static
+ad7101a.ada: <input>:40:21-36: error: expression is not static
+ad7101a.ada: <input>:41:26-40: error: expression is not static
+ad7101c.ada: <input>:39:28-36: error: expression is not static
+ad7101c.ada: <input>:39:39-46: error: expression is not static
+ad7101c.ada: <input>:40:28-36: error: expression is not static
+ad7101c.ada: <input>:40:39-46: error: expression is not static
+ad7102a.ada: <input>:40:34-51: error: expression is not static
+
+### other (283 errors)
+
+a54b01a.ada: <input>:108:17-21: error: 'Integer' is not an array
+a54b02a.ada: <input>:127:17-20: error: 'Integer' is not an array
+ad7203b.ada: <input>:167:35-45: error: record 'DISCR_REC' has no component 'C1_I'
+c32001c.ada: <input>:86:19-24: error: record 'REC' has no component 'D1'
+c32001c.ada: <input>:87:24-29: error: record 'REC' has no component 'D2'
+c32001c.ada: <input>:96:22-27: error: record 'REC' has no component 'D1'
+c32001c.ada: <input>:97:24-29: error: record 'REC' has no component 'D2'
+c32001d.ada: <input>:79:19-26: error: record 'CELL' has no component 'SIZE'
+c324002.a: <input>:69:4-71:4: error: constant declaration must have initialization
+c34001d.ada: <input>:87:9-16: error: 'Boolean' is not an array
+c34001d.ada: <input>:87:31-38: error: 'Boolean' is not an array
+c354002.a: <input>:70:31-56: error: modulus must be positive, got 0
+c354002.a: <input>:71:31-59: error: modulus must be positive, got 0
+c354002.a: <input>:72:31-52: error: modulus must be positive, got 0
+c37305a.ada: <input>:72:14-21: error: record 'REC' has no component 'DISC'
+
+### expected X (208 errors)
+
+a85013b.ada: <input>:53:21-54:16: error: wrong number of arguments: expected 1, got 0
+c39006d.ada: <input>:84:16-86:16: error: wrong number of generic parameters for 'P': expected 1, got 0
+c39006d.ada: <input>:119:21-120:21: error: wrong number of arguments: expected 1, got 0
+c392c07.a: <input>:128:3-129:3: error: wrong number of arguments: expected 2, got 1
+c392c07.a: <input>:129:3-130:3: error: wrong number of arguments: expected 2, got 1
+c392c07.a: <input>:130:3-131:3: error: wrong number of arguments: expected 2, got 1
+c3a0020.a: <input>:444:13-445:10: error: wrong number of generic parameters for 'GPack': expected 1, got 0
+c3a0021.a: <input>:468:13-469:10: error: wrong number of generic parameters for 'GPack': expected 1, got 0
+c3a0023.a: <input>:440:13-441:10: error: wrong number of generic parameters for 'GPack': expected 1, got 0
+c3a0024.a: <input>:430:13-431:10: error: wrong number of generic parameters for 'GPack': expected 1, got 0
+c490001.a: <input>:188:4-189:4: error: wrong number of arguments: expected 4, got 3
+c490001.a: <input>:189:4-195:4: error: wrong number of arguments: expected 4, got 3
+c490001.a: <input>:195:7-29: error: expected Boolean, got 'Integer'
+c490001.a: <input>:197:7-198:7: error: wrong number of arguments: expected 4, got 3
+c490001.a: <input>:198:7-200:7: error: wrong number of arguments: expected 4, got 3
+
+### type mismatch (188 errors)
+
+a35801f.ada: <input>:48:19-29: error: type mismatch in initialization: expected 'Float', got 'Integer'
+a35801f.ada: <input>:49:19-28: error: type mismatch in initialization: expected 'Float', got 'Integer'
+a35801f.ada: <input>:51:20-31: error: type mismatch in initialization: expected 'Float', got 'Integer'
+a35801f.ada: <input>:52:20-30: error: type mismatch in initialization: expected 'Float', got 'Integer'
+a35801f.ada: <input>:54:20-31: error: type mismatch in initialization: expected 'Float', got 'Integer'
+a35801f.ada: <input>:55:20-30: error: type mismatch in initialization: expected 'Float', got 'Integer'
+a49027b.ada: <input>:97:44-45: error: type mismatch in initialization: expected 'NUMBER_TYPE', got 'Universal_Integer'
+a99006a.ada: <input>:48:30-38: error: type mismatch in initialization: expected 'Y', got 'Integer'
+c26006a.ada: <input>:44:17-45:17: error: type mismatch in assignment: cannot assign 'Integer' to 'Character'
+c26006a.ada: <input>:45:17-46:17: error: type mismatch in assignment: cannot assign 'Integer' to 'Character'
+c34001a.ada: <input>:59:18-60:6: error: return type mismatch: expected 'PARENT', got 'Integer'
+c34001d.ada: <input>:59:18-60:6: error: return type mismatch: expected 'Boolean', got 'Integer'
+c34002a.ada: <input>:65:18-66:6: error: return type mismatch: expected 'T', got 'Integer'
+c350001.a: <input>:86:17-87:7: error: return type mismatch: expected 'Enum', got 'Integer'
+c350001.a: <input>:152:20-153:10: error: return type mismatch: expected 'Tiny', got 'Integer'
+
+### incompatible (159 errors)
+
+c3a0006.a: <input>:139:16-27: error: incompatible types for arithmetic: 'Float' and 'Universal_Real'
+c3a0017.a: <input>:71:14-21: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
+c3a0018.a: <input>:80:17-24: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
+c3a0026.a: <input>:59:14-21: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
+c3a0026.a: <input>:64:14-21: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
+c3a0027.a: <input>:59:17-24: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
+c3a0027.a: <input>:64:17-24: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
+c413001.a: <input>:200:18-29: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
+c413001.a: <input>:205:14-25: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
+c413002.a: <input>:203:18-29: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
+c413002.a: <input>:208:14-25: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
+c413003.a: <input>:202:18-29: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
+c413004.a: <input>:203:18-29: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
+c452002.a: error: incompatible types in range: 'Month' and 'Shape'
+c452002.a: error: incompatible types in range: 'Shape' and 'Radix'
+
+### already defined (42 errors)
+
+c38102d.ada: <input>:36:11-39:11: error: task type 'T1' is already defined
+c452006.a: <input>:108:4-110:4: error: 'Null_Lim_Handle' is already defined in this scope
+c452006.a: <input>:112:4-114:1: error: 'Null_Nonlim_Handle' is already defined in this scope
+c480001.a: <input>:77:4-78:1: error: 'Root_Obj' is already defined in this scope
+c48006b.ada: <input>:172:16-173:16: error: 'CONS1_UP' is already defined in this scope
+c48006b.ada: <input>:173:16-175:16: error: 'CONS2_UP' is already defined in this scope
+c48006b.ada: <input>:175:16-176:16: error: 'CONS3_UP' is already defined in this scope
+c48006b.ada: <input>:176:16-178:11: error: 'CONS4_UP' is already defined in this scope
+c48009b.ada: <input>:113:16-114:11: error: 'CONS_PRIV' is already defined in this scope
+c54a03a.ada: <input>:44:6-45:6: error: 'I' is already defined in this scope
+c54a03a.ada: <input>:46:6-47:6: error: 'B' is already defined in this scope
+c54a03a.ada: <input>:49:6-50:6: error: 'E' is already defined in this scope
+c54a03a.ada: <input>:50:6-51:6: error: 'C' is already defined in this scope
+c62003b.ada: <input>:60:16-61:16: error: 'C0' is already defined in this scope
+c62003b.ada: <input>:61:16-62:16: error: 'C1' is already defined in this scope
+
+### cannot convert (4 errors)
+
+c552001.a: <input>:215:16-39: error: cannot convert from 'Null_Array' to 'One_D_Array'
+cxai017.a: <input>:96:6-52: error: cannot convert from 'My_Constrained_Array_Type' to 'My_Array_Type'
+cxai017.a: <input>:100:6-54: error: cannot convert from 'My_Constrained_Array_Type' to 'My_Array_Type'
+la140050.a: <input>:55:22-29: error: cannot convert from 'Integer' to 'flt'
+
