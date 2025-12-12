@@ -9,7 +9,9 @@ Performs:
 - Semantic error reporting
 """
 
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 from uada80.ast_nodes import (
@@ -71,6 +73,7 @@ from uada80.ast_nodes import (
     BinaryOp,
     UnaryOp,
     RangeExpr,
+    Parenthesized,
     Aggregate,
     DeltaAggregate,
     ContainerAggregate,
@@ -104,6 +107,8 @@ from uada80.ast_nodes import (
     AccessSubprogramTypeDef,
     DerivedTypeDef,
     InterfaceTypeDef,
+    PrivateTypeDef,
+    RealTypeDef,
     SubtypeIndication,
     ComponentDecl,
     GenericInstantiation,
@@ -121,6 +126,7 @@ from uada80.type_system import (
     TypeKind,
     IntegerType,
     ModularType,
+    FloatType,
     EnumerationType,
     ArrayType,
     RecordType,
@@ -132,6 +138,8 @@ from uada80.type_system import (
     EntryInfo,
     ProtectedType,
     ProtectedOperation,
+    VariantPartInfo,
+    VariantInfo,
     PREDEFINED_TYPES,
     types_compatible,
     common_type,
@@ -177,7 +185,7 @@ class SemanticAnalyzer:
     2. Checking pass: performs type checking and validation
     """
 
-    def __init__(self) -> None:
+    def __init__(self, search_paths: Optional[list[str]] = None) -> None:
         self.symbols = SymbolTable()
         self.errors: list[SemanticError] = []
         self.current_subprogram: Optional[Symbol] = None  # For return type checking
@@ -190,6 +198,10 @@ class SemanticAnalyzer:
         self.in_accept_or_entry: bool = False  # For requeue statement validation
         # Assignment target tracking for @ (target name) support
         self.current_assignment_target_type: Optional[AdaType] = None
+        # Multi-file package loading support
+        self.search_paths: list[str] = search_paths or []
+        self._loaded_packages: dict[str, Symbol] = {}  # Cache of loaded packages
+        self._loading_packages: set[str] = set()  # Packages currently being loaded (cycle detection)
 
     def analyze(self, program: Program) -> SemanticResult:
         """Analyze a complete program."""
@@ -234,13 +246,10 @@ class SemanticAnalyzer:
         compilation unit. The package names become directly usable for
         qualified references (Package.Entity).
 
-        For a full implementation, this would:
+        This now supports multi-file package loading:
         1. Load the package specification from the file system
         2. Parse and analyze it
         3. Add its public declarations to the visible scope
-
-        Currently we register a placeholder symbol for the package name
-        so qualified references can be resolved during semantic analysis.
         """
         for name in clause.names:
             if isinstance(name, Identifier):
@@ -248,24 +257,35 @@ class SemanticAnalyzer:
                 # Check if already defined (e.g., from a previous with)
                 existing = self.symbols.lookup(pkg_name)
                 if existing is None:
-                    # Create a placeholder package symbol
-                    # In a full implementation, we would load the actual package
-                    pkg_symbol = Symbol(
-                        name=pkg_name,
-                        kind=SymbolKind.PACKAGE,
-                    )
-                    pkg_symbol.is_withed = True  # Mark as from with clause
-                    # For standard library packages, we could predefine their contents
-                    if pkg_name.upper() in ("ADA", "SYSTEM", "INTERFACES"):
-                        self._setup_standard_package(pkg_symbol, pkg_name.upper())
-                    self.symbols.define(pkg_symbol)
+                    # Try to load the package from file system first
+                    loaded_pkg = self._load_external_package(pkg_name)
+                    if loaded_pkg:
+                        self.symbols.define(loaded_pkg)
+                    else:
+                        # Create a placeholder package symbol
+                        pkg_symbol = Symbol(
+                            name=pkg_name,
+                            kind=SymbolKind.PACKAGE,
+                        )
+                        pkg_symbol.is_withed = True  # Mark as from with clause
+                        # For standard library packages, we could predefine their contents
+                        if pkg_name.upper() in ("ADA", "SYSTEM", "INTERFACES"):
+                            self._setup_standard_package(pkg_symbol, pkg_name.upper())
+                        self.symbols.define(pkg_symbol)
             elif hasattr(name, 'prefix') and hasattr(name, 'selector'):
                 # Handle hierarchical package names like Ada.Text_IO
-                # For now, just register the root package
-                if isinstance(name.prefix, Identifier):
-                    root_pkg = name.prefix.name
-                    existing = self.symbols.lookup(root_pkg)
-                    if existing is None:
+                # Register both the root package and the full hierarchical name
+                full_name = self._get_hierarchical_name(name)
+                root_pkg = self._get_root_name(name)
+
+                # First register the root package if not already defined
+                existing = self.symbols.lookup(root_pkg)
+                if existing is None:
+                    # Try to load root package from file system
+                    loaded_root = self._load_external_package(root_pkg)
+                    if loaded_root:
+                        self.symbols.define(loaded_root)
+                    else:
                         pkg_symbol = Symbol(
                             name=root_pkg,
                             kind=SymbolKind.PACKAGE,
@@ -275,6 +295,212 @@ class SemanticAnalyzer:
                             self._setup_standard_package(pkg_symbol, root_pkg.upper())
                         self.symbols.define(pkg_symbol)
 
+                # Also register the full hierarchical name for direct lookup
+                # This allows "Ada.Text_IO" to be found when used as a prefix
+                if full_name != root_pkg:
+                    existing_full = self.symbols.lookup(full_name)
+                    if existing_full is None:
+                        # Try to load the full package from file system first
+                        loaded_full = self._load_external_package(full_name)
+                        if loaded_full:
+                            self.symbols.define(loaded_full)
+                        else:
+                            # Try to resolve the child package from the root's public_symbols
+                            child_sym = self._resolve_hierarchical_package(name)
+                            if child_sym:
+                                # Register the full name pointing to the child package
+                                full_pkg = Symbol(
+                                    name=full_name,
+                                    kind=child_sym.kind,
+                                )
+                                full_pkg.is_withed = True
+                                full_pkg.public_symbols = child_sym.public_symbols
+                                full_pkg.private_symbols = child_sym.private_symbols
+                                self.symbols.define(full_pkg)
+
+    def _get_hierarchical_name(self, name) -> str:
+        """Get the full dotted name from a hierarchical package reference.
+
+        E.g., SelectedName(prefix=Identifier("Ada"), selector="Text_IO") -> "Ada.Text_IO"
+        """
+        if isinstance(name, Identifier):
+            return name.name
+        elif hasattr(name, 'prefix') and hasattr(name, 'selector'):
+            prefix_name = self._get_hierarchical_name(name.prefix)
+            selector = name.selector if isinstance(name.selector, str) else name.selector
+            return f"{prefix_name}.{selector}"
+        return str(name)
+
+    def _get_root_name(self, name) -> str:
+        """Get the root package name from a hierarchical reference.
+
+        E.g., SelectedName(prefix=Identifier("Ada"), selector="Text_IO") -> "Ada"
+        """
+        if isinstance(name, Identifier):
+            return name.name
+        elif hasattr(name, 'prefix'):
+            return self._get_root_name(name.prefix)
+        return str(name)
+
+    def _resolve_hierarchical_package(self, name) -> Optional[Symbol]:
+        """Resolve a hierarchical package name to its symbol.
+
+        E.g., Ada.Text_IO -> look up "Ada", then find "Text_IO" in Ada.public_symbols
+        """
+        if isinstance(name, Identifier):
+            return self.symbols.lookup(name.name)
+        elif hasattr(name, 'prefix') and hasattr(name, 'selector'):
+            # Recursively resolve the prefix
+            prefix_sym = self._resolve_hierarchical_package(name.prefix)
+            if prefix_sym is None:
+                return None
+            # Look up the selector in the prefix's public symbols
+            selector = name.selector.lower() if isinstance(name.selector, str) else name.selector.lower()
+            if prefix_sym.public_symbols and selector in prefix_sym.public_symbols:
+                return prefix_sym.public_symbols[selector]
+        return None
+
+    def _find_package_file(self, pkg_name: str) -> Optional[str]:
+        """Find the file containing a package specification.
+
+        Converts Ada package names to file paths following GNAT naming conventions:
+        - Ada.Text_IO -> ada-text_io.ads
+        - My_Package -> my_package.ads
+
+        Returns the full path if found, None otherwise.
+        """
+        # Convert package name to file name (GNAT convention)
+        file_base = pkg_name.lower().replace(".", "-")
+        file_name = f"{file_base}.ads"
+
+        # Search in all configured paths
+        for search_path in self.search_paths:
+            file_path = os.path.join(search_path, file_name)
+            if os.path.isfile(file_path):
+                return file_path
+
+        # Also search current directory
+        if os.path.isfile(file_name):
+            return file_name
+
+        return None
+
+    def _load_external_package(self, pkg_name: str) -> Optional[Symbol]:
+        """Load and analyze an external package specification.
+
+        Parses the package specification file and extracts public symbols.
+        Returns a Symbol with populated public_symbols, or None if not found.
+        """
+        # Check cache first
+        pkg_key = pkg_name.lower()
+        if pkg_key in self._loaded_packages:
+            return self._loaded_packages[pkg_key]
+
+        # Detect circular dependencies
+        if pkg_key in self._loading_packages:
+            return None
+        self._loading_packages.add(pkg_key)
+
+        try:
+            # Find the package file
+            file_path = self._find_package_file(pkg_name)
+            if not file_path:
+                return None
+
+            # Parse the file
+            try:
+                with open(file_path, "r") as f:
+                    source = f.read()
+                from uada80.parser import parse
+                program = parse(source, file_path)
+            except Exception:
+                return None
+
+            # Find the package declaration in the parsed AST
+            pkg_decl = None
+            for unit in program.units:
+                if isinstance(unit.unit, PackageDecl):
+                    # Match by name (case-insensitive)
+                    if unit.unit.name.lower() == pkg_name.lower():
+                        pkg_decl = unit.unit
+                        break
+                    # Also check for child package match (Ada.Text_IO in file)
+                    if "." in pkg_name:
+                        if unit.unit.name.lower().endswith(pkg_name.lower().split(".")[-1]):
+                            pkg_decl = unit.unit
+                            break
+
+            if not pkg_decl:
+                return None
+
+            # Handle package renaming (e.g., package Text_IO renames Ada.Text_IO)
+            if pkg_decl.renames:
+                renamed_name = self._get_hierarchical_name(pkg_decl.renames)
+                renamed_pkg = self._load_external_package(renamed_name)
+                if renamed_pkg:
+                    pkg_symbol = Symbol(
+                        name=pkg_name,
+                        kind=SymbolKind.PACKAGE,
+                    )
+                    pkg_symbol.is_withed = True
+                    pkg_symbol.public_symbols = renamed_pkg.public_symbols
+                    pkg_symbol.private_symbols = renamed_pkg.private_symbols
+                    self._loaded_packages[pkg_key] = pkg_symbol
+                    return pkg_symbol
+                return None
+
+            # Create a symbol for this package and extract its public declarations
+            pkg_symbol = Symbol(
+                name=pkg_name,
+                kind=SymbolKind.PACKAGE,
+            )
+            pkg_symbol.is_withed = True
+
+            # Save current state
+            saved_errors = self.errors
+            saved_symbols = self.symbols
+            saved_package = self.current_package
+
+            # Create fresh state for analyzing the external package
+            self.errors = []
+            self.symbols = SymbolTable()
+            self.current_package = pkg_symbol
+
+            # Enter package scope for analysis
+            self.symbols.enter_scope(pkg_name, is_package=True)
+
+            # Process WITH clauses from the package (recursive loading)
+            for unit in program.units:
+                if isinstance(unit, CompilationUnit):
+                    for clause in unit.context_clauses:
+                        if isinstance(clause, WithClause):
+                            self._analyze_with_clause(clause)
+                        elif isinstance(clause, UseClause):
+                            self._analyze_use_clause(clause)
+
+            # Analyze public declarations
+            for decl in pkg_decl.declarations:
+                try:
+                    self._analyze_declaration(decl)
+                    self._add_to_package(pkg_symbol, decl, is_private=False)
+                except Exception:
+                    pass  # Skip declarations that fail analysis
+
+            self.symbols.leave_scope()
+
+            # Restore state
+            self.errors = saved_errors
+            self.symbols = saved_symbols
+            self.current_package = saved_package
+
+            # Cache the loaded package
+            self._loaded_packages[pkg_key] = pkg_symbol
+
+            return pkg_symbol
+
+        finally:
+            self._loading_packages.discard(pkg_key)
+
     def _setup_standard_package(self, pkg_symbol: Symbol, name: str) -> None:
         """Set up standard library package contents.
 
@@ -283,17 +509,131 @@ class SemanticAnalyzer:
         """
         if name == "SYSTEM":
             # System package provides Address, Storage_Elements, etc.
-            # Add common types
+            # Add common types (keys are lowercase for case-insensitive lookup)
             addr_type = Symbol(name="Address", kind=SymbolKind.TYPE)
             addr_type.ada_type = AdaType(kind=TypeKind.ACCESS, name="Address")
-            pkg_symbol.public_symbols["Address"] = addr_type
+            pkg_symbol.public_symbols["address"] = addr_type
 
             storage_type = Symbol(name="Storage_Offset", kind=SymbolKind.TYPE)
             storage_type.ada_type = AdaType(kind=TypeKind.INTEGER, name="Storage_Offset")
-            pkg_symbol.public_symbols["Storage_Offset"] = storage_type
+            pkg_symbol.public_symbols["storage_offset"] = storage_type
+
+            # Standard Ada integer range constants (implementation-defined)
+            # These are Universal_Integer type for implicit conversion to any integer
+            int_type = AdaType(kind=TypeKind.UNIVERSAL_INTEGER, name="Universal_Integer")
+            min_int = Symbol(
+                name="Min_Int",
+                kind=SymbolKind.VARIABLE,
+                ada_type=int_type,
+                is_constant=True,
+                value=-2147483648
+            )
+            pkg_symbol.public_symbols["min_int"] = min_int
+
+            max_int = Symbol(
+                name="Max_Int",
+                kind=SymbolKind.VARIABLE,
+                ada_type=int_type,
+                is_constant=True,
+                value=2147483647
+            )
+            pkg_symbol.public_symbols["max_int"] = max_int
+
+            # Storage_Unit - typically 8 bits per storage unit
+            storage_unit = Symbol(
+                name="Storage_Unit",
+                kind=SymbolKind.VARIABLE,
+                ada_type=int_type,
+                is_constant=True,
+                value=8
+            )
+            pkg_symbol.public_symbols["storage_unit"] = storage_unit
+
+            # Word_Size - typically 32 bits
+            word_size = Symbol(
+                name="Word_Size",
+                kind=SymbolKind.VARIABLE,
+                ada_type=int_type,
+                is_constant=True,
+                value=32
+            )
+            pkg_symbol.public_symbols["word_size"] = word_size
+
+            # Max_Binary_Modulus - largest power of 2 for modular types
+            max_binary = Symbol(
+                name="Max_Binary_Modulus",
+                kind=SymbolKind.VARIABLE,
+                ada_type=int_type,
+                is_constant=True,
+                value=2**32  # 4294967296
+            )
+            pkg_symbol.public_symbols["max_binary_modulus"] = max_binary
+
+            # Max_Nonbinary_Modulus - largest non-power-of-2 for modular types
+            max_nonbinary = Symbol(
+                name="Max_Nonbinary_Modulus",
+                kind=SymbolKind.VARIABLE,
+                ada_type=int_type,
+                is_constant=True,
+                value=2**32  # Same as binary for this implementation
+            )
+            pkg_symbol.public_symbols["max_nonbinary_modulus"] = max_nonbinary
+
+            # Max_Digits - maximum digits for floating-point types
+            max_digits = Symbol(
+                name="Max_Digits",
+                kind=SymbolKind.VARIABLE,
+                ada_type=int_type,
+                is_constant=True,
+                value=15  # IEEE double precision
+            )
+            pkg_symbol.public_symbols["max_digits"] = max_digits
+
+            # Max_Mantissa - maximum mantissa for fixed-point types
+            max_mantissa = Symbol(
+                name="Max_Mantissa",
+                kind=SymbolKind.VARIABLE,
+                ada_type=int_type,
+                is_constant=True,
+                value=31  # 31-bit mantissa
+            )
+            pkg_symbol.public_symbols["max_mantissa"] = max_mantissa
+
+            # Max_Base_Digits - maximum base digits
+            max_base_digits = Symbol(
+                name="Max_Base_Digits",
+                kind=SymbolKind.VARIABLE,
+                ada_type=int_type,
+                is_constant=True,
+                value=18  # Long double precision
+            )
+            pkg_symbol.public_symbols["max_base_digits"] = max_base_digits
+
+            # Real-valued constants use Universal_Real type
+            real_type = AdaType(kind=TypeKind.UNIVERSAL_REAL, name="Universal_Real")
+
+            # Fine_Delta - smallest delta for fixed-point types (Universal_Real)
+            fine_delta = Symbol(
+                name="Fine_Delta",
+                kind=SymbolKind.VARIABLE,
+                ada_type=real_type,
+                is_constant=True,
+                value=2**(-31)  # Smallest fixed-point delta
+            )
+            pkg_symbol.public_symbols["fine_delta"] = fine_delta
+
+            # Tick - clock tick duration (Universal_Real)
+            tick = Symbol(
+                name="Tick",
+                kind=SymbolKind.VARIABLE,
+                ada_type=real_type,
+                is_constant=True,
+                value=0.0001  # 100 microseconds
+            )
+            pkg_symbol.public_symbols["tick"] = tick
 
         elif name == "INTERFACES":
-            # Interfaces package provides C types
+            # Interfaces package provides C types (keys are lowercase)
             for c_type in ["Integer_8", "Integer_16", "Integer_32",
                           "Unsigned_8", "Unsigned_16", "Unsigned_32"]:
                 type_sym = Symbol(name=c_type, kind=SymbolKind.TYPE)
@@ -301,7 +641,7 @@ class SemanticAnalyzer:
                     type_sym.ada_type = AdaType(kind=TypeKind.MODULAR, name=c_type)
                 else:
                     type_sym.ada_type = AdaType(kind=TypeKind.INTEGER, name=c_type)
-                pkg_symbol.public_symbols[c_type] = type_sym
+                pkg_symbol.public_symbols[c_type.lower()] = type_sym
 
     def _analyze_use_clause(self, clause: UseClause) -> None:
         """Analyze a use clause."""
@@ -323,20 +663,34 @@ class SemanticAnalyzer:
         """Analyze a subprogram body."""
         spec = body.spec
 
-        # Create symbol for subprogram
-        kind = SymbolKind.FUNCTION if spec.is_function else SymbolKind.PROCEDURE
-        return_type = None
-        if spec.is_function and spec.return_type:
-            return_type = self._resolve_type(spec.return_type)
+        # Check if this is completing a generic subprogram spec
+        existing = self.symbols.lookup_local(spec.name)
+        is_completing_generic = (existing and
+            existing.kind in (SymbolKind.GENERIC_PROCEDURE, SymbolKind.GENERIC_FUNCTION))
 
-        subprog_symbol = Symbol(
-            name=spec.name,
-            kind=kind,
-            return_type=return_type,
-        )
+        if is_completing_generic:
+            # This body completes the generic spec - store body reference
+            existing.generic_body = body
+            # Don't create a new symbol, use the existing generic one
+            subprog_symbol = existing
+            kind = (SymbolKind.GENERIC_FUNCTION
+                    if existing.kind == SymbolKind.GENERIC_FUNCTION
+                    else SymbolKind.GENERIC_PROCEDURE)
+        else:
+            # Create symbol for subprogram
+            kind = SymbolKind.FUNCTION if spec.is_function else SymbolKind.PROCEDURE
+            return_type = None
+            if spec.is_function and spec.return_type:
+                return_type = self._resolve_type(spec.return_type)
 
-        # Define in current scope
-        self.symbols.define(subprog_symbol)
+            subprog_symbol = Symbol(
+                name=spec.name,
+                kind=kind,
+                return_type=return_type,
+            )
+
+            # Define in current scope
+            self.symbols.define(subprog_symbol)
 
         # Collect parameter types for primitive operation check
         param_types = []
@@ -345,8 +699,11 @@ class SemanticAnalyzer:
             param_types.append(param_type)
 
         # Check if this is a primitive operation of a tagged type
-        self._check_primitive_operation(subprog_symbol, kind == SymbolKind.FUNCTION,
-                                        param_types, return_type)
+        # (not for generic subprograms)
+        if not is_completing_generic:
+            return_type = subprog_symbol.return_type
+            self._check_primitive_operation(subprog_symbol, kind == SymbolKind.FUNCTION,
+                                            param_types, return_type)
 
         # Enter subprogram scope
         self.symbols.enter_scope(spec.name)
@@ -384,6 +741,7 @@ class SemanticAnalyzer:
                 kind=SymbolKind.PARAMETER,
                 ada_type=param_type,
                 mode=param.mode,
+                default_value=param.default_value,
             )
             self.symbols.define(param_symbol)
             subprog.parameters.append(param_symbol)
@@ -453,7 +811,27 @@ class SemanticAnalyzer:
 
     def _analyze_package_decl(self, pkg: PackageDecl) -> None:
         """Analyze a package declaration."""
-        is_generic = bool(pkg.generic_formals)
+        # Handle package renaming: package X renames Y;
+        if pkg.renames:
+            renamed_name = self._get_hierarchical_name(pkg.renames)
+            renamed_pkg = self.symbols.lookup(renamed_name)
+            if renamed_pkg is None:
+                # Try to load from file
+                renamed_pkg = self._load_external_package(renamed_name)
+            if renamed_pkg and renamed_pkg.kind == SymbolKind.PACKAGE:
+                # Create renaming symbol that points to the renamed package
+                pkg_symbol = Symbol(
+                    name=pkg.name,
+                    kind=SymbolKind.PACKAGE,
+                )
+                pkg_symbol.public_symbols = renamed_pkg.public_symbols
+                pkg_symbol.private_symbols = renamed_pkg.private_symbols
+                self.symbols.define(pkg_symbol)
+            else:
+                self.error(f"'{renamed_name}' is not a package", pkg)
+            return
+
+        is_generic = getattr(pkg, 'is_generic', False) or bool(pkg.generic_formals)
 
         pkg_symbol = Symbol(
             name=pkg.name,
@@ -470,6 +848,11 @@ class SemanticAnalyzer:
 
         # Enter package scope
         self.symbols.enter_scope(pkg.name, is_package=True)
+
+        # For child packages (names with dots), make parent's declarations visible
+        # Ada RM 10.1.1: A child package has implicit visibility to its parent
+        if "." in pkg.name:
+            self._import_parent_package_symbols(pkg.name)
 
         # Process generic formal parameters first
         for formal in pkg.generic_formals:
@@ -490,6 +873,35 @@ class SemanticAnalyzer:
         self.symbols.leave_scope()
         self.current_package = old_package
 
+    def _import_parent_package_symbols(self, child_name: str) -> None:
+        """Import parent package symbols for a child package.
+
+        For a child package like Parent.Child, this makes all public
+        declarations from Parent visible in Child's scope.
+        Ada RM 10.1.1: The declarative region of a child package includes
+        the visible part of its parent.
+        """
+        # Get parent name (e.g., "Parent" from "Parent.Child")
+        parts = child_name.rsplit(".", 1)
+        if len(parts) < 2:
+            return
+
+        parent_name = parts[0]
+
+        # Look up the parent package symbol
+        parent_sym = self.symbols.lookup(parent_name)
+        if parent_sym is None or parent_sym.kind not in (SymbolKind.PACKAGE, SymbolKind.GENERIC_PACKAGE):
+            # Parent not found - might be analyzed later or not present
+            return
+
+        # Add parent as an implicit "use" clause so its symbols are visible
+        # This uses the existing use clause mechanism for symbol lookup
+        self.symbols.add_use_clause(parent_sym)
+
+        # Recursively import grandparent symbols if parent is also a child
+        if "." in parent_name:
+            self._import_parent_package_symbols(parent_name)
+
     def _analyze_generic_formal(self, formal) -> None:
         """Analyze a generic formal parameter."""
         from uada80.ast_nodes import GenericObjectDecl, GenericSubprogramDecl
@@ -502,8 +914,30 @@ class SemanticAnalyzer:
             )
             # Mark it as a generic formal type
             type_sym.is_generic_formal = True
+
+            # Determine the appropriate type kind based on the constraint
+            constraint = getattr(formal, 'constraint', None) or 'private'
+            if constraint == 'range':
+                # Signed integer type (type T is range <>)
+                type_kind = TypeKind.INTEGER
+            elif constraint == 'mod':
+                # Modular integer type (type T is mod <>)
+                type_kind = TypeKind.MODULAR
+            elif constraint == 'digits':
+                # Floating point type (type T is digits <>)
+                type_kind = TypeKind.FLOAT
+            elif constraint in ('delta', 'delta_digits'):
+                # Fixed point type (type T is delta <>)
+                type_kind = TypeKind.FIXED
+            elif constraint == 'discrete':
+                # Discrete type (type T is (<>))
+                type_kind = TypeKind.ENUMERATION
+            else:
+                # Private, tagged private, derived, etc.
+                type_kind = TypeKind.PRIVATE
+
             type_sym.ada_type = AdaType(
-                kind=TypeKind.PRIVATE,
+                kind=type_kind,
                 name=formal.name,
             )
             self.symbols.define(type_sym)
@@ -545,11 +979,21 @@ class SemanticAnalyzer:
         # Look up the generic
         if isinstance(inst.generic_name, Identifier):
             generic_name = inst.generic_name.name
+            generic_sym = self.symbols.lookup(generic_name)
+        elif isinstance(inst.generic_name, SelectedName):
+            # Handle qualified names like Ada.Unchecked_Deallocation
+            if isinstance(inst.generic_name.prefix, Identifier):
+                generic_sym = self.symbols.lookup_selected(
+                    inst.generic_name.prefix.name,
+                    inst.generic_name.selector
+                )
+                generic_name = f"{inst.generic_name.prefix.name}.{inst.generic_name.selector}"
+            else:
+                generic_name = str(inst.generic_name)
+                generic_sym = self.symbols.lookup(generic_name)
         else:
-            # Handle qualified names like Pkg.Generic_Unit
             generic_name = str(inst.generic_name)
-
-        generic_sym = self.symbols.lookup(generic_name)
+            generic_sym = self.symbols.lookup(generic_name)
 
         if generic_sym is None:
             self.error(f"generic '{generic_name}' not found", inst.generic_name)
@@ -570,14 +1014,20 @@ class SemanticAnalyzer:
             self.error(f"generic '{generic_name}' has no declaration", inst.generic_name)
             return
 
-        # Check number of actual parameters
+        # Check number of actual parameters (accounting for defaults)
         num_formals = len(generic_decl.generic_formals)
         num_actuals = len(inst.actual_parameters)
+        # Count formals with default values
+        num_with_defaults = sum(
+            1 for f in generic_decl.generic_formals
+            if hasattr(f, 'default_value') and f.default_value is not None
+        )
+        min_required = num_formals - num_with_defaults
 
-        if num_actuals != num_formals:
+        if num_actuals < min_required or num_actuals > num_formals:
             self.error(
                 f"wrong number of generic parameters for '{generic_name}': "
-                f"expected {num_formals}, got {num_actuals}",
+                f"expected {min_required if min_required == num_formals else f'{min_required} to {num_formals}'}, got {num_actuals}",
                 inst
             )
 
@@ -590,6 +1040,38 @@ class SemanticAnalyzer:
         inst_symbol.generic_instance_of = generic_sym
         inst_symbol.generic_actuals = inst.actual_parameters
         self.symbols.define(inst_symbol)
+
+        # Build mapping from generic formal names to actual values/types
+        formal_to_actual: dict[str, any] = {}
+        for i, formal in enumerate(generic_decl.generic_formals):
+            if i < len(inst.actual_parameters):
+                actual = inst.actual_parameters[i]
+                if hasattr(formal, 'name'):
+                    # Object formal (like X : Integer)
+                    formal_to_actual[formal.name.lower()] = actual
+                elif hasattr(formal, 'type_name'):
+                    # Type formal (like type T is private)
+                    formal_to_actual[formal.type_name.lower()] = actual
+
+        # Enter the package scope to define its contents
+        self.symbols.enter_scope(inst.name)
+
+        # Save generic context for type resolution
+        old_generic_formals = getattr(self, '_generic_formals', {})
+        self._generic_formals = formal_to_actual
+
+        # Process the generic package's declarations
+        for decl in generic_decl.declarations:
+            self._analyze_declaration(decl)
+
+        # Restore generic context
+        self._generic_formals = old_generic_formals
+
+        # Export public symbols to the package
+        for name, sym in self.symbols.current_scope.symbols.items():
+            inst_symbol.public_symbols[name] = sym
+
+        self.symbols.leave_scope()
 
     def _analyze_generic_subprogram(self, gen_subprog: GenericSubprogramUnit) -> None:
         """Analyze a generic subprogram declaration."""
@@ -648,10 +1130,21 @@ class SemanticAnalyzer:
         # Look up the generic
         if isinstance(inst.generic_name, Identifier):
             generic_name = inst.generic_name.name
+            generic_sym = self.symbols.lookup(generic_name)
+        elif isinstance(inst.generic_name, SelectedName):
+            # Handle qualified names like Ada.Unchecked_Deallocation
+            if isinstance(inst.generic_name.prefix, Identifier):
+                generic_sym = self.symbols.lookup_selected(
+                    inst.generic_name.prefix.name,
+                    inst.generic_name.selector
+                )
+                generic_name = f"{inst.generic_name.prefix.name}.{inst.generic_name.selector}"
+            else:
+                generic_name = str(inst.generic_name)
+                generic_sym = self.symbols.lookup(generic_name)
         else:
             generic_name = str(inst.generic_name)
-
-        generic_sym = self.symbols.lookup(generic_name)
+            generic_sym = self.symbols.lookup(generic_name)
 
         if generic_sym is None:
             self.error(f"generic '{generic_name}' not found", inst.generic_name)
@@ -672,14 +1165,20 @@ class SemanticAnalyzer:
                 self.error(f"generic '{generic_name}' has no declaration", inst.generic_name)
                 return
 
-            # Check number of actual parameters
+            # Check number of actual parameters (accounting for defaults)
             num_formals = len(generic_decl.formals)
             num_actuals = len(inst.actual_parameters)
+            # Count formals with default values
+            num_with_defaults = sum(
+                1 for f in generic_decl.formals
+                if hasattr(f, 'default_value') and f.default_value is not None
+            )
+            min_required = num_formals - num_with_defaults
 
-            if num_actuals != num_formals:
+            if num_actuals < min_required or num_actuals > num_formals:
                 self.error(
                     f"wrong number of generic parameters for '{generic_name}': "
-                    f"expected {num_formals}, got {num_actuals}",
+                    f"expected {min_required if min_required == num_formals else f'{min_required} to {num_formals}'}, got {num_actuals}",
                     inst
                 )
 
@@ -712,7 +1211,7 @@ class SemanticAnalyzer:
         if pkg_symbol is None:
             self.error(f"package specification for '{body.name}' not found")
             return
-        if pkg_symbol.kind != SymbolKind.PACKAGE:
+        if pkg_symbol.kind not in (SymbolKind.PACKAGE, SymbolKind.GENERIC_PACKAGE):
             self.error(f"'{body.name}' is not a package")
             return
 
@@ -734,7 +1233,9 @@ class SemanticAnalyzer:
     ) -> None:
         """Add a declaration to a package's symbol table."""
         if hasattr(decl, "name"):
-            name = decl.name.lower()
+            # Handle both string names and Identifier objects
+            decl_name = decl.name
+            name = decl_name.name.lower() if isinstance(decl_name, Identifier) else str(decl_name).lower()
             symbol = self.symbols.lookup_local(name)
             if symbol:
                 if is_private:
@@ -743,7 +1244,9 @@ class SemanticAnalyzer:
                     pkg.public_symbols[name] = symbol
         elif hasattr(decl, "names"):
             for name in decl.names:
-                name_lower = name.lower()
+                # Handle both string names and Identifier objects
+                name_str = name.name if isinstance(name, Identifier) else str(name)
+                name_lower = name_str.lower()
                 symbol = self.symbols.lookup_local(name_lower)
                 if symbol:
                     if is_private:
@@ -787,6 +1290,10 @@ class SemanticAnalyzer:
             self._analyze_protected_type_decl(decl)
         elif isinstance(decl, ProtectedBody):
             self._analyze_protected_body(decl)
+        elif isinstance(decl, PackageDecl):
+            self._analyze_package_decl(decl)
+        elif isinstance(decl, PackageBody):
+            self._analyze_package_body(decl)
 
     def _analyze_object_decl(self, decl: ObjectDecl) -> None:
         """Analyze an object (variable/constant) declaration."""
@@ -798,11 +1305,19 @@ class SemanticAnalyzer:
         # Resolve type
         obj_type: Optional[AdaType] = None
         if decl.type_mark:
-            obj_type = self._resolve_subtype_indication(decl.type_mark)
+            # Handle anonymous array types (e.g., X : array (1..10) of Integer)
+            if isinstance(decl.type_mark, ArrayTypeDef):
+                obj_type = self._build_array_type(decl.names[0] if decl.names else "_anon", decl.type_mark)
+            elif isinstance(decl.type_mark, SubtypeIndication):
+                obj_type = self._resolve_subtype_indication(decl.type_mark)
+            else:
+                # Assume it's a type name (Identifier or SelectedName)
+                obj_type = self._resolve_type(decl.type_mark)
 
         # Check initialization expression
         if decl.init_expr:
-            init_type = self._analyze_expr(decl.init_expr)
+            # Pass expected type for overload resolution (e.g., enum literals)
+            init_type = self._analyze_expr(decl.init_expr, expected_type=obj_type)
             if obj_type and init_type:
                 if not types_compatible(obj_type, init_type):
                     self.error(
@@ -814,15 +1329,38 @@ class SemanticAnalyzer:
                 # Type inference from initializer (not strictly Ada, but useful)
                 obj_type = init_type
 
-        # Constants must have initialization
-        if decl.is_constant and not decl.init_expr:
-            self.error("constant declaration must have initialization", decl)
+        # Try to evaluate static value for constants
+        static_value = None
+        if decl.is_constant and decl.init_expr:
+            static_value = self._try_eval_static(decl.init_expr)
 
         # Create symbols
         for name in decl.names:
-            if self.symbols.is_defined_locally(name):
-                self.error(f"'{name}' is already defined in this scope", decl)
-                continue
+            existing = self.symbols.lookup_local(name)
+
+            # Check for deferred constant completion
+            if existing is not None:
+                if (decl.is_constant and decl.init_expr and
+                    existing.is_constant and existing.value is None and
+                    existing.definition and
+                    not getattr(existing.definition, 'init_expr', None)):
+                    # This is completing a deferred constant - update existing symbol
+                    existing.value = static_value
+                    existing.definition = decl
+                    if obj_type:
+                        existing.ada_type = obj_type
+                    continue
+                else:
+                    self.error(f"'{name}' is already defined in this scope", decl)
+                    continue
+
+            # Constants without initialization in package specs are deferred constants
+            # They'll be completed in the private part - don't error here
+            is_deferred_constant = (decl.is_constant and not decl.init_expr and
+                                    self.symbols.current_scope.is_package)
+
+            if decl.is_constant and not decl.init_expr and not is_deferred_constant:
+                self.error("constant declaration must have initialization", decl)
 
             symbol = Symbol(
                 name=name,
@@ -831,6 +1369,7 @@ class SemanticAnalyzer:
                 is_constant=decl.is_constant,
                 is_aliased=decl.is_aliased,
                 definition=decl,
+                value=static_value,  # Store static value for constants (None for deferred)
             )
             self.symbols.define(symbol)
 
@@ -894,13 +1433,29 @@ class SemanticAnalyzer:
             self.symbols.define(symbol)
             return
 
-        # Check if we're completing an incomplete type
+        # Check if we're completing an incomplete or private type
         if existing is not None:
             if (existing.kind == SymbolKind.TYPE and
                 existing.ada_type and
-                existing.ada_type.kind == TypeKind.INCOMPLETE):
-                # This is completing an incomplete type - update the existing symbol
+                existing.ada_type.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE)):
+                # This is completing an incomplete or private type - update the existing symbol
                 ada_type = self._build_type(decl.name, decl.type_def)
+
+                # Add discriminants to record types
+                if isinstance(ada_type, RecordType) and decl.discriminants:
+                    for disc_spec in decl.discriminants:
+                        disc_type = self._resolve_type(disc_spec.type_mark)
+                        if disc_type is None:
+                            disc_type = IntegerType(name="_unknown", size_bits=16, low=0, high=0)
+                        for disc_name in disc_spec.names:
+                            ada_type.discriminants.append(
+                                RecordComponent(
+                                    name=disc_name,
+                                    component_type=disc_type,
+                                    is_discriminant=True,
+                                )
+                            )
+
                 existing.ada_type = ada_type
                 existing.definition = decl
                 # Fall through to handle enum literals if applicable
@@ -911,6 +1466,21 @@ class SemanticAnalyzer:
             # Build the type
             ada_type = self._build_type(decl.name, decl.type_def)
 
+            # Add discriminants to record types
+            if isinstance(ada_type, RecordType) and decl.discriminants:
+                for disc_spec in decl.discriminants:
+                    disc_type = self._resolve_type(disc_spec.type_mark)
+                    if disc_type is None:
+                        disc_type = IntegerType(name="_unknown", size_bits=16, low=0, high=0)
+                    for disc_name in disc_spec.names:
+                        ada_type.discriminants.append(
+                            RecordComponent(
+                                name=disc_name,
+                                component_type=disc_type,
+                                is_discriminant=True,
+                            )
+                        )
+
             symbol = Symbol(
                 name=decl.name,
                 kind=SymbolKind.TYPE,
@@ -920,15 +1490,26 @@ class SemanticAnalyzer:
             self.symbols.define(symbol)
 
         # For enumeration types, add literals to symbol table
-        if isinstance(ada_type, EnumerationType):
+        # Ada allows the same literal name in different enumeration types (overloading)
+        # BUT only for new enumeration type definitions, NOT for derived types.
+        # Derived types inherit literals which are already in scope from the parent.
+        if isinstance(ada_type, EnumerationType) and isinstance(decl.type_def, EnumerationTypeDef):
             for literal in ada_type.literals:
-                # Check if literal already exists (could be from another enum)
-                if self.symbols.is_defined_locally(literal):
-                    self.error(
-                        f"enumeration literal '{literal}' conflicts with existing declaration",
-                        decl,
-                    )
-                    continue
+                existing = self.symbols.lookup_local(literal)
+                # Allow if it's a new literal OR if existing is also an enum literal
+                # (enum literals can be overloaded like subprograms)
+                if existing is not None:
+                    # Check if existing is an enumeration literal
+                    if not (existing.is_constant and
+                            existing.ada_type and
+                            existing.ada_type.kind == TypeKind.ENUMERATION):
+                        self.error(
+                            f"enumeration literal '{literal}' conflicts with existing declaration",
+                            decl,
+                        )
+                        continue
+                    # Same literal in different enum type - this is fine in Ada
+                    # The literal becomes overloaded
 
                 literal_symbol = Symbol(
                     name=literal,
@@ -937,6 +1518,7 @@ class SemanticAnalyzer:
                     is_constant=True,
                     definition=decl,
                 )
+                # Use define which handles overloading
                 self.symbols.define(literal_symbol)
 
     def _analyze_subtype_decl(self, decl: SubtypeDecl) -> None:
@@ -1059,6 +1641,22 @@ class SemanticAnalyzer:
             )
             self.symbols.define(symbol)
 
+    def _analyze_exception_handler(self, handler) -> None:
+        """Analyze an exception handler."""
+        # Check that exception names are valid
+        for exc_name in handler.exception_names:
+            if isinstance(exc_name, Identifier):
+                # Verify it's a declared exception
+                symbol = self.symbols.lookup(exc_name.name)
+                if symbol is None:
+                    self.error(f"unknown exception '{exc_name.name}'", exc_name)
+                elif symbol.kind != SymbolKind.EXCEPTION:
+                    self.error(f"'{exc_name.name}' is not an exception", exc_name)
+
+        # Analyze handler statements
+        for stmt in handler.statements:
+            self._analyze_statement(stmt)
+
     def _analyze_representation_clause(self, decl: RepresentationClause) -> None:
         """Analyze a representation clause.
 
@@ -1123,7 +1721,7 @@ class SemanticAnalyzer:
                 from uada80.type_system import ArrayType
                 if isinstance(sym.ada_type, ArrayType):
                     # Store component size (would need to add field)
-                    sym.ada_type.element_type.size_bits = value
+                    sym.ada_type.component_type.size_bits = value
         elif attr == "storage_size":
             # for Access_Type'Storage_Size use N;
             # for Task_Type'Storage_Size use N;
@@ -1222,9 +1820,18 @@ class SemanticAnalyzer:
 
     def _analyze_task_type_decl(self, decl: TaskTypeDecl) -> None:
         """Analyze a task type declaration."""
-        if self.symbols.is_defined_locally(decl.name):
-            self.error(f"task type '{decl.name}' is already defined", decl)
-            return
+        # Check if we're completing an incomplete type
+        existing = self.symbols.lookup_local(decl.name)
+        if existing is not None:
+            # Allow completing an incomplete or private type with a task type
+            if (existing.kind == SymbolKind.TYPE and
+                existing.ada_type and
+                existing.ada_type.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE)):
+                # This is completing an incomplete/private type - will update below
+                pass
+            else:
+                self.error(f"task type '{decl.name}' is already defined", decl)
+                return
 
         # Build entry information
         entries = []
@@ -1232,8 +1839,9 @@ class SemanticAnalyzer:
             param_types = []
             for param in entry_decl.parameters:
                 param_type = self._resolve_type(param.type_mark)
-                if param_type:
-                    param_types.append(param_type)
+                # Always count the parameter even if type can't be resolved
+                # (e.g., for generic formal types)
+                param_types.append(param_type)
 
             family_type = None
             if entry_decl.family_index:
@@ -1251,13 +1859,19 @@ class SemanticAnalyzer:
             entries=entries,
         )
 
-        symbol = Symbol(
-            name=decl.name,
-            kind=SymbolKind.TASK_TYPE,
-            ada_type=task_type,
-            definition=decl,
-        )
-        self.symbols.define(symbol)
+        if existing is not None and existing.ada_type and existing.ada_type.kind == TypeKind.INCOMPLETE:
+            # Completing an incomplete type - update the existing symbol
+            existing.kind = SymbolKind.TASK_TYPE
+            existing.ada_type = task_type
+            existing.definition = decl
+        else:
+            symbol = Symbol(
+                name=decl.name,
+                kind=SymbolKind.TASK_TYPE,
+                ada_type=task_type,
+                definition=decl,
+            )
+            self.symbols.define(symbol)
 
         # Enter task scope to analyze entries and declarations
         self.symbols.enter_scope(decl.name)
@@ -1348,9 +1962,18 @@ class SemanticAnalyzer:
 
     def _analyze_protected_type_decl(self, decl: ProtectedTypeDecl) -> None:
         """Analyze a protected type declaration."""
-        if self.symbols.is_defined_locally(decl.name):
-            self.error(f"protected type '{decl.name}' is already defined", decl)
-            return
+        # Check if we're completing an incomplete type
+        existing = self.symbols.lookup_local(decl.name)
+        if existing is not None:
+            # Allow completing an incomplete or private type with a protected type
+            if (existing.kind == SymbolKind.TYPE and
+                existing.ada_type and
+                existing.ada_type.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE)):
+                # This is completing an incomplete/private type - will update below
+                pass
+            else:
+                self.error(f"protected type '{decl.name}' is already defined", decl)
+                return
 
         # Build entry and operation information
         entries = []
@@ -1362,8 +1985,8 @@ class SemanticAnalyzer:
                 param_types = []
                 for param in item.parameters:
                     param_type = self._resolve_type(param.type_mark)
-                    if param_type:
-                        param_types.append(param_type)
+                    # Always count the parameter even if type can't be resolved
+                    param_types.append(param_type)
                 entries.append(EntryInfo(
                     name=item.name,
                     parameter_types=param_types,
@@ -1404,13 +2027,19 @@ class SemanticAnalyzer:
             components=components,
         )
 
-        symbol = Symbol(
-            name=decl.name,
-            kind=SymbolKind.PROTECTED_TYPE,
-            ada_type=prot_type,
-            definition=decl,
-        )
-        self.symbols.define(symbol)
+        if existing is not None and existing.ada_type and existing.ada_type.kind == TypeKind.INCOMPLETE:
+            # Completing an incomplete type - update the existing symbol
+            existing.kind = SymbolKind.PROTECTED_TYPE
+            existing.ada_type = prot_type
+            existing.definition = decl
+        else:
+            symbol = Symbol(
+                name=decl.name,
+                kind=SymbolKind.PROTECTED_TYPE,
+                ada_type=prot_type,
+                definition=decl,
+            )
+            self.symbols.define(symbol)
 
         # Enter scope for protected type
         self.symbols.enter_scope(decl.name)
@@ -1496,6 +2125,10 @@ class SemanticAnalyzer:
             return self._build_derived_type(name, type_def)
         elif isinstance(type_def, InterfaceTypeDef):
             return self._build_interface_type(name, type_def)
+        elif isinstance(type_def, PrivateTypeDef):
+            return self._build_private_type(name, type_def)
+        elif isinstance(type_def, RealTypeDef):
+            return self._build_real_type(name, type_def)
 
         return None
 
@@ -1520,6 +2153,34 @@ class SemanticAnalyzer:
             self.error(f"modulus must be positive, got {modulus}", type_def.modulus)
             modulus = 256  # Default to byte
         return ModularType(name=name, size_bits=0, modulus=modulus)
+
+    def _build_real_type(
+        self, name: str, type_def: RealTypeDef
+    ) -> FloatType:
+        """Build a floating-point or fixed-point type."""
+        digits = 6  # Default precision
+        range_first = None
+        range_last = None
+
+        if type_def.is_floating and type_def.digits_expr:
+            digits = self._eval_static_expr(type_def.digits_expr)
+
+        if type_def.range_constraint:
+            # Try to evaluate bounds as floats
+            try:
+                range_first = float(self._eval_static_expr(type_def.range_constraint.low))
+                range_last = float(self._eval_static_expr(type_def.range_constraint.high))
+            except (TypeError, ValueError):
+                pass
+
+        return FloatType(
+            name=name,
+            kind=TypeKind.FLOAT,
+            size_bits=32 if digits <= 6 else 64,
+            digits=digits,
+            range_first=range_first,
+            range_last=range_last,
+        )
 
     def _build_enumeration_type(
         self, name: str, type_def: EnumerationTypeDef
@@ -1572,15 +2233,40 @@ class SemanticAnalyzer:
 
         for comp_decl in type_def.components:
             comp_type = self._resolve_type(comp_decl.type_mark)
+            # If type couldn't be resolved, use a placeholder type
+            if comp_type is None:
+                comp_type = IntegerType(name="_unknown", size_bits=16, low=0, high=0)
             for comp_name in comp_decl.names:
                 components.append(
                     RecordComponent(name=comp_name, component_type=comp_type)
                 )
 
+        # Build variant part if present
+        variant_part = None
+        if type_def.variant_part is not None:
+            variants: list[VariantInfo] = []
+            for variant in type_def.variant_part.variants:
+                var_components: list[RecordComponent] = []
+                for comp_decl in variant.components:
+                    comp_type = self._resolve_type(comp_decl.type_mark)
+                    if comp_type is None:
+                        comp_type = IntegerType(name="_unknown", size_bits=16, low=0, high=0)
+                    for comp_name in comp_decl.names:
+                        var_components.append(
+                            RecordComponent(name=comp_name, component_type=comp_type)
+                        )
+                # Extract choice values (simplified - stores the choice AST nodes)
+                variants.append(VariantInfo(choices=variant.choices, components=var_components))
+            variant_part = VariantPartInfo(
+                discriminant_name=type_def.variant_part.discriminant,
+                variants=variants,
+            )
+
         # Check if record is limited
         is_limited = getattr(type_def, 'is_limited', False)
 
-        return RecordType(name=name, size_bits=0, components=components, is_limited=is_limited)
+        return RecordType(name=name, size_bits=0, components=components,
+                          variant_part=variant_part, is_limited=is_limited)
 
     def _build_access_type(
         self, name: str, type_def: AccessTypeDef
@@ -1698,6 +2384,20 @@ class SemanticAnalyzer:
             is_task=type_def.is_task,
             is_protected=type_def.is_protected,
             parent_interfaces=parent_interfaces,
+        )
+
+    def _build_private_type(
+        self, name: str, type_def: PrivateTypeDef
+    ) -> AdaType:
+        """Build a private type placeholder.
+
+        A private type declaration (type T is private;) creates an opaque
+        type that will be completed with a full type definition in the
+        private part of the package.
+        """
+        return AdaType(
+            name=name,
+            kind=TypeKind.PRIVATE,
         )
 
     # =========================================================================
@@ -1888,7 +2588,8 @@ class SemanticAnalyzer:
         # Set target type for @ (target name) support in Ada 2022
         old_target_type = self.current_assignment_target_type
         self.current_assignment_target_type = target_type
-        value_type = self._analyze_expr(stmt.value)
+        # Pass target_type as expected type for overload resolution (enum literals)
+        value_type = self._analyze_expr(stmt.value, expected_type=target_type)
         self.current_assignment_target_type = old_target_type
 
         # Check that target is assignable (variable, not constant)
@@ -2031,7 +2732,10 @@ class SemanticAnalyzer:
             self.error("return statement outside subprogram", stmt)
             return
 
-        if self.current_subprogram.kind == SymbolKind.FUNCTION:
+        is_function = self.current_subprogram.kind in (
+            SymbolKind.FUNCTION, SymbolKind.GENERIC_FUNCTION
+        )
+        if is_function:
             if stmt.value is None:
                 self.error("function must return a value", stmt)
             else:
@@ -2057,7 +2761,10 @@ class SemanticAnalyzer:
             self.error("extended return statement outside subprogram", stmt)
             return
 
-        if self.current_subprogram.kind != SymbolKind.FUNCTION:
+        is_function = self.current_subprogram.kind in (
+            SymbolKind.FUNCTION, SymbolKind.GENERIC_FUNCTION
+        )
+        if not is_function:
             self.error("extended return statement only allowed in functions", stmt)
             return
 
@@ -2261,10 +2968,20 @@ class SemanticAnalyzer:
         self, subprog: Symbol, args: list, node: ASTNode
     ) -> None:
         """Check that call arguments match parameters."""
-        if len(args) != len(subprog.parameters):
+        num_params = len(subprog.parameters)
+        num_args = len(args)
+
+        # Count parameters with default values
+        num_with_defaults = sum(
+            1 for p in subprog.parameters if p.default_value is not None
+        )
+        min_required = num_params - num_with_defaults
+
+        if num_args < min_required or num_args > num_params:
+            expected = str(num_params) if min_required == num_params else f"{min_required} to {num_params}"
             self.error(
-                f"wrong number of arguments: expected {len(subprog.parameters)}, "
-                f"got {len(args)}",
+                f"wrong number of arguments: expected {expected}, "
+                f"got {num_args}",
                 node,
             )
             return
@@ -2292,10 +3009,15 @@ class SemanticAnalyzer:
     # Expressions
     # =========================================================================
 
-    def _analyze_expr(self, expr: Expr) -> Optional[AdaType]:
-        """Analyze an expression and return its type."""
+    def _analyze_expr(self, expr: Expr, expected_type: Optional[AdaType] = None) -> Optional[AdaType]:
+        """Analyze an expression and return its type.
+
+        Args:
+            expr: The expression to analyze
+            expected_type: Optional expected type for overload resolution
+        """
         if isinstance(expr, Identifier):
-            return self._analyze_identifier(expr)
+            return self._analyze_identifier(expr, expected_type)
         elif isinstance(expr, IntegerLiteral):
             return PREDEFINED_TYPES["Universal_Integer"]
         elif isinstance(expr, RealLiteral):
@@ -2324,6 +3046,9 @@ class SemanticAnalyzer:
             return self._analyze_type_conversion(expr)
         elif isinstance(expr, QualifiedExpr):
             return self._analyze_qualified_expr(expr)
+        elif isinstance(expr, Parenthesized):
+            # Parenthesized expression - just analyze the inner expression
+            return self._analyze_expr(expr.expr, expected_type)
         elif isinstance(expr, Aggregate):
             return self._analyze_aggregate(expr)
         elif isinstance(expr, DeltaAggregate):
@@ -2433,7 +3158,7 @@ class SemanticAnalyzer:
             # Determine the element type for the loop variable
             element_type = iter_type if iter_type else PREDEFINED_TYPES["Integer"]
             if isinstance(iter_type, ArrayType):
-                element_type = iter_type.element_type
+                element_type = iter_type.component_type
 
             # Define the loop variable
             self.symbols.define(
@@ -2636,9 +3361,7 @@ class SemanticAnalyzer:
             return None
 
         # Selector must be a discrete type (integer, enumeration, or modular)
-        if selector_type and not isinstance(
-            selector_type, (IntegerType, EnumerationType, ModularType)
-        ):
+        if selector_type and not selector_type.is_discrete():
             self.error(
                 f"case expression selector must be a discrete type, got '{selector_type.name}'",
                 expr.selector,
@@ -2734,12 +3457,34 @@ class SemanticAnalyzer:
         # Return the designated type
         return prefix_type.designated_type
 
-    def _analyze_identifier(self, expr: Identifier) -> Optional[AdaType]:
-        """Analyze an identifier expression."""
+    def _analyze_identifier(self, expr: Identifier, expected_type: Optional[AdaType] = None) -> Optional[AdaType]:
+        """Analyze an identifier expression.
+
+        Args:
+            expr: The identifier to analyze
+            expected_type: Optional expected type for overload resolution
+        """
         symbol = self.symbols.lookup(expr.name)
         if symbol is None:
             self.error(f"'{expr.name}' not found", expr)
             return None
+
+        # Check if this is an enum literal (VARIABLE with is_constant and ENUMERATION type)
+        def is_enum_literal(sym: Symbol) -> bool:
+            return (sym.is_constant and
+                    sym.ada_type is not None and
+                    sym.ada_type.kind == TypeKind.ENUMERATION)
+
+        # If there's an expected type and the symbol is an enum literal,
+        # try to find a matching overload
+        if expected_type is not None and is_enum_literal(symbol):
+            # Get all overloads for this name
+            overloads = self.symbols.all_overloads(expr.name)
+            for candidate in overloads:
+                if is_enum_literal(candidate):
+                    if candidate.ada_type and types_compatible(expected_type, candidate.ada_type):
+                        return candidate.ada_type
+            # No match found - fall through to return default
 
         return symbol.ada_type
 
@@ -2789,7 +3534,21 @@ class SemanticAnalyzer:
             self._check_boolean(right_type, expr.right)
             return PREDEFINED_TYPES["Boolean"]
 
-        # Arithmetic operators
+        # Exponentiation is special: X ** N where N must be integer, result is type of X
+        if expr.op == BinaryOp.EXP:
+            if left_type and right_type:
+                # Right operand must be integer type
+                if right_type.kind not in (TypeKind.INTEGER, TypeKind.MODULAR,
+                                           TypeKind.UNIVERSAL_INTEGER):
+                    self.error(
+                        f"exponent must be integer type, got '{right_type.name}'",
+                        expr,
+                    )
+                # Result type is the left operand type
+                return left_type
+            return left_type
+
+        # Other arithmetic operators
         if expr.op in (
             BinaryOp.ADD,
             BinaryOp.SUB,
@@ -2797,7 +3556,6 @@ class SemanticAnalyzer:
             BinaryOp.DIV,
             BinaryOp.MOD,
             BinaryOp.REM,
-            BinaryOp.EXP,
         ):
             if left_type and right_type:
                 result = common_type(left_type, right_type)
@@ -2854,7 +3612,35 @@ class SemanticAnalyzer:
         return low_type or high_type
 
     def _analyze_indexed_component(self, expr: IndexedComponent) -> Optional[AdaType]:
-        """Analyze an indexed component (array access)."""
+        """Analyze an indexed component (array access) or type conversion.
+
+        In Ada, T(X) can be either:
+        - Array indexing if T is an array
+        - Type conversion if T is a type name
+
+        The parser cannot distinguish these, so we resolve it here.
+        """
+        # Check if prefix is a type name (type conversion)
+        if isinstance(expr.prefix, Identifier):
+            symbol = self.symbols.lookup(expr.prefix.name)
+            if symbol and symbol.kind in (SymbolKind.TYPE, SymbolKind.SUBTYPE):
+                # This is a type conversion: Type(Expr)
+                if len(expr.indices) != 1:
+                    self.error("type conversion takes exactly one argument", expr)
+                    return None
+                # Analyze the argument
+                arg_type = self._analyze_expr(expr.indices[0])
+                target_type = symbol.ada_type
+                # Check if conversion is valid
+                if arg_type and target_type:
+                    if not can_convert(arg_type, target_type):
+                        self.error(
+                            f"cannot convert from '{arg_type.name}' to '{target_type.name}'",
+                            expr
+                        )
+                return target_type
+
+        # Otherwise, it's array indexing
         prefix_type = self._analyze_expr(expr.prefix)
 
         if prefix_type is None:
@@ -2875,13 +3661,28 @@ class SemanticAnalyzer:
         prefix_type = self._analyze_expr(expr.prefix)
 
         if prefix_type is None:
-            # Might be a package prefix
+            # Might be a package prefix - handle both simple and hierarchical names
             if isinstance(expr.prefix, Identifier):
                 symbol = self.symbols.lookup_selected(
                     expr.prefix.name, expr.selector
                 )
                 if symbol:
                     return symbol.ada_type
+            elif isinstance(expr.prefix, SelectedName):
+                # Handle recursive SelectedName prefix (e.g., Ada.Text_IO.Put)
+                # First try to look up the full prefix as a registered package
+                full_prefix = self._get_hierarchical_name(expr.prefix)
+                prefix_sym = self.symbols.lookup(full_prefix)
+                if prefix_sym and prefix_sym.kind == SymbolKind.PACKAGE:
+                    selector = expr.selector.lower() if isinstance(expr.selector, str) else expr.selector.lower()
+                    if selector in prefix_sym.public_symbols:
+                        return prefix_sym.public_symbols[selector].ada_type
+                # Try resolving through the package hierarchy
+                prefix_pkg = self._resolve_hierarchical_package(expr.prefix)
+                if prefix_pkg and prefix_pkg.kind == SymbolKind.PACKAGE:
+                    selector = expr.selector.lower() if isinstance(expr.selector, str) else expr.selector.lower()
+                    if selector in prefix_pkg.public_symbols:
+                        return prefix_pkg.public_symbols[selector].ada_type
             return None
 
         # Access type dereference (Ptr.all)
@@ -2929,9 +3730,27 @@ class SemanticAnalyzer:
         # Handle attributes based on their name
         attr_lower = expr.attribute.lower()
 
-        # Integer-valued attributes
-        if attr_lower in ("first", "last", "length", "size", "pos", "min", "max"):
+        # First/Last return the same type as the prefix (for scalar types)
+        if attr_lower in ("first", "last", "min", "max"):
+            # For scalar types, First/Last return that type
+            if prefix_type and prefix_type.kind in (
+                TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.ENUMERATION,
+                TypeKind.FLOAT, TypeKind.FIXED, TypeKind.UNIVERSAL_INTEGER,
+                TypeKind.UNIVERSAL_REAL
+            ):
+                return prefix_type
+            # For arrays, First/Last return the index type
+            if isinstance(prefix_type, ArrayType) and prefix_type.index_types:
+                return prefix_type.index_types[0]
             return PREDEFINED_TYPES["Integer"]
+
+        # Integer-valued attributes
+        # 'Length and 'Size return Universal_Integer (implicitly convertible to any integer)
+        if attr_lower in ("length", "size"):
+            return PREDEFINED_TYPES["Universal_Integer"]
+        # 'Pos returns Universal_Integer
+        if attr_lower == "pos":
+            return PREDEFINED_TYPES["Universal_Integer"]
 
         # Val returns the enumeration type
         if attr_lower == "val":
@@ -2945,14 +3764,14 @@ class SemanticAnalyzer:
         if attr_lower == "value":
             return prefix_type
 
-        # Address returns an access type (System.Address)
+        # Address returns System.Address type
         if attr_lower == "address":
-            return AccessType(
-                name="System.Address",
-                kind=TypeKind.ACCESS,
-                size_bits=16,  # Z80 has 16-bit addresses
-                designated_type=prefix_type if prefix_type else PREDEFINED_TYPES["Integer"],
-            )
+            # Try to get the actual System.Address type from the symbol table
+            system_pkg = self.symbols.lookup("System")
+            if system_pkg and system_pkg.public_symbols.get("address"):
+                return system_pkg.public_symbols["address"].ada_type
+            # Fallback if System package not available
+            return AdaType(name="Address", kind=TypeKind.ACCESS)
 
         # Access returns an access type to the prefix
         if attr_lower == "access":
@@ -2991,7 +3810,7 @@ class SemanticAnalyzer:
             return PREDEFINED_TYPES["Integer"]
 
         # Boolean attributes
-        if attr_lower in ("valid", "constrained"):
+        if attr_lower in ("valid", "constrained", "terminated", "callable"):
             return PREDEFINED_TYPES["Boolean"]
 
         # Reduce attribute (Ada 2022)
@@ -3031,7 +3850,9 @@ class SemanticAnalyzer:
         if attr_lower == "result":
             # Should be used only in postconditions of functions
             if self.current_subprogram is not None:
-                if self.current_subprogram.kind == SymbolKind.FUNCTION:
+                if self.current_subprogram.kind in (
+                    SymbolKind.FUNCTION, SymbolKind.GENERIC_FUNCTION
+                ):
                     return self.current_subprogram.return_type
             self.error("'Result can only be used in function postconditions", expr)
             return None
@@ -3084,23 +3905,72 @@ class SemanticAnalyzer:
     # Static Expression Evaluation
     # =========================================================================
 
+    def _try_eval_static(self, expr: Expr) -> Optional[int]:
+        """Try to evaluate a static expression. Returns None if not static."""
+        try:
+            return self._eval_static_impl(expr, report_errors=False)
+        except Exception:
+            return None
+
     def _eval_static_expr(self, expr: Expr) -> int:
         """Evaluate a static expression to an integer value."""
+        result = self._eval_static_impl(expr, report_errors=True)
+        return result if result is not None else 0
+
+    def _eval_static_impl(self, expr: Expr, report_errors: bool = True) -> Optional[int]:
+        """Implementation of static expression evaluation."""
         if isinstance(expr, IntegerLiteral):
             return expr.value
 
+        if isinstance(expr, RealLiteral):
+            # Return truncated integer value for real literals in integer contexts
+            return int(expr.value)
+
+        if isinstance(expr, Identifier):
+            # Look up constant value
+            sym = self.symbols.lookup(expr.name)
+            if sym and sym.is_constant and sym.value is not None:
+                return sym.value
+            # Check if it's an enumeration literal with a known position
+            if sym and sym.kind == SymbolKind.VARIABLE and sym.ada_type:
+                if hasattr(sym.ada_type, 'literals') and sym.ada_type.literals:
+                    # This is an enum value - find its position
+                    try:
+                        pos = sym.ada_type.literals.index(expr.name)
+                        return pos
+                    except (ValueError, AttributeError):
+                        pass
+            if report_errors:
+                self.error("expression is not static", expr)
+            return None
+
+        if isinstance(expr, SelectedName):
+            # Handle Package.Name for constants like SYSTEM.MIN_INT
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup_selected(expr.prefix.name, expr.selector)
+                if sym and sym.is_constant and sym.value is not None:
+                    return sym.value
+            if report_errors:
+                self.error("expression is not static", expr)
+            return None
+
         if isinstance(expr, UnaryExpr):
-            operand = self._eval_static_expr(expr.operand)
+            operand = self._eval_static_impl(expr.operand, report_errors)
+            if operand is None:
+                return None
             if expr.op == UnaryOp.MINUS:
                 return -operand
             if expr.op == UnaryOp.PLUS:
                 return operand
             if expr.op == UnaryOp.ABS:
                 return abs(operand)
+            return operand
 
         if isinstance(expr, BinaryExpr):
-            left = self._eval_static_expr(expr.left)
-            right = self._eval_static_expr(expr.right)
+            left = self._eval_static_impl(expr.left, report_errors)
+            right = self._eval_static_impl(expr.right, report_errors)
+            if left is None or right is None:
+                return None
             if expr.op == BinaryOp.ADD:
                 return left + right
             if expr.op == BinaryOp.SUB:
@@ -3109,25 +3979,80 @@ class SemanticAnalyzer:
                 return left * right
             if expr.op == BinaryOp.DIV:
                 return left // right if right != 0 else 0
+            if expr.op == BinaryOp.MOD:
+                return left % right if right != 0 else 0
+            if expr.op == BinaryOp.REM:
+                # Ada rem has sign of dividend
+                if right == 0:
+                    return 0
+                result = abs(left) % abs(right)
+                return result if left >= 0 else -result
             if expr.op == BinaryOp.EXP:
-                return left**right
+                return left ** right
+
+        if isinstance(expr, TypeConversion):
+            # Type conversion of static expression is static
+            return self._eval_static_impl(expr.expr, report_errors)
+
+        if isinstance(expr, QualifiedExpr):
+            # Qualified expression - evaluate the expression part
+            return self._eval_static_impl(expr.expr, report_errors)
+
+        if isinstance(expr, Parenthesized):
+            # Parenthesized expression - evaluate the inner expression
+            return self._eval_static_impl(expr.expr, report_errors)
 
         if isinstance(expr, AttributeReference):
+            attr = expr.attribute.lower()
+            # Handle type attributes
             if isinstance(expr.prefix, Identifier):
                 type_obj = self.symbols.lookup_type(expr.prefix.name)
                 if type_obj:
-                    attr = expr.attribute.lower()
+                    # Integer/modular types have low/high
                     if attr == "first" and hasattr(type_obj, "low"):
                         return type_obj.low
                     if attr == "last" and hasattr(type_obj, "high"):
                         return type_obj.high
+                    # Float types have range_first/range_last
+                    if attr == "first" and hasattr(type_obj, "range_first") and type_obj.range_first is not None:
+                        return int(type_obj.range_first)
+                    if attr == "last" and hasattr(type_obj, "range_last") and type_obj.range_last is not None:
+                        return int(type_obj.range_last)
+                    if attr == "size" and hasattr(type_obj, "size_bits"):
+                        return type_obj.size_bits
+                    if attr == "length" and hasattr(type_obj, "length"):
+                        return type_obj.length
+                    # For arrays, 'Length is high - low + 1
+                    if attr == "length" and hasattr(type_obj, "low") and hasattr(type_obj, "high"):
+                        return type_obj.high - type_obj.low + 1
+                # Might be an object, check its type
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.ada_type:
+                    type_obj = sym.ada_type
+                    if attr == "first" and hasattr(type_obj, "low"):
+                        return type_obj.low
+                    if attr == "last" and hasattr(type_obj, "high"):
+                        return type_obj.high
+                    # Float types
+                    if attr == "first" and hasattr(type_obj, "range_first") and type_obj.range_first is not None:
+                        return int(type_obj.range_first)
+                    if attr == "last" and hasattr(type_obj, "range_last") and type_obj.range_last is not None:
+                        return int(type_obj.range_last)
+            # Handle 'Pos and 'Val for enumeration types
+            if attr == "pos" and expr.args:
+                arg_val = self._eval_static_impl(expr.args[0], report_errors)
+                return arg_val  # 'Pos returns the position value
+            if attr == "val" and expr.args:
+                arg_val = self._eval_static_impl(expr.args[0], report_errors)
+                return arg_val  # 'Val returns the value at position
 
         # Default/fallback
-        self.error("expression is not static", expr)
-        return 0
+        if report_errors:
+            self.error("expression is not static", expr)
+        return None
 
 
-def analyze(program: Program) -> SemanticResult:
+def analyze(program: Program, search_paths: Optional[list[str]] = None) -> SemanticResult:
     """Analyze a program and return the result."""
-    analyzer = SemanticAnalyzer()
+    analyzer = SemanticAnalyzer(search_paths=search_paths)
     return analyzer.analyze(program)
