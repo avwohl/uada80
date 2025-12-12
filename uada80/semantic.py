@@ -2435,10 +2435,17 @@ class SemanticAnalyzer:
 
         for idx_subtype in type_def.index_subtypes:
             if isinstance(idx_subtype, RangeExpr):
-                # Constrained with explicit range
-                low = self._eval_static_expr(idx_subtype.low)
-                high = self._eval_static_expr(idx_subtype.high)
-                bounds.append((low, high))
+                # Constrained with explicit range - may be dynamic for local variables
+                low = self._try_eval_static(idx_subtype.low)
+                high = self._try_eval_static(idx_subtype.high)
+                # Analyze expressions even if not static
+                self._analyze_expr(idx_subtype.low)
+                self._analyze_expr(idx_subtype.high)
+                if low is not None and high is not None:
+                    bounds.append((low, high))
+                else:
+                    # Dynamic bounds - mark as unconstrained at compile time
+                    bounds.append((0, 0))  # Placeholder for dynamic bounds
                 index_types.append(PREDEFINED_TYPES["Integer"])
             else:
                 # Type or subtype mark
