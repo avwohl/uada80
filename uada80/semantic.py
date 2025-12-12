@@ -3857,12 +3857,19 @@ class SemanticAnalyzer:
                             expr,
                         )
                     return result
+                elif right_type and right_type.kind == TypeKind.UNIVERSAL_INTEGER:
+                    # Universal_Integer is implicitly convertible to modular
+                    return left_type
                 else:
                     self.error(
                         f"expected modular type, got '{right_type.name if right_type else 'unknown'}'",
                         expr.right,
                     )
                     return left_type
+            # Also handle reverse: Universal_Integer on left, modular on right
+            if left_type and left_type.kind == TypeKind.UNIVERSAL_INTEGER:
+                if right_type and right_type.kind == TypeKind.MODULAR:
+                    return right_type
             # For Boolean, these are logical operators
             self._check_boolean(left_type, expr.left)
             self._check_boolean(right_type, expr.right)
@@ -3914,6 +3921,9 @@ class SemanticAnalyzer:
         if expr.op == UnaryOp.NOT:
             # For modular types, NOT is bitwise complement
             if operand_type and operand_type.kind == TypeKind.MODULAR:
+                return operand_type
+            # For Universal_Integer, NOT is also bitwise complement
+            if operand_type and operand_type.kind == TypeKind.UNIVERSAL_INTEGER:
                 return operand_type
             # For Boolean, NOT is logical negation
             self._check_boolean(operand_type, expr.operand)
