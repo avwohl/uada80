@@ -6506,6 +6506,19 @@ class Z80CodeGen:
             self._gen_entry_call(instr)
         elif op == OpCode.ENTRY_ACCEPT:
             self._gen_entry_accept(instr)
+        elif op == OpCode.INLINE_ASM:
+            self._gen_inline_asm(instr)
+
+    def _gen_inline_asm(self, instr: IRInstr) -> None:
+        """Emit inline assembly code from pragma Machine_Code."""
+        # The assembly code is stored in the comment field
+        if instr.comment:
+            # Split multiline assembly and emit each line
+            for line in instr.comment.split('\n'):
+                line = line.strip()
+                if line:
+                    # Emit as raw assembly (already formatted)
+                    self.output.append(f"        {line}")
 
     def _load_to_hl(self, value: IRValue) -> None:
         """Load a value into HL."""

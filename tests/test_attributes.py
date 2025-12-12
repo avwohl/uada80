@@ -23,14 +23,26 @@ class TestTypeAttributes:
         assert not result.has_errors
 
     def test_type_first_last(self):
-        """Test 'First and 'Last for scalar types."""
+        """Test 'First and 'Last for scalar types.
+
+        In Ada, T'First returns a value of type T, so:
+        - Small'First returns Small, not Integer
+        - Integer'First returns Integer
+        - Float'First returns Float
+        """
         source = """
         procedure Test is
             type Small is range 1 .. 100;
-            Min, Max : Integer;
+            Min, Max : Small;  -- Must be Small, not Integer
+            I_Min, I_Max : Integer;
+            F_Min, F_Max : Float;
         begin
             Min := Small'First;
             Max := Small'Last;
+            I_Min := Integer'First;
+            I_Max := Integer'Last;
+            F_Min := Float'First;
+            F_Max := Float'Last;
         end Test;
         """
         ast = parse(source)
@@ -268,17 +280,20 @@ class TestAttributeUseCases:
         assert not result.has_errors
 
     def test_type_conversion_validation(self):
-        """Test using attributes for type validation."""
+        """Test using attributes for type validation.
+
+        Note: Small'First returns Small type, not Integer.
+        To compare with Integer, use Integer'First or explicit conversion.
+        """
         source = """
         procedure Test is
-            type Small is range 1 .. 10;
             X : Integer := 5;
             In_Range : Boolean;
             First_Val : Integer;
             Last_Val : Integer;
         begin
-            First_Val := Small'First;
-            Last_Val := Small'Last;
+            First_Val := Integer'First;
+            Last_Val := Integer'Last;
             In_Range := X >= First_Val and X <= Last_Val;
         end Test;
         """

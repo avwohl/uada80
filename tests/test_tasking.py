@@ -345,3 +345,71 @@ class TestSingleTasks:
         ast = parse(source)
         result = analyze(ast)
         assert not result.has_errors
+
+
+class TestTaskingCodegen:
+    """Tests for tasking code generation."""
+
+    def test_task_body_compilation(self):
+        """Test that task bodies compile to IR and then Z80."""
+        from uada80.compiler import compile_source
+
+        source = """
+        procedure Main is
+            task Worker;
+            task body Worker is
+            begin
+                delay 1.0;
+            end Worker;
+        begin
+            null;
+        end Main;
+        """
+        # Just verify it compiles without errors
+        result = compile_source(source)
+        # Check that task body function was generated
+        assert result.success, f"Compilation failed: {result.errors}"
+        assert result.output is not None
+        assert "_task_body_Worker" in result.output or "Worker" in result.output
+
+    def test_task_with_entry_compilation(self):
+        """Test task with entry compiles correctly."""
+        from uada80.compiler import compile_source
+
+        source = """
+        procedure Main is
+            task type Server is
+                entry Request(X : Integer);
+            end Server;
+
+            task body Server is
+            begin
+                accept Request(X : Integer) do
+                    null;
+                end Request;
+            end Server;
+        begin
+            null;
+        end Main;
+        """
+        result = compile_source(source)
+        # Should generate task body and entry accept code
+        assert result.success, f"Compilation failed: {result.errors}"
+        assert result.output is not None
+        assert "_task_body_Server" in result.output or "Server" in result.output
+
+    def test_delay_statement_compilation(self):
+        """Test delay statement generates correct runtime call."""
+        from uada80.compiler import compile_source
+
+        source = """
+        procedure Test is
+        begin
+            delay 5.0;
+        end Test;
+        """
+        result = compile_source(source)
+        # Should call the delay runtime
+        assert result.success, f"Compilation failed: {result.errors}"
+        assert result.output is not None
+        assert "_TASK_DELAY" in result.output or "DELAY" in result.output.upper()

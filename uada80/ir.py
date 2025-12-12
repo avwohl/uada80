@@ -134,6 +134,9 @@ class OpCode(Enum):
     SHL = auto()  # dst = src1 << src2
     SHR = auto()  # dst = src1 >> src2
 
+    # Comparison (sets flags only)
+    CMP = auto()  # compare src1 with src2, set flags
+
     # Comparison (sets dst to 0 or 1)
     CMP_EQ = auto()  # dst = src1 == src2
     CMP_NE = auto()  # dst = src1 != src2
@@ -167,6 +170,7 @@ class OpCode(Enum):
     # Special
     NOP = auto()  # no operation
     LABEL = auto()  # label definition (pseudo-instruction)
+    INLINE_ASM = auto()  # inline assembly (asm code in comment field)
 
     # Exception handling
     EXC_PUSH = auto()  # push exception handler (dst=handler_label, src1=exc_id)
@@ -382,6 +386,12 @@ class IRBuilder:
         self._label_counter += 1
         return name
 
+    def new_label(self, prefix: str = "L") -> str:
+        """Generate a unique label name with optional prefix."""
+        name = f"{prefix}_{self._label_counter}"
+        self._label_counter += 1
+        return name
+
     def new_string_label(self) -> str:
         """Generate a unique string literal label."""
         name = f"_str{self._string_counter}"
@@ -443,6 +453,10 @@ class IRBuilder:
     def not_(self, dst: VReg, src: IRValue, comment: str = "") -> None:
         """Emit a bitwise NOT instruction."""
         self.emit(IRInstr(OpCode.NOT, dst, src, comment=comment))
+
+    def cmp(self, src1: IRValue, src2: IRValue, comment: str = "") -> None:
+        """Emit a comparison instruction (sets flags)."""
+        self.emit(IRInstr(OpCode.CMP, None, src1, src2, comment=comment))
 
     def cmp_eq(self, dst: VReg, src1: IRValue, src2: IRValue, comment: str = "") -> None:
         """Emit an equality comparison."""

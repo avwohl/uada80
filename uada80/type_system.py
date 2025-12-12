@@ -75,7 +75,12 @@ class AdaType:
 
     def is_discrete(self) -> bool:
         """Check if this is a discrete type (integer or enumeration)."""
-        return self.kind in (TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.ENUMERATION)
+        return self.kind in (
+            TypeKind.INTEGER,
+            TypeKind.MODULAR,
+            TypeKind.ENUMERATION,
+            TypeKind.UNIVERSAL_INTEGER,
+        )
 
     def is_numeric(self) -> bool:
         """Check if this is a numeric type."""
@@ -84,6 +89,8 @@ class AdaType:
             TypeKind.MODULAR,
             TypeKind.FLOAT,
             TypeKind.FIXED,
+            TypeKind.UNIVERSAL_INTEGER,
+            TypeKind.UNIVERSAL_REAL,
         )
 
     def is_composite(self) -> bool:
@@ -845,6 +852,27 @@ def create_predefined_types() -> dict[str, AdaType]:
         is_constrained=False,
     )
 
+    # Wide_Character type (16-bit Unicode BMP)
+    wide_char_literals = [chr(i) for i in range(65536)]
+    wide_char_positions = {chr(i): i for i in range(65536)}
+    types["Wide_Character"] = EnumerationType(
+        name="Wide_Character",
+        kind=TypeKind.ENUMERATION,
+        size_bits=16,
+        literals=wide_char_literals,
+        positions=wide_char_positions,
+    )
+
+    # Wide_String type (unconstrained array of Wide_Character)
+    types["Wide_String"] = ArrayType(
+        name="Wide_String",
+        kind=TypeKind.ARRAY,
+        size_bits=0,  # Unconstrained
+        index_types=[types["Positive"]],  # type: ignore
+        component_type=types["Wide_Character"],
+        is_constrained=False,
+    )
+
     # Universal_Integer (compile-time integer, unlimited precision)
     types["Universal_Integer"] = AdaType(
         name="Universal_Integer",
@@ -922,12 +950,24 @@ def types_compatible(t1: AdaType, t2: AdaType) -> bool:
     if same_type(t1, t2):
         return True
 
+    # Check subtype relationship (e.g., Small is subtype of Integer)
+    if is_subtype_of(t1, t2) or is_subtype_of(t2, t1):
+        return True
+
     # Universal_Integer is compatible with integer/modular types only
     if t1.kind == TypeKind.UNIVERSAL_INTEGER:
         if t2.kind in (TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.UNIVERSAL_INTEGER):
             return True
     if t2.kind == TypeKind.UNIVERSAL_INTEGER:
         if t1.kind in (TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.UNIVERSAL_INTEGER):
+            return True
+
+    # Universal_Real is compatible with float/fixed types
+    if t1.kind == TypeKind.UNIVERSAL_REAL:
+        if t2.kind in (TypeKind.FLOAT, TypeKind.FIXED, TypeKind.UNIVERSAL_REAL):
+            return True
+    if t2.kind == TypeKind.UNIVERSAL_REAL:
+        if t1.kind in (TypeKind.FLOAT, TypeKind.FIXED, TypeKind.UNIVERSAL_REAL):
             return True
 
     # Interface compatibility: a tagged type is compatible with interfaces it implements
@@ -980,6 +1020,14 @@ def can_convert(from_type: AdaType, to_type: AdaType) -> bool:
     if from_type.kind == TypeKind.UNIVERSAL_INTEGER and to_type.is_discrete():
         return True
 
+    # Universal integer to float (e.g., Float(5))
+    if from_type.kind == TypeKind.UNIVERSAL_INTEGER and to_type.kind == TypeKind.FLOAT:
+        return True
+
+    # Universal real to numeric
+    if from_type.kind == TypeKind.UNIVERSAL_REAL and to_type.is_numeric():
+        return True
+
     # Enumeration types are not convertible to each other (except via Pos/Val)
     if from_type.kind == TypeKind.ENUMERATION and to_type.kind == TypeKind.ENUMERATION:
         return False
@@ -1001,6 +1049,22 @@ def common_type(t1: AdaType, t2: AdaType) -> Optional[AdaType]:
         return t2
     if t2.kind == TypeKind.UNIVERSAL_INTEGER and t1.is_discrete():
         return t1
+
+    # Universal_Real with float/fixed -> the float/fixed type
+    if t1.kind == TypeKind.UNIVERSAL_REAL:
+        if t2.kind in (TypeKind.FLOAT, TypeKind.FIXED):
+            return t2
+    if t2.kind == TypeKind.UNIVERSAL_REAL:
+        if t1.kind in (TypeKind.FLOAT, TypeKind.FIXED):
+            return t1
+
+    # Universal_Integer with integer/modular -> the integer/modular type
+    if t1.kind == TypeKind.UNIVERSAL_INTEGER:
+        if t2.kind in (TypeKind.INTEGER, TypeKind.MODULAR):
+            return t2
+    if t2.kind == TypeKind.UNIVERSAL_INTEGER:
+        if t1.kind in (TypeKind.INTEGER, TypeKind.MODULAR):
+            return t1
 
     # Subtype and base type -> base type
     if is_subtype_of(t1, t2):
