@@ -760,9 +760,10 @@ class SemanticAnalyzer:
         old_subprogram = self.current_subprogram
         self.current_subprogram = subprog_symbol
 
-        # Process parameters
+        # Process parameters (but don't add to symbol if completing generic - already done)
         for param_spec in spec.parameters:
-            self._analyze_parameter_spec(param_spec, subprog_symbol)
+            self._analyze_parameter_spec(param_spec, subprog_symbol,
+                                        add_to_symbol=not is_completing_generic)
 
         # Analyze Pre/Post aspects
         self._analyze_subprogram_aspects(spec, subprog_symbol)
@@ -780,7 +781,7 @@ class SemanticAnalyzer:
         self.symbols.leave_scope()
 
     def _analyze_parameter_spec(
-        self, param: ParameterSpec, subprog: Symbol
+        self, param: ParameterSpec, subprog: Symbol, add_to_symbol: bool = True
     ) -> None:
         """Analyze a parameter specification."""
         param_type = self._resolve_type(param.type_mark)
@@ -802,7 +803,8 @@ class SemanticAnalyzer:
                 default_value=param.default_value,
             )
             self.symbols.define(param_symbol)
-            subprog.parameters.append(param_symbol)
+            if add_to_symbol:
+                subprog.parameters.append(param_symbol)
 
     def _analyze_subprogram_aspects(
         self, spec: SubprogramDecl, subprog: Symbol
@@ -1252,6 +1254,8 @@ class SemanticAnalyzer:
         inst_symbol.generic_instance_of = generic_sym
         inst_symbol.generic_actuals = inst.actual_parameters
         inst_symbol.return_type = generic_sym.return_type
+        # Copy parameters from the original generic subprogram
+        inst_symbol.parameters = generic_sym.parameters.copy() if generic_sym.parameters else []
 
         # Check if this is Ada.Unchecked_Deallocation instantiation
         generic_name_lower = generic_name.lower()
@@ -3337,10 +3341,18 @@ class SemanticAnalyzer:
             )
             return
 
+        # Check if this is a generic instance - if so, skip strict type checking
+        # because parameter types are generic formals, not substituted actuals
+        is_generic_instance = getattr(subprog, 'generic_instance_of', None) is not None
+
         for arg, param in zip(args, subprog.parameters):
             if arg.value:
                 arg_type = self._analyze_expr(arg.value)
                 if arg_type and param.ada_type:
+                    # For generic instances, accept any type for generic formal parameters
+                    if is_generic_instance:
+                        # Just analyze the argument, don't check type compatibility
+                        continue
                     if not types_compatible(param.ada_type, arg_type):
                         self.error(
                             f"type mismatch for parameter '{param.name}': "
