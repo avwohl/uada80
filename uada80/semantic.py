@@ -3998,10 +3998,31 @@ class SemanticAnalyzer:
 
         if expr.op in (UnaryOp.PLUS, UnaryOp.MINUS, UnaryOp.ABS):
             if operand_type and not operand_type.is_numeric():
-                self.error(
-                    f"numeric type required, got '{operand_type.name}'",
-                    expr.operand,
-                )
+                # Check for user-defined operator
+                op_name = {
+                    UnaryOp.PLUS: '"++"',  # Ada uses "+" for unary plus
+                    UnaryOp.MINUS: '"-"',
+                    UnaryOp.ABS: '"abs"',
+                }.get(expr.op, '"-"')
+                # Ada convention: unary operators use the same name as binary ones
+                op_name_lookup = {
+                    UnaryOp.PLUS: '+',
+                    UnaryOp.MINUS: '-',
+                    UnaryOp.ABS: 'abs',
+                }.get(expr.op, '-')
+                overloads = self.symbols.all_overloads(op_name_lookup)
+                found_match = False
+                for candidate in overloads:
+                    if candidate.kind == SymbolKind.FUNCTION and len(candidate.parameters) == 1:
+                        param_type = candidate.parameters[0].ada_type
+                        if param_type and types_compatible(param_type, operand_type):
+                            found_match = True
+                            return candidate.return_type
+                if not found_match:
+                    self.error(
+                        f"numeric type required, got '{operand_type.name}'",
+                        expr.operand,
+                    )
             return operand_type
 
         return operand_type
