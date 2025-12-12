@@ -928,6 +928,13 @@ def same_type(t1: AdaType, t2: AdaType) -> bool:
     return t1.name == t2.name
 
 
+def get_root_type(t: AdaType) -> AdaType:
+    """Get the root (base) type of a subtype chain."""
+    if isinstance(t, IntegerType) and t.base_type:
+        return get_root_type(t.base_type)
+    return t
+
+
 def is_subtype_of(subtype: AdaType, parent: AdaType) -> bool:
     """Check if subtype is a subtype of parent."""
     if same_type(subtype, parent):
@@ -938,6 +945,19 @@ def is_subtype_of(subtype: AdaType, parent: AdaType) -> bool:
         return is_subtype_of(subtype.base_type, parent)
 
     return False
+
+
+def same_base_type(t1: AdaType, t2: AdaType) -> bool:
+    """Check if two types share the same base type.
+
+    In Ada, subtypes of the same type are compatible with each other.
+    For example, Positive and Natural are both subtypes of Integer.
+    """
+    if t1.kind != t2.kind:
+        return False
+    root1 = get_root_type(t1)
+    root2 = get_root_type(t2)
+    return same_type(root1, root2)
 
 
 def types_compatible(t1: AdaType, t2: AdaType) -> bool:
@@ -952,6 +972,10 @@ def types_compatible(t1: AdaType, t2: AdaType) -> bool:
 
     # Check subtype relationship (e.g., Small is subtype of Integer)
     if is_subtype_of(t1, t2) or is_subtype_of(t2, t1):
+        return True
+
+    # Subtypes of the same base type are compatible (e.g., Positive and Natural)
+    if same_base_type(t1, t2):
         return True
 
     # Universal_Integer is compatible with integer/modular types only
