@@ -1171,6 +1171,14 @@ class Parser:
             self.expect(TokenType.COLON)
             return self.parse_loop_statement(label=label)
 
+        # Check for labeled block: Label : declare/begin
+        if (self.check(TokenType.IDENTIFIER) and
+            self.peek_next_type() == TokenType.COLON and
+            self.peek(2).type in (TokenType.DECLARE, TokenType.BEGIN)):
+            label = self.expect_identifier()
+            self.expect(TokenType.COLON)
+            return self.parse_block_statement(label=label)
+
         # Loop statement
         if self.check(TokenType.LOOP, TokenType.WHILE, TokenType.FOR):
             return self.parse_loop_statement()
@@ -1179,8 +1187,8 @@ class Parser:
         if self.check(TokenType.PARALLEL):
             return self.parse_parallel_statement()
 
-        # Block statement
-        if self.check(TokenType.DECLARE):
+        # Block statement (with declare) or unnamed begin block
+        if self.check(TokenType.DECLARE, TokenType.BEGIN):
             return self.parse_block_statement()
 
         # Exit statement
@@ -1495,12 +1503,21 @@ class Parser:
         # It's a subtype indication or type mark
         return first_expr
 
-    def parse_block_statement(self) -> BlockStmt:
-        """Parse block statement."""
-        start = self.current
-        self.expect(TokenType.DECLARE)
+    def parse_block_statement(self, label: Optional[str] = None) -> BlockStmt:
+        """Parse block statement.
 
-        declarations = self.parse_declarative_part()
+        Block statements can be:
+            declare ... begin ... end;
+            begin ... end;
+            Label: declare ... begin ... end Label;
+            Label: begin ... end Label;
+        """
+        start = self.current
+        declarations = []
+
+        # Optional DECLARE part
+        if self.match(TokenType.DECLARE):
+            declarations = self.parse_declarative_part()
 
         self.expect(TokenType.BEGIN)
         statements = self.parse_statement_sequence()
@@ -1510,10 +1527,19 @@ class Parser:
             handlers = self.parse_exception_handlers()
 
         self.expect(TokenType.END)
+
+        # Optional trailing block name (must match leading label)
+        trailing_label = None
+        if self.check(TokenType.IDENTIFIER):
+            trailing_label = self.expect_identifier()
+            if label and trailing_label.lower() != label.lower():
+                print(f"Parse warning: Block end label '{trailing_label}' does not match start label '{label}'")
+
         self.expect(TokenType.SEMICOLON)
 
         return BlockStmt(
-            declarations=declarations, statements=statements, handled_exception_handlers=handlers, span=self.make_span(start)
+            declarations=declarations, statements=statements, handled_exception_handlers=handlers,
+            label=label or trailing_label, span=self.make_span(start)
         )
 
     def parse_exit_statement(self) -> ExitStmt:
