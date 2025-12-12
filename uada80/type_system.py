@@ -1096,6 +1096,10 @@ def common_type(t1: AdaType, t2: AdaType) -> Optional[AdaType]:
     if is_subtype_of(t2, t1):
         return t1
 
+    # Subtypes with same base type -> return the common base type
+    if same_base_type(t1, t2):
+        return get_root_type(t1)
+
     return None
 
 
