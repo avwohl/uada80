@@ -1905,8 +1905,8 @@ class SemanticAnalyzer:
             entries=entries,
         )
 
-        if existing is not None and existing.ada_type and existing.ada_type.kind == TypeKind.INCOMPLETE:
-            # Completing an incomplete type - update the existing symbol
+        if existing is not None and existing.ada_type and existing.ada_type.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE):
+            # Completing an incomplete/private type - update the existing symbol
             existing.kind = SymbolKind.TASK_TYPE
             existing.ada_type = task_type
             existing.definition = decl
@@ -2073,8 +2073,8 @@ class SemanticAnalyzer:
             components=components,
         )
 
-        if existing is not None and existing.ada_type and existing.ada_type.kind == TypeKind.INCOMPLETE:
-            # Completing an incomplete type - update the existing symbol
+        if existing is not None and existing.ada_type and existing.ada_type.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE):
+            # Completing an incomplete/private type - update the existing symbol
             existing.kind = SymbolKind.PROTECTED_TYPE
             existing.ada_type = prot_type
             existing.definition = decl
