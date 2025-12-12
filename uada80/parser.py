@@ -301,6 +301,7 @@ class Parser:
 
         Ada grammar for names is quite complex, handling:
         - Simple identifiers
+        - Operator symbols ("+" can be a name in renaming contexts)
         - Selected components (Package.Entity)
         - Indexed components (Array(I))
         - Slices (Array(1..10))
@@ -308,7 +309,14 @@ class Parser:
         - Function calls (which look like indexed components)
         """
         start = self.current
-        name: Expr = Identifier(name=self.expect_identifier(), span=self.make_span(start))
+
+        # Handle operator symbol as name (e.g., function "+" renames Other."+";)
+        if self.check(TokenType.STRING_LITERAL):
+            op_name = self.current.value
+            self.advance()
+            name: Expr = Identifier(name=op_name, span=self.make_span(start))
+        else:
+            name = Identifier(name=self.expect_identifier(), span=self.make_span(start))
 
         # Handle suffixes (dot, apostrophe, parentheses)
         while True:
