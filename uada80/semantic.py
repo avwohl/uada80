@@ -35,6 +35,7 @@ from uada80.ast_nodes import (
     TaskBody,
     EntryDecl,
     EntryBody,
+    BodyStub,
     ProtectedTypeDecl,
     ProtectedBody,
     # Statements
@@ -1305,6 +1306,8 @@ class SemanticAnalyzer:
             self._analyze_protected_type_decl(decl)
         elif isinstance(decl, ProtectedBody):
             self._analyze_protected_body(decl)
+        elif isinstance(decl, BodyStub):
+            self._analyze_body_stub(decl)
         elif isinstance(decl, PackageDecl):
             self._analyze_package_decl(decl)
         elif isinstance(decl, PackageBody):
@@ -2217,6 +2220,61 @@ class SemanticAnalyzer:
         self.in_accept_or_entry = old_in_accept_or_entry
 
         self.symbols.leave_scope()
+
+    def _analyze_body_stub(self, stub: BodyStub) -> None:
+        """Analyze a body stub declaration (is separate).
+
+        A body stub declares a subprogram, package, task, or protected unit
+        whose body will be provided in a separate compilation unit.
+        We define the symbol here so it can be referenced before the body is seen.
+        """
+        if stub.kind == "procedure":
+            # Define a procedure symbol
+            symbol = Symbol(
+                name=stub.name,
+                kind=SymbolKind.PROCEDURE,
+                parameters=[],  # No parameters available from stub
+                definition=stub,
+            )
+            self.symbols.define(symbol)
+        elif stub.kind == "function":
+            # Define a function symbol
+            symbol = Symbol(
+                name=stub.name,
+                kind=SymbolKind.FUNCTION,
+                parameters=[],  # No parameters available from stub
+                return_type=None,
+                definition=stub,
+            )
+            self.symbols.define(symbol)
+        elif stub.kind == "package":
+            # Define a package symbol
+            symbol = Symbol(
+                name=stub.name,
+                kind=SymbolKind.PACKAGE,
+                definition=stub,
+            )
+            self.symbols.define(symbol)
+        elif stub.kind == "task":
+            # Define a task symbol
+            task_type = TaskType(name=stub.name, is_single_task=True)
+            symbol = Symbol(
+                name=stub.name,
+                kind=SymbolKind.TASK,
+                ada_type=task_type,
+                definition=stub,
+            )
+            self.symbols.define(symbol)
+        elif stub.kind == "protected":
+            # Define a protected symbol
+            prot_type = ProtectedType(name=stub.name, is_single_protected=True)
+            symbol = Symbol(
+                name=stub.name,
+                kind=SymbolKind.PROTECTED,
+                ada_type=prot_type,
+                definition=stub,
+            )
+            self.symbols.define(symbol)
 
     # =========================================================================
     # Type Building
