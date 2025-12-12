@@ -2915,12 +2915,33 @@ class SemanticAnalyzer:
                 iterator = stmt.iteration_scheme.iterator
                 iter_type = self._analyze_expr(iterator.iterable)
 
+                # For "for X of Array" loops, get the element type
+                loop_var_type = iter_type
+                is_constant = True  # Loop variable is normally constant
+
+                if iterator.is_of_iterator and iter_type:
+                    # "for Element of Container" - get element type
+                    if isinstance(iter_type, ArrayType) and iter_type.component_type:
+                        loop_var_type = iter_type.component_type
+                    elif hasattr(iter_type, 'component_type') and iter_type.component_type:
+                        loop_var_type = iter_type.component_type
+                    else:
+                        # Fall back to Integer for unknown container types
+                        loop_var_type = PREDEFINED_TYPES.get("Integer")
+
+                    # For-of loop variable is mutable if container is mutable
+                    # Check if iterable is a non-constant variable
+                    if isinstance(iterator.iterable, Identifier):
+                        container_sym = self.symbols.lookup(iterator.iterable.name)
+                        if container_sym and not getattr(container_sym, 'is_constant', False):
+                            is_constant = False
+
                 # Define loop variable
                 loop_var = Symbol(
                     name=iterator.name,
                     kind=SymbolKind.VARIABLE,
-                    ada_type=iter_type if iter_type else PREDEFINED_TYPES["Integer"],
-                    is_constant=True,  # Loop variable is implicitly constant
+                    ada_type=loop_var_type if loop_var_type else PREDEFINED_TYPES["Integer"],
+                    is_constant=is_constant,
                 )
                 self.symbols.define(loop_var)
 
