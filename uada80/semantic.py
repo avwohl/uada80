@@ -23,6 +23,7 @@ from uada80.ast_nodes import (
     PackageDecl,
     PackageBody,
     ObjectDecl,
+    NumberDecl,
     TypeDecl,
     SubtypeDecl,
     ParameterSpec,
@@ -1262,6 +1263,8 @@ class SemanticAnalyzer:
         """Analyze a declaration."""
         if isinstance(decl, ObjectDecl):
             self._analyze_object_decl(decl)
+        elif isinstance(decl, NumberDecl):
+            self._analyze_number_decl(decl)
         elif isinstance(decl, TypeDecl):
             self._analyze_type_decl(decl)
         elif isinstance(decl, SubtypeDecl):
@@ -1370,6 +1373,45 @@ class SemanticAnalyzer:
                 is_aliased=decl.is_aliased,
                 definition=decl,
                 value=static_value,  # Store static value for constants (None for deferred)
+            )
+            self.symbols.define(symbol)
+
+    def _analyze_number_decl(self, decl: NumberDecl) -> None:
+        """Analyze a number declaration (named number).
+
+        Ada allows named numbers like:
+            X : constant := 10;
+            Pi : constant := 3.14159;
+
+        These are compile-time constants with universal types.
+        """
+        # Evaluate the static expression
+        static_value = self._try_eval_static(decl.value)
+
+        # Determine type based on the expression
+        if isinstance(decl.value, IntegerLiteral):
+            num_type = self.symbols.lookup_type("universal_integer")
+        elif isinstance(decl.value, RealLiteral):
+            num_type = self.symbols.lookup_type("universal_real")
+        else:
+            # For other expressions, try to infer type
+            num_type = self._analyze_expr(decl.value)
+            if num_type is None:
+                num_type = self.symbols.lookup_type("universal_integer")
+
+        # Create symbols for each name
+        for name in decl.names:
+            if self.symbols.is_defined_locally(name):
+                self.error(f"'{name}' is already defined in this scope", decl)
+                continue
+
+            symbol = Symbol(
+                name=name,
+                kind=SymbolKind.VARIABLE,
+                ada_type=num_type,
+                is_constant=True,
+                definition=decl,
+                value=static_value,
             )
             self.symbols.define(symbol)
 

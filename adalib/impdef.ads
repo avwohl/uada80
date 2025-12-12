@@ -35,6 +35,9 @@ package ImpDef is
    Max_Linker_Alignment : constant := 8;
    Maximum_Adjustment_To_Specified_Storage_Size : constant := 1024;
 
+   -- Character size (bits per character, typically 8)
+   Char_Bits : constant := 8;
+
    -- Directory operations
    Directory_To_Create : constant String := "TESTDIR";
    Parent_Directory_Name : constant String := "..";
