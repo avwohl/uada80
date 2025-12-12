@@ -3832,10 +3832,11 @@ class SemanticAnalyzer:
         self._analyze_expr(expr.range_expr)
 
         # Slice of an array returns same array type (unconstrained)
+        # Use the same type name so slices are compatible with the base type
         return ArrayType(
-            name=f"{prefix_type.name}_slice",
+            name=prefix_type.name,  # Same type name - slice of String is String
             kind=prefix_type.kind,
-            size_bits=0,  # Size depends on range
+            size_bits=0,  # Size depends on range at runtime
             index_types=prefix_type.index_types,
             component_type=prefix_type.component_type,
             is_constrained=False,
