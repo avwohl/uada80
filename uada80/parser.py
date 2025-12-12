@@ -757,11 +757,13 @@ class Parser:
 
             elif self.match(TokenType.COMMA):
                 # Positional aggregate: (val1, val2, ...)
+                # Ada allows mixing positional and named: (1, 2, X => 3)
                 components = [ComponentAssociation(choices=[], value=first_expr)]
 
                 while True:
-                    expr = self.parse_expression()
-                    components.append(ComponentAssociation(choices=[], value=expr))
+                    # Use parse_aggregate_component to handle named associations
+                    comp = self.parse_aggregate_component()
+                    components.append(comp)
                     if not self.match(TokenType.COMMA):
                         break
 
@@ -1745,23 +1747,45 @@ class Parser:
         return statements
 
     def parse_exception_handlers(self) -> list[ExceptionHandler]:
-        """Parse exception handlers."""
+        """Parse exception handlers.
+
+        Syntax:
+            when [occurrence_name :] exception_choice {| exception_choice} =>
+                statements
+
+        Where exception_choice can be an exception name or 'others'.
+        """
         handlers = []
 
         while self.match(TokenType.WHEN):
-            exception_names = []
+            exception_names: list[Expr] = []
+            occurrence_name: Optional[str] = None
+
+            # Check for occurrence name: identifier : (before exceptions)
+            if (self.check(TokenType.IDENTIFIER) and
+                self.peek(1).type == TokenType.COLON and
+                self.peek(2).type != TokenType.ASSIGN):  # Not a decl
+                occurrence_name = self.advance().value
+                self.advance()  # consume ':'
 
             if self.match(TokenType.OTHERS):
                 exception_names = []
             else:
                 exception_names.append(self.parse_name())
                 while self.match(TokenType.PIPE):
-                    exception_names.append(self.parse_name())
+                    if self.match(TokenType.OTHERS):
+                        pass  # others can appear in choice list
+                    else:
+                        exception_names.append(self.parse_name())
 
             self.expect(TokenType.ARROW)
             stmts = self.parse_statement_sequence()
 
-            handlers.append(ExceptionHandler(exception_names=exception_names, statements=stmts))
+            handlers.append(ExceptionHandler(
+                exception_names=exception_names,
+                statements=stmts,
+                occurrence_name=occurrence_name
+            ))
 
         return handlers
 

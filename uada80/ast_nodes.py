@@ -1260,6 +1260,7 @@ class ExceptionHandler(ASTNode):
 
     exception_names: list[Expr]  # Empty or 'others' for catch-all
     statements: list[Stmt]
+    occurrence_name: Optional[str] = None  # Exception occurrence identifier
 
 
 # ============================================================================
