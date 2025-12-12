@@ -3741,7 +3741,13 @@ class SemanticAnalyzer:
         # Access type dereference (Ptr.all)
         if expr.selector.lower() == "all":
             if isinstance(prefix_type, AccessType):
-                return prefix_type.designated_type
+                designated = prefix_type.designated_type
+                # If designated type is incomplete, try to get the completed type
+                if designated and designated.kind == TypeKind.INCOMPLETE:
+                    completed = self.symbols.lookup_type(designated.name)
+                    if completed:
+                        designated = completed
+                return designated
             self.error(
                 f"'.all' can only be applied to access types, not '{prefix_type.name}'",
                 expr,
@@ -3762,6 +3768,11 @@ class SemanticAnalyzer:
         # Access to record - implicit dereference
         if isinstance(prefix_type, AccessType):
             designated = prefix_type.designated_type
+            # If designated type is incomplete, try to get the completed type
+            if designated and designated.kind == TypeKind.INCOMPLETE:
+                completed = self.symbols.lookup_type(designated.name)
+                if completed:
+                    designated = completed
             if isinstance(designated, RecordType):
                 comp = designated.get_component(expr.selector)
                 if comp is None:
