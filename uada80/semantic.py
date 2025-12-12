@@ -200,7 +200,11 @@ class SemanticAnalyzer:
         # Assignment target tracking for @ (target name) support
         self.current_assignment_target_type: Optional[AdaType] = None
         # Multi-file package loading support
+        # Auto-include adalib directory for standard library stubs
+        adalib_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "adalib")
         self.search_paths: list[str] = search_paths or []
+        if os.path.isdir(adalib_dir) and adalib_dir not in self.search_paths:
+            self.search_paths.insert(0, adalib_dir)
         self._loaded_packages: dict[str, Symbol] = {}  # Cache of loaded packages
         self._loading_packages: set[str] = set()  # Packages currently being loaded (cycle detection)
 
