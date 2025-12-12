@@ -652,15 +652,58 @@ class SemanticAnalyzer:
 
     def _analyze_use_clause(self, clause: UseClause) -> None:
         """Analyze a use clause."""
-        for name in clause.names:
-            if isinstance(name, Identifier):
-                pkg_symbol = self.symbols.lookup(name.name)
-                if pkg_symbol is None:
-                    self.error(f"package '{name.name}' not found", name)
-                elif pkg_symbol.kind != SymbolKind.PACKAGE:
-                    self.error(f"'{name.name}' is not a package", name)
-                else:
-                    self.symbols.add_use_clause(pkg_symbol)
+        if clause.is_type or clause.is_all:
+            # use type T; or use all type T;
+            # Makes operators (and for is_all, all primitives) directly visible
+            for name in clause.names:
+                type_sym = None
+                pkg_symbol = None
+
+                if isinstance(name, SelectedName):
+                    # Qualified name like P.T
+                    pkg_name = self._get_hierarchical_name(name.prefix)
+                    pkg_symbol = self.symbols.lookup(pkg_name)
+                    if pkg_symbol and pkg_symbol.kind == SymbolKind.PACKAGE:
+                        type_name = name.selector.lower() if isinstance(name.selector, str) else name.selector
+                        if type_name in pkg_symbol.public_symbols:
+                            type_sym = pkg_symbol.public_symbols[type_name]
+                elif isinstance(name, Identifier):
+                    type_sym = self.symbols.lookup(name.name)
+
+                if type_sym is None or type_sym.kind not in (SymbolKind.TYPE, SymbolKind.SUBTYPE):
+                    type_name = self._get_hierarchical_name(name)
+                    self.error(f"type '{type_name}' not found for use type clause", name)
+                    continue
+
+                # For use all type, make all primitive operations visible
+                if clause.is_all and pkg_symbol and pkg_symbol.kind == SymbolKind.PACKAGE:
+                    # Find primitive operations - operations with parameters of this type
+                    target_type = type_sym.ada_type
+                    for sym_name, sym in pkg_symbol.public_symbols.items():
+                        if sym.kind in (SymbolKind.PROCEDURE, SymbolKind.FUNCTION):
+                            # Check if any parameter is of the target type
+                            is_primitive = False
+                            if hasattr(sym, 'parameters') and sym.parameters:
+                                for param in sym.parameters:
+                                    if param.ada_type and target_type:
+                                        if (param.ada_type.name == target_type.name or
+                                            param.ada_type == target_type):
+                                            is_primitive = True
+                                            break
+                            if is_primitive:
+                                # Make this operation directly visible
+                                self.symbols.define(sym)
+        else:
+            # Regular use clause (use Package;)
+            for name in clause.names:
+                if isinstance(name, Identifier):
+                    pkg_symbol = self.symbols.lookup(name.name)
+                    if pkg_symbol is None:
+                        self.error(f"package '{name.name}' not found", name)
+                    elif pkg_symbol.kind != SymbolKind.PACKAGE:
+                        self.error(f"'{name.name}' is not a package", name)
+                    else:
+                        self.symbols.add_use_clause(pkg_symbol)
 
     # =========================================================================
     # Subprograms
