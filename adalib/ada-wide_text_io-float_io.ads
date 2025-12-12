@@ -1,0 +1,47 @@
+-- Ada.Wide_Text_IO.Float_IO for Z80
+-- Wide float I/O operations
+
+with Ada.Wide_Text_IO;
+
+generic
+   type Num is digits <>;
+package Ada.Wide_Text_IO.Float_IO is
+
+   Default_Fore : Field := 2;
+   Default_Aft  : Field := Num'Digits - 1;
+   Default_Exp  : Field := 3;
+
+   procedure Get
+     (File  : File_Type;
+      Item  : out Num;
+      Width : Field := 0);
+
+   procedure Get
+     (Item  : out Num;
+      Width : Field := 0);
+
+   procedure Put
+     (File : File_Type;
+      Item : Num;
+      Fore : Field := Default_Fore;
+      Aft  : Field := Default_Aft;
+      Exp  : Field := Default_Exp);
+
+   procedure Put
+     (Item : Num;
+      Fore : Field := Default_Fore;
+      Aft  : Field := Default_Aft;
+      Exp  : Field := Default_Exp);
+
+   procedure Get
+     (From : Wide_String;
+      Item : out Num;
+      Last : out Positive);
+
+   procedure Put
+     (To   : out Wide_String;
+      Item : Num;
+      Aft  : Field := Default_Aft;
+      Exp  : Field := Default_Exp);
+
+end Ada.Wide_Text_IO.Float_IO;

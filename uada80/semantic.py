@@ -3016,6 +3016,26 @@ class SemanticAnalyzer:
             if symbol is None:
                 self.error(f"procedure '{stmt.name.name}' not found", stmt)
                 return
+
+            # Handle access-to-subprogram (function pointer) calls
+            if symbol.kind in (SymbolKind.VARIABLE, SymbolKind.CONSTANT):
+                if isinstance(symbol.ada_type, AccessSubprogramType):
+                    if symbol.ada_type.is_function:
+                        self.error(
+                            f"'{stmt.name.name}' is an access-to-function, "
+                            "cannot be called as a procedure",
+                            stmt,
+                        )
+                        return
+                    # Check arguments against access subprogram type
+                    self._check_access_subprogram_call(
+                        symbol.ada_type, stmt.args, stmt
+                    )
+                    return
+                else:
+                    self.error(f"'{stmt.name.name}' is not a procedure", stmt)
+                    return
+
             if symbol.kind not in (SymbolKind.PROCEDURE, SymbolKind.FUNCTION):
                 self.error(f"'{stmt.name.name}' is not a procedure", stmt)
                 return
@@ -3053,6 +3073,31 @@ class SemanticAnalyzer:
                         self.error(
                             f"type mismatch for parameter '{param.name}': "
                             f"expected '{param.ada_type.name}', got '{arg_type.name}'",
+                            arg.value,
+                        )
+
+    def _check_access_subprogram_call(
+        self, access_type: AccessSubprogramType, args: list, node: ASTNode
+    ) -> None:
+        """Check arguments for a call through an access-to-subprogram type."""
+        num_params = len(access_type.parameter_types)
+        num_args = len(args)
+
+        if num_args != num_params:
+            self.error(
+                f"wrong number of arguments: expected {num_params}, got {num_args}",
+                node,
+            )
+            return
+
+        for i, (arg, param_type) in enumerate(zip(args, access_type.parameter_types)):
+            if arg.value:
+                arg_type = self._analyze_expr(arg.value)
+                if arg_type and param_type:
+                    if not types_compatible(param_type, arg_type):
+                        self.error(
+                            f"type mismatch for parameter {i + 1}: "
+                            f"expected '{param_type.name}', got '{arg_type.name}'",
                             arg.value,
                         )
 
