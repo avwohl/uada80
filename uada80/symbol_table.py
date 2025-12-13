@@ -240,6 +240,7 @@ class SymbolTable:
         self._init_interfaces()
         self._init_system_packages()
         self._init_impdef()
+        self._init_spprt13()
 
     def _init_text_io(self) -> None:
         """Add Ada.Text_IO package to the standard scope."""
@@ -4502,6 +4503,105 @@ class SymbolTable:
 
         # Register the ImpDef package at global scope
         self.current_scope.define(impdef_pkg)
+
+    def _init_spprt13(self) -> None:
+        """
+        Initialize SPPRT13 package for ACATS Chapter 13 test support.
+
+        SPPRT13 provides address constants used by Chapter 13 tests
+        (representation clauses). These are Z80/CP/M specific addresses.
+        """
+        # Get System.Address type
+        system_pkg = self.lookup("System")
+        if system_pkg is None:
+            return
+
+        addr_type = system_pkg.public_symbols.get("address")
+        if addr_type is None:
+            return
+        addr_ada_type = addr_type.ada_type
+
+        # Create SPPRT13 package
+        spprt13_pkg = Symbol(
+            name="SPPRT13",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # =====================================================================
+        # Variable Address Constants
+        # These are valid addresses for variables in the Z80 address space
+        # We use addresses in the high TPA area (below BDOS)
+        # =====================================================================
+
+        # Variable_Address - primary variable address constant
+        spprt13_pkg.public_symbols["variable_address"] = Symbol(
+            name="Variable_Address",
+            kind=SymbolKind.CONSTANT,
+            ada_type=addr_ada_type,
+            is_constant=True,
+            value=0x8000,  # 32768 - middle of RAM
+            scope_level=0,
+        )
+
+        # Variable_Address1 - second variable address
+        spprt13_pkg.public_symbols["variable_address1"] = Symbol(
+            name="Variable_Address1",
+            kind=SymbolKind.CONSTANT,
+            ada_type=addr_ada_type,
+            is_constant=True,
+            value=0x8100,  # 33024
+            scope_level=0,
+        )
+
+        # Variable_Address2 - third variable address
+        spprt13_pkg.public_symbols["variable_address2"] = Symbol(
+            name="Variable_Address2",
+            kind=SymbolKind.CONSTANT,
+            ada_type=addr_ada_type,
+            is_constant=True,
+            value=0x8200,  # 33280
+            scope_level=0,
+        )
+
+        # =====================================================================
+        # Entry Address Constants (Interrupt Vectors)
+        # On Z80, these would be interrupt mode 2 vectors
+        # For CP/M, we use low memory addresses that would be valid
+        # =====================================================================
+
+        # Entry_Address - primary entry/interrupt address
+        spprt13_pkg.public_symbols["entry_address"] = Symbol(
+            name="Entry_Address",
+            kind=SymbolKind.CONSTANT,
+            ada_type=addr_ada_type,
+            is_constant=True,
+            value=0x0038,  # RST 38h - mode 1 interrupt
+            scope_level=0,
+        )
+
+        # Entry_Address1 - second entry address
+        spprt13_pkg.public_symbols["entry_address1"] = Symbol(
+            name="Entry_Address1",
+            kind=SymbolKind.CONSTANT,
+            ada_type=addr_ada_type,
+            is_constant=True,
+            value=0x0066,  # NMI vector
+            scope_level=0,
+        )
+
+        # Entry_Address2 - third entry address
+        spprt13_pkg.public_symbols["entry_address2"] = Symbol(
+            name="Entry_Address2",
+            kind=SymbolKind.CONSTANT,
+            ada_type=addr_ada_type,
+            is_constant=True,
+            value=0x0100,  # TPA start (after warm boot)
+            scope_level=0,
+        )
+
+        # Register the SPPRT13 package at global scope
+        self.current_scope.define(spprt13_pkg)
 
     def enter_scope(self, name: str = "", is_package: bool = False) -> Scope:
         """Enter a new nested scope."""
