@@ -6,8 +6,15 @@ UM80_PATH = /home/wohl2/src/um80_and_friends
 UM80 = PYTHONPATH=$(UM80_PATH) python3 -m um80.um80
 ULIB80 = PYTHONPATH=$(UM80_PATH) python3 -m um80.ulib80
 
-SOURCES = strings.asm bounded.asm containers.asm heap.asm math.asm io.asm tasking.asm fileio.asm float48.asm timer.asm
-OBJECTS = $(SOURCES:.asm=.rel)
+# Source files with .mac extension (macro assembler source)
+# Note: strings, bounded, containers, heap, math, io only have pre-compiled .rel files
+MAC_SOURCES = tasking.mac fileio.mac float48.mac timer.mac
+MAC_OBJECTS = $(MAC_SOURCES:.mac=.rel)
+
+# Pre-compiled object files (no source available)
+PREBUILT_OBJECTS = strings.rel bounded.rel containers.rel heap.rel math.rel io.rel
+
+OBJECTS = $(PREBUILT_OBJECTS) $(MAC_OBJECTS)
 
 LIBRARY = libada.lib
 
@@ -18,19 +25,14 @@ all: $(LIBRARY)
 $(LIBRARY): $(OBJECTS)
 	$(ULIB80) -c $@ $(OBJECTS)
 
-%.rel: %.asm
+%.rel: %.mac
 	$(UM80) -o $@ $<
 
 clean:
-	rm -f $(OBJECTS) $(LIBRARY)
+	rm -f $(MAC_OBJECTS) $(LIBRARY)
 
-# Dependencies
-strings.rel: strings.asm
-containers.rel: containers.asm
-heap.rel: heap.asm
-math.rel: math.asm
-io.rel: io.asm
-tasking.rel: tasking.asm
-fileio.rel: fileio.asm
-float48.rel: float48.asm
-timer.rel: timer.asm
+# Dependencies for .mac source files
+tasking.rel: tasking.mac
+fileio.rel: fileio.mac
+float48.rel: float48.mac
+timer.rel: timer.mac

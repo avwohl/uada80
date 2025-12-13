@@ -1,0 +1,876 @@
+; =========================================
+; Tasking Runtime (Preemptive Multitasking)
+; =========================================
+; Ada tasking support for Z80
+;
+; Task model:
+; - Up to 8 concurrent tasks (configurable)
+; - Preemptive scheduling via timer interrupt (IM 1 at RST 38h)
+; - Round-robin with priority support
+; - Entry calls for task synchronization (rendezvous)
+;
+; TCB (Task Control Block) structure - 16 bytes:
+;   +0:  saved_sp (2 bytes) - task's stack pointer
+;   +2:  stack_base (2 bytes) - bottom of task's stack
+;   +4:  stack_size (2 bytes) - size of stack allocation
+;   +6:  state (1 byte) - 0=inactive, 1=ready, 2=waiting, 3=terminated
+;   +7:  priority (1 byte) - higher = more important
+;   +8:  next (2 bytes) - next TCB in ready/wait queue
+;   +10: prev (2 bytes) - previous TCB in queue
+;   +12: task_id (2 bytes) - unique task identifier
+;   +14: delay_ticks (2 bytes) - ticks remaining for delay
+
+    CSEG
+
+; Export all public routines
+    PUBLIC _TASK_INIT
+    PUBLIC _TASK_CREATE
+    PUBLIC _TASK_YIELD
+    PUBLIC _TASK_TERMINATE
+    PUBLIC _TASK_DELAY
+    PUBLIC _TASK_DELAY_UNTIL
+    PUBLIC _TASK_ABORT
+    PUBLIC _ENTRY_CALL
+    PUBLIC _ENTRY_ACCEPT
+    PUBLIC _ENTRY_ACCEPT_END
+    PUBLIC _SELECT_START
+    PUBLIC _SELECT_WAIT
+    PUBLIC _SELECT_END
+    PUBLIC _PROTECTED_LOCK
+    PUBLIC _PROTECTED_UNLOCK
+    PUBLIC _task_current
+    PUBLIC _tick_count
+
+; External dependencies
+    EXTRN _heap_alloc
+    EXTRN _raise_tasking_error
+
+; =========================================
+; Constants
+; =========================================
+
+; Task states
+TASK_INACTIVE   .equ 0
+TASK_READY      .equ 1
+TASK_WAITING    .equ 2
+TASK_TERMINATED .equ 3
+TASK_ENTRY_WAIT .equ 4    ; waiting for entry call to complete
+TASK_ACCEPT_WAIT .equ 5   ; waiting in accept statement
+
+; TCB (Task Control Block) field offsets
+TCB_SAVED_SP    .equ 0    ; saved stack pointer (2 bytes)
+TCB_STACK_BASE  .equ 2    ; base of task's stack (2 bytes)
+TCB_STACK_SIZE  .equ 4    ; size of stack allocation (2 bytes)
+TCB_STATE       .equ 6    ; task state (1 byte)
+TCB_PRIORITY    .equ 7    ; task priority (1 byte)
+TCB_NEXT        .equ 8    ; next TCB in queue (2 bytes)
+TCB_PREV        .equ 10   ; prev TCB in queue (2 bytes)
+TCB_TASK_ID     .equ 12   ; unique task identifier (2 bytes)
+TCB_DELAY_TICKS .equ 14   ; ticks remaining for delay (2 bytes)
+
+; Configuration
+MAX_TASKS       .equ 8
+TCB_SIZE        .equ 16
+DEFAULT_STACK   .equ 256  ; bytes per task stack
+TIME_SLICE      .equ 10   ; ticks per time slice
+DEFAULT_PRIO    .equ 128  ; default task priority (mid-range)
+
+; Entry queue structure (8 bytes per entry)
+ENTRY_Q_NEXT     .equ 0    ; next entry in queue (2 bytes)
+ENTRY_Q_CALLER   .equ 2    ; caller task TCB (2 bytes)
+ENTRY_Q_ENTRY_ID .equ 4    ; entry ID being called (2 bytes)
+ENTRY_Q_PARAMS   .equ 6    ; parameter block pointer (2 bytes)
+ENTRY_Q_SIZE     .equ 8    ; size of queue entry
+MAX_ENTRY_NODES  .equ 16
+
+; =========================================
+; Data Section
+; =========================================
+
+    DSEG
+
+_task_current:
+    DS 2            ; pointer to current task's TCB
+_task_ready_head:
+    DS 2            ; head of ready queue
+_task_count:
+    DS 1            ; number of active tasks
+_task_next_id:
+    DS 2            ; next task ID to assign
+_tick_count:
+    DS 2            ; system tick counter
+_slice_remaining:
+    DS 1            ; ticks left in current slice
+_scheduler_lock:
+    DS 1            ; non-zero = scheduler disabled
+_old_rst38:
+    DS 2            ; saved RST 38h vector
+
+; TCB array (MAX_TASKS * TCB_SIZE bytes)
+_tcb_array:
+    DS MAX_TASKS * TCB_SIZE
+
+; Entry queue data
+_entry_queue_head:
+    DS 2            ; head of pending entry calls queue
+_entry_free_list:
+    DS 2            ; head of free node list
+_entry_nodes:
+    DS ENTRY_Q_SIZE * MAX_ENTRY_NODES
+
+; =========================================
+; Code Section
+; =========================================
+
+    CSEG
+
+; -----------------------------------------
+; _TASK_INIT: Initialize tasking system
+; Called once at program start
+; -----------------------------------------
+_TASK_INIT:
+    di
+    ; Clear TCB array
+    ld HL, _tcb_array
+    ld DE, _tcb_array + 1
+    ld BC, MAX_TASKS * TCB_SIZE - 1
+    ld (HL), 0
+    ldir
+    ; Set up main task as task 0 using IX for indexed access
+    ld IX, _tcb_array
+    ld HL, _tcb_array
+    ld (_task_current), HL
+    ld A, TASK_READY
+    ld (IX+TCB_STATE), A       ; state = ready
+    ld A, DEFAULT_PRIO
+    ld (IX+TCB_PRIORITY), A    ; priority = default
+    ld (IX+TCB_TASK_ID), 1     ; task_id low byte
+    ld (IX+TCB_TASK_ID+1), 0   ; task_id high byte
+    ld HL, 2
+    ld (_task_next_id), HL
+    ld A, 1
+    ld (_task_count), A
+    ; Initialize entry queue free list
+    call _entry_init
+    ; Install timer ISR at RST 38h (IM 1)
+    ld HL, (0x0039)  ; save old vector
+    ld (_old_rst38), HL
+    ld HL, _TIMER_ISR
+    ld (0x0039), HL
+    im 1
+    ei
+    ret
+
+; -----------------------------------------
+; _TIMER_ISR: Timer interrupt service routine
+; Called by RST 38h for preemptive task switching
+; -----------------------------------------
+_TIMER_ISR:
+    push AF
+    push BC
+    push DE
+    push HL
+    push IX
+    push IY
+    ex AF, AF'
+    exx
+    push AF
+    push BC
+    push DE
+    push HL
+    ; Increment tick count
+    ld HL, (_tick_count)
+    inc HL
+    ld (_tick_count), HL
+    ; Update delay counters for waiting tasks
+    call _update_delays
+    ; Check scheduler lock
+    ld A, (_scheduler_lock)
+    or A
+    jr NZ, _timer_isr_exit
+    ; Decrement time slice
+    ld A, (_slice_remaining)
+    dec A
+    ld (_slice_remaining), A
+    jr NZ, _timer_isr_exit
+    ; Time slice expired - switch tasks
+    call _do_schedule
+_timer_isr_exit:
+    pop HL
+    pop DE
+    pop BC
+    pop AF
+    exx
+    ex AF, AF'
+    pop IY
+    pop IX
+    pop HL
+    pop DE
+    pop BC
+    pop AF
+    ei
+    reti
+
+; -----------------------------------------
+; _update_delays: Decrement delay counters
+; Wake tasks whose delays have expired
+; -----------------------------------------
+_update_delays:
+    ld HL, _tcb_array
+    ld B, MAX_TASKS
+_ud_loop:
+    push HL
+    pop IX
+    ld A, (IX+TCB_STATE)
+    cp TASK_WAITING
+    jr NZ, _ud_next
+    ; Check if delay has expired
+    ld E, (IX+TCB_DELAY_TICKS)
+    ld D, (IX+TCB_DELAY_TICKS+1)
+    ld A, D
+    or E
+    jr Z, _ud_next        ; already zero
+    dec DE
+    ld (IX+TCB_DELAY_TICKS), E
+    ld (IX+TCB_DELAY_TICKS+1), D
+    ld A, D
+    or E
+    jr NZ, _ud_next       ; still waiting
+    ; Delay expired - wake the task
+    ld A, TASK_READY
+    ld (IX+TCB_STATE), A
+_ud_next:
+    ld DE, TCB_SIZE
+    add HL, DE
+    djnz _ud_loop
+    ret
+
+; -----------------------------------------
+; _do_schedule: Find next ready task and switch to it
+; -----------------------------------------
+_do_schedule:
+    ; Save current task's SP
+    ld HL, (_task_current)
+    ld A, H
+    or L
+    jr Z, _sched_no_current
+    ld (HL), SP    ; save SP at TCB+0
+_sched_no_current:
+    ; Simple round-robin: move to next task
+    ld HL, (_task_current)
+    ld DE, TCB_SIZE
+    add HL, DE
+    ; Check if past end of array
+    ld DE, _tcb_array + (MAX_TASKS * TCB_SIZE)
+    or A
+    sbc HL, DE
+    add HL, DE
+    jr C, _sched_check_task
+    ; Wrap to start
+    ld HL, _tcb_array
+_sched_check_task:
+    ; Check if this task is ready (HL = TCB address)
+    push HL
+    pop IX           ; IX = TCB address for indexed access
+    ld A, (IX+TCB_STATE)  ; get task state
+    cp TASK_READY
+    jr Z, _sched_found
+    ; Try next task (simple search)
+    ld DE, TCB_SIZE
+    add HL, DE
+    ; Check bounds again
+    ld DE, _tcb_array + (MAX_TASKS * TCB_SIZE)
+    or A
+    sbc HL, DE
+    add HL, DE
+    jr C, _sched_check_task
+    ld HL, _tcb_array
+    jr _sched_check_task
+_sched_found:
+    ; Switch to new task
+    ld (_task_current), HL
+    ld SP, (HL)    ; restore SP from TCB+0
+    ld A, TIME_SLICE
+    ld (_slice_remaining), A
+    ret
+
+; -----------------------------------------
+; _TASK_CREATE: Create a new task
+; Input: HL = entry point address
+; Output: HL = task ID (0 on failure)
+; -----------------------------------------
+_TASK_CREATE:
+    push DE
+    push BC
+    push HL         ; save entry point
+    ; Find free TCB slot
+    ld HL, _tcb_array
+    ld B, MAX_TASKS
+_tc_find_slot:
+    push HL
+    pop IX           ; IX = TCB for indexed access
+    ld A, (IX+TCB_STATE)  ; check task state
+    cp TASK_INACTIVE
+    jr Z, _tc_found_slot
+    ld DE, TCB_SIZE
+    add HL, DE
+    djnz _tc_find_slot
+    ; No free slot
+    pop HL
+    ld HL, 0
+    pop BC
+    pop DE
+    ret
+_tc_found_slot:
+    ; HL = TCB address, IX already set from _tc_find_slot
+    push HL         ; save TCB ptr
+    push IX         ; save IX (TCB)
+    ; Allocate stack
+    ld HL, DEFAULT_STACK
+    call _heap_alloc
+    ld A, H
+    or L
+    jr Z, _tc_fail
+    ; HL = stack base, save it
+    ld D, H
+    ld E, L         ; DE = stack base
+    pop IX          ; IX = TCB for indexed writes
+    ; Store stack_base at TCB+2
+    ld (IX+TCB_STACK_BASE), E
+    ld (IX+TCB_STACK_BASE+1), D
+    ; Store stack_size at TCB+4
+    ld (IX+TCB_STACK_SIZE), LOW DEFAULT_STACK
+    ld (IX+TCB_STACK_SIZE+1), HIGH DEFAULT_STACK
+    ; Calculate initial SP (top of stack = base + size)
+    ld HL, DEFAULT_STACK
+    add HL, DE      ; HL = top of stack
+    ; Set up initial stack frame
+    ; Push task termination handler as return address
+    dec HL
+    dec HL
+    ld BC, _task_term_handler
+    ld (HL), C
+    inc HL
+    ld (HL), B
+    dec HL
+    ; Push entry point
+    pop DE          ; DE = TCB
+    pop BC          ; BC = entry point (was saved earlier)
+    push DE         ; save TCB again
+    dec HL
+    dec HL
+    ld (HL), C      ; store entry point low byte
+    inc HL
+    ld (HL), B      ; store entry point high byte
+    dec HL          ; HL = initial SP
+    ; Save initial SP in TCB+0
+    pop DE          ; DE = TCB
+    push DE         ; save again for task_id setup
+    push HL
+    pop IX          ; use HL for storing
+    push DE
+    pop IX          ; IX = TCB ptr for indexed access
+    pop DE          ; DE = initial SP
+    ld (IX+TCB_SAVED_SP), E
+    ld (IX+TCB_SAVED_SP+1), D
+    ; Set task state to READY
+    ld (IX+TCB_STATE), TASK_READY
+    ; Set default priority
+    ld (IX+TCB_PRIORITY), DEFAULT_PRIO
+    ; Assign task ID
+    ld HL, (_task_next_id)
+    ld (IX+TCB_TASK_ID), L
+    ld (IX+TCB_TASK_ID+1), H
+    push HL         ; save task ID for return
+    inc HL
+    ld (_task_next_id), HL
+    ; Increment task count
+    ld A, (_task_count)
+    inc A
+    ld (_task_count), A
+    ; Return task ID in HL
+    pop HL          ; HL = task ID
+    pop BC          ; discard saved TCB
+    pop BC
+    pop DE
+    ret
+_tc_fail:
+    pop HL
+    pop HL
+    ld HL, 0
+    pop BC
+    pop DE
+    ret
+
+; Task termination handler - called when task body returns
+_task_term_handler:
+    jp _TASK_TERMINATE
+
+; -----------------------------------------
+; _TASK_YIELD: Voluntarily yield to scheduler
+; -----------------------------------------
+_TASK_YIELD:
+    di
+    call _do_schedule
+    ei
+    ret
+
+; -----------------------------------------
+; _TASK_TERMINATE: Terminate current task
+; -----------------------------------------
+_TASK_TERMINATE:
+    di
+    ld HL, (_task_current)
+    push HL
+    pop IX            ; IX = TCB pointer
+    ld A, TASK_TERMINATED
+    ld (IX+TCB_STATE), A
+    ; Decrement task count
+    ld A, (_task_count)
+    dec A
+    ld (_task_count), A
+    ; Schedule another task
+    call _do_schedule
+    ei
+    ret
+
+; -----------------------------------------
+; _TASK_DELAY: Delay for HL ticks
+; -----------------------------------------
+_TASK_DELAY:
+    di
+    push HL           ; save ticks to delay
+    ld HL, (_task_current)
+    push HL
+    pop IX            ; IX = TCB pointer
+    pop DE            ; DE = ticks to delay
+    ld (IX+TCB_DELAY_TICKS), E
+    ld (IX+TCB_DELAY_TICKS+1), D
+    ld A, TASK_WAITING
+    ld (IX+TCB_STATE), A
+    call _do_schedule
+    ei
+    ret
+
+; -----------------------------------------
+; _TASK_DELAY_UNTIL: Delay until tick count reaches HL
+; -----------------------------------------
+_TASK_DELAY_UNTIL:
+    di
+    ld DE, (_tick_count)
+    or A
+    sbc HL, DE      ; ticks to wait = target - current
+    jr NC, _delay_until_positive
+    ld HL, 0        ; already past, no delay
+_delay_until_positive:
+    push HL           ; save ticks to delay
+    ld HL, (_task_current)
+    push HL
+    pop IX            ; IX = TCB pointer
+    pop DE            ; DE = ticks to delay
+    ld (IX+TCB_DELAY_TICKS), E
+    ld (IX+TCB_DELAY_TICKS+1), D
+    ld A, TASK_WAITING
+    ld (IX+TCB_STATE), A
+    call _do_schedule
+    ei
+    ret
+
+; -----------------------------------------
+; _TASK_ABORT: Abort a task
+; Input: HL = task ID to abort
+; -----------------------------------------
+_TASK_ABORT:
+    di
+    push HL
+    call _find_task_by_id
+    ld A, H
+    or L
+    jr Z, _abort_not_found
+    push HL
+    pop IX
+    ; Check if task is already terminated
+    ld A, (IX+TCB_STATE)
+    cp TASK_TERMINATED
+    jr Z, _abort_done
+    cp TASK_INACTIVE
+    jr Z, _abort_done
+    ; Mark task as terminated
+    ld A, TASK_TERMINATED
+    ld (IX+TCB_STATE), A
+    ; Decrement task count
+    ld A, (_task_count)
+    dec A
+    ld (_task_count), A
+_abort_done:
+_abort_not_found:
+    pop HL
+    ei
+    ret
+
+; -----------------------------------------
+; Entry queue management
+; -----------------------------------------
+
+; _entry_init: Initialize entry queue free list
+_entry_init:
+    ld HL, _entry_nodes
+    ld (_entry_free_list), HL
+    ld DE, ENTRY_Q_SIZE
+    ld B, MAX_ENTRY_NODES - 1
+_ei_loop:
+    push HL
+    add HL, DE       ; next node
+    ex DE, HL        ; DE = next node
+    pop HL           ; HL = current node
+    push HL
+    pop IX
+    ld (IX+ENTRY_Q_NEXT), E
+    ld (IX+ENTRY_Q_NEXT+1), D
+    ex DE, HL        ; HL = next node
+    ld DE, ENTRY_Q_SIZE
+    djnz _ei_loop
+    ; Terminate last node
+    push HL
+    pop IX
+    xor A
+    ld (IX+ENTRY_Q_NEXT), A
+    ld (IX+ENTRY_Q_NEXT+1), A
+    ; Initialize queue head to empty
+    xor A
+    ld (_entry_queue_head), A
+    ld (_entry_queue_head+1), A
+    ret
+
+; _entry_alloc: Allocate a queue node
+; Output: HL = node pointer (0 if none)
+_entry_alloc:
+    ld HL, (_entry_free_list)
+    ld A, H
+    or L
+    ret Z            ; no free nodes
+    ; Remove from free list
+    push HL
+    pop IX
+    ld E, (IX+ENTRY_Q_NEXT)
+    ld D, (IX+ENTRY_Q_NEXT+1)
+    ld (_entry_free_list), DE
+    ret
+
+; _entry_free: Free a queue node
+; Input: HL = node pointer
+_entry_free:
+    push HL
+    pop IX
+    ld DE, (_entry_free_list)
+    ld (IX+ENTRY_Q_NEXT), E
+    ld (IX+ENTRY_Q_NEXT+1), D
+    ld (_entry_free_list), HL
+    ret
+
+; -----------------------------------------
+; _ENTRY_CALL: Call a task entry (rendezvous)
+; Stack: entry_id, task_id, params_ptr
+; Blocks caller until entry is accepted
+; -----------------------------------------
+_ENTRY_CALL:
+    di
+    ; Set up stack frame
+    push IX
+    ld IX, 0
+    add IX, SP
+    ; Get parameters from stack (IX+4=ret, IX+6=entry_id, IX+8=task_id, IX+10=params)
+    ld L, (IX+8)     ; task_id low
+    ld H, (IX+9)     ; task_id high
+    push HL          ; save task_id
+    ld E, (IX+6)     ; entry_id low
+    ld D, (IX+7)     ; entry_id high
+    push DE          ; save entry_id
+    ld L, (IX+10)    ; params_ptr low
+    ld H, (IX+11)    ; params_ptr high
+    push HL          ; save params_ptr
+    ; Allocate queue node
+    call _entry_alloc
+    ld A, H
+    or L
+    jr Z, _ec_fail
+    ; HL = queue node, fill it in
+    push HL
+    pop IX           ; IX = queue node
+    ; Set caller TCB
+    ld HL, (_task_current)
+    ld (IX+ENTRY_Q_CALLER), L
+    ld (IX+ENTRY_Q_CALLER+1), H
+    ; Set entry ID
+    pop HL           ; discard params (stack order)
+    pop DE           ; entry_id
+    ld (IX+ENTRY_Q_ENTRY_ID), E
+    ld (IX+ENTRY_Q_ENTRY_ID+1), D
+    pop HL           ; task_id (target)
+    push HL          ; save for later
+    ; Set params ptr (re-get from frame)
+    ld L, (IX+10)
+    ld H, (IX+11)
+    push HL
+    pop IY
+    ld (IX+ENTRY_Q_PARAMS), L
+    ld (IX+ENTRY_Q_PARAMS+1), H
+    ; Add to pending queue (at head)
+    ld HL, (_entry_queue_head)
+    ld (IX+ENTRY_Q_NEXT), L
+    ld (IX+ENTRY_Q_NEXT+1), H
+    push IX
+    pop HL
+    ld (_entry_queue_head), HL
+    ; Mark caller as ENTRY_WAIT
+    ld HL, (_task_current)
+    push HL
+    pop IY           ; IY = caller TCB
+    ld A, TASK_ENTRY_WAIT
+    ld (IY+TCB_STATE), A
+    ; Wake target task if it's waiting on accept
+    pop HL           ; target task_id
+    call _find_task_by_id
+    ld A, H
+    or L
+    jr Z, _ec_no_target
+    push HL
+    pop IY           ; IY = target TCB
+    ld A, (IY+TCB_STATE)
+    cp TASK_ACCEPT_WAIT
+    jr NZ, _ec_schedule
+    ; Target is waiting for accept, wake it
+    ld A, TASK_READY
+    ld (IY+TCB_STATE), A
+_ec_schedule:
+_ec_no_target:
+    ; Schedule away from caller
+    call _do_schedule
+    ; When we return, rendezvous is complete
+    pop IX
+    ei
+    ret
+_ec_fail:
+    ; No queue node available - raise Tasking_Error
+    pop HL
+    pop HL
+    pop HL
+    pop IX
+    ei
+    jp _raise_tasking_error
+
+; -----------------------------------------
+; _ENTRY_ACCEPT: Accept an entry call
+; Input: HL = entry_id to accept
+; Output: HL = params_ptr from caller (0 if none)
+; Blocks until a matching entry call arrives
+; -----------------------------------------
+_ENTRY_ACCEPT:
+    di
+    push IX
+    push HL          ; save entry_id
+_ea_check:
+    ; Search queue for matching entry call
+    ld HL, _entry_queue_head
+    ld IY, 0         ; prev pointer (0 = head)
+_ea_search:
+    ld E, (HL)
+    inc HL
+    ld D, (HL)       ; DE = current node
+    ld A, D
+    or E
+    jr Z, _ea_wait   ; queue empty, wait
+    ; DE = node, check if entry_id matches
+    push DE
+    pop IX           ; IX = node
+    ld L, (IX+ENTRY_Q_ENTRY_ID)
+    ld H, (IX+ENTRY_Q_ENTRY_ID+1)
+    ex (SP), HL      ; HL = wanted entry_id, stack = node entry_id
+    pop DE           ; DE = node entry_id
+    push HL          ; save wanted entry_id
+    or A
+    sbc HL, DE
+    jr Z, _ea_found
+    ; Not a match, move to next
+    push IX
+    pop IY           ; IY = prev (this node)
+    push IX
+    pop HL
+    jr _ea_search
+_ea_wait:
+    ; No matching entry, block and wait
+    ld HL, (_task_current)
+    push HL
+    pop IX
+    ld A, TASK_ACCEPT_WAIT
+    ld (IX+TCB_STATE), A
+    call _do_schedule
+    ; Woken up, check queue again
+    jr _ea_check
+_ea_found:
+    ; IX = matching node, IY = prev node (or 0)
+    ; Remove node from queue
+    ld E, (IX+ENTRY_Q_NEXT)
+    ld D, (IX+ENTRY_Q_NEXT+1)
+    ; Check if prev is head
+    push IY
+    pop HL
+    ld A, H
+    or L
+    jr NZ, _ea_unlink_mid
+    ; Unlinking head
+    ld (_entry_queue_head), DE
+    jr _ea_unlinked
+_ea_unlink_mid:
+    ; IY = prev node
+    ld (IY+ENTRY_Q_NEXT), E
+    ld (IY+ENTRY_Q_NEXT+1), D
+_ea_unlinked:
+    ; Get params pointer to return
+    ld L, (IX+ENTRY_Q_PARAMS)
+    ld H, (IX+ENTRY_Q_PARAMS+1)
+    push HL          ; save params
+    ; Wake caller task
+    ld L, (IX+ENTRY_Q_CALLER)
+    ld H, (IX+ENTRY_Q_CALLER+1)
+    push HL
+    pop IY           ; IY = caller TCB
+    ld A, TASK_READY
+    ld (IY+TCB_STATE), A
+    ; Free the node
+    push IX
+    pop HL
+    call _entry_free
+    ; Return params ptr
+    pop HL           ; params
+    pop DE           ; discard saved entry_id
+    pop IX
+    ei
+    ret
+
+; -----------------------------------------
+; _ENTRY_ACCEPT_END: Mark end of accept body
+; Called when accept body completes
+; -----------------------------------------
+_ENTRY_ACCEPT_END:
+    ; Rendezvous complete - caller already woken in _ENTRY_ACCEPT
+    ret
+
+; -----------------------------------------
+; Select statement support
+; -----------------------------------------
+
+; _SELECT_START: Begin a select statement
+_SELECT_START:
+    ret              ; placeholder for future guard evaluation
+
+; _SELECT_WAIT: Wait for one of the registered alternatives
+; For now, uses simple round-robin check
+_SELECT_WAIT:
+    di
+    push IX
+    ; Check if any entry call is pending
+    ld HL, (_entry_queue_head)
+    ld A, H
+    or L
+    jr NZ, _sw_found
+    ; No calls pending, block
+    ld HL, (_task_current)
+    push HL
+    pop IX
+    ld A, TASK_ACCEPT_WAIT
+    ld (IX+TCB_STATE), A
+    call _do_schedule
+_sw_found:
+    pop IX
+    ei
+    ret
+
+; _SELECT_END: End a select statement
+_SELECT_END:
+    ret
+
+; -----------------------------------------
+; _find_task_by_id: Find TCB for task ID
+; Input: HL = task_id
+; Output: HL = TCB pointer (0 if not found)
+; -----------------------------------------
+_find_task_by_id:
+    ld DE, _tcb_array
+    ld B, MAX_TASKS
+_ftbi_loop:
+    push HL
+    push DE
+    ex DE, HL        ; HL = TCB
+    ld DE, TCB_TASK_ID
+    add HL, DE       ; HL = &TCB.task_id
+    ld E, (HL)
+    inc HL
+    ld D, (HL)       ; DE = stored task_id
+    pop HL           ; HL = TCB
+    ex (SP), HL      ; HL = target task_id, stack = TCB
+    or A
+    sbc HL, DE
+    pop HL           ; HL = TCB
+    jr Z, _ftbi_found
+    ; Move to next TCB
+    ld DE, TCB_SIZE
+    add HL, DE
+    ex DE, HL        ; DE = next TCB
+    pop HL           ; HL = target task_id
+    djnz _ftbi_loop
+    ld HL, 0
+    ret
+_ftbi_found:
+    ; HL already has TCB
+    ret
+
+; =========================================
+; Protected Object Support
+; =========================================
+; Protected objects provide mutual exclusion for their operations.
+; On Z80, we use DI/EI for efficient mutual exclusion since there
+; is only a single CPU and no memory protection hardware.
+;
+; The lock value is stored at offset 0 of the protected object and
+; contains the nesting count (0 = unlocked, >0 = locked).
+
+PROT_LOCK_OFFSET .equ 0  ; Lock byte at offset 0 of protected object
+
+; -----------------------------------------
+; _PROTECTED_LOCK: Acquire protected object lock
+; Input: Protected object address on stack
+; Output: None (returns with interrupts disabled)
+; -----------------------------------------
+_PROTECTED_LOCK:
+    di                  ; Disable interrupts for mutual exclusion
+    pop DE              ; Return address
+    pop HL              ; Protected object address
+    push DE             ; Restore return address
+    ; Increment lock count
+    ld A, (HL)
+    inc A
+    ld (HL), A
+    ; Note: Interrupts remain disabled until _PROTECTED_UNLOCK
+    ret
+
+; -----------------------------------------
+; _PROTECTED_UNLOCK: Release protected object lock
+; Input: Protected object address on stack
+; Output: None
+; -----------------------------------------
+_PROTECTED_UNLOCK:
+    pop DE              ; Return address
+    pop HL              ; Protected object address
+    push DE             ; Restore return address
+    ; Decrement lock count
+    ld A, (HL)
+    dec A
+    ld (HL), A
+    ; Only re-enable interrupts when fully unlocked (count = 0)
+    or A
+    ret NZ              ; Still locked, keep interrupts disabled
+    ei                  ; Unlock complete, re-enable interrupts
+    ret
+
+    END

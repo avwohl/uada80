@@ -1,0 +1,344 @@
+; 48-bit Floating Point Runtime for Ada on Z80
+; Compatible with z88dk float format
+;
+; Float format (6 bytes, little-endian):
+;   Bytes 0-3: 32-bit mantissa (implied 1 at bit 31)
+;   Byte 4: Exponent (biased by 128)
+;   Byte 5: Sign (0x00 = positive, 0x80 = negative)
+;
+; Primary accumulator: BC'DE'HL' (alternate register set)
+; Secondary accumulator: BCDEHL (main register set)
+;
+; All routines preserve IX and IY
+
+        SECTION CODE
+
+        PUBLIC  _FADD48
+        PUBLIC  _FSUB48
+        PUBLIC  _FMUL48
+        PUBLIC  _FDIV48
+        PUBLIC  _FNEG48
+        PUBLIC  _FABS48
+        PUBLIC  _FCMP48
+        PUBLIC  _ITOF48
+        PUBLIC  _FTOI48
+        PUBLIC  _FZERO48
+        PUBLIC  _FONE48
+        PUBLIC  _FSQRT48
+        PUBLIC  _FSIN48
+        PUBLIC  _FCOS48
+        PUBLIC  _FTAN48
+        PUBLIC  _FEXP48
+        PUBLIC  _FLOG48
+
+; z88dk math library externals (if available)
+        EXTERN  dadd
+        EXTERN  dsub
+        EXTERN  dmul
+        EXTERN  ddiv
+        EXTERN  dneg
+        EXTERN  dabs
+        EXTERN  dcmp
+        EXTERN  uitod
+        EXTERN  itod
+        EXTERN  dtoi
+        EXTERN  dsqrt
+        EXTERN  dsin
+        EXTERN  dcos
+        EXTERN  dtan
+        EXTERN  dexp
+        EXTERN  dlog
+
+;----------------------------------------------------------------------
+; _FADD48: Add two 48-bit floats
+; Input:  Primary (BC'DE'HL') = first operand
+;         Secondary (BCDEHL) = second operand
+; Output: Primary (BC'DE'HL') = result
+;----------------------------------------------------------------------
+_FADD48:
+        ; Call z88dk dadd routine
+        ; Primary and secondary are already set up
+        call    dadd
+        ret
+
+;----------------------------------------------------------------------
+; _FSUB48: Subtract two 48-bit floats (primary - secondary)
+; Input:  Primary (BC'DE'HL') = first operand
+;         Secondary (BCDEHL) = second operand
+; Output: Primary (BC'DE'HL') = result
+;----------------------------------------------------------------------
+_FSUB48:
+        call    dsub
+        ret
+
+;----------------------------------------------------------------------
+; _FMUL48: Multiply two 48-bit floats
+; Input:  Primary (BC'DE'HL') = first operand
+;         Secondary (BCDEHL) = second operand
+; Output: Primary (BC'DE'HL') = result
+;----------------------------------------------------------------------
+_FMUL48:
+        call    dmul
+        ret
+
+;----------------------------------------------------------------------
+; _FDIV48: Divide two 48-bit floats (primary / secondary)
+; Input:  Primary (BC'DE'HL') = dividend
+;         Secondary (BCDEHL) = divisor
+; Output: Primary (BC'DE'HL') = result
+;----------------------------------------------------------------------
+_FDIV48:
+        call    ddiv
+        ret
+
+;----------------------------------------------------------------------
+; _FNEG48: Negate 48-bit float
+; Input:  Primary (BC'DE'HL')
+; Output: Primary (BC'DE'HL') = -input
+;----------------------------------------------------------------------
+_FNEG48:
+        call    dneg
+        ret
+
+;----------------------------------------------------------------------
+; _FABS48: Absolute value of 48-bit float
+; Input:  Primary (BC'DE'HL')
+; Output: Primary (BC'DE'HL') = |input|
+;----------------------------------------------------------------------
+_FABS48:
+        call    dabs
+        ret
+
+;----------------------------------------------------------------------
+; _FCMP48: Compare two 48-bit floats
+; Input:  Primary (BC'DE'HL') = first operand
+;         Secondary (BCDEHL) = second operand
+; Output: A = -1 if primary < secondary
+;         A = 0 if primary = secondary
+;         A = 1 if primary > secondary
+;         Flags set accordingly (Z if equal, C if less)
+;----------------------------------------------------------------------
+_FCMP48:
+        call    dcmp
+        ret
+
+;----------------------------------------------------------------------
+; _ITOF48: Convert 16-bit signed integer to 48-bit float
+; Input:  HL = signed 16-bit integer
+; Output: Primary (BC'DE'HL') = float value
+;----------------------------------------------------------------------
+_ITOF48:
+        ; Sign extend HL to 32-bit in DEHL
+        ld      a, h
+        ld      d, a
+        rla                     ; Sign bit to carry
+        sbc     a, a            ; A = 0xFF if negative, 0x00 if positive
+        ld      e, a
+        ld      d, a
+        ; Now DEHL = 32-bit signed value
+        call    itod            ; Convert to float in primary
+        ret
+
+;----------------------------------------------------------------------
+; _FTOI48: Convert 48-bit float to 16-bit signed integer
+; Input:  Primary (BC'DE'HL') = float value
+; Output: HL = signed 16-bit integer (truncated)
+;----------------------------------------------------------------------
+_FTOI48:
+        call    dtoi
+        ; Result in DEHL, we just want HL (truncated)
+        ret
+
+;----------------------------------------------------------------------
+; _FZERO48: Load zero into primary accumulator
+; Output: Primary (BC'DE'HL') = 0.0
+;----------------------------------------------------------------------
+_FZERO48:
+        exx
+        ld      hl, 0
+        ld      de, 0
+        ld      bc, 0
+        exx
+        ret
+
+;----------------------------------------------------------------------
+; _FONE48: Load 1.0 into primary accumulator
+; Output: Primary (BC'DE'HL') = 1.0
+;----------------------------------------------------------------------
+_FONE48:
+        exx
+        ld      hl, 0x0000      ; Mantissa low
+        ld      de, 0x8000      ; Mantissa high (implied 1)
+        ld      bc, 0x0081      ; Exponent 129 (bias 128 + 1), sign 0
+        exx
+        ret
+
+;----------------------------------------------------------------------
+; _FSQRT48: Square root of 48-bit float
+; Input:  Primary (BC'DE'HL')
+; Output: Primary (BC'DE'HL') = sqrt(input)
+;----------------------------------------------------------------------
+_FSQRT48:
+        call    dsqrt
+        ret
+
+;----------------------------------------------------------------------
+; _FSIN48: Sine of 48-bit float (radians)
+; Input:  Primary (BC'DE'HL')
+; Output: Primary (BC'DE'HL') = sin(input)
+;----------------------------------------------------------------------
+_FSIN48:
+        call    dsin
+        ret
+
+;----------------------------------------------------------------------
+; _FCOS48: Cosine of 48-bit float (radians)
+; Input:  Primary (BC'DE'HL')
+; Output: Primary (BC'DE'HL') = cos(input)
+;----------------------------------------------------------------------
+_FCOS48:
+        call    dcos
+        ret
+
+;----------------------------------------------------------------------
+; _FTAN48: Tangent of 48-bit float (radians)
+; Input:  Primary (BC'DE'HL')
+; Output: Primary (BC'DE'HL') = tan(input)
+;----------------------------------------------------------------------
+_FTAN48:
+        call    dtan
+        ret
+
+;----------------------------------------------------------------------
+; _FEXP48: Exponential (e^x) of 48-bit float
+; Input:  Primary (BC'DE'HL')
+; Output: Primary (BC'DE'HL') = e^input
+;----------------------------------------------------------------------
+_FEXP48:
+        call    dexp
+        ret
+
+;----------------------------------------------------------------------
+; _FLOG48: Natural logarithm of 48-bit float
+; Input:  Primary (BC'DE'HL')
+; Output: Primary (BC'DE'HL') = ln(input)
+;----------------------------------------------------------------------
+_FLOG48:
+        call    dlog
+        ret
+
+;----------------------------------------------------------------------
+; Standalone implementations (for when z88dk math is not linked)
+; These are simpler/slower but self-contained
+;----------------------------------------------------------------------
+
+        SECTION CODE_STANDALONE
+
+; Standalone negate - just flip sign byte
+_FNEG48_STANDALONE:
+        exx
+        ld      a, b            ; Get sign byte
+        xor     0x80            ; Flip sign bit
+        ld      b, a
+        exx
+        ret
+
+; Standalone absolute value - clear sign byte
+_FABS48_STANDALONE:
+        exx
+        ld      a, b
+        and     0x7F            ; Clear sign bit
+        ld      b, a
+        exx
+        ret
+
+; Standalone zero check
+; Returns Z flag set if primary is zero
+_FISZERO48:
+        exx
+        ld      a, c            ; Check exponent
+        or      a
+        jr      nz, _not_zero
+        ; Exponent is zero, check mantissa
+        ld      a, h
+        or      l
+        or      d
+        or      e
+        exx
+        ret                     ; Z set if all zero
+_not_zero:
+        exx
+        or      1               ; Clear Z flag
+        ret
+
+; Standalone compare (simple version)
+_FCMP48_STANDALONE:
+        ; First check signs
+        exx
+        ld      a, b            ; Primary sign
+        exx
+        ld      c, a            ; Save primary sign in C
+        ld      a, b            ; Secondary sign
+        xor     c               ; Different signs?
+        jp      m, _cmp_diff_sign
+
+        ; Same sign - compare exponents first
+        exx
+        ld      a, c            ; Primary exponent
+        exx
+        cp      c               ; Compare with secondary exponent
+        jr      nz, _cmp_exp_diff
+
+        ; Exponents equal - compare mantissa
+        exx
+        push    de
+        push    hl
+        exx
+        ; Compare high mantissa
+        ex      de, hl
+        pop     bc              ; Primary mantissa low in BC
+        sbc     hl, bc
+        jr      nz, _cmp_mant_diff
+        pop     bc              ; Primary mantissa high
+        ex      de, hl
+        sbc     hl, bc
+        jr      nz, _cmp_mant_diff
+
+        ; Equal
+        xor     a
+        ret
+
+_cmp_mant_diff:
+        pop     bc              ; Clean stack
+_cmp_exp_diff:
+        ; A has comparison result, adjust for sign
+        ld      a, c            ; Get sign
+        rla                     ; Sign to carry
+        jr      c, _cmp_neg
+        ; Positive: normal comparison
+        jr      c, _cmp_less
+        ld      a, 1
+        ret
+_cmp_less:
+        ld      a, -1
+        ret
+_cmp_neg:
+        ; Negative: reverse result
+        jr      c, _cmp_greater
+        ld      a, -1
+        ret
+_cmp_greater:
+        ld      a, 1
+        ret
+
+_cmp_diff_sign:
+        ; Different signs - negative is less
+        bit     7, c            ; Primary sign
+        jr      nz, _cmp_prim_neg
+        ld      a, 1            ; Primary positive, secondary negative
+        ret
+_cmp_prim_neg:
+        ld      a, -1           ; Primary negative
+        ret
+
+        END
