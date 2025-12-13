@@ -111,7 +111,7 @@ The ACATS test suite requires certain support libraries:
 
 1. [x] Ada.Text_IO and Ada.Calendar (now available for Report.a)
 2. [ ] ACATS support library (Report.a) - can now be compiled
-3. [ ] Impdef (implementation defined values)
+3. [x] ImpDef (implementation defined values for Z80/CP/M target)
 4. [ ] Spprt13 (support for chapter 13 tests)
 5. [ ] Various FCxx packages (foundation code)
 
