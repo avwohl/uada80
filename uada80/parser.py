@@ -2533,6 +2533,9 @@ class Parser:
                 # Check for case expression: (case ...)
                 elif self.check(TokenType.CASE):
                     expr = self.parse_case_expr(start)
+                # Ada 2022 declare expression: (declare ... begin Expr)
+                elif self.check(TokenType.DECLARE):
+                    expr = self.parse_declare_expr(start)
                 else:
                     # Regular expression
                     expr = self.parse_expression()
