@@ -102,6 +102,9 @@
 - [x] Interfaces.C.Strings (chars_ptr, New_String, Value)
 - [x] System.Storage_Elements (Storage_Offset, To_Address, To_Integer)
 - [x] System.Address_To_Access_Conversions (generic)
+- [x] Ada.Assertions (Assert procedures, Assertion_Error exception)
+- [x] Ada.Synchronous_Task_Control (Suspension_Object, Set_True, Suspend_Until_True)
+- [x] Ada.Wide_Characters.Handling (Is_Letter, To_Upper, etc. for Wide_Character)
 
 ## Remaining Work
 
