@@ -241,6 +241,9 @@ class SymbolTable:
         self._init_system_packages()
         self._init_impdef()
         self._init_spprt13()
+        self._init_assertions()
+        self._init_synchronous_task_control()
+        self._init_wide_characters()
 
     def _init_text_io(self) -> None:
         """Add Ada.Text_IO package to the standard scope."""
@@ -4602,6 +4605,258 @@ class SymbolTable:
 
         # Register the SPPRT13 package at global scope
         self.current_scope.define(spprt13_pkg)
+
+    def _init_assertions(self) -> None:
+        """
+        Initialize Ada.Assertions package (Ada 2005).
+
+        Provides Assert procedures and Assertion_Error exception
+        for runtime assertion checking.
+        """
+        ada_pkg = self.lookup("Ada")
+        if ada_pkg is None:
+            return
+
+        bool_type = PREDEFINED_TYPES["Boolean"]
+        str_type = PREDEFINED_TYPES["String"]
+
+        # Create Assertions subpackage
+        assertions_pkg = Symbol(
+            name="Assertions",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Assertion_Error exception
+        assertions_pkg.public_symbols["assertion_error"] = Symbol(
+            name="Assertion_Error",
+            kind=SymbolKind.EXCEPTION,
+            scope_level=0,
+        )
+
+        # Assert procedure (Check : Boolean)
+        assert_proc1 = Symbol(
+            name="Assert",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Check", SymbolKind.PARAMETER, bool_type, mode="in"),
+            ],
+        )
+        assert_proc1.runtime_name = "_ada_assert"
+        assertions_pkg.public_symbols["assert"] = assert_proc1
+
+        # Assert procedure (Check : Boolean; Message : String)
+        assert_proc2 = Symbol(
+            name="Assert",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Check", SymbolKind.PARAMETER, bool_type, mode="in"),
+                Symbol("Message", SymbolKind.PARAMETER, str_type, mode="in"),
+            ],
+        )
+        assert_proc2.runtime_name = "_ada_assert_msg"
+        assert_proc1.overloaded_next = assert_proc2
+
+        ada_pkg.public_symbols["assertions"] = assertions_pkg
+
+    def _init_synchronous_task_control(self) -> None:
+        """
+        Initialize Ada.Synchronous_Task_Control package (Ada 95 Annex D).
+
+        Provides Suspension_Object type and operations for task synchronization.
+        """
+        ada_pkg = self.lookup("Ada")
+        if ada_pkg is None:
+            return
+
+        bool_type = PREDEFINED_TYPES["Boolean"]
+
+        # Create Synchronous_Task_Control subpackage
+        stc_pkg = Symbol(
+            name="Synchronous_Task_Control",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Suspension_Object type (limited private)
+        from uada80.type_system import RecordType
+        suspension_obj_type = RecordType(
+            name="Suspension_Object",
+            components=[],
+            is_limited=True,
+        )
+        stc_pkg.public_symbols["suspension_object"] = Symbol(
+            name="Suspension_Object",
+            kind=SymbolKind.TYPE,
+            ada_type=suspension_obj_type,
+            scope_level=0,
+        )
+
+        # Set_True procedure
+        set_true_proc = Symbol(
+            name="Set_True",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("S", SymbolKind.PARAMETER, suspension_obj_type, mode="in out"),
+            ],
+        )
+        set_true_proc.runtime_name = "_stc_set_true"
+        stc_pkg.public_symbols["set_true"] = set_true_proc
+
+        # Set_False procedure
+        set_false_proc = Symbol(
+            name="Set_False",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("S", SymbolKind.PARAMETER, suspension_obj_type, mode="in out"),
+            ],
+        )
+        set_false_proc.runtime_name = "_stc_set_false"
+        stc_pkg.public_symbols["set_false"] = set_false_proc
+
+        # Current_State function
+        current_state_func = Symbol(
+            name="Current_State",
+            kind=SymbolKind.FUNCTION,
+            return_type=bool_type,
+            scope_level=0,
+            parameters=[
+                Symbol("S", SymbolKind.PARAMETER, suspension_obj_type, mode="in"),
+            ],
+        )
+        current_state_func.runtime_name = "_stc_current_state"
+        stc_pkg.public_symbols["current_state"] = current_state_func
+
+        # Suspend_Until_True procedure
+        suspend_proc = Symbol(
+            name="Suspend_Until_True",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("S", SymbolKind.PARAMETER, suspension_obj_type, mode="in out"),
+            ],
+        )
+        suspend_proc.runtime_name = "_stc_suspend"
+        stc_pkg.public_symbols["suspend_until_true"] = suspend_proc
+
+        ada_pkg.public_symbols["synchronous_task_control"] = stc_pkg
+
+    def _init_wide_characters(self) -> None:
+        """
+        Initialize Ada.Wide_Characters packages (Ada 2005).
+
+        Provides wide character handling analogous to Ada.Characters.
+        """
+        ada_pkg = self.lookup("Ada")
+        if ada_pkg is None:
+            return
+
+        wide_char_type = PREDEFINED_TYPES["Wide_Character"]
+        bool_type = PREDEFINED_TYPES["Boolean"]
+        char_type = PREDEFINED_TYPES["Character"]
+
+        # Create Wide_Characters subpackage
+        wide_chars_pkg = Symbol(
+            name="Wide_Characters",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Create Handling child package
+        handling_pkg = Symbol(
+            name="Handling",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Character classification functions
+        classification_funcs = [
+            ("Is_Control", "Is Wide_Character a control character"),
+            ("Is_Graphic", "Is Wide_Character a graphic character"),
+            ("Is_Letter", "Is Wide_Character a letter"),
+            ("Is_Lower", "Is Wide_Character a lowercase letter"),
+            ("Is_Upper", "Is Wide_Character an uppercase letter"),
+            ("Is_Digit", "Is Wide_Character a decimal digit"),
+            ("Is_Hexadecimal_Digit", "Is Wide_Character a hexadecimal digit"),
+            ("Is_Alphanumeric", "Is Wide_Character a letter or digit"),
+            ("Is_Special", "Is Wide_Character a special graphic character"),
+            ("Is_Line_Terminator", "Is Wide_Character a line terminator"),
+            ("Is_Mark", "Is Wide_Character a mark (diacritic)"),
+            ("Is_Other_Format", "Is Wide_Character an other format character"),
+            ("Is_Punctuation_Connector", "Is Wide_Character a punctuation connector"),
+            ("Is_Space", "Is Wide_Character a space"),
+        ]
+
+        for func_name, _ in classification_funcs:
+            func = Symbol(
+                name=func_name,
+                kind=SymbolKind.FUNCTION,
+                return_type=bool_type,
+                scope_level=0,
+                parameters=[
+                    Symbol("Item", SymbolKind.PARAMETER, wide_char_type, mode="in"),
+                ],
+            )
+            func.runtime_name = f"_wide_{func_name.lower()}"
+            handling_pkg.public_symbols[func_name.lower()] = func
+
+        # Case conversion functions
+        to_lower_func = Symbol(
+            name="To_Lower",
+            kind=SymbolKind.FUNCTION,
+            return_type=wide_char_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Item", SymbolKind.PARAMETER, wide_char_type, mode="in"),
+            ],
+        )
+        to_lower_func.runtime_name = "_wide_to_lower"
+        handling_pkg.public_symbols["to_lower"] = to_lower_func
+
+        to_upper_func = Symbol(
+            name="To_Upper",
+            kind=SymbolKind.FUNCTION,
+            return_type=wide_char_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Item", SymbolKind.PARAMETER, wide_char_type, mode="in"),
+            ],
+        )
+        to_upper_func.runtime_name = "_wide_to_upper"
+        handling_pkg.public_symbols["to_upper"] = to_upper_func
+
+        # Is_Basic function
+        is_basic_func = Symbol(
+            name="Is_Basic",
+            kind=SymbolKind.FUNCTION,
+            return_type=bool_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Item", SymbolKind.PARAMETER, wide_char_type, mode="in"),
+            ],
+        )
+        is_basic_func.runtime_name = "_wide_is_basic"
+        handling_pkg.public_symbols["is_basic"] = is_basic_func
+
+        # To_Basic function
+        to_basic_func = Symbol(
+            name="To_Basic",
+            kind=SymbolKind.FUNCTION,
+            return_type=wide_char_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Item", SymbolKind.PARAMETER, wide_char_type, mode="in"),
+            ],
+        )
+        to_basic_func.runtime_name = "_wide_to_basic"
+        handling_pkg.public_symbols["to_basic"] = to_basic_func
+
+        wide_chars_pkg.public_symbols["handling"] = handling_pkg
+        ada_pkg.public_symbols["wide_characters"] = wide_chars_pkg
 
     def enter_scope(self, name: str = "", is_package: bool = False) -> Scope:
         """Enter a new nested scope."""
