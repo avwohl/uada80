@@ -1783,10 +1783,13 @@ class ASTLowering:
 
         Entry call sequence:
         1. Push parameters onto stack
-        2. Push entry ID
+        2. Push entry ID (combined with family index if entry family)
         3. Push target task ID
         4. Call _ENTRY_CALL runtime
         5. Runtime blocks caller until accept completes
+
+        For entry families (entry E(for I in Range)), the family index is
+        passed as an additional implicit parameter after the task object.
         """
         # Save context
         old_ctx = self.ctx
@@ -1810,11 +1813,18 @@ class ASTLowering:
 
         # Parameters:
         # - First implicit param: target task object (contains task ID)
+        # - For entry families: second implicit param is family index
         # - Then the entry's formal parameters
 
         # Pop target task object pointer
         task_obj = self.builder.new_vreg(IRType.PTR, "_task_obj")
         self.builder.pop(task_obj)
+
+        # Handle entry family index if present
+        family_index_vreg = None
+        if entry.family_index:
+            family_index_vreg = self.builder.new_vreg(IRType.WORD, "_family_index")
+            self.builder.pop(family_index_vreg)
 
         # Get task ID from task object (stored at offset 0 of task object)
         task_id = self.builder.new_vreg(IRType.WORD, "_task_id")
@@ -1836,12 +1846,32 @@ class ASTLowering:
             self.builder.mov(params_ptr, Immediate(0, IRType.PTR))
 
         # Compute entry ID (hash of entry name for uniqueness)
-        entry_id = hash(entry.name) & 0xFFFF
+        base_entry_id = hash(entry.name) & 0xFFFF
+
+        # For entry families, combine base entry ID with family index
+        if family_index_vreg:
+            # entry_id = base_id * 256 + family_index
+            # This allows up to 256 indices per family
+            scaled_base = self.builder.new_vreg(IRType.WORD, "_scaled_base")
+            self.builder.emit(IRInstr(
+                OpCode.MUL, scaled_base,
+                Immediate(base_entry_id, IRType.WORD),
+                Immediate(256, IRType.WORD),
+                comment="scale base entry id"
+            ))
+            entry_id_vreg = self.builder.new_vreg(IRType.WORD, "_entry_id")
+            self.builder.emit(IRInstr(
+                OpCode.ADD, entry_id_vreg, scaled_base, family_index_vreg,
+                comment="combine with family index"
+            ))
+        else:
+            entry_id_vreg = self.builder.new_vreg(IRType.WORD, "_entry_id")
+            self.builder.mov(entry_id_vreg, Immediate(base_entry_id, IRType.WORD))
 
         # Push parameters for _ENTRY_CALL: params_ptr, task_id, entry_id
         self.builder.push(params_ptr)
         self.builder.push(task_id)
-        self.builder.push(Immediate(entry_id, IRType.WORD))
+        self.builder.push(entry_id_vreg)
 
         # Call runtime entry call
         self.builder.call(Label("_ENTRY_CALL"))
@@ -4114,9 +4144,10 @@ class ASTLowering:
         if base_addr is None:
             return
 
-        # Get field offset
+        # Get field offset and atomic/volatile flags
         field_offset = self._get_field_offset(target)
         field_size = self._get_field_size(target)
+        is_atomic, is_volatile = self._get_field_atomic_volatile(target)
 
         # Calculate field address
         if field_offset != 0:
@@ -4125,8 +4156,11 @@ class ASTLowering:
         else:
             field_addr = base_addr
 
-        # Store value to field
-        mem = MemoryLocation(base=field_addr, offset=0, ir_type=IRType.WORD)
+        # Store value to field (with atomic/volatile flags for DI/EI)
+        mem = MemoryLocation(
+            base=field_addr, offset=0, ir_type=IRType.WORD,
+            is_atomic=is_atomic, is_volatile=is_volatile
+        )
         self.builder.store(mem, value)
 
     def _get_record_base(self, prefix: Expr) -> Optional[VReg]:
@@ -4187,6 +4221,38 @@ class ASTLowering:
                         return (comp.component_type.size_bits + 7) // 8
         return 2  # Default to word size
 
+    def _get_field_atomic_volatile(self, selected: SelectedName) -> tuple[bool, bool]:
+        """Get the atomic and volatile flags for a record field.
+
+        Returns (is_atomic, is_volatile) tuple.
+        Checks both the field's own flags and the parent record's flags.
+        """
+        from uada80.type_system import RecordType
+
+        is_atomic = False
+        is_volatile = False
+
+        if isinstance(selected.prefix, Identifier):
+            sym = self.symbols.lookup(selected.prefix.name)
+            if sym:
+                # Check record-level atomic/volatile (applies to all fields)
+                if sym.is_atomic:
+                    is_atomic = True
+                if sym.is_volatile:
+                    is_volatile = True
+
+                # Check field-level atomic/volatile
+                if sym.ada_type and isinstance(sym.ada_type, RecordType):
+                    for comp in sym.ada_type.components:
+                        if comp.name.lower() == selected.selector.lower():
+                            if comp.is_atomic:
+                                is_atomic = True
+                            if comp.is_volatile:
+                                is_volatile = True
+                            break
+
+        return (is_atomic, is_volatile)
+
     def _lower_selected(self, expr: SelectedName):
         """Lower a selected component (record field access or pointer dereference)."""
         if self.ctx is None:
@@ -4230,8 +4296,9 @@ class ASTLowering:
         if prefix_type:
             self._check_variant_discriminant(prefix_type, expr.selector, base_addr)
 
-        # Get field offset
+        # Get field offset and atomic/volatile flags
         field_offset = self._get_field_offset(expr)
+        is_atomic, is_volatile = self._get_field_atomic_volatile(expr)
 
         # Calculate field address
         if field_offset != 0:
@@ -4240,9 +4307,12 @@ class ASTLowering:
         else:
             field_addr = base_addr
 
-        # Load value from field
+        # Load value from field (with atomic/volatile flags for DI/EI)
         result = self.builder.new_vreg(IRType.WORD, "_field")
-        mem = MemoryLocation(base=field_addr, offset=0, ir_type=IRType.WORD)
+        mem = MemoryLocation(
+            base=field_addr, offset=0, ir_type=IRType.WORD,
+            is_atomic=is_atomic, is_volatile=is_volatile
+        )
         self.builder.load(result, mem)
 
         return result

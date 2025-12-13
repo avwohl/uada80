@@ -344,6 +344,9 @@ class RecordComponent:
     # For discriminants: constraint information
     is_discriminant: bool = False
     discriminant_constraint: Optional[DiscriminantConstraint] = None
+    # Atomic/volatile component attributes (pragma Atomic_Components, etc.)
+    is_atomic: bool = False
+    is_volatile: bool = False
 
 
 @dataclass
