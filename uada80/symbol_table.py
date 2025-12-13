@@ -244,6 +244,7 @@ class SymbolTable:
         self._init_assertions()
         self._init_synchronous_task_control()
         self._init_wide_characters()
+        self._init_gnat_packages()
 
     def _init_text_io(self) -> None:
         """Add Ada.Text_IO package to the standard scope."""
@@ -4857,6 +4858,1103 @@ class SymbolTable:
 
         wide_chars_pkg.public_symbols["handling"] = handling_pkg
         ada_pkg.public_symbols["wide_characters"] = wide_chars_pkg
+
+    def _init_gnat_packages(self) -> None:
+        """
+        Initialize GNAT-specific packages.
+
+        GNAT provides a rich set of utility packages beyond the standard
+        Ada library. These are commonly used in real-world Ada programs.
+        """
+        int_type = PREDEFINED_TYPES["Integer"]
+        nat_type = PREDEFINED_TYPES["Natural"]
+        pos_type = PREDEFINED_TYPES["Positive"]
+        bool_type = PREDEFINED_TYPES["Boolean"]
+        char_type = PREDEFINED_TYPES["Character"]
+        str_type = PREDEFINED_TYPES["String"]
+        float_type = PREDEFINED_TYPES["Float"]
+
+        # Create GNAT root package
+        gnat_pkg = Symbol(
+            name="GNAT",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # =====================================================================
+        # GNAT.IO - Simple I/O package (preelaborated, lighter than Text_IO)
+        # =====================================================================
+        io_pkg = Symbol(
+            name="IO",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+        io_pkg.is_preelaborate = True
+
+        # Put procedures
+        put_char = Symbol(
+            name="Put",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[Symbol("C", SymbolKind.PARAMETER, char_type, mode="in")],
+        )
+        put_char.runtime_name = "_gnat_io_put_char"
+        io_pkg.public_symbols["put"] = put_char
+
+        put_str = Symbol(
+            name="Put",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[Symbol("S", SymbolKind.PARAMETER, str_type, mode="in")],
+        )
+        put_str.runtime_name = "_gnat_io_put_str"
+        put_char.overloaded_next = put_str
+
+        put_int = Symbol(
+            name="Put",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[Symbol("I", SymbolKind.PARAMETER, int_type, mode="in")],
+        )
+        put_int.runtime_name = "_gnat_io_put_int"
+        put_str.overloaded_next = put_int
+
+        # Put_Line procedures
+        put_line_str = Symbol(
+            name="Put_Line",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[Symbol("S", SymbolKind.PARAMETER, str_type, mode="in")],
+        )
+        put_line_str.runtime_name = "_gnat_io_put_line"
+        io_pkg.public_symbols["put_line"] = put_line_str
+
+        # New_Line procedure
+        new_line = Symbol(
+            name="New_Line",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[],
+        )
+        new_line.runtime_name = "_gnat_io_new_line"
+        io_pkg.public_symbols["new_line"] = new_line
+
+        # Get procedures
+        get_char = Symbol(
+            name="Get",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[Symbol("C", SymbolKind.PARAMETER, char_type, mode="out")],
+        )
+        get_char.runtime_name = "_gnat_io_get_char"
+        io_pkg.public_symbols["get"] = get_char
+
+        get_int = Symbol(
+            name="Get",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[Symbol("I", SymbolKind.PARAMETER, int_type, mode="out")],
+        )
+        get_int.runtime_name = "_gnat_io_get_int"
+        get_char.overloaded_next = get_int
+
+        # Get_Line function
+        get_line = Symbol(
+            name="Get_Line",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[],
+        )
+        get_line.runtime_name = "_gnat_io_get_line"
+        io_pkg.public_symbols["get_line"] = get_line
+
+        gnat_pkg.public_symbols["io"] = io_pkg
+
+        # =====================================================================
+        # GNAT.Source_Info - Compile-time source information
+        # =====================================================================
+        source_info_pkg = Symbol(
+            name="Source_Info",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # File function - returns current source file name
+        file_func = Symbol(
+            name="File",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[],
+        )
+        file_func.runtime_name = "_gnat_source_file"
+        source_info_pkg.public_symbols["file"] = file_func
+
+        # Line function - returns current line number
+        line_func = Symbol(
+            name="Line",
+            kind=SymbolKind.FUNCTION,
+            return_type=pos_type,
+            scope_level=0,
+            parameters=[],
+        )
+        line_func.runtime_name = "_gnat_source_line"
+        source_info_pkg.public_symbols["line"] = line_func
+
+        # Source_Location function - returns "file:line"
+        source_loc_func = Symbol(
+            name="Source_Location",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[],
+        )
+        source_loc_func.runtime_name = "_gnat_source_location"
+        source_info_pkg.public_symbols["source_location"] = source_loc_func
+
+        # Enclosing_Entity function - returns enclosing subprogram/package name
+        enclosing_func = Symbol(
+            name="Enclosing_Entity",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[],
+        )
+        enclosing_func.runtime_name = "_gnat_enclosing_entity"
+        source_info_pkg.public_symbols["enclosing_entity"] = enclosing_func
+
+        # Compilation_Date function
+        comp_date_func = Symbol(
+            name="Compilation_Date",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[],
+        )
+        comp_date_func.runtime_name = "_gnat_compilation_date"
+        source_info_pkg.public_symbols["compilation_date"] = comp_date_func
+
+        # Compilation_Time function
+        comp_time_func = Symbol(
+            name="Compilation_Time",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[],
+        )
+        comp_time_func.runtime_name = "_gnat_compilation_time"
+        source_info_pkg.public_symbols["compilation_time"] = comp_time_func
+
+        gnat_pkg.public_symbols["source_info"] = source_info_pkg
+
+        # =====================================================================
+        # GNAT.Case_Util - Case conversion utilities
+        # =====================================================================
+        case_util_pkg = Symbol(
+            name="Case_Util",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # To_Upper for Character
+        to_upper_char = Symbol(
+            name="To_Upper",
+            kind=SymbolKind.FUNCTION,
+            return_type=char_type,
+            scope_level=0,
+            parameters=[Symbol("A", SymbolKind.PARAMETER, char_type, mode="in")],
+        )
+        to_upper_char.runtime_name = "_gnat_to_upper_char"
+        case_util_pkg.public_symbols["to_upper"] = to_upper_char
+
+        # To_Lower for Character
+        to_lower_char = Symbol(
+            name="To_Lower",
+            kind=SymbolKind.FUNCTION,
+            return_type=char_type,
+            scope_level=0,
+            parameters=[Symbol("A", SymbolKind.PARAMETER, char_type, mode="in")],
+        )
+        to_lower_char.runtime_name = "_gnat_to_lower_char"
+        case_util_pkg.public_symbols["to_lower"] = to_lower_char
+
+        # To_Mixed for String (in out parameter)
+        to_mixed_str = Symbol(
+            name="To_Mixed",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[Symbol("A", SymbolKind.PARAMETER, str_type, mode="in out")],
+        )
+        to_mixed_str.runtime_name = "_gnat_to_mixed"
+        case_util_pkg.public_symbols["to_mixed"] = to_mixed_str
+
+        gnat_pkg.public_symbols["case_util"] = case_util_pkg
+
+        # =====================================================================
+        # GNAT.CRC32 - CRC-32 checksum computation
+        # =====================================================================
+        from uada80.type_system import ModularType
+        crc32_type = ModularType(name="CRC32", modulus=2**32)
+
+        crc32_pkg = Symbol(
+            name="CRC32",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # CRC32 type
+        crc32_pkg.public_symbols["crc32"] = Symbol(
+            name="CRC32",
+            kind=SymbolKind.TYPE,
+            ada_type=crc32_type,
+            scope_level=0,
+        )
+
+        # Initialize procedure
+        init_crc = Symbol(
+            name="Initialize",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[Symbol("C", SymbolKind.PARAMETER, crc32_type, mode="out")],
+        )
+        init_crc.runtime_name = "_gnat_crc32_init"
+        crc32_pkg.public_symbols["initialize"] = init_crc
+
+        # Update procedure (single character)
+        update_crc_char = Symbol(
+            name="Update",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("C", SymbolKind.PARAMETER, crc32_type, mode="in out"),
+                Symbol("Value", SymbolKind.PARAMETER, char_type, mode="in"),
+            ],
+        )
+        update_crc_char.runtime_name = "_gnat_crc32_update_char"
+        crc32_pkg.public_symbols["update"] = update_crc_char
+
+        # Update procedure (string)
+        update_crc_str = Symbol(
+            name="Update",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("C", SymbolKind.PARAMETER, crc32_type, mode="in out"),
+                Symbol("Value", SymbolKind.PARAMETER, str_type, mode="in"),
+            ],
+        )
+        update_crc_str.runtime_name = "_gnat_crc32_update_str"
+        update_crc_char.overloaded_next = update_crc_str
+
+        # Get_Value function
+        get_value_crc = Symbol(
+            name="Get_Value",
+            kind=SymbolKind.FUNCTION,
+            return_type=crc32_type,
+            scope_level=0,
+            parameters=[Symbol("C", SymbolKind.PARAMETER, crc32_type, mode="in")],
+        )
+        get_value_crc.runtime_name = "_gnat_crc32_get_value"
+        crc32_pkg.public_symbols["get_value"] = get_value_crc
+
+        gnat_pkg.public_symbols["crc32"] = crc32_pkg
+
+        # =====================================================================
+        # GNAT.Heap_Sort - Generic heap sort algorithm
+        # =====================================================================
+        heap_sort_pkg = Symbol(
+            name="Heap_Sort",
+            kind=SymbolKind.GENERIC_PACKAGE,
+            scope_level=0,
+        )
+        heap_sort_pkg.is_builtin_generic = True
+        gnat_pkg.public_symbols["heap_sort"] = heap_sort_pkg
+
+        # GNAT.Heap_Sort_G - Simpler generic heap sort
+        heap_sort_g_pkg = Symbol(
+            name="Heap_Sort_G",
+            kind=SymbolKind.GENERIC_PACKAGE,
+            scope_level=0,
+        )
+        heap_sort_g_pkg.is_builtin_generic = True
+        gnat_pkg.public_symbols["heap_sort_g"] = heap_sort_g_pkg
+
+        # =====================================================================
+        # GNAT.Bubble_Sort - Generic bubble sort algorithm
+        # =====================================================================
+        bubble_sort_pkg = Symbol(
+            name="Bubble_Sort",
+            kind=SymbolKind.GENERIC_PACKAGE,
+            scope_level=0,
+        )
+        bubble_sort_pkg.is_builtin_generic = True
+        gnat_pkg.public_symbols["bubble_sort"] = bubble_sort_pkg
+
+        # GNAT.Bubble_Sort_G - Simpler generic bubble sort
+        bubble_sort_g_pkg = Symbol(
+            name="Bubble_Sort_G",
+            kind=SymbolKind.GENERIC_PACKAGE,
+            scope_level=0,
+        )
+        bubble_sort_g_pkg.is_builtin_generic = True
+        gnat_pkg.public_symbols["bubble_sort_g"] = bubble_sort_g_pkg
+
+        # =====================================================================
+        # GNAT.String_Split - String tokenization
+        # =====================================================================
+        string_split_pkg = Symbol(
+            name="String_Split",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Slice_Set type (limited private)
+        from uada80.type_system import RecordType
+        slice_set_type = RecordType(
+            name="Slice_Set",
+            components=[],
+            is_limited=True,
+        )
+        string_split_pkg.public_symbols["slice_set"] = Symbol(
+            name="Slice_Set",
+            kind=SymbolKind.TYPE,
+            ada_type=slice_set_type,
+            scope_level=0,
+        )
+
+        # Slice_Number subtype
+        string_split_pkg.public_symbols["slice_number"] = Symbol(
+            name="Slice_Number",
+            kind=SymbolKind.SUBTYPE,
+            ada_type=nat_type,
+            scope_level=0,
+        )
+
+        # Separators_Mode enumeration
+        from uada80.type_system import EnumerationType
+        sep_mode_type = EnumerationType(
+            name="Separators_Mode",
+            literals=["Single", "Multiple"],
+        )
+        string_split_pkg.public_symbols["separators_mode"] = Symbol(
+            name="Separators_Mode",
+            kind=SymbolKind.TYPE,
+            ada_type=sep_mode_type,
+            scope_level=0,
+        )
+
+        # Create procedure
+        create_proc = Symbol(
+            name="Create",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("S", SymbolKind.PARAMETER, slice_set_type, mode="out"),
+                Symbol("From", SymbolKind.PARAMETER, str_type, mode="in"),
+                Symbol("Separators", SymbolKind.PARAMETER, str_type, mode="in"),
+                Symbol("Mode", SymbolKind.PARAMETER, sep_mode_type, mode="in"),
+            ],
+        )
+        create_proc.runtime_name = "_gnat_string_split_create"
+        string_split_pkg.public_symbols["create"] = create_proc
+
+        # Slice_Count function
+        slice_count_func = Symbol(
+            name="Slice_Count",
+            kind=SymbolKind.FUNCTION,
+            return_type=nat_type,
+            scope_level=0,
+            parameters=[Symbol("S", SymbolKind.PARAMETER, slice_set_type, mode="in")],
+        )
+        slice_count_func.runtime_name = "_gnat_string_split_count"
+        string_split_pkg.public_symbols["slice_count"] = slice_count_func
+
+        # Slice function
+        slice_func = Symbol(
+            name="Slice",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[
+                Symbol("S", SymbolKind.PARAMETER, slice_set_type, mode="in"),
+                Symbol("Index", SymbolKind.PARAMETER, nat_type, mode="in"),
+            ],
+        )
+        slice_func.runtime_name = "_gnat_string_split_slice"
+        string_split_pkg.public_symbols["slice"] = slice_func
+
+        gnat_pkg.public_symbols["string_split"] = string_split_pkg
+
+        # =====================================================================
+        # GNAT.OS_Lib - Operating system interface
+        # =====================================================================
+        os_lib_pkg = Symbol(
+            name="OS_Lib",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # File_Descriptor type (Integer)
+        os_lib_pkg.public_symbols["file_descriptor"] = Symbol(
+            name="File_Descriptor",
+            kind=SymbolKind.SUBTYPE,
+            ada_type=int_type,
+            scope_level=0,
+        )
+
+        # Standard file descriptors
+        os_lib_pkg.public_symbols["standin"] = Symbol(
+            name="Standin",
+            kind=SymbolKind.CONSTANT,
+            ada_type=int_type,
+            is_constant=True,
+            value=0,
+            scope_level=0,
+        )
+        os_lib_pkg.public_symbols["standout"] = Symbol(
+            name="Standout",
+            kind=SymbolKind.CONSTANT,
+            ada_type=int_type,
+            is_constant=True,
+            value=1,
+            scope_level=0,
+        )
+        os_lib_pkg.public_symbols["standerr"] = Symbol(
+            name="Standerr",
+            kind=SymbolKind.CONSTANT,
+            ada_type=int_type,
+            is_constant=True,
+            value=2,
+            scope_level=0,
+        )
+
+        # Invalid_FD constant
+        os_lib_pkg.public_symbols["invalid_fd"] = Symbol(
+            name="Invalid_FD",
+            kind=SymbolKind.CONSTANT,
+            ada_type=int_type,
+            is_constant=True,
+            value=-1,
+            scope_level=0,
+        )
+
+        # Getenv function
+        getenv_func = Symbol(
+            name="Getenv",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[Symbol("Name", SymbolKind.PARAMETER, str_type, mode="in")],
+        )
+        getenv_func.runtime_name = "_gnat_getenv"
+        os_lib_pkg.public_symbols["getenv"] = getenv_func
+
+        # Setenv procedure
+        setenv_proc = Symbol(
+            name="Setenv",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Name", SymbolKind.PARAMETER, str_type, mode="in"),
+                Symbol("Value", SymbolKind.PARAMETER, str_type, mode="in"),
+            ],
+        )
+        setenv_proc.runtime_name = "_gnat_setenv"
+        os_lib_pkg.public_symbols["setenv"] = setenv_proc
+
+        # Is_Regular_File function
+        is_regular_file_func = Symbol(
+            name="Is_Regular_File",
+            kind=SymbolKind.FUNCTION,
+            return_type=bool_type,
+            scope_level=0,
+            parameters=[Symbol("Name", SymbolKind.PARAMETER, str_type, mode="in")],
+        )
+        is_regular_file_func.runtime_name = "_gnat_is_regular_file"
+        os_lib_pkg.public_symbols["is_regular_file"] = is_regular_file_func
+
+        # Is_Directory function
+        is_directory_func = Symbol(
+            name="Is_Directory",
+            kind=SymbolKind.FUNCTION,
+            return_type=bool_type,
+            scope_level=0,
+            parameters=[Symbol("Name", SymbolKind.PARAMETER, str_type, mode="in")],
+        )
+        is_directory_func.runtime_name = "_gnat_is_directory"
+        os_lib_pkg.public_symbols["is_directory"] = is_directory_func
+
+        # File_Time_Stamp function
+        file_time_func = Symbol(
+            name="File_Time_Stamp",
+            kind=SymbolKind.FUNCTION,
+            return_type=int_type,  # OS_Time
+            scope_level=0,
+            parameters=[Symbol("Name", SymbolKind.PARAMETER, str_type, mode="in")],
+        )
+        file_time_func.runtime_name = "_gnat_file_time_stamp"
+        os_lib_pkg.public_symbols["file_time_stamp"] = file_time_func
+
+        # Delete_File procedure
+        delete_file_proc = Symbol(
+            name="Delete_File",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Name", SymbolKind.PARAMETER, str_type, mode="in"),
+                Symbol("Success", SymbolKind.PARAMETER, bool_type, mode="out"),
+            ],
+        )
+        delete_file_proc.runtime_name = "_gnat_delete_file"
+        os_lib_pkg.public_symbols["delete_file"] = delete_file_proc
+
+        # Rename_File procedure
+        rename_file_proc = Symbol(
+            name="Rename_File",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Old_Name", SymbolKind.PARAMETER, str_type, mode="in"),
+                Symbol("New_Name", SymbolKind.PARAMETER, str_type, mode="in"),
+                Symbol("Success", SymbolKind.PARAMETER, bool_type, mode="out"),
+            ],
+        )
+        rename_file_proc.runtime_name = "_gnat_rename_file"
+        os_lib_pkg.public_symbols["rename_file"] = rename_file_proc
+
+        # OS_Exit procedure
+        os_exit_proc = Symbol(
+            name="OS_Exit",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[Symbol("Status", SymbolKind.PARAMETER, int_type, mode="in")],
+        )
+        os_exit_proc.runtime_name = "_gnat_os_exit"
+        os_exit_proc.is_no_return = True
+        os_lib_pkg.public_symbols["os_exit"] = os_exit_proc
+
+        gnat_pkg.public_symbols["os_lib"] = os_lib_pkg
+
+        # =====================================================================
+        # GNAT.Calendar - Extended calendar operations
+        # =====================================================================
+        gnat_calendar_pkg = Symbol(
+            name="Calendar",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Day_Of_Week type
+        day_of_week_type = EnumerationType(
+            name="Day_Of_Week_Type",
+            literals=["Sunday", "Monday", "Tuesday", "Wednesday",
+                     "Thursday", "Friday", "Saturday"],
+        )
+        gnat_calendar_pkg.public_symbols["day_of_week_type"] = Symbol(
+            name="Day_Of_Week_Type",
+            kind=SymbolKind.TYPE,
+            ada_type=day_of_week_type,
+            scope_level=0,
+        )
+
+        # Get Ada.Calendar.Time type
+        ada_pkg = self.lookup("Ada")
+        calendar_pkg = ada_pkg.public_symbols.get("calendar") if ada_pkg else None
+        if calendar_pkg:
+            time_sym = calendar_pkg.public_symbols.get("time")
+            time_type = time_sym.ada_type if time_sym else None
+        else:
+            time_type = float_type  # fallback
+
+        # Day_Of_Week function
+        day_of_week_func = Symbol(
+            name="Day_Of_Week",
+            kind=SymbolKind.FUNCTION,
+            return_type=day_of_week_type,
+            scope_level=0,
+            parameters=[Symbol("Date", SymbolKind.PARAMETER, time_type, mode="in")],
+        )
+        day_of_week_func.runtime_name = "_gnat_day_of_week"
+        gnat_calendar_pkg.public_symbols["day_of_week"] = day_of_week_func
+
+        # Hour function
+        hour_func = Symbol(
+            name="Hour",
+            kind=SymbolKind.FUNCTION,
+            return_type=nat_type,
+            scope_level=0,
+            parameters=[Symbol("Date", SymbolKind.PARAMETER, time_type, mode="in")],
+        )
+        hour_func.runtime_name = "_gnat_hour"
+        gnat_calendar_pkg.public_symbols["hour"] = hour_func
+
+        # Minute function
+        minute_func = Symbol(
+            name="Minute",
+            kind=SymbolKind.FUNCTION,
+            return_type=nat_type,
+            scope_level=0,
+            parameters=[Symbol("Date", SymbolKind.PARAMETER, time_type, mode="in")],
+        )
+        minute_func.runtime_name = "_gnat_minute"
+        gnat_calendar_pkg.public_symbols["minute"] = minute_func
+
+        # Second function
+        second_func = Symbol(
+            name="Second",
+            kind=SymbolKind.FUNCTION,
+            return_type=nat_type,
+            scope_level=0,
+            parameters=[Symbol("Date", SymbolKind.PARAMETER, time_type, mode="in")],
+        )
+        second_func.runtime_name = "_gnat_second"
+        gnat_calendar_pkg.public_symbols["second"] = second_func
+
+        gnat_pkg.public_symbols["calendar"] = gnat_calendar_pkg
+
+        # =====================================================================
+        # GNAT.MD5 - MD5 message digest
+        # =====================================================================
+        md5_pkg = Symbol(
+            name="MD5",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Message_Digest type (String of 32 hex characters)
+        md5_pkg.public_symbols["message_digest"] = Symbol(
+            name="Message_Digest",
+            kind=SymbolKind.SUBTYPE,
+            ada_type=str_type,
+            scope_level=0,
+        )
+
+        # Context type (limited private)
+        md5_context_type = RecordType(
+            name="Context",
+            components=[],
+            is_limited=True,
+        )
+        md5_pkg.public_symbols["context"] = Symbol(
+            name="Context",
+            kind=SymbolKind.TYPE,
+            ada_type=md5_context_type,
+            scope_level=0,
+        )
+
+        # Digest function (simple - hash a string)
+        md5_digest_func = Symbol(
+            name="Digest",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[Symbol("S", SymbolKind.PARAMETER, str_type, mode="in")],
+        )
+        md5_digest_func.runtime_name = "_gnat_md5_digest"
+        md5_pkg.public_symbols["digest"] = md5_digest_func
+
+        gnat_pkg.public_symbols["md5"] = md5_pkg
+
+        # =====================================================================
+        # GNAT.SHA1 - SHA-1 secure hash
+        # =====================================================================
+        sha1_pkg = Symbol(
+            name="SHA1",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Context type
+        sha1_context_type = RecordType(
+            name="Context",
+            components=[],
+            is_limited=True,
+        )
+        sha1_pkg.public_symbols["context"] = Symbol(
+            name="Context",
+            kind=SymbolKind.TYPE,
+            ada_type=sha1_context_type,
+            scope_level=0,
+        )
+
+        # Digest function
+        sha1_digest_func = Symbol(
+            name="Digest",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[Symbol("S", SymbolKind.PARAMETER, str_type, mode="in")],
+        )
+        sha1_digest_func.runtime_name = "_gnat_sha1_digest"
+        sha1_pkg.public_symbols["digest"] = sha1_digest_func
+
+        gnat_pkg.public_symbols["sha1"] = sha1_pkg
+
+        # =====================================================================
+        # GNAT.SHA256 - SHA-256 secure hash
+        # =====================================================================
+        sha256_pkg = Symbol(
+            name="SHA256",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        sha256_context_type = RecordType(
+            name="Context",
+            components=[],
+            is_limited=True,
+        )
+        sha256_pkg.public_symbols["context"] = Symbol(
+            name="Context",
+            kind=SymbolKind.TYPE,
+            ada_type=sha256_context_type,
+            scope_level=0,
+        )
+
+        sha256_digest_func = Symbol(
+            name="Digest",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[Symbol("S", SymbolKind.PARAMETER, str_type, mode="in")],
+        )
+        sha256_digest_func.runtime_name = "_gnat_sha256_digest"
+        sha256_pkg.public_symbols["digest"] = sha256_digest_func
+
+        gnat_pkg.public_symbols["sha256"] = sha256_pkg
+
+        # =====================================================================
+        # GNAT.Regpat - Regular expression pattern matching
+        # =====================================================================
+        regpat_pkg = Symbol(
+            name="Regpat",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Pattern_Matcher type (limited private)
+        pattern_matcher_type = RecordType(
+            name="Pattern_Matcher",
+            components=[],
+            is_limited=True,
+        )
+        regpat_pkg.public_symbols["pattern_matcher"] = Symbol(
+            name="Pattern_Matcher",
+            kind=SymbolKind.TYPE,
+            ada_type=pattern_matcher_type,
+            scope_level=0,
+        )
+
+        # Match_Location record
+        from uada80.type_system import RecordComponent
+        match_loc_type = RecordType(
+            name="Match_Location",
+            components=[
+                RecordComponent(name="First", component_type=nat_type),
+                RecordComponent(name="Last", component_type=nat_type),
+            ],
+        )
+        regpat_pkg.public_symbols["match_location"] = Symbol(
+            name="Match_Location",
+            kind=SymbolKind.TYPE,
+            ada_type=match_loc_type,
+            scope_level=0,
+        )
+
+        # No_Match constant
+        regpat_pkg.public_symbols["no_match"] = Symbol(
+            name="No_Match",
+            kind=SymbolKind.CONSTANT,
+            ada_type=match_loc_type,
+            is_constant=True,
+            scope_level=0,
+        )
+
+        # Compile function
+        compile_func = Symbol(
+            name="Compile",
+            kind=SymbolKind.FUNCTION,
+            return_type=pattern_matcher_type,
+            scope_level=0,
+            parameters=[Symbol("Expression", SymbolKind.PARAMETER, str_type, mode="in")],
+        )
+        compile_func.runtime_name = "_gnat_regpat_compile"
+        regpat_pkg.public_symbols["compile"] = compile_func
+
+        # Match function
+        match_func = Symbol(
+            name="Match",
+            kind=SymbolKind.FUNCTION,
+            return_type=bool_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Self", SymbolKind.PARAMETER, pattern_matcher_type, mode="in"),
+                Symbol("Data", SymbolKind.PARAMETER, str_type, mode="in"),
+            ],
+        )
+        match_func.runtime_name = "_gnat_regpat_match"
+        regpat_pkg.public_symbols["match"] = match_func
+
+        gnat_pkg.public_symbols["regpat"] = regpat_pkg
+
+        # =====================================================================
+        # GNAT.Command_Line - Advanced command line parsing
+        # =====================================================================
+        cmd_line_pkg = Symbol(
+            name="Command_Line",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Define_Switch procedure
+        define_switch_proc = Symbol(
+            name="Define_Switch",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Switch", SymbolKind.PARAMETER, str_type, mode="in"),
+                Symbol("Help", SymbolKind.PARAMETER, str_type, mode="in"),
+            ],
+        )
+        define_switch_proc.runtime_name = "_gnat_define_switch"
+        cmd_line_pkg.public_symbols["define_switch"] = define_switch_proc
+
+        # Getopt function
+        getopt_func = Symbol(
+            name="Getopt",
+            kind=SymbolKind.FUNCTION,
+            return_type=char_type,
+            scope_level=0,
+            parameters=[Symbol("Switches", SymbolKind.PARAMETER, str_type, mode="in")],
+        )
+        getopt_func.runtime_name = "_gnat_getopt"
+        cmd_line_pkg.public_symbols["getopt"] = getopt_func
+
+        # Full_Switch function
+        full_switch_func = Symbol(
+            name="Full_Switch",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[],
+        )
+        full_switch_func.runtime_name = "_gnat_full_switch"
+        cmd_line_pkg.public_symbols["full_switch"] = full_switch_func
+
+        # Parameter function
+        parameter_func = Symbol(
+            name="Parameter",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[],
+        )
+        parameter_func.runtime_name = "_gnat_parameter"
+        cmd_line_pkg.public_symbols["parameter"] = parameter_func
+
+        gnat_pkg.public_symbols["command_line"] = cmd_line_pkg
+
+        # =====================================================================
+        # GNAT.Directory_Operations - Directory handling
+        # =====================================================================
+        dir_ops_pkg = Symbol(
+            name="Directory_Operations",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Dir_Type (limited private)
+        dir_type = RecordType(
+            name="Dir_Type",
+            components=[],
+            is_limited=True,
+        )
+        dir_ops_pkg.public_symbols["dir_type"] = Symbol(
+            name="Dir_Type",
+            kind=SymbolKind.TYPE,
+            ada_type=dir_type,
+            scope_level=0,
+        )
+
+        # Dir_Separator constant
+        dir_ops_pkg.public_symbols["dir_separator"] = Symbol(
+            name="Dir_Separator",
+            kind=SymbolKind.CONSTANT,
+            ada_type=char_type,
+            is_constant=True,
+            value=ord('/'),  # Unix-style, even though CP/M is target
+            scope_level=0,
+        )
+
+        # Get_Current_Dir function
+        get_current_dir_func = Symbol(
+            name="Get_Current_Dir",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[],
+        )
+        get_current_dir_func.runtime_name = "_gnat_get_current_dir"
+        dir_ops_pkg.public_symbols["get_current_dir"] = get_current_dir_func
+
+        # Change_Dir procedure
+        change_dir_proc = Symbol(
+            name="Change_Dir",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[Symbol("Dir_Name", SymbolKind.PARAMETER, str_type, mode="in")],
+        )
+        change_dir_proc.runtime_name = "_gnat_change_dir"
+        dir_ops_pkg.public_symbols["change_dir"] = change_dir_proc
+
+        # Make_Dir procedure
+        make_dir_proc = Symbol(
+            name="Make_Dir",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[Symbol("Dir_Name", SymbolKind.PARAMETER, str_type, mode="in")],
+        )
+        make_dir_proc.runtime_name = "_gnat_make_dir"
+        dir_ops_pkg.public_symbols["make_dir"] = make_dir_proc
+
+        # Remove_Dir procedure
+        remove_dir_proc = Symbol(
+            name="Remove_Dir",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[Symbol("Dir_Name", SymbolKind.PARAMETER, str_type, mode="in")],
+        )
+        remove_dir_proc.runtime_name = "_gnat_remove_dir"
+        dir_ops_pkg.public_symbols["remove_dir"] = remove_dir_proc
+
+        # Open procedure
+        open_dir_proc = Symbol(
+            name="Open",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Dir", SymbolKind.PARAMETER, dir_type, mode="out"),
+                Symbol("Dir_Name", SymbolKind.PARAMETER, str_type, mode="in"),
+            ],
+        )
+        open_dir_proc.runtime_name = "_gnat_dir_open"
+        dir_ops_pkg.public_symbols["open"] = open_dir_proc
+
+        # Read procedure
+        read_dir_proc = Symbol(
+            name="Read",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Dir", SymbolKind.PARAMETER, dir_type, mode="in out"),
+                Symbol("Str", SymbolKind.PARAMETER, str_type, mode="out"),
+                Symbol("Last", SymbolKind.PARAMETER, nat_type, mode="out"),
+            ],
+        )
+        read_dir_proc.runtime_name = "_gnat_dir_read"
+        dir_ops_pkg.public_symbols["read"] = read_dir_proc
+
+        # Close procedure
+        close_dir_proc = Symbol(
+            name="Close",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[Symbol("Dir", SymbolKind.PARAMETER, dir_type, mode="in out")],
+        )
+        close_dir_proc.runtime_name = "_gnat_dir_close"
+        dir_ops_pkg.public_symbols["close"] = close_dir_proc
+
+        # Base_Name function
+        base_name_func = Symbol(
+            name="Base_Name",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[Symbol("Path", SymbolKind.PARAMETER, str_type, mode="in")],
+        )
+        base_name_func.runtime_name = "_gnat_base_name"
+        dir_ops_pkg.public_symbols["base_name"] = base_name_func
+
+        # Dir_Name function
+        dir_name_func = Symbol(
+            name="Dir_Name",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[Symbol("Path", SymbolKind.PARAMETER, str_type, mode="in")],
+        )
+        dir_name_func.runtime_name = "_gnat_dir_name"
+        dir_ops_pkg.public_symbols["dir_name"] = dir_name_func
+
+        # File_Extension function
+        file_ext_func = Symbol(
+            name="File_Extension",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[Symbol("Path", SymbolKind.PARAMETER, str_type, mode="in")],
+        )
+        file_ext_func.runtime_name = "_gnat_file_extension"
+        dir_ops_pkg.public_symbols["file_extension"] = file_ext_func
+
+        gnat_pkg.public_symbols["directory_operations"] = dir_ops_pkg
+
+        # =====================================================================
+        # GNAT.Traceback - Stack traceback
+        # =====================================================================
+        traceback_pkg = Symbol(
+            name="Traceback",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Tracebacks_Array type (access to array of addresses)
+        system_pkg = self.lookup("System")
+        if system_pkg:
+            addr_sym = system_pkg.public_symbols.get("address")
+            addr_type = addr_sym.ada_type if addr_sym else int_type
+        else:
+            addr_type = int_type
+
+        # Call_Chain procedure
+        call_chain_proc = Symbol(
+            name="Call_Chain",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Len", SymbolKind.PARAMETER, nat_type, mode="out"),
+            ],
+        )
+        call_chain_proc.runtime_name = "_gnat_call_chain"
+        traceback_pkg.public_symbols["call_chain"] = call_chain_proc
+
+        gnat_pkg.public_symbols["traceback"] = traceback_pkg
+
+        # =====================================================================
+        # GNAT.Traceback.Symbolic - Symbolic traceback
+        # =====================================================================
+        symbolic_traceback_pkg = Symbol(
+            name="Symbolic",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Symbolic_Traceback function (from Exception_Occurrence)
+        sym_traceback_func = Symbol(
+            name="Symbolic_Traceback",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[],  # Takes Exception_Occurrence, simplified here
+        )
+        sym_traceback_func.runtime_name = "_gnat_symbolic_traceback"
+        symbolic_traceback_pkg.public_symbols["symbolic_traceback"] = sym_traceback_func
+
+        traceback_pkg.public_symbols["symbolic"] = symbolic_traceback_pkg
+
+        # Register the GNAT package at global scope
+        self.current_scope.define(gnat_pkg)
 
     def enter_scope(self, name: str = "", is_package: bool = False) -> Scope:
         """Enter a new nested scope."""
