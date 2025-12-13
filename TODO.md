@@ -118,15 +118,33 @@ The ACATS test suite requires certain support libraries:
 4. [x] SPPRT13 (address constants for chapter 13 representation clause tests)
 5. [ ] Various FCxx packages (foundation code)
 
+### GNAT Library (Implemented)
+
+GNAT-specific packages for extended functionality:
+
+- [x] GNAT.IO (simple preelaborated I/O)
+- [x] GNAT.Source_Info (compile-time source information)
+- [x] GNAT.Case_Util (case conversion utilities)
+- [x] GNAT.CRC32 (CRC-32 checksum)
+- [x] GNAT.String_Split (string tokenization)
+- [x] GNAT.OS_Lib (operating system interface)
+- [x] GNAT.Calendar (extended calendar, Day_Of_Week, Hour, Minute, Second)
+- [x] GNAT.Directory_Operations (directory handling)
+- [x] GNAT.Command_Line (advanced command line parsing)
+- [x] GNAT.Regpat (regular expressions)
+- [x] GNAT.MD5 (MD5 hash)
+- [x] GNAT.SHA1, GNAT.SHA256 (SHA hash family)
+- [x] GNAT.Traceback (stack traceback)
+- [x] GNAT.Heap_Sort, GNAT.Bubble_Sort (generic sorting)
+
 ### Optional Standard Library Extensions (Future)
 
-These packages can be added for extended GNAT compatibility:
+These packages can be added for extended compatibility:
 
 - Ada.Wide_Text_IO (wide character I/O)
 - Ada.Directories (file system operations - not applicable to CP/M)
 - Ada.Environment_Variables
 - Ada.Real_Time (not applicable to Z80)
-- GNAT-specific packages (GNAT.*, etc.)
 
 ## Z80/CP/M Target Notes
 
