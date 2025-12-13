@@ -239,6 +239,7 @@ class SymbolTable:
         self._init_streams()
         self._init_interfaces()
         self._init_system_packages()
+        self._init_impdef()
 
     def _init_text_io(self) -> None:
         """Add Ada.Text_IO package to the standard scope."""
@@ -4181,6 +4182,326 @@ class SymbolTable:
             is_constant=True,
             scope_level=0,
         )
+
+    def _init_impdef(self) -> None:
+        """
+        Initialize ImpDef package for ACATS test suite support.
+
+        ImpDef provides implementation-defined constants and values
+        required by ACATS conformance tests. Values are customized
+        for the Z80/CP/M target.
+        """
+        int_type = PREDEFINED_TYPES["Integer"]
+        float_type = PREDEFINED_TYPES["Float"]
+        str_type = PREDEFINED_TYPES["String"]
+        bool_type = PREDEFINED_TYPES["Boolean"]
+        duration_type = PREDEFINED_TYPES["Duration"]
+
+        # Create ImpDef package
+        impdef_pkg = Symbol(
+            name="ImpDef",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # =====================================================================
+        # Annex Validation Flags
+        # These indicate which Specialized Needs Annexes are supported
+        # =====================================================================
+
+        # Annex C - Systems Programming
+        impdef_pkg.public_symbols["validating_annex_c"] = Symbol(
+            name="Validating_Annex_C",
+            kind=SymbolKind.CONSTANT,
+            ada_type=bool_type,
+            is_constant=True,
+            value=True,  # We support Systems Programming features
+            scope_level=0,
+        )
+
+        # Annex D - Real-Time Systems (limited on Z80)
+        impdef_pkg.public_symbols["validating_annex_d"] = Symbol(
+            name="Validating_Annex_D",
+            kind=SymbolKind.CONSTANT,
+            ada_type=bool_type,
+            is_constant=True,
+            value=False,  # Real-time not fully supported on Z80
+            scope_level=0,
+        )
+
+        # Annex E - Distributed Systems
+        impdef_pkg.public_symbols["validating_annex_e"] = Symbol(
+            name="Validating_Annex_E",
+            kind=SymbolKind.CONSTANT,
+            ada_type=bool_type,
+            is_constant=True,
+            value=False,  # Not applicable to single-CPU Z80
+            scope_level=0,
+        )
+
+        # Annex F - Information Systems (COBOL/Decimal)
+        impdef_pkg.public_symbols["validating_annex_f"] = Symbol(
+            name="Validating_Annex_F",
+            kind=SymbolKind.CONSTANT,
+            ada_type=bool_type,
+            is_constant=True,
+            value=False,  # Decimal types not implemented
+            scope_level=0,
+        )
+
+        # Annex G - Numerics
+        impdef_pkg.public_symbols["validating_annex_g"] = Symbol(
+            name="Validating_Annex_G",
+            kind=SymbolKind.CONSTANT,
+            ada_type=bool_type,
+            is_constant=True,
+            value=True,  # Numerics supported via 48-bit float
+            scope_level=0,
+        )
+
+        # Annex H - Safety and Security
+        impdef_pkg.public_symbols["validating_annex_h"] = Symbol(
+            name="Validating_Annex_H",
+            kind=SymbolKind.CONSTANT,
+            ada_type=bool_type,
+            is_constant=True,
+            value=False,  # Safety features not implemented
+            scope_level=0,
+        )
+
+        # =====================================================================
+        # Timing Constants for Task Tests
+        # Values adjusted for Z80 clock speeds (typically 2-8 MHz)
+        # =====================================================================
+
+        # Minimum time needed for a task switch (in seconds)
+        impdef_pkg.public_symbols["minimum_task_switch"] = Symbol(
+            name="Minimum_Task_Switch",
+            kind=SymbolKind.CONSTANT,
+            ada_type=duration_type,
+            is_constant=True,
+            value=0.1,  # 100ms - Z80 is slow
+            scope_level=0,
+        )
+
+        # Time to wait for a new task to start executing
+        impdef_pkg.public_symbols["switch_to_new_task"] = Symbol(
+            name="Switch_To_New_Task",
+            kind=SymbolKind.CONSTANT,
+            ada_type=duration_type,
+            is_constant=True,
+            value=0.1,  # 100ms
+            scope_level=0,
+        )
+
+        # Time for the ready queue to empty
+        impdef_pkg.public_symbols["clear_ready_queue"] = Symbol(
+            name="Clear_Ready_Queue",
+            kind=SymbolKind.CONSTANT,
+            ada_type=duration_type,
+            is_constant=True,
+            value=1.0,  # 1 second
+            scope_level=0,
+        )
+
+        # Time for a delay that should already have passed
+        impdef_pkg.public_symbols["delay_for_time_past"] = Symbol(
+            name="Delay_For_Time_Past",
+            kind=SymbolKind.CONSTANT,
+            ada_type=duration_type,
+            is_constant=True,
+            value=0.01,  # 10ms
+            scope_level=0,
+        )
+
+        # Time for time-dependent resets
+        impdef_pkg.public_symbols["time_dependent_reset"] = Symbol(
+            name="Time_Dependent_Reset",
+            kind=SymbolKind.CONSTANT,
+            ada_type=duration_type,
+            is_constant=True,
+            value=0.01,  # 10ms
+            scope_level=0,
+        )
+
+        # Delay for random number tests
+        impdef_pkg.public_symbols["delay_per_random_test"] = Symbol(
+            name="Delay_Per_Random_Test",
+            kind=SymbolKind.CONSTANT,
+            ada_type=duration_type,
+            is_constant=True,
+            value=0.01,  # 10ms
+            scope_level=0,
+        )
+
+        # =====================================================================
+        # String Constants
+        # =====================================================================
+
+        # Non-state string (for territory tests)
+        impdef_pkg.public_symbols["non_state_string"] = Symbol(
+            name="Non_State_String",
+            kind=SymbolKind.CONSTANT,
+            ada_type=str_type,
+            is_constant=True,
+            value="Not A State",
+            scope_level=0,
+        )
+
+        # External tag value for tagged types
+        impdef_pkg.public_symbols["external_tag_value"] = Symbol(
+            name="External_Tag_Value",
+            kind=SymbolKind.CONSTANT,
+            ada_type=str_type,
+            is_constant=True,
+            value="uada80_tag",
+            scope_level=0,
+        )
+
+        # =====================================================================
+        # File System Constants (CP/M specific)
+        # =====================================================================
+
+        # Directory name to create for tests
+        impdef_pkg.public_symbols["directory_to_create"] = Symbol(
+            name="Directory_To_Create",
+            kind=SymbolKind.CONSTANT,
+            ada_type=str_type,
+            is_constant=True,
+            value="A:TESTDIR",  # CP/M style
+            scope_level=0,
+        )
+
+        # Parent directory name
+        impdef_pkg.public_symbols["parent_directory_name"] = Symbol(
+            name="Parent_Directory_Name",
+            kind=SymbolKind.CONSTANT,
+            ada_type=str_type,
+            is_constant=True,
+            value="",  # CP/M doesn't have directories
+            scope_level=0,
+        )
+
+        # Current directory name
+        impdef_pkg.public_symbols["current_directory_name"] = Symbol(
+            name="Current_Directory_Name",
+            kind=SymbolKind.CONSTANT,
+            ada_type=str_type,
+            is_constant=True,
+            value="",  # CP/M doesn't have directories
+            scope_level=0,
+        )
+
+        # =====================================================================
+        # Alignment and Storage Constants
+        # =====================================================================
+
+        # Maximum default alignment
+        impdef_pkg.public_symbols["max_default_alignment"] = Symbol(
+            name="Max_Default_Alignment",
+            kind=SymbolKind.CONSTANT,
+            ada_type=int_type,
+            is_constant=True,
+            value=2,  # Word alignment on Z80
+            scope_level=0,
+        )
+
+        # Maximum alignment achievable by linker
+        impdef_pkg.public_symbols["max_linker_alignment"] = Symbol(
+            name="Max_Linker_Alignment",
+            kind=SymbolKind.CONSTANT,
+            ada_type=int_type,
+            is_constant=True,
+            value=256,  # Page alignment possible
+            scope_level=0,
+        )
+
+        # Maximum adjustment to specified storage size
+        impdef_pkg.public_symbols["maximum_adjustment_to_specified_storage_size"] = Symbol(
+            name="Maximum_Adjustment_To_Specified_Storage_Size",
+            kind=SymbolKind.CONSTANT,
+            ada_type=int_type,
+            is_constant=True,
+            value=256,  # Overhead for task control block
+            scope_level=0,
+        )
+
+        # Bits per character
+        impdef_pkg.public_symbols["char_bits"] = Symbol(
+            name="Char_Bits",
+            kind=SymbolKind.CONSTANT,
+            ada_type=int_type,
+            is_constant=True,
+            value=8,
+            scope_level=0,
+        )
+
+        # Next storage slot after a component
+        impdef_pkg.public_symbols["next_storage_slot"] = Symbol(
+            name="Next_Storage_Slot",
+            kind=SymbolKind.CONSTANT,
+            ada_type=int_type,
+            is_constant=True,
+            value=2,  # Word on Z80
+            scope_level=0,
+        )
+
+        # =====================================================================
+        # Type Support Flags
+        # =====================================================================
+
+        # Non-binary fixed-point support
+        impdef_pkg.public_symbols["non_binary_fixed_supported"] = Symbol(
+            name="Non_Binary_Fixed_Supported",
+            kind=SymbolKind.CONSTANT,
+            ada_type=bool_type,
+            is_constant=True,
+            value=True,  # We support arbitrary 'Small values
+            scope_level=0,
+        )
+
+        # Long integer support (32-bit)
+        impdef_pkg.public_symbols["long_integer_supported"] = Symbol(
+            name="Long_Integer_Supported",
+            kind=SymbolKind.CONSTANT,
+            ada_type=bool_type,
+            is_constant=True,
+            value=True,  # 32-bit integers available
+            scope_level=0,
+        )
+
+        # =====================================================================
+        # Procedure Exceed_Time_Slice
+        # This procedure should consume at least one time slice
+        # =====================================================================
+        exceed_time_slice = Symbol(
+            name="Exceed_Time_Slice",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[],
+        )
+        exceed_time_slice.runtime_name = "_impdef_exceed_time_slice"
+        impdef_pkg.public_symbols["exceed_time_slice"] = exceed_time_slice
+
+        # =====================================================================
+        # Function Equivalent_File_Names
+        # Tests if two file names refer to the same file
+        # =====================================================================
+        equivalent_file_names = Symbol(
+            name="Equivalent_File_Names",
+            kind=SymbolKind.FUNCTION,
+            return_type=bool_type,
+            scope_level=0,
+            parameters=[
+                Symbol("Name_1", SymbolKind.PARAMETER, str_type, mode="in"),
+                Symbol("Name_2", SymbolKind.PARAMETER, str_type, mode="in"),
+            ],
+        )
+        equivalent_file_names.runtime_name = "_impdef_equiv_files"
+        impdef_pkg.public_symbols["equivalent_file_names"] = equivalent_file_names
+
+        # Register the ImpDef package at global scope
+        self.current_scope.define(impdef_pkg)
 
     def enter_scope(self, name: str = "", is_package: bool = False) -> Scope:
         """Enter a new nested scope."""
