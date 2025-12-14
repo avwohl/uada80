@@ -156,16 +156,18 @@ def test_loop_execution():
 @skip_if_no_tools
 def test_function_call():
     """Test function calls work correctly."""
+    # Note: Function name "Sum" used instead of "Add" to avoid collision
+    # with Z80 ADD instruction mnemonic in um80 assembler
     source = """
     procedure Test is
-        function Add(A, B : Integer) return Integer is
+        function Sum(A, B : Integer) return Integer is
         begin
             return A + B;
-        end Add;
+        end Sum;
 
         Result : Integer;
     begin
-        Result := Add(10, 20);
+        Result := Sum(10, 20);
     end Test;
     """
 
