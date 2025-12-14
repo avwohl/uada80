@@ -14,7 +14,9 @@
 ;   _file_delete  - Delete file
 ;
 
-        SECTION CODE
+        .Z80    ; Enable Z80 instruction set
+
+        CSEG
 
 ; CP/M BDOS function codes
 BDOS_CONSOLE_OUT    EQU     2
@@ -353,7 +355,7 @@ read_loop:
         ld      hl, (read_size)
         ld      a, h
         or      l
-        jr      z, read_done
+        jp      z, read_done
 
         ; Check buffer for data
         push    ix
@@ -366,7 +368,7 @@ read_loop:
 
         ; Need to read a sector
         call    read_sector
-        jr      c, read_done        ; EOF or error
+        jp      c, read_done        ; EOF or error
 
         ; Update buffer length
         push    ix
@@ -652,7 +654,8 @@ _file_read_at:
 
         ; Calculate sector number and offset
         ; Position / 128 = sector, Position % 128 = offset
-        ld      hl, (iy+10)
+        ld      l, (iy+10)
+        ld      h, (iy+11)
         ld      a, l
         and     0x7F                ; A = offset within sector
         push    af                  ; Save offset
@@ -750,7 +753,8 @@ _file_write_at:
         call    get_efcb_ptr
 
         ; Calculate sector
-        ld      hl, (iy+10)
+        ld      l, (iy+10)
+        ld      h, (iy+11)
         srl     h
         rr      l
         srl     h
@@ -1216,7 +1220,7 @@ flush_no_pad:
 ;----------------------------------------------------------------------
 ; Data section
 ;----------------------------------------------------------------------
-        SECTION DATA
+        DSEG
 
 file_in_use:    DS      MAX_FILES       ; Flags for file slots in use
 current_slot:   DS      1               ; Current slot being processed

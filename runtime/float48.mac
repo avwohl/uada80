@@ -11,7 +11,9 @@
 ;
 ; All routines preserve IX and IY
 
-        SECTION CODE
+        .Z80    ; Enable Z80 instruction set
+
+        CSEG
 
         PUBLIC  _FADD48
         PUBLIC  _FSUB48
@@ -32,22 +34,22 @@
         PUBLIC  _FLOG48
 
 ; z88dk math library externals (if available)
-        EXTERN  dadd
-        EXTERN  dsub
-        EXTERN  dmul
-        EXTERN  ddiv
-        EXTERN  dneg
-        EXTERN  dabs
-        EXTERN  dcmp
-        EXTERN  uitod
-        EXTERN  itod
-        EXTERN  dtoi
-        EXTERN  dsqrt
-        EXTERN  dsin
-        EXTERN  dcos
-        EXTERN  dtan
-        EXTERN  dexp
-        EXTERN  dlog
+        EXTRN  dadd
+        EXTRN  dsub
+        EXTRN  dmul
+        EXTRN  ddiv
+        EXTRN  dneg
+        EXTRN  dabs
+        EXTRN  dcmp
+        EXTRN  uitod
+        EXTRN  itod
+        EXTRN  dtoi
+        EXTRN  dsqrt
+        EXTRN  dsin
+        EXTRN  dcos
+        EXTRN  dtan
+        EXTRN  dexp
+        EXTRN  dlog
 
 ;----------------------------------------------------------------------
 ; _FADD48: Add two 48-bit floats
@@ -232,7 +234,7 @@ _FLOG48:
 ; These are simpler/slower but self-contained
 ;----------------------------------------------------------------------
 
-        SECTION CODE_STANDALONE
+        ; Continue in CSEG
 
 ; Standalone negate - just flip sign byte
 _FNEG48_STANDALONE:

@@ -20,6 +20,8 @@
 ;   +12: task_id (2 bytes) - unique task identifier
 ;   +14: delay_ticks (2 bytes) - ticks remaining for delay
 
+    .Z80    ; Enable Z80 instruction set
+
     CSEG
 
 ; Export all public routines
@@ -50,38 +52,38 @@
 ; =========================================
 
 ; Task states
-TASK_INACTIVE   .equ 0
-TASK_READY      .equ 1
-TASK_WAITING    .equ 2
-TASK_TERMINATED .equ 3
-TASK_ENTRY_WAIT .equ 4    ; waiting for entry call to complete
-TASK_ACCEPT_WAIT .equ 5   ; waiting in accept statement
+TASK_INACTIVE   EQU 0
+TASK_READY      EQU 1
+TASK_WAITING    EQU 2
+TASK_TERMINATED EQU 3
+TASK_ENTRY_WAIT EQU 4    ; waiting for entry call to complete
+TASK_ACCEPT_WAIT EQU 5   ; waiting in accept statement
 
 ; TCB (Task Control Block) field offsets
-TCB_SAVED_SP    .equ 0    ; saved stack pointer (2 bytes)
-TCB_STACK_BASE  .equ 2    ; base of task's stack (2 bytes)
-TCB_STACK_SIZE  .equ 4    ; size of stack allocation (2 bytes)
-TCB_STATE       .equ 6    ; task state (1 byte)
-TCB_PRIORITY    .equ 7    ; task priority (1 byte)
-TCB_NEXT        .equ 8    ; next TCB in queue (2 bytes)
-TCB_PREV        .equ 10   ; prev TCB in queue (2 bytes)
-TCB_TASK_ID     .equ 12   ; unique task identifier (2 bytes)
-TCB_DELAY_TICKS .equ 14   ; ticks remaining for delay (2 bytes)
+TCB_SAVED_SP    EQU 0    ; saved stack pointer (2 bytes)
+TCB_STACK_BASE  EQU 2    ; base of task's stack (2 bytes)
+TCB_STACK_SIZE  EQU 4    ; size of stack allocation (2 bytes)
+TCB_STATE       EQU 6    ; task state (1 byte)
+TCB_PRIORITY    EQU 7    ; task priority (1 byte)
+TCB_NEXT        EQU 8    ; next TCB in queue (2 bytes)
+TCB_PREV        EQU 10   ; prev TCB in queue (2 bytes)
+TCB_TASK_ID     EQU 12   ; unique task identifier (2 bytes)
+TCB_DELAY_TICKS EQU 14   ; ticks remaining for delay (2 bytes)
 
 ; Configuration
-MAX_TASKS       .equ 8
-TCB_SIZE        .equ 16
-DEFAULT_STACK   .equ 256  ; bytes per task stack
-TIME_SLICE      .equ 10   ; ticks per time slice
-DEFAULT_PRIO    .equ 128  ; default task priority (mid-range)
+MAX_TASKS       EQU 8
+TCB_SIZE        EQU 16
+DEFAULT_STACK   EQU 256  ; bytes per task stack
+TIME_SLICE      EQU 10   ; ticks per time slice
+DEFAULT_PRIO    EQU 128  ; default task priority (mid-range)
 
 ; Entry queue structure (8 bytes per entry)
-ENTRY_Q_NEXT     .equ 0    ; next entry in queue (2 bytes)
-ENTRY_Q_CALLER   .equ 2    ; caller task TCB (2 bytes)
-ENTRY_Q_ENTRY_ID .equ 4    ; entry ID being called (2 bytes)
-ENTRY_Q_PARAMS   .equ 6    ; parameter block pointer (2 bytes)
-ENTRY_Q_SIZE     .equ 8    ; size of queue entry
-MAX_ENTRY_NODES  .equ 16
+ENTRY_Q_NEXT     EQU 0    ; next entry in queue (2 bytes)
+ENTRY_Q_CALLER   EQU 2    ; caller task TCB (2 bytes)
+ENTRY_Q_ENTRY_ID EQU 4    ; entry ID being called (2 bytes)
+ENTRY_Q_PARAMS   EQU 6    ; parameter block pointer (2 bytes)
+ENTRY_Q_SIZE     EQU 8    ; size of queue entry
+MAX_ENTRY_NODES  EQU 16
 
 ; =========================================
 ; Data Section
@@ -254,7 +256,17 @@ _do_schedule:
     ld A, H
     or L
     jr Z, _sched_no_current
-    ld (HL), SP    ; save SP at TCB+0
+    ; save SP at (HL) - TCB+0
+    push HL           ; save TCB address
+    ld HL, 0
+    add HL, SP        ; HL = SP (current value + 2 for the push)
+    inc HL
+    inc HL            ; adjust for the push we just did
+    ex DE, HL         ; DE = adjusted SP
+    pop HL            ; HL = TCB address
+    ld (HL), E        ; store SP low
+    inc HL
+    ld (HL), D        ; store SP high
 _sched_no_current:
     ; Simple round-robin: move to next task
     ld HL, (_task_current)
@@ -289,7 +301,12 @@ _sched_check_task:
 _sched_found:
     ; Switch to new task
     ld (_task_current), HL
-    ld SP, (HL)    ; restore SP from TCB+0
+    ; restore SP from (HL) - TCB+0
+    ld E, (HL)        ; load SP low
+    inc HL
+    ld D, (HL)        ; load SP high
+    ex DE, HL         ; HL = new SP value
+    ld SP, HL         ; restore SP
     ld A, TIME_SLICE
     ld (_slice_remaining), A
     ret
@@ -835,7 +852,7 @@ _ftbi_found:
 ; The lock value is stored at offset 0 of the protected object and
 ; contains the nesting count (0 = unlocked, >0 = locked).
 
-PROT_LOCK_OFFSET .equ 0  ; Lock byte at offset 0 of protected object
+PROT_LOCK_OFFSET EQU 0  ; Lock byte at offset 0 of protected object
 
 ; -----------------------------------------
 ; _PROTECTED_LOCK: Acquire protected object lock

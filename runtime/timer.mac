@@ -10,7 +10,9 @@
 ; The timer increments at 50Hz (typical Z80 interrupt rate)
 ; Each day = 4,320,000 ticks (86400 * 50)
 
-        SECTION CODE
+        .Z80
+
+        CSEG
 
         PUBLIC  _get_ticks
         PUBLIC  _get_days
@@ -20,9 +22,9 @@
 
 ; Constants
 TICKS_PER_SECOND    EQU     50
-TICKS_PER_DAY_LOW   EQU     0x00        ; 4,320,000 = 0x41EB00 (low byte)
-TICKS_PER_DAY_MID   EQU     0xEB        ; (mid byte)
-TICKS_PER_DAY_HIGH  EQU     0x41        ; (high byte)
+TICKS_PER_DAY_LOW   EQU     00H         ; 4,320,000 = 0x41EB00 (low byte)
+TICKS_PER_DAY_MID   EQU     0EBH        ; (mid byte)
+TICKS_PER_DAY_HIGH  EQU     41H         ; (high byte)
 
 ; ============================================================
 ; _timer_init - Initialize timer system
@@ -63,10 +65,10 @@ _timer_isr:
         INC     HL
         LD      A,H
         OR      L
-        JR      NZ,.no_overflow_mid
+        JR      NZ,isr_no_overflow
         INC     D
 
-.no_overflow_mid:
+isr_no_overflow:
         ; Store updated counter
         LD      (tick_count),HL
         LD      A,D
@@ -76,13 +78,13 @@ _timer_isr:
         ; Compare tick_count with TICKS_PER_DAY (4,320,000)
         LD      A,L
         CP      TICKS_PER_DAY_LOW
-        JR      NZ,.no_day_rollover
+        JR      NZ,isr_no_day
         LD      A,H
         CP      TICKS_PER_DAY_MID
-        JR      NZ,.no_day_rollover
+        JR      NZ,isr_no_day
         LD      A,D
         CP      TICKS_PER_DAY_HIGH
-        JR      NZ,.no_day_rollover
+        JR      NZ,isr_no_day
 
         ; Day rollover - reset ticks, increment day
         XOR     A
@@ -95,7 +97,7 @@ _timer_isr:
         INC     HL
         LD      (day_count),HL
 
-.no_day_rollover:
+isr_no_day:
         POP     DE
         POP     HL
         POP     AF
@@ -118,37 +120,37 @@ _get_ticks:
         ; Result in BC
         LD      BC,0            ; Quotient
 
-.div_loop:
+gt_div_loop:
         ; Check if tick_count >= 50
         LD      A,L
         SUB     50
-        JR      NC,.can_sub
+        JR      NC,gt_can_sub
 
         ; Check high bytes
         LD      A,H
         OR      D
-        JR      Z,.div_done     ; tick_count < 50, done
+        JR      Z,gt_div_done   ; tick_count < 50, done
 
         ; tick_count >= 256, can subtract
         LD      A,L
         SUB     50
 
-.can_sub:
+gt_can_sub:
         ; Subtract 50 from tick count (DHL)
         LD      L,A
-        JR      NC,.no_borrow_h
+        JR      NC,gt_no_borrow
         DEC     H
         LD      A,H
         CP      0FFH
-        JR      NZ,.no_borrow_h
+        JR      NZ,gt_no_borrow
         DEC     D
 
-.no_borrow_h:
+gt_no_borrow:
         ; Increment quotient
         INC     BC
-        JR      .div_loop
+        JR      gt_div_loop
 
-.div_done:
+gt_div_done:
         ; Return seconds in HL
         LD      H,B
         LD      L,C
@@ -178,28 +180,28 @@ _delay_ms:
         OR      L
         RET     Z               ; Return if HL=0
 
-.ms_loop:
+dm_ms_loop:
         PUSH    HL
         LD      B,235           ; Iterations per ms
 
-.inner_loop:
+dm_inner_loop:
         ; ~17 cycles per iteration
         NOP                     ; 4 cycles
         NOP                     ; 4 cycles
-        DJNZ    .inner_loop     ; 13 cycles (8 if not taken)
+        DJNZ    dm_inner_loop   ; 13 cycles (8 if not taken)
 
         POP     HL
         DEC     HL
         LD      A,H
         OR      L
-        JR      NZ,.ms_loop
+        JR      NZ,dm_ms_loop
 
         RET
 
 ; ============================================================
 ; Data section
 ; ============================================================
-        SECTION DATA
+        DSEG
 
 tick_count:
         DS      3               ; 24-bit tick counter (ticks within day)
@@ -207,4 +209,4 @@ tick_count:
 day_count:
         DS      2               ; 16-bit day counter (days since epoch)
 
-        SECTION CODE
+        END
