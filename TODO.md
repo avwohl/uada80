@@ -8,8 +8,8 @@
 | Semantic | 2742/2742 (100%) | All grouped ACATS tests pass |
 | Lowering | 105/105 (100%) | All lowering tests pass |
 | Codegen | 24/24 (100%) | All code generation tests pass |
-| Unit Tests | 6786/6786 (100%) | All pass |
-| Execution | 11/12 (92%) | End-to-end tests via cpmemu |
+| Unit Tests | 6787/6787 (100%) | All pass |
+| Execution | 12/12 (100%) | End-to-end tests via cpmemu |
 
 ## Recent Fixes (2025-12-14)
 
@@ -19,6 +19,11 @@
    - `_mul16` / `_div16` / `_mod16` (16-bit signed arithmetic)
    - `_raise_constraint_error`, `_raise_program_error`, `_raise_storage_error`
    - Fixed EXTRN generation for JP targets (not just CALL)
+
+2. [x] Text_IO runtime support
+   - Added `_put_line`, `_put_string`, `_new_line` to runtime library
+   - Uses CP/M BDOS function 2 (console output) for character-by-character output
+   - Added proper CP/M startup code (`_start:` entry point at 0100H)
 
 ## Recent Fixes (2025-12-13)
 
