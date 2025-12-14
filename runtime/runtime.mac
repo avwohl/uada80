@@ -567,4 +567,116 @@ _udiv16_zero:
     LD DE, 0
     RET
 
+; ============================================================
+; _get_int - Read signed 16-bit integer from console
+; Input: None
+; Output: HL = integer value
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _get_int
+_get_int:
+    LD HL, 0            ; accumulator
+    LD B, 0             ; negative flag (0=positive, 1=negative)
+
+    ; Skip leading whitespace
+_get_int_skip:
+    CALL _get_char_raw
+    CP ' '
+    JR Z, _get_int_skip
+    CP 9                ; TAB
+    JR Z, _get_int_skip
+    CP 13               ; CR
+    JR Z, _get_int_skip
+    CP 10               ; LF
+    JR Z, _get_int_skip
+
+    ; Check for minus sign
+    CP '-'
+    JR NZ, _get_int_not_neg
+    LD B, 1             ; set negative flag
+    CALL _get_char_raw  ; get next char
+    JR _get_int_digit
+
+_get_int_not_neg:
+    ; Check for plus sign
+    CP '+'
+    JR NZ, _get_int_digit
+    CALL _get_char_raw  ; skip plus, get next char
+
+_get_int_digit:
+    ; A contains current char, check if digit
+    CP '0'
+    JR C, _get_int_done
+    CP '9'+1
+    JR NC, _get_int_done
+
+    ; It's a digit, multiply accumulator by 10 and add digit
+    SUB '0'             ; A = digit value
+    PUSH AF             ; save digit
+    PUSH BC             ; save negative flag
+
+    ; HL = HL * 10
+    LD D, H
+    LD E, L
+    ADD HL, HL          ; HL * 2
+    ADD HL, HL          ; HL * 4
+    ADD HL, DE          ; HL * 5
+    ADD HL, HL          ; HL * 10
+
+    POP BC              ; restore negative flag
+    POP AF              ; restore digit
+    LD E, A
+    LD D, 0
+    ADD HL, DE          ; HL = HL * 10 + digit
+
+    ; Get next character
+    CALL _get_char_raw
+    JR _get_int_digit
+
+_get_int_done:
+    ; Apply negative flag
+    LD A, B
+    OR A
+    RET Z               ; positive, return HL as-is
+
+    ; Negate HL
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+    RET
+
+; ============================================================
+; _get_char - Read single character from console
+; Input: None
+; Output: HL = character (low byte, high byte = 0)
+; Destroys: A
+; ============================================================
+    PUBLIC _get_char
+_get_char:
+    CALL _get_char_raw
+    LD L, A
+    LD H, 0
+    RET
+
+; ============================================================
+; _get_char_raw - Read raw character using BDOS
+; Input: None
+; Output: A = character
+; Destroys: None (except A)
+; ============================================================
+_get_char_raw:
+    PUSH BC
+    PUSH DE
+    PUSH HL
+    LD C, 1             ; BDOS: Console input
+    CALL 5
+    POP HL
+    POP DE
+    POP BC
+    RET
+
     END
