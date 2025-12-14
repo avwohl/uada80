@@ -2823,6 +2823,17 @@ class SemanticAnalyzer:
                     if sym:
                         sym.is_volatile = True
 
+        elif pragma_name == "atomic":
+            # pragma Atomic(variable);
+            # Atomic implies volatile behavior plus indivisible access
+            if stmt.args:
+                entity = stmt.args[0]
+                if isinstance(entity, Identifier):
+                    sym = self.symbols.lookup(entity.name)
+                    if sym:
+                        sym.is_atomic = True
+                        sym.is_volatile = True  # Atomic implies volatile
+
         elif pragma_name == "no_return":
             # pragma No_Return(procedure);
             if stmt.args:
@@ -4463,12 +4474,32 @@ class SemanticAnalyzer:
             # Return truncated integer value for real literals in integer contexts
             return int(expr.value)
 
+        if isinstance(expr, CharacterLiteral):
+            # Character literals are static - return their position value
+            return ord(expr.value)
+
+        if isinstance(expr, StringLiteral):
+            # String literals are static for 'Length - return length
+            return len(expr.value)
+
         if isinstance(expr, Identifier):
             # Look up constant value
             sym = self.symbols.lookup(expr.name)
             if sym and sym.is_constant and sym.value is not None:
                 return sym.value
-            # Check if it's an enumeration literal with a known position
+            # Check if it's an enumeration literal (constant with enumeration type)
+            if sym and sym.is_constant and sym.ada_type:
+                if hasattr(sym.ada_type, 'kind') and sym.ada_type.kind == TypeKind.ENUMERATION:
+                    # Get position from positions dict or literals list
+                    if hasattr(sym.ada_type, 'positions') and expr.name in sym.ada_type.positions:
+                        return sym.ada_type.positions[expr.name]
+                    if hasattr(sym.ada_type, 'literals') and sym.ada_type.literals:
+                        try:
+                            pos = sym.ada_type.literals.index(expr.name)
+                            return pos
+                        except (ValueError, AttributeError):
+                            pass
+            # Check if it's a variable with an enumeration type (enum value lookup)
             if sym and sym.kind == SymbolKind.VARIABLE and sym.ada_type:
                 if hasattr(sym.ada_type, 'literals') and sym.ada_type.literals:
                     # This is an enum value - find its position
@@ -4541,47 +4572,92 @@ class SemanticAnalyzer:
 
         if isinstance(expr, AttributeReference):
             attr = expr.attribute.lower()
-            # Handle type attributes
+            type_obj = None
+
+            # Get the type object from the prefix
             if isinstance(expr.prefix, Identifier):
                 type_obj = self.symbols.lookup_type(expr.prefix.name)
-                if type_obj:
-                    # Integer/modular types have low/high
-                    if attr == "first" and hasattr(type_obj, "low"):
+                if not type_obj:
+                    # Might be an object, check its type
+                    sym = self.symbols.lookup(expr.prefix.name)
+                    if sym and sym.ada_type:
+                        type_obj = sym.ada_type
+            elif isinstance(expr.prefix, SelectedName):
+                # Handle Package.Type'Attr
+                if isinstance(expr.prefix.prefix, Identifier):
+                    sym = self.symbols.lookup_selected(expr.prefix.prefix.name, expr.prefix.selector)
+                    if sym and sym.ada_type:
+                        type_obj = sym.ada_type
+
+            if type_obj:
+                # 'First and 'Last for scalar types
+                if attr == "first":
+                    if hasattr(type_obj, "low"):
                         return type_obj.low
-                    if attr == "last" and hasattr(type_obj, "high"):
-                        return type_obj.high
-                    # Float types have range_first/range_last
-                    if attr == "first" and hasattr(type_obj, "range_first") and type_obj.range_first is not None:
+                    if hasattr(type_obj, "range_first") and type_obj.range_first is not None:
                         return int(type_obj.range_first)
-                    if attr == "last" and hasattr(type_obj, "range_last") and type_obj.range_last is not None:
+                    # Enumeration types: 'First is 0
+                    if hasattr(type_obj, "literals") and type_obj.literals:
+                        return 0
+                    # Array types: 'First is first dimension's low bound
+                    if hasattr(type_obj, "index_types") and type_obj.index_types:
+                        idx_type = type_obj.index_types[0]
+                        if hasattr(idx_type, "low"):
+                            return idx_type.low
+
+                if attr == "last":
+                    if hasattr(type_obj, "high"):
+                        return type_obj.high
+                    if hasattr(type_obj, "range_last") and type_obj.range_last is not None:
                         return int(type_obj.range_last)
-                    if attr == "size" and hasattr(type_obj, "size_bits"):
-                        return type_obj.size_bits
-                    if attr == "length" and hasattr(type_obj, "length"):
+                    # Enumeration types: 'Last is len(literals) - 1
+                    if hasattr(type_obj, "literals") and type_obj.literals:
+                        return len(type_obj.literals) - 1
+                    # Array types: 'Last is first dimension's high bound
+                    if hasattr(type_obj, "index_types") and type_obj.index_types:
+                        idx_type = type_obj.index_types[0]
+                        if hasattr(idx_type, "high"):
+                            return idx_type.high
+
+                # 'Size
+                if attr == "size" and hasattr(type_obj, "size_bits"):
+                    return type_obj.size_bits
+
+                # 'Length for arrays
+                if attr == "length":
+                    if hasattr(type_obj, "length"):
                         return type_obj.length
-                    # For arrays, 'Length is high - low + 1
-                    if attr == "length" and hasattr(type_obj, "low") and hasattr(type_obj, "high"):
+                    # Calculate from bounds
+                    if hasattr(type_obj, "low") and hasattr(type_obj, "high"):
                         return type_obj.high - type_obj.low + 1
-                # Might be an object, check its type
-                sym = self.symbols.lookup(expr.prefix.name)
-                if sym and sym.ada_type:
-                    type_obj = sym.ada_type
-                    if attr == "first" and hasattr(type_obj, "low"):
-                        return type_obj.low
-                    if attr == "last" and hasattr(type_obj, "high"):
-                        return type_obj.high
-                    # Float types
-                    if attr == "first" and hasattr(type_obj, "range_first") and type_obj.range_first is not None:
-                        return int(type_obj.range_first)
-                    if attr == "last" and hasattr(type_obj, "range_last") and type_obj.range_last is not None:
-                        return int(type_obj.range_last)
+                    # For array types, get first dimension
+                    if hasattr(type_obj, "index_types") and type_obj.index_types:
+                        idx_type = type_obj.index_types[0]
+                        if hasattr(idx_type, "low") and hasattr(idx_type, "high"):
+                            return idx_type.high - idx_type.low + 1
+
+                # 'Modulus for modular types
+                if attr == "modulus" and hasattr(type_obj, "modulus"):
+                    return type_obj.modulus
+
+                # 'Component_Size for arrays
+                if attr == "component_size" and hasattr(type_obj, "element_type"):
+                    elem_type = type_obj.element_type
+                    if hasattr(elem_type, "size_bits"):
+                        return elem_type.size_bits
+
             # Handle 'Pos and 'Val for enumeration types
             if attr == "pos" and expr.args:
-                arg_val = self._eval_static_impl(expr.args[0], report_errors)
-                return arg_val  # 'Pos returns the position value
+                # 'Pos(X) returns position of X
+                # If X is a character literal, return its ord value
+                arg = expr.args[0]
+                if isinstance(arg, CharacterLiteral):
+                    return ord(arg.value)
+                arg_val = self._eval_static_impl(arg, report_errors)
+                return arg_val
             if attr == "val" and expr.args:
                 arg_val = self._eval_static_impl(expr.args[0], report_errors)
-                return arg_val  # 'Val returns the value at position
+                return arg_val
 
         # Default/fallback
         if report_errors:
