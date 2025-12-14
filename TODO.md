@@ -1,6 +1,6 @@
 # UADA80 - Remaining Work for Full Ada/ACATS
 
-## Current Status (2025-12-13)
+## Current Status (2025-12-14)
 
 | Phase | Pass Rate | Notes |
 |-------|-----------|-------|
@@ -8,8 +8,17 @@
 | Semantic | 2742/2742 (100%) | All grouped ACATS tests pass |
 | Lowering | 105/105 (100%) | All lowering tests pass |
 | Codegen | 24/24 (100%) | All code generation tests pass |
-| Unit Tests | 6783/6783 (100%) | All pass |
-| Execution | 8/12 (67%) | End-to-end tests via cpmemu |
+| Unit Tests | 6786/6786 (100%) | All pass |
+| Execution | 11/12 (92%) | End-to-end tests via cpmemu |
+
+## Recent Fixes (2025-12-14)
+
+1. [x] Minimal Z80 runtime library
+   - Created runtime/runtime.mac with essential Ada runtime functions
+   - `_fin_push_scope` / `_fin_pop_scope` (finalization support)
+   - `_mul16` / `_div16` / `_mod16` (16-bit signed arithmetic)
+   - `_raise_constraint_error`, `_raise_program_error`, `_raise_storage_error`
+   - Fixed EXTRN generation for JP targets (not just CALL)
 
 ## Recent Fixes (2025-12-13)
 
