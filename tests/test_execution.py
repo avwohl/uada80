@@ -203,6 +203,81 @@ def test_function_name_add():
 
 
 @skip_if_no_tools
+def test_function_name_sub():
+    """Test that 'Sub' can be used as function name (Z80 SUB mnemonic)."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        function Sub(A, B : Integer) return Integer is
+        begin
+            return A - B;
+        end Sub;
+
+        Result : Integer;
+    begin
+        Result := Sub(30, 10);
+        Ada.Integer_Text_IO.Put(Result);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "20" in stdout, f"Expected 30-10=20, got: {stdout}"
+
+
+@skip_if_no_tools
+def test_function_name_inc():
+    """Test that 'Inc' can be used as function name (Z80 INC mnemonic)."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        function Inc(N : Integer) return Integer is
+        begin
+            return N + 1;
+        end Inc;
+
+        Result : Integer;
+    begin
+        Result := Inc(41);
+        Ada.Integer_Text_IO.Put(Result);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "42" in stdout, f"Expected Inc(41)=42, got: {stdout}"
+
+
+@skip_if_no_tools
+def test_function_name_dec():
+    """Test that 'Dec' can be used as function name (Z80 DEC mnemonic)."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        function Dec(N : Integer) return Integer is
+        begin
+            return N - 1;
+        end Dec;
+
+        Result : Integer;
+    begin
+        Result := Dec(43);
+        Ada.Integer_Text_IO.Put(Result);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "42" in stdout, f"Expected Dec(43)=42, got: {stdout}"
+
+
+@skip_if_no_tools
 def test_recursive_function():
     """Test recursive function execution with factorial."""
     source = """
