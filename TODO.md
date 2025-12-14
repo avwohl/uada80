@@ -9,23 +9,29 @@
 | Lowering | 105/105 (100%) | All lowering tests pass |
 | Codegen | 24/24 (100%) | All code generation tests pass |
 | Unit Tests | 6789/6789 (100%) | All pass |
-| Execution | 14/14 (100%) | End-to-end tests via cpmemu |
+| Execution | 15/15 (100%) | End-to-end tests via cpmemu |
 
 ## Recent Fixes (2025-12-14)
 
-1. [x] Minimal Z80 runtime library
+1. [x] Text_IO.Get_Line runtime support
+   - Added `_get_line` to runtime library for reading line input
+   - Fixed `_calc_type_size` to correctly handle `String(1..80)` (Slice AST nodes)
+   - Fixed LEA offset calculation for local string buffers
+   - Fixed return value preservation during stack cleanup
+
+2. [x] Minimal Z80 runtime library
    - Created runtime/runtime.mac with essential Ada runtime functions
    - `_fin_push_scope` / `_fin_pop_scope` (finalization support)
    - `_mul16` / `_div16` / `_mod16` (16-bit signed arithmetic)
    - `_raise_constraint_error`, `_raise_program_error`, `_raise_storage_error`
    - Fixed EXTRN generation for JP targets (not just CALL)
 
-2. [x] Text_IO runtime support
+3. [x] Text_IO runtime support
    - Added `_put_line`, `_put_string`, `_new_line` to runtime library
    - Uses CP/M BDOS function 2 (console output) for character-by-character output
    - Added proper CP/M startup code (`_start:` entry point at 0100H)
 
-3. [x] Integer_Text_IO runtime support
+4. [x] Integer_Text_IO runtime support
    - Added `_put_int` for signed 16-bit integer output
    - Added `_get_int` for signed 16-bit integer input
    - Added `_get_char` for single character input

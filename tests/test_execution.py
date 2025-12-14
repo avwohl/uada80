@@ -383,5 +383,26 @@ def test_integer_io_input():
     assert "-456" in stdout
 
 
+@skip_if_no_tools
+def test_text_io_get_line():
+    """Test Ada.Text_IO.Get_Line input."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        Line : String(1..80);
+        Last : Natural;
+    begin
+        Ada.Text_IO.Get_Line(Line, Last);
+        Ada.Integer_Text_IO.Put(Last);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source, stdin_input="Hello World\n")
+    assert success, f"Program failed: {stderr}"
+    assert "11" in stdout  # "Hello World" is 11 characters
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
