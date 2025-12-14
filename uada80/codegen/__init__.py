@@ -6443,18 +6443,44 @@ class Z80CodeGen:
         self._emit("")
 
     def _allocate_registers(self, func: IRFunction) -> RegisterAllocation:
-        """Simple register allocation - spill everything to stack."""
+        """Simple register allocation - spill everything to stack.
+
+        Parameters are at positive offsets from IX (they were pushed before CALL):
+            (IX+4) = first param, (IX+6) = second param, etc.
+        Local variables/temporaries are at negative offsets from IX:
+            (IX-2) = first local, (IX-4) = second local, etc.
+        """
         alloc = RegisterAllocation()
 
-        # Collect all virtual registers
+        # Track which VReg IDs are parameters
+        param_ids: set[int] = set()
+        for param in func.params:
+            if isinstance(param, VReg):
+                param_ids.add(param.id)
+
+        # Assign parameter offsets (positive from IX)
+        # Stack layout after CALL and PUSH IX:
+        #   (IX+0) = saved IX (2 bytes)
+        #   (IX+2) = return address (2 bytes)
+        #   (IX+4) = first parameter, (IX+6) = second, etc.
+        param_offset = 4  # Start after saved IX and return address
+        for param in func.params:
+            if isinstance(param, VReg):
+                # Store as a special marker: negative means local, positive means param
+                # We use a large negative number to indicate it's a parameter
+                # The actual offset is stored separately
+                alloc.vreg_to_stack[param.id] = -10000 - param_offset
+                param_offset += 2
+
+        # Collect all other virtual registers (locals/temporaries)
         vregs: set[int] = set()
         for block in func.blocks:
             for instr in block.instructions:
                 for operand in [instr.dst, instr.src1, instr.src2]:
-                    if isinstance(operand, VReg):
+                    if isinstance(operand, VReg) and operand.id not in param_ids:
                         vregs.add(operand.id)
 
-        # Allocate stack slots for each vreg
+        # Allocate stack slots for local vregs (negative offsets)
         offset = 0
         for vreg_id in sorted(vregs):
             alloc.vreg_to_stack[vreg_id] = offset
@@ -6636,10 +6662,18 @@ class Z80CodeGen:
         self._emit_instr("ld", f"(IX{offset:+d})", "A")
 
     def _vreg_offset(self, vreg: VReg) -> int:
-        """Get the stack offset for a virtual register."""
+        """Get the stack offset for a virtual register.
+
+        Returns positive offset for parameters, negative for locals.
+        """
         if self.reg_alloc and vreg.id in self.reg_alloc.vreg_to_stack:
-            # Negative offset from IX (local variables)
-            return -(self.reg_alloc.vreg_to_stack[vreg.id] + 2)
+            slot = self.reg_alloc.vreg_to_stack[vreg.id]
+            if slot <= -10000:
+                # This is a parameter - extract the positive offset
+                return -(slot + 10000)  # e.g., -10004 -> +4
+            else:
+                # This is a local variable - negative offset from IX
+                return -(slot + 2)
         return 0
 
     # Instruction generators
