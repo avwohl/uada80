@@ -172,6 +172,36 @@ Key points:
 - um80 does NOT support undocumented Z80 instructions (IXH, IXL, IYH, IYL)
 - Use `PUSH IX / POP HL` instead of `LD H, IXH / LD L, IXL`
 
+### Symbol Mangling
+
+User-defined symbols (functions, procedures, global variables) are prefixed with `_` in the generated assembly to avoid collisions with Z80 instruction mnemonics.
+
+**Why this matters**: Z80 mnemonics like `ADD`, `SUB`, `INC`, `DEC`, `CALL`, `RET`, `PUSH`, `POP`, etc. are valid Ada identifiers. Without mangling, an Ada function named `Add` would generate `CALL Add` which um80 interprets as an invalid instruction rather than a call to a label.
+
+**How it works**:
+- Ada function `Add` → assembly label `_Add:`
+- Ada function `Test` → assembly label `_Test:`
+- Ada global `Counter` → assembly label `_Counter:`
+- Runtime symbols already start with `_` (e.g., `_mul16`, `_put_line`) and are unchanged
+
+**Example**:
+```ada
+-- This Ada code works correctly:
+function Add(A, B : Integer) return Integer is
+begin
+    return A + B;
+end Add;
+```
+
+Generates:
+```asm
+_Add:
+    ; function body
+    RET
+```
+
+The mangling is handled automatically by the code generator in `uada80/codegen/__init__.py` via the `_mangle_symbol()` helper.
+
 ### Execution Tests
 
 End-to-end execution tests are in `tests/test_execution.py`. They:
