@@ -29,9 +29,14 @@ skip_if_no_tools = pytest.mark.skipif(
 )
 
 
-def compile_and_run(source: str, timeout: float = 5.0) -> tuple[bool, str, str]:
+def compile_and_run(source: str, timeout: float = 5.0, stdin_input: str = None) -> tuple[bool, str, str]:
     """
     Compile Ada source and run the resulting .com file.
+
+    Args:
+        source: Ada source code
+        timeout: Execution timeout in seconds
+        stdin_input: Optional input to pass to the program
 
     Returns:
         (success, stdout, stderr) tuple
@@ -90,7 +95,8 @@ def compile_and_run(source: str, timeout: float = 5.0) -> tuple[bool, str, str]:
             [str(CPMEMU), "--z80", str(com_file)],
             capture_output=True,
             text=True,
-            timeout=timeout
+            timeout=timeout,
+            input=stdin_input
         )
 
         return proc.returncode == 0, proc.stdout, proc.stderr
@@ -350,6 +356,31 @@ def test_integer_io_output():
     assert "42" in stdout
     assert "-123" in stdout
     assert "0" in stdout
+
+
+@skip_if_no_tools
+def test_integer_io_input():
+    """Test Ada.Integer_Text_IO input."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        X : Integer;
+        Y : Integer;
+    begin
+        Ada.Integer_Text_IO.Get(X);
+        Ada.Integer_Text_IO.Get(Y);
+        Ada.Integer_Text_IO.Put(X);
+        Ada.Text_IO.New_Line;
+        Ada.Integer_Text_IO.Put(Y);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source, stdin_input="123 -456\n")
+    assert success, f"Program failed: {stderr}"
+    assert "123" in stdout
+    assert "-456" in stdout
 
 
 if __name__ == "__main__":

@@ -8,8 +8,8 @@
 | Semantic | 2742/2742 (100%) | All grouped ACATS tests pass |
 | Lowering | 105/105 (100%) | All lowering tests pass |
 | Codegen | 24/24 (100%) | All code generation tests pass |
-| Unit Tests | 6788/6788 (100%) | All pass |
-| Execution | 13/13 (100%) | End-to-end tests via cpmemu |
+| Unit Tests | 6789/6789 (100%) | All pass |
+| Execution | 14/14 (100%) | End-to-end tests via cpmemu |
 
 ## Recent Fixes (2025-12-14)
 
@@ -27,8 +27,11 @@
 
 3. [x] Integer_Text_IO runtime support
    - Added `_put_int` for signed 16-bit integer output
+   - Added `_get_int` for signed 16-bit integer input
+   - Added `_get_char` for single character input
    - Handles negative numbers, zero, and positive values
    - Uses unsigned division to extract decimal digits
+   - Fixed lowering to detect Integer_Text_IO vs Text_IO package context
 
 ## Recent Fixes (2025-12-13)
 

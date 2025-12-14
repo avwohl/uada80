@@ -3424,7 +3424,12 @@ class ASTLowering:
 
         # Check for Text_IO built-in procedures
         if proc_name in ("put", "put_line", "new_line", "get", "get_line"):
-            self._lower_text_io_call(proc_name, stmt.args)
+            # Determine if this is from Integer_Text_IO
+            is_integer_io = False
+            if isinstance(stmt.name, SelectedName):
+                prefix = self._get_selected_name_prefix(stmt.name)
+                is_integer_io = "integer_text_io" in prefix.lower()
+            self._lower_text_io_call(proc_name, stmt.args, is_integer_io)
             return
 
         # Check if this is a Free (Unchecked_Deallocation instantiation)
@@ -3783,7 +3788,18 @@ class ASTLowering:
 
         return effective_args
 
-    def _lower_text_io_call(self, proc_name: str, args: list) -> None:
+    def _get_selected_name_prefix(self, name: SelectedName) -> str:
+        """Get the full prefix of a selected name as a string."""
+        parts = []
+        current = name.prefix
+        while isinstance(current, SelectedName):
+            parts.insert(0, current.selector)
+            current = current.prefix
+        if isinstance(current, Identifier):
+            parts.insert(0, current.name)
+        return ".".join(parts)
+
+    def _lower_text_io_call(self, proc_name: str, args: list, is_integer_io: bool = False) -> None:
         """Lower a Text_IO procedure call to runtime calls."""
         if proc_name == "put":
             if args and args[0].value:
@@ -3844,11 +3860,10 @@ class ASTLowering:
             if args and args[0].value:
                 arg_expr = args[0].value
 
-                # Determine type of output parameter
-                # For Character: call _get_char
-                # For Integer: call _get_int
-                # Default to character for now
-                if self._is_integer_type(arg_expr):
+                # Use is_integer_io flag or check type of output parameter
+                # For Integer_Text_IO.Get: call _get_int
+                # For Text_IO.Get: call _get_char
+                if is_integer_io or self._is_integer_type(arg_expr):
                     self.builder.call(Label("_get_int"))
                 else:
                     self.builder.call(Label("_get_char"))
