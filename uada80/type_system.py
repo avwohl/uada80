@@ -981,12 +981,15 @@ def types_compatible(t1: AdaType, t2: AdaType) -> bool:
     if same_base_type(t1, t2):
         return True
 
-    # Universal_Integer is compatible with integer/modular types only
+    # Universal_Integer is compatible with numeric types
+    # In Ada, integer literals can initialize/assign to any numeric type (including Float)
     if t1.kind == TypeKind.UNIVERSAL_INTEGER:
-        if t2.kind in (TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.UNIVERSAL_INTEGER):
+        if t2.kind in (TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.UNIVERSAL_INTEGER,
+                       TypeKind.FLOAT, TypeKind.FIXED, TypeKind.UNIVERSAL_REAL):
             return True
     if t2.kind == TypeKind.UNIVERSAL_INTEGER:
-        if t1.kind in (TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.UNIVERSAL_INTEGER):
+        if t1.kind in (TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.UNIVERSAL_INTEGER,
+                       TypeKind.FLOAT, TypeKind.FIXED, TypeKind.UNIVERSAL_REAL):
             return True
 
     # Universal_Real is compatible with float/fixed types
@@ -1071,11 +1074,18 @@ def common_type(t1: AdaType, t2: AdaType) -> Optional[AdaType]:
     if same_type(t1, t2):
         return t1
 
-    # Universal_Integer with discrete -> the discrete type
-    if t1.kind == TypeKind.UNIVERSAL_INTEGER and t2.is_discrete():
-        return t2
-    if t2.kind == TypeKind.UNIVERSAL_INTEGER and t1.is_discrete():
-        return t1
+    # Universal_Integer with numeric types -> the numeric type
+    # Integer literals can be used with any numeric type in Ada
+    if t1.kind == TypeKind.UNIVERSAL_INTEGER:
+        if t2.is_discrete():
+            return t2
+        if t2.kind in (TypeKind.FLOAT, TypeKind.FIXED):
+            return t2
+    if t2.kind == TypeKind.UNIVERSAL_INTEGER:
+        if t1.is_discrete():
+            return t1
+        if t1.kind in (TypeKind.FLOAT, TypeKind.FIXED):
+            return t1
 
     # Universal_Real with float/fixed -> the float/fixed type
     if t1.kind == TypeKind.UNIVERSAL_REAL:
@@ -1083,14 +1093,6 @@ def common_type(t1: AdaType, t2: AdaType) -> Optional[AdaType]:
             return t2
     if t2.kind == TypeKind.UNIVERSAL_REAL:
         if t1.kind in (TypeKind.FLOAT, TypeKind.FIXED):
-            return t1
-
-    # Universal_Integer with integer/modular -> the integer/modular type
-    if t1.kind == TypeKind.UNIVERSAL_INTEGER:
-        if t2.kind in (TypeKind.INTEGER, TypeKind.MODULAR):
-            return t2
-    if t2.kind == TypeKind.UNIVERSAL_INTEGER:
-        if t1.kind in (TypeKind.INTEGER, TypeKind.MODULAR):
             return t1
 
     # Subtype and base type -> base type

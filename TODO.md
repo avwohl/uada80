@@ -8,8 +8,32 @@
 | Semantic | 2742/2742 (100%) | All grouped ACATS tests pass |
 | Lowering | 105/105 (100%) | All lowering tests pass |
 | Codegen | 24/24 (100%) | All code generation tests pass |
-| Unit Tests | 6789/6789 (100%) | All pass |
+| Unit Tests | 6790/6790 (100%) | All pass |
 | Execution | 15/15 (100%) | End-to-end tests via cpmemu |
+
+## Recent Fixes (2025-12-14 Session 2)
+
+1. [x] Static Expression Evaluation Improvements
+   - Added CharacterLiteral support (returns ord value)
+   - Added StringLiteral support (returns length)
+   - Enhanced enumeration literal position detection
+   - Added SelectedName prefix support for attributes (Package.Type'First)
+   - Added enumeration type 'First/'Last (returns 0/len-1)
+   - Added array type 'First/'Last (from index_types)
+   - Added 'Modulus for modular types
+   - Added 'Component_Size for arrays
+   - Improved 'Pos handling for character literals
+
+2. [x] Type Compatibility Fixes
+   - Universal_Integer now compatible with Float/Fixed types
+   - Allows `X : Float := 5;` (integer literal to float)
+   - Allows `Y := F + 5;` (float arithmetic with integer literal)
+   - Updated common_type() for mixed float/integer operations
+
+3. [x] Pragma Atomic Support
+   - Added pragma Atomic handling in semantic analyzer
+   - Sets is_atomic and is_volatile flags on symbol
+   - Codegen already emits DI/EI around atomic memory operations
 
 ## Recent Fixes (2025-12-14)
 
