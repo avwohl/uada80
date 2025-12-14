@@ -177,21 +177,31 @@ def test_function_call():
 
 @skip_if_no_tools
 def test_recursive_function():
-    """Test recursive function execution."""
-    # Note: This test uses simple multiplication without nested functions
-    # because nested function calls aren't fully generating call code yet.
+    """Test recursive function execution with factorial."""
     source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
     procedure Test is
-        X : Integer := 3;
-        Y : Integer := 4;
-        Z : Integer;
+        function Fact(N : Integer) return Integer is
+        begin
+            if N <= 1 then
+                return 1;
+            else
+                return N * Fact(N - 1);
+            end if;
+        end Fact;
+
+        Result : Integer;
     begin
-        Z := X * Y;
+        Result := Fact(5);
+        Ada.Integer_Text_IO.Put(Result);
+        Ada.Text_IO.New_Line;
     end Test;
     """
 
     success, stdout, stderr = compile_and_run(source)
     assert success, f"Program failed: {stderr}"
+    assert "120" in stdout, f"Expected factorial 5! = 120, got: {stdout}"
 
 
 @skip_if_no_tools
