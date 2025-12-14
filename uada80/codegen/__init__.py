@@ -83,6 +83,8 @@ class Z80CodeGen:
         if not self.emit_inline_runtime:
             self._emit("; Link with: ul80 program.rel -l libada.lib")
         self._emit("")
+        self._emit("    .Z80    ; Enable Z80 instruction set")
+        self._emit("")
 
         # Generate globals
         if module.globals:
@@ -3835,6 +3837,23 @@ class Z80CodeGen:
         self._emit("    ret")
         self._emit("")
 
+    # Z80 instruction mnemonics that need to be uppercased
+    _Z80_MNEMONICS = {
+        "ld", "ldd", "lddr", "ldi", "ldir",
+        "push", "pop", "ex", "exx",
+        "add", "adc", "sub", "sbc", "and", "or", "xor", "cp",
+        "inc", "dec", "neg", "cpl", "daa",
+        "rlca", "rrca", "rla", "rra", "rlc", "rrc", "rl", "rr",
+        "sla", "sra", "srl", "sll",
+        "bit", "set", "res",
+        "jp", "jr", "call", "ret", "reti", "retn", "rst",
+        "djnz",
+        "nop", "halt", "di", "ei", "im",
+        "in", "ini", "inir", "ind", "indr",
+        "out", "outi", "otir", "outd", "otdr",
+        "ccf", "scf",
+    }
+
     def _emit(self, line: str) -> None:
         """Emit a line of assembly."""
         # Track runtime calls in emitted lines
@@ -3848,7 +3867,50 @@ class Z80CodeGen:
                     if routine.startswith("_") and not routine.startswith("__"):
                         self.runtime_deps.add(routine)
                     break
+
+        # Uppercase Z80 instruction mnemonics for um80 compatibility
+        line = self._uppercase_mnemonic(line)
         self.output.append(line)
+
+    def _uppercase_mnemonic(self, line: str) -> str:
+        """Uppercase Z80 instruction mnemonic in an assembly line."""
+        # Skip empty lines, comments, and directives
+        stripped = line.lstrip()
+        if not stripped or stripped.startswith(";") or stripped.startswith("."):
+            return line
+
+        # Find the leading whitespace
+        leading_ws = line[:len(line) - len(stripped)]
+
+        # Split at first whitespace or end of line
+        parts = stripped.split(None, 1)
+        if not parts:
+            return line
+
+        first_word = parts[0]
+
+        # Check if first word is a label (ends with ':')
+        if first_word.endswith(":"):
+            # It's a label, check for mnemonic after
+            label_part = first_word
+            if len(parts) > 1:
+                rest = parts[1]
+                rest_parts = rest.split(None, 1)
+                if rest_parts and rest_parts[0].lower() in self._Z80_MNEMONICS:
+                    mnemonic = rest_parts[0].upper()
+                    operands = rest_parts[1] if len(rest_parts) > 1 else ""
+                    return f"{leading_ws}{label_part} {mnemonic} {operands}".rstrip()
+            return line
+
+        # Check if it's a mnemonic (not a label - no leading whitespace and no colon)
+        if first_word.lower() in self._Z80_MNEMONICS:
+            # Only uppercase if there's leading whitespace (it's an instruction)
+            # Labels at column 0 should not be uppercased
+            if leading_ws:
+                rest = parts[1] if len(parts) > 1 else ""
+                return f"{leading_ws}{first_word.upper()} {rest}".rstrip()
+
+        return line
 
     def _call_runtime(self, routine_name: str, comment: str = "") -> None:
         """Emit a call to a runtime routine and track the dependency."""

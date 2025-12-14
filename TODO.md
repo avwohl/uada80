@@ -8,14 +8,21 @@
 | Semantic | 2742/2742 (100%) | All grouped ACATS tests pass |
 | Lowering | 105/105 (100%) | All lowering tests pass |
 | Codegen | 24/24 (100%) | All code generation tests pass |
-| Unit Tests | 6775/6775 (100%) | All pass |
+| Unit Tests | 6783/6783 (100%) | All pass |
+| Execution | 8/12 (67%) | End-to-end tests via cpmemu |
 
 ## Recent Fixes (2025-12-13)
 
 1. [x] Ada 2022 declare expressions in expression functions
    - Parser now handles `(declare ... begin Expr)` syntax in expression function bodies
 
-2. [x] Extended GNAT Standard Library Integration
+2. [x] um80 Assembler Compatibility
+   - Added `.Z80` directive to enable Z80 instruction set
+   - Uppercase instruction mnemonics (um80 requires uppercase)
+   - Fixed peephole optimizer to avoid undocumented IXH/IXL instructions
+   - End-to-end execution tests via cpmemu now working
+
+3. [x] Extended GNAT Standard Library Integration
    - Added Ada.Exceptions (Exception_Name, Exception_Message, Raise_Exception, Reraise_Occurrence)
    - Added Ada.Tags (Tag type, External_Tag, Internal_Tag, Parent_Tag, etc.)
    - Added Ada.Characters.Handling (Is_Letter, Is_Digit, To_Upper, To_Lower, etc.)
