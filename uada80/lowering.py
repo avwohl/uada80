@@ -465,17 +465,19 @@ class ASTLowering:
         for decl in body.declarations:
             if isinstance(decl, ObjectDecl):
                 for name in decl.names:
-                    size = 2  # Default to word size
+                    size = self._calc_type_size(decl)
                     vreg = self.builder.new_vreg(IRType.WORD, name)
                     self.ctx.locals[name.lower()] = LocalVariable(
                         name=name,
                         vreg=vreg,
                         stack_offset=stack_offset,
                         size=size,
+                        ada_type=decl.type_mark if hasattr(decl, 'type_mark') else None,
                     )
                     stack_offset += size
 
         func.locals_size = stack_offset
+        self.ctx.locals_size = stack_offset
 
         # Create entry block
         entry = self.builder.new_block(f"{spec.name}_entry")
@@ -3878,7 +3880,8 @@ class ASTLowering:
 
         elif proc_name == "get_line":
             # Get line into output string parameter
-            if args and args[0].value:
+            # Ada.Text_IO.Get_Line(Item : out String; Last : out Natural)
+            if args and len(args) >= 1 and args[0].value:
                 arg_expr = args[0].value
 
                 # Get address of destination buffer
@@ -3886,16 +3889,33 @@ class ASTLowering:
                     name = arg_expr.name.lower()
                     if self.ctx and name in self.ctx.locals:
                         local = self.ctx.locals[name]
-                        # Push buffer address
+                        # LEA: get address of buffer
+                        # Locals are at negative offsets from IX
+                        # offset = -(locals_size - stack_offset)
+                        neg_offset = -(self.ctx.locals_size - local.stack_offset)
                         addr_reg = self.builder.new_vreg(IRType.PTR, "_buf")
-                        self.builder.lea(addr_reg, local.vreg)
+                        self.builder.emit(IRInstr(
+                            OpCode.LEA,
+                            dst=addr_reg,
+                            src1=MemoryLocation(offset=neg_offset, ir_type=IRType.PTR),
+                        ))
                         self.builder.push(addr_reg)
                         # Push max length (from type bounds if available)
                         max_len = self._get_string_max_length(arg_expr)
                         self.builder.push(Immediate(max_len, IRType.WORD))
                         # Call runtime to read line
                         self.builder.call(Label("_get_line"))
-                        # Clean up stack
+                        # Result in HL is the length read (Last)
+                        # Store Last BEFORE stack cleanup (pop clobbers HL)
+                        if len(args) >= 2 and args[1].value:
+                            last_expr = args[1].value
+                            result = MemoryLocation(
+                                is_global=False,
+                                symbol_name="_HL",
+                                ir_type=IRType.WORD,
+                            )
+                            self._store_to_target(last_expr, result)
+                        # Clean up stack (2 word args = 4 bytes)
                         temp = self.builder.new_vreg(IRType.WORD, "_discard")
                         self.builder.pop(temp)
                         self.builder.pop(temp)
@@ -10984,6 +11004,78 @@ class ASTLowering:
             # Record field store
             self._lower_selected_store(target, value)
 
+    def _calc_type_size(self, decl: ObjectDecl) -> int:
+        """Calculate the size in bytes for a local variable declaration."""
+        # Default size for scalar types
+        size = 2
+
+        if not hasattr(decl, 'type_mark') or decl.type_mark is None:
+            return size
+
+        type_mark = decl.type_mark
+        type_name = ""
+        constraint = None
+
+        # Handle type mark with constraint: String(1..80)
+        if isinstance(type_mark, SubtypeIndication):
+            inner = getattr(type_mark, 'type_mark', None)
+
+            # Handle Slice: String(1..80) is parsed as Slice(prefix=String, range_expr=RangeExpr)
+            if isinstance(inner, Slice):
+                prefix = getattr(inner, 'prefix', None)
+                if isinstance(prefix, Identifier) and prefix.name.lower() == 'string':
+                    range_expr = getattr(inner, 'range_expr', None)
+                    if range_expr:
+                        # RangeExpr has 'low' and 'high' attributes
+                        first = self._eval_static_expr(getattr(range_expr, 'low', None))
+                        last = self._eval_static_expr(getattr(range_expr, 'high', None))
+                        if first is not None and last is not None:
+                            return last - first + 1
+            elif isinstance(inner, Identifier):
+                type_name = inner.name.lower()
+            elif isinstance(inner, SelectedName):
+                type_name = inner.selector.lower()
+
+            constraint = getattr(type_mark, 'constraint', None)
+        elif isinstance(type_mark, Identifier):
+            type_name = type_mark.name.lower()
+        elif isinstance(type_mark, SelectedName):
+            type_name = type_mark.selector.lower()
+
+        # Handle String type with constraint (IndexConstraint case)
+        if type_name == 'string' and constraint:
+            if isinstance(constraint, IndexConstraint) and constraint.ranges:
+                range_expr = constraint.ranges[0]
+                if isinstance(range_expr, RangeExpr):
+                    first = self._eval_static_expr(range_expr.first)
+                    last = self._eval_static_expr(range_expr.last)
+                    if first is not None and last is not None:
+                        return last - first + 1
+
+        # For other array types, try to get size from type definition
+        if type_name in ('integer', 'natural', 'positive'):
+            return 2
+        elif type_name == 'character':
+            return 1
+        elif type_name == 'boolean':
+            return 1
+        elif type_name == 'float':
+            return 6  # 48-bit float
+
+        return size
+
+    def _eval_static_expr(self, expr) -> int | None:
+        """Evaluate a static expression to an integer value."""
+        if isinstance(expr, IntegerLiteral):
+            return expr.value
+        if isinstance(expr, Identifier):
+            # Try to look up named number
+            name = expr.name.lower()
+            sym = self.symbols.lookup(name) if self.symbols else None
+            if sym and hasattr(sym, 'value') and isinstance(sym.value, int):
+                return sym.value
+        return None
+
     def _get_string_max_length(self, expr) -> int:
         """Get maximum length for a string variable."""
         if self.ctx is None:
@@ -11000,6 +11092,9 @@ class ASTLowering:
                         last = getattr(local.ada_type, 'last', 80)
                         if isinstance(first, int) and isinstance(last, int):
                             return last - first + 1
+                # Also check size stored in LocalVariable
+                if local.size > 2:
+                    return local.size
 
         return 80  # Default buffer size
 

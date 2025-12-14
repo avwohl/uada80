@@ -679,4 +679,120 @@ _get_char_raw:
     POP BC
     RET
 
+; ============================================================
+; _get_line - Read line from console into buffer
+; Input: Stack: buffer_addr (SP+4), max_len (SP+2)
+; Output: HL = number of characters read
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _get_line
+_get_line:
+    ; Get parameters from stack
+    LD HL, 4
+    ADD HL, SP
+    LD E, (HL)
+    INC HL
+    LD D, (HL)          ; DE = buffer address
+
+    LD HL, 2
+    ADD HL, SP
+    LD C, (HL)
+    INC HL
+    LD B, (HL)          ; BC = max length
+
+    ; DE = buffer, BC = max length
+    PUSH DE             ; save buffer start for length calc
+
+_get_line_loop:
+    ; Check if buffer is full
+    LD A, B
+    OR C
+    JR Z, _get_line_done
+
+    ; Read a character
+    PUSH BC
+    PUSH DE
+    CALL _get_char_raw
+    POP DE
+    POP BC
+
+    ; Check for CR (end of line)
+    CP 13
+    JR Z, _get_line_cr
+
+    ; Check for LF (also end of line)
+    CP 10
+    JR Z, _get_line_done
+
+    ; Check for backspace
+    CP 8
+    JR Z, _get_line_bs
+    CP 127              ; DEL also treated as backspace
+    JR Z, _get_line_bs
+
+    ; Store character in buffer
+    LD (DE), A
+    INC DE
+    DEC BC
+
+    ; Echo character
+    PUSH BC
+    PUSH DE
+    LD E, A
+    LD C, 2
+    CALL 5
+    POP DE
+    POP BC
+
+    JR _get_line_loop
+
+_get_line_bs:
+    ; Backspace - move back if not at start
+    POP HL              ; HL = buffer start
+    PUSH HL
+    OR A
+    SBC HL, DE
+    JR Z, _get_line_loop  ; at start, ignore backspace
+    ; Move back
+    DEC DE
+    INC BC
+    ; Echo backspace, space, backspace to erase char
+    PUSH BC
+    PUSH DE
+    LD E, 8
+    LD C, 2
+    CALL 5
+    LD E, ' '
+    LD C, 2
+    CALL 5
+    LD E, 8
+    LD C, 2
+    CALL 5
+    POP DE
+    POP BC
+    JR _get_line_loop
+
+_get_line_cr:
+    ; CR received - consume LF if present and finish
+    ; Echo CR LF
+    PUSH BC
+    PUSH DE
+    LD E, 13
+    LD C, 2
+    CALL 5
+    LD E, 10
+    LD C, 2
+    CALL 5
+    POP DE
+    POP BC
+    ; Fall through to done
+
+_get_line_done:
+    ; Calculate length: DE - buffer_start
+    POP HL              ; HL = buffer start
+    EX DE, HL           ; HL = current pos, DE = start
+    OR A
+    SBC HL, DE          ; HL = length
+    RET
+
     END
