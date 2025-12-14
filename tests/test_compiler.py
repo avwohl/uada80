@@ -460,8 +460,8 @@ def test_array_access():
     result = compile_source(source)
 
     assert result.success
-    assert "ld (HL)" in result.output  # Store to computed address
-    assert "ld E, (HL)" in result.output or "ld D, (HL)" in result.output  # Load from computed address
+    assert "LD (HL)" in result.output  # Store to computed address
+    assert "LD E, (HL)" in result.output or "LD D, (HL)" in result.output  # Load from computed address
 
 
 def test_array_ir_generation():

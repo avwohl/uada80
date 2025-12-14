@@ -216,8 +216,10 @@ def _opt_push_pop_transfer(line1: str, line2: str) -> Optional[list[str]]:
             dst = instr2[1][0].upper()
             if src != dst:
                 # Map register pairs to their halves
+                # Note: IX/IY half-registers (IXH, IXL, IYH, IYL) are undocumented
+                # and not supported by um80 assembler, so we exclude them
                 pair_map = {'HL': ('H', 'L'), 'DE': ('D', 'E'), 'BC': ('B', 'C'),
-                           'AF': ('A', 'F'), 'IX': ('IXH', 'IXL'), 'IY': ('IYH', 'IYL')}
+                           'AF': ('A', 'F')}
                 if src in pair_map and dst in pair_map:
                     src_h, src_l = pair_map[src]
                     dst_h, dst_l = pair_map[dst]
