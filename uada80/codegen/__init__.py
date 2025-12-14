@@ -67,6 +67,17 @@ class Z80CodeGen:
         self.runtime_deps: set[str] = set()  # Track needed runtime routines
         self.module: Optional[IRModule] = None
 
+    def _mangle_symbol(self, name: str) -> str:
+        """Mangle a user symbol name to avoid Z80 mnemonic collisions.
+
+        Prefixes user symbols with '_' to avoid collisions with Z80 instruction
+        mnemonics like ADD, SUB, INC, DEC, CALL, RET, PUSH, POP, etc.
+        Runtime symbols (already starting with '_') are left unchanged.
+        """
+        if name.startswith("_"):
+            return name  # Already prefixed (runtime symbol or internal)
+        return f"_{name}"
+
     def generate(self, module: IRModule) -> str:
         """Generate Z80 assembly for an IR module."""
         self.output = []
@@ -94,8 +105,9 @@ class Z80CodeGen:
             self._emit("; CP/M entry point - execution starts here")
             self._emit("    CSEG")
             self._emit("_start:")
-            self._emit(f"    CALL {main_entry}")
-            self._emit("    JP 0        ; Exit to CP/M")
+            self._emit_instr("call", self._mangle_symbol(main_entry))
+            self._emit_instr("jp", "0")
+            self._emit("; Exit to CP/M")
             self._emit("")
 
         # Generate globals
@@ -103,7 +115,7 @@ class Z80CodeGen:
             self._emit("; Global variables")
             self._emit("    DSEG")
             for name, (ir_type, size) in module.globals.items():
-                self._emit(f"{name}:")
+                self._emit(f"{self._mangle_symbol(name)}:")
                 self._emit(f"    DS {size}")
             self._emit("")
 
@@ -3868,7 +3880,7 @@ class Z80CodeGen:
 
     def _emit(self, line: str) -> None:
         """Emit a line of assembly."""
-        # Track runtime calls in emitted lines
+        # Track runtime calls in emitted lines (but not calls to local functions)
         stripped = line.strip().lower()
         if stripped.startswith("call _") and not stripped.startswith("call __"):
             # Extract routine name: "call _routine" or "call _routine ; comment"
@@ -3877,7 +3889,15 @@ class Z80CodeGen:
                 if p.lower() == "call" and i + 1 < len(parts):
                     routine = parts[i + 1].rstrip(",;")
                     if routine.startswith("_") and not routine.startswith("__"):
-                        self.runtime_deps.add(routine)
+                        # Check if this is a locally defined function
+                        is_local = False
+                        if self.module:
+                            for func in self.module.functions:
+                                if self._mangle_symbol(func.name) == routine:
+                                    is_local = True
+                                    break
+                        if not is_local:
+                            self.runtime_deps.add(routine)
                     break
 
         # Uppercase Z80 instruction mnemonics for um80 compatibility
@@ -6401,12 +6421,20 @@ class Z80CodeGen:
 
     def _emit_instr(self, mnemonic: str, *operands: str) -> None:
         """Emit an instruction."""
-        # Track runtime calls
+        # Track runtime calls (but not calls to locally defined functions)
         if mnemonic.lower() == "call" and operands:
             target = operands[0]
             if target.startswith("_") and not target.startswith("__"):
-                # This is a call to a runtime routine
-                self.runtime_deps.add(target)
+                # Check if this is a locally defined function
+                is_local = False
+                if self.module:
+                    for func in self.module.functions:
+                        if self._mangle_symbol(func.name) == target:
+                            is_local = True
+                            break
+                if not is_local:
+                    # This is a call to a runtime routine
+                    self.runtime_deps.add(target)
 
         if operands:
             self._emit(f"    {mnemonic} {', '.join(operands)}")
@@ -6421,8 +6449,9 @@ class Z80CodeGen:
         self.reg_alloc = self._allocate_registers(func)
 
         # Function prologue
+        mangled_name = self._mangle_symbol(func.name)
         self._emit(f"; Function: {func.name}")
-        self._emit(f"{func.name}:")
+        self._emit(f"{mangled_name}:")
 
         # Set up stack frame
         if func.locals_size > 0 or self.reg_alloc.stack_size > 0:
@@ -6697,7 +6726,7 @@ class Z80CodeGen:
             self._emit_instr("di", "", "")  # Disable interrupts
 
         if mem.is_global:
-            self._emit_instr("ld", "HL", f"({mem.symbol_name})")
+            self._emit_instr("ld", "HL", f"({self._mangle_symbol(mem.symbol_name)})")
         elif mem.base is not None:
             # Load from computed address: base + offset
             # First load the base address into HL
@@ -6734,7 +6763,7 @@ class Z80CodeGen:
 
         if mem.is_global:
             self._load_to_hl(instr.src1)
-            self._emit_instr("ld", f"({mem.symbol_name})", "HL")
+            self._emit_instr("ld", f"({self._mangle_symbol(mem.symbol_name)})", "HL")
         elif mem.base is not None:
             # Store to computed address: base + offset
             # Load value into DE first
@@ -6767,7 +6796,7 @@ class Z80CodeGen:
         mem = instr.src1
         if mem.is_global:
             # Load address of global variable
-            self._emit_instr("ld", "HL", mem.symbol_name)
+            self._emit_instr("ld", "HL", self._mangle_symbol(mem.symbol_name))
         elif mem.base is not None:
             # Computed address: base + offset
             self._load_to_hl(mem.base)
@@ -7010,7 +7039,7 @@ class Z80CodeGen:
     def _gen_call(self, instr: IRInstr) -> None:
         """Generate CALL instruction."""
         if isinstance(instr.dst, Label):
-            self._emit_instr("call", instr.dst.name)
+            self._emit_instr("call", self._mangle_symbol(instr.dst.name))
 
     def _gen_call_indirect(self, instr: IRInstr) -> None:
         """Generate indirect CALL through function pointer.
