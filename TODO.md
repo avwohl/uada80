@@ -65,7 +65,11 @@
 - [x] Conditional expressions (if/case)
 - [x] Quantified expressions (for all/some)
 - [x] Membership tests with multiple choices
-- [x] Contract aspects (Pre, Post)
+- [x] Contract aspects (Pre, Post, Type_Invariant)
+- [x] Subtype predicates (Static_Predicate, Dynamic_Predicate)
+- [x] Contract attributes ('Old, 'Result, 'Loop_Entry)
+- [x] 'Update attribute for records and arrays
+- [x] Iterator interfaces
 
 ### Ada 2022 Features
 - [x] Declare expressions
@@ -73,6 +77,9 @@
 - [x] Parallel loops (`parallel for`)
 - [x] Delta aggregates
 - [x] Container aggregates
+- [x] Reduction expressions ('Reduce)
+- [x] Target name (@) in assignments
+- [x] Generalized 'Image for all types
 
 ### Type System
 - [x] Type checking edge cases (Universal_Real, type conversion)
