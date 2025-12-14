@@ -112,6 +112,11 @@
 - [x] Ada.Assertions (Assert procedures, Assertion_Error exception)
 - [x] Ada.Synchronous_Task_Control (Suspension_Object, Set_True, Suspend_Until_True)
 - [x] Ada.Wide_Characters.Handling (Is_Letter, To_Upper, etc. for Wide_Character)
+- [x] Ada.Wide_Wide_Characters.Handling (Is_Letter, To_Upper, etc. for Wide_Wide_Character)
+- [x] Ada.Locales (Language, Country)
+- [x] Ada.Environment_Variables (Value, Exists, Set, Clear)
+- [x] Ada.Long_Long_Integer_Text_IO (Get, Put)
+- [x] Ada.Iterator_Interfaces (Forward_Iterator, Reversible_Iterator)
 
 ## Remaining Work
 

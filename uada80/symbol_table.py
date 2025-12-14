@@ -5956,6 +5956,260 @@ class SymbolTable:
         # Register the GNAT package at global scope
         self.current_scope.define(gnat_pkg)
 
+        # Initialize additional standard library packages
+        self._init_additional_stdlib()
+
+    def _init_additional_stdlib(self) -> None:
+        """Initialize additional standard library packages for completeness."""
+        int_type = PREDEFINED_TYPES["Integer"]
+        nat_type = PREDEFINED_TYPES["Natural"]
+        bool_type = PREDEFINED_TYPES["Boolean"]
+        char_type = PREDEFINED_TYPES["Character"]
+        str_type = PREDEFINED_TYPES["String"]
+        wide_char_type = PREDEFINED_TYPES["Wide_Character"]
+        wide_str_type = PREDEFINED_TYPES["Wide_String"]
+
+        # Get Ada package from current scope
+        ada_pkg = self.current_scope.lookup_local("ada")
+        if ada_pkg is None:
+            return  # Ada package should exist
+
+        # =====================================================================
+        # Ada.Locales - Locale support (stub for Z80/CP/M)
+        # =====================================================================
+        locales_pkg = Symbol(
+            name="Locales",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+        locales_pkg.is_pure = True
+
+        # Language_Code subtype (3-character ISO 639 code)
+        locales_pkg.public_symbols["language_code"] = Symbol(
+            name="Language_Code",
+            kind=SymbolKind.TYPE,
+            ada_type=str_type,
+            scope_level=0,
+        )
+
+        # Country_Code subtype (2-character ISO 3166 code)
+        locales_pkg.public_symbols["country_code"] = Symbol(
+            name="Country_Code",
+            kind=SymbolKind.TYPE,
+            ada_type=str_type,
+            scope_level=0,
+        )
+
+        # Language function
+        language_func = Symbol(
+            name="Language",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[],
+        )
+        language_func.runtime_name = "_ada_locales_language"
+        locales_pkg.public_symbols["language"] = language_func
+
+        # Country function
+        country_func = Symbol(
+            name="Country",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[],
+        )
+        country_func.runtime_name = "_ada_locales_country"
+        locales_pkg.public_symbols["country"] = country_func
+
+        ada_pkg.public_symbols["locales"] = locales_pkg
+
+        # =====================================================================
+        # Ada.Environment_Variables - Environment variable access
+        # (Stub for CP/M - typically not available on Z80/CP/M)
+        # =====================================================================
+        env_vars_pkg = Symbol(
+            name="Environment_Variables",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Value function
+        value_func = Symbol(
+            name="Value",
+            kind=SymbolKind.FUNCTION,
+            return_type=str_type,
+            scope_level=0,
+            parameters=[Symbol("Name", SymbolKind.PARAMETER, str_type, mode="in")],
+        )
+        value_func.runtime_name = "_ada_env_value"
+        env_vars_pkg.public_symbols["value"] = value_func
+
+        # Exists function
+        exists_func = Symbol(
+            name="Exists",
+            kind=SymbolKind.FUNCTION,
+            return_type=bool_type,
+            scope_level=0,
+            parameters=[Symbol("Name", SymbolKind.PARAMETER, str_type, mode="in")],
+        )
+        exists_func.runtime_name = "_ada_env_exists"
+        env_vars_pkg.public_symbols["exists"] = exists_func
+
+        # Set procedure
+        set_proc = Symbol(
+            name="Set",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Name", SymbolKind.PARAMETER, str_type, mode="in"),
+                Symbol("Value", SymbolKind.PARAMETER, str_type, mode="in"),
+            ],
+        )
+        set_proc.runtime_name = "_ada_env_set"
+        env_vars_pkg.public_symbols["set"] = set_proc
+
+        # Clear procedure
+        clear_proc = Symbol(
+            name="Clear",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[Symbol("Name", SymbolKind.PARAMETER, str_type, mode="in")],
+        )
+        clear_proc.runtime_name = "_ada_env_clear"
+        env_vars_pkg.public_symbols["clear"] = clear_proc
+
+        ada_pkg.public_symbols["environment_variables"] = env_vars_pkg
+
+        # =====================================================================
+        # Ada.Wide_Wide_Characters - Wide Wide character support
+        # =====================================================================
+        wide_wide_chars_pkg = Symbol(
+            name="Wide_Wide_Characters",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        # Wide_Wide_Characters.Handling
+        www_handling_pkg = Symbol(
+            name="Handling",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+        www_handling_pkg.is_pure = True
+
+        # Character classification functions
+        for func_name in ["Is_Control", "Is_Letter", "Is_Lower", "Is_Upper",
+                          "Is_Digit", "Is_Alphanumeric", "Is_Special",
+                          "Is_Line_Terminator", "Is_Mark"]:
+            func = Symbol(
+                name=func_name,
+                kind=SymbolKind.FUNCTION,
+                return_type=bool_type,
+                scope_level=0,
+                parameters=[Symbol("Item", SymbolKind.PARAMETER, wide_char_type, mode="in")],
+            )
+            func.runtime_name = f"_www_{func_name.lower()}"
+            www_handling_pkg.public_symbols[func_name.lower()] = func
+
+        # Case conversion functions
+        to_lower_func = Symbol(
+            name="To_Lower",
+            kind=SymbolKind.FUNCTION,
+            return_type=wide_char_type,
+            scope_level=0,
+            parameters=[Symbol("Item", SymbolKind.PARAMETER, wide_char_type, mode="in")],
+        )
+        to_lower_func.runtime_name = "_www_to_lower"
+        www_handling_pkg.public_symbols["to_lower"] = to_lower_func
+
+        to_upper_func = Symbol(
+            name="To_Upper",
+            kind=SymbolKind.FUNCTION,
+            return_type=wide_char_type,
+            scope_level=0,
+            parameters=[Symbol("Item", SymbolKind.PARAMETER, wide_char_type, mode="in")],
+        )
+        to_upper_func.runtime_name = "_www_to_upper"
+        www_handling_pkg.public_symbols["to_upper"] = to_upper_func
+
+        wide_wide_chars_pkg.public_symbols["handling"] = www_handling_pkg
+
+        ada_pkg.public_symbols["wide_wide_characters"] = wide_wide_chars_pkg
+
+        # =====================================================================
+        # Ada.Long_Long_Integer_Text_IO - I/O for Long_Long_Integer
+        # =====================================================================
+        lli_text_io_pkg = Symbol(
+            name="Long_Long_Integer_Text_IO",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        lli_type = PREDEFINED_TYPES.get("Long_Long_Integer", int_type)
+
+        lli_get_proc = Symbol(
+            name="Get",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Item", SymbolKind.PARAMETER, lli_type, mode="out"),
+            ],
+        )
+        lli_get_proc.runtime_name = "_lli_text_io_get"
+        lli_text_io_pkg.public_symbols["get"] = lli_get_proc
+
+        lli_put_proc = Symbol(
+            name="Put",
+            kind=SymbolKind.PROCEDURE,
+            scope_level=0,
+            parameters=[
+                Symbol("Item", SymbolKind.PARAMETER, lli_type, mode="in"),
+            ],
+        )
+        lli_put_proc.runtime_name = "_lli_text_io_put"
+        lli_text_io_pkg.public_symbols["put"] = lli_put_proc
+
+        ada_pkg.public_symbols["long_long_integer_text_io"] = lli_text_io_pkg
+
+        # =====================================================================
+        # Ada.Iterator_Interfaces - Ada 2012 iterator interfaces
+        # =====================================================================
+        from uada80.type_system import InterfaceType
+
+        iterator_pkg = Symbol(
+            name="Iterator_Interfaces",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+        iterator_pkg.is_pure = True
+
+        # Forward_Iterator interface
+        forward_iterator = InterfaceType(
+            name="Forward_Iterator",
+            primitive_ops=[],
+        )
+        iterator_pkg.public_symbols["forward_iterator"] = Symbol(
+            name="Forward_Iterator",
+            kind=SymbolKind.TYPE,
+            ada_type=forward_iterator,
+            scope_level=0,
+        )
+
+        # Reversible_Iterator interface (extends Forward_Iterator)
+        reversible_iterator = InterfaceType(
+            name="Reversible_Iterator",
+            primitive_ops=[],
+        )
+        iterator_pkg.public_symbols["reversible_iterator"] = Symbol(
+            name="Reversible_Iterator",
+            kind=SymbolKind.TYPE,
+            ada_type=reversible_iterator,
+            scope_level=0,
+        )
+
+        ada_pkg.public_symbols["iterator_interfaces"] = iterator_pkg
+
     def enter_scope(self, name: str = "", is_package: bool = False) -> Scope:
         """Enter a new nested scope."""
         new_scope = Scope(
