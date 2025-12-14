@@ -325,5 +325,32 @@ def test_text_io_output():
     assert "Hello, World!" in stdout
 
 
+@skip_if_no_tools
+def test_integer_io_output():
+    """Test Ada.Integer_Text_IO output."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        X : Integer := 42;
+        Y : Integer := -123;
+        Z : Integer := 0;
+    begin
+        Ada.Integer_Text_IO.Put(X);
+        Ada.Text_IO.New_Line;
+        Ada.Integer_Text_IO.Put(Y);
+        Ada.Text_IO.New_Line;
+        Ada.Integer_Text_IO.Put(Z);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "42" in stdout
+    assert "-123" in stdout
+    assert "0" in stdout
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

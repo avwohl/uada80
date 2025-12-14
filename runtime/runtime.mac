@@ -442,4 +442,129 @@ _new_line:
     CALL 5
     RET
 
+; ============================================================
+; _put_int - Print signed 16-bit integer
+; Input: Integer value on stack (at SP+2)
+; Output: None
+; Destroys: A, BC, DE, HL
+; ============================================================
+    PUBLIC _put_int
+_put_int:
+    ; Get integer from stack
+    LD HL, 2
+    ADD HL, SP
+    LD E, (HL)
+    INC HL
+    LD D, (HL)
+    EX DE, HL           ; HL = integer value
+
+    ; Check for negative
+    BIT 7, H
+    JR Z, _put_int_pos
+
+    ; Print minus sign
+    PUSH HL
+    LD E, '-'
+    LD C, 2
+    CALL 5
+    POP HL
+
+    ; Negate HL
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+
+_put_int_pos:
+    ; HL = positive value to print
+    ; Use stack to store digits (pushed in reverse order)
+    LD B, 0             ; digit count
+
+_put_int_loop:
+    ; Divide HL by 10, remainder is next digit
+    LD DE, 10
+    CALL _udiv16        ; HL = quotient, DE = remainder
+
+    ; Push digit (remainder + '0')
+    LD A, E
+    ADD A, '0'
+    PUSH AF
+    INC B
+
+    ; Check if quotient is zero
+    LD A, H
+    OR L
+    JR NZ, _put_int_loop
+
+    ; Print digits (pop and print B times)
+_put_int_print:
+    POP AF
+    LD E, A
+    LD C, 2
+    PUSH BC
+    CALL 5
+    POP BC
+    DJNZ _put_int_print
+
+    RET
+
+; ============================================================
+; _udiv16 - Unsigned 16-bit division
+; Input: HL = dividend, DE = divisor
+; Output: HL = quotient, DE = remainder
+; Destroys: A, BC
+; ============================================================
+_udiv16:
+    ; Check for division by zero
+    LD A, D
+    OR E
+    JR Z, _udiv16_zero
+
+    PUSH BC
+    LD BC, 0            ; BC = remainder
+    LD A, 16            ; 16 bits
+
+_udiv16_loop:
+    ; Shift HL left, MSB into carry
+    ADD HL, HL
+    ; Shift carry into BC
+    RL C
+    RL B
+
+    ; Try to subtract DE from BC
+    PUSH HL
+    LD H, B
+    LD L, C
+    OR A                ; clear carry
+    SBC HL, DE
+    JR C, _udiv16_no_sub
+
+    ; Subtraction succeeded
+    LD B, H
+    LD C, L
+    POP HL
+    SET 0, L            ; Set quotient bit
+    JR _udiv16_next
+
+_udiv16_no_sub:
+    POP HL
+
+_udiv16_next:
+    DEC A
+    JR NZ, _udiv16_loop
+
+    ; HL = quotient, BC = remainder
+    LD D, B
+    LD E, C
+    POP BC
+    RET
+
+_udiv16_zero:
+    LD HL, 0FFFFH
+    LD DE, 0
+    RET
+
     END

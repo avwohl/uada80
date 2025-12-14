@@ -8,8 +8,8 @@
 | Semantic | 2742/2742 (100%) | All grouped ACATS tests pass |
 | Lowering | 105/105 (100%) | All lowering tests pass |
 | Codegen | 24/24 (100%) | All code generation tests pass |
-| Unit Tests | 6787/6787 (100%) | All pass |
-| Execution | 12/12 (100%) | End-to-end tests via cpmemu |
+| Unit Tests | 6788/6788 (100%) | All pass |
+| Execution | 13/13 (100%) | End-to-end tests via cpmemu |
 
 ## Recent Fixes (2025-12-14)
 
@@ -24,6 +24,11 @@
    - Added `_put_line`, `_put_string`, `_new_line` to runtime library
    - Uses CP/M BDOS function 2 (console output) for character-by-character output
    - Added proper CP/M startup code (`_start:` entry point at 0100H)
+
+3. [x] Integer_Text_IO runtime support
+   - Added `_put_int` for signed 16-bit integer output
+   - Handles negative numbers, zero, and positive values
+   - Uses unsigned division to extract decimal digits
 
 ## Recent Fixes (2025-12-13)
 
