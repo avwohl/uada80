@@ -1,0 +1,367 @@
+; Minimal Ada Runtime Library for UADA80
+; Assembled with um80 (.Z80 mode)
+;
+; This provides the minimal runtime routines needed for basic Ada programs.
+; More complex programs may need additional runtime support.
+
+    .Z80
+
+    CSEG
+
+; ============================================================
+; _fin_pop_scope - Pop finalization scope
+; For simple programs without controlled types, this is a no-op.
+; Input: None
+; Output: None
+; Destroys: None
+; ============================================================
+    PUBLIC _fin_pop_scope
+_fin_pop_scope:
+    RET
+
+; ============================================================
+; _fin_push_scope - Push finalization scope
+; For simple programs without controlled types, this is a no-op.
+; Input: None
+; Output: None
+; Destroys: None
+; ============================================================
+    PUBLIC _fin_push_scope
+_fin_push_scope:
+    RET
+
+; ============================================================
+; _mul16 - 16-bit signed multiplication
+; Input: HL = multiplicand, DE = multiplier
+; Output: HL = product (low 16 bits)
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _mul16
+_mul16:
+    ; Simple shift-and-add multiplication
+    ; HL = HL * DE
+
+    PUSH BC
+
+    ; Handle sign
+    LD A, H
+    XOR D
+    PUSH AF             ; Save result sign
+
+    ; Make HL positive
+    BIT 7, H
+    JR Z, _mul16_hl_pos
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+_mul16_hl_pos:
+
+    ; Make DE positive
+    BIT 7, D
+    JR Z, _mul16_de_pos
+    LD A, E
+    CPL
+    LD E, A
+    LD A, D
+    CPL
+    LD D, A
+    INC DE
+_mul16_de_pos:
+
+    ; Now multiply unsigned: BC = HL * DE
+    LD B, H
+    LD C, L             ; BC = multiplicand
+    LD HL, 0            ; HL = result
+
+_mul16_loop:
+    ; Check if DE is zero
+    LD A, D
+    OR E
+    JR Z, _mul16_done
+
+    ; Check low bit of DE
+    BIT 0, E
+    JR Z, _mul16_skip
+    ADD HL, BC          ; Add multiplicand to result
+_mul16_skip:
+
+    ; Shift DE right
+    SRL D
+    RR E
+
+    ; Shift BC left
+    SLA C
+    RL B
+
+    JR _mul16_loop
+
+_mul16_done:
+    ; Apply sign
+    POP AF
+    BIT 7, A
+    JR Z, _mul16_ret
+
+    ; Negate result
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+
+_mul16_ret:
+    POP BC
+    RET
+
+; ============================================================
+; _div16 - 16-bit signed division
+; Input: HL = dividend, DE = divisor
+; Output: HL = quotient
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _div16
+_div16:
+    ; Check for division by zero
+    LD A, D
+    OR E
+    JR Z, _div16_zero
+
+    PUSH BC
+
+    ; Handle signs
+    LD A, H
+    XOR D
+    PUSH AF             ; Save result sign
+
+    ; Make HL positive
+    BIT 7, H
+    JR Z, _div16_hl_pos
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+_div16_hl_pos:
+
+    ; Make DE positive
+    BIT 7, D
+    JR Z, _div16_de_pos
+    LD A, E
+    CPL
+    LD E, A
+    LD A, D
+    CPL
+    LD D, A
+    INC DE
+_div16_de_pos:
+
+    ; Unsigned division
+    LD B, H
+    LD C, L             ; BC = dividend
+    LD HL, 0            ; HL = quotient
+
+    ; Count bits
+    LD A, 16
+_div16_loop:
+    ; Shift BC left into HL
+    SLA C
+    RL B
+    ADC HL, HL
+
+    ; Try to subtract DE from HL
+    OR A                ; Clear carry
+    SBC HL, DE
+    JR NC, _div16_sub_ok
+
+    ; Add back and set bit 0 of C to 0 (already 0 from shift)
+    ADD HL, DE
+    JR _div16_next
+
+_div16_sub_ok:
+    ; Set bit 0 of C to 1
+    SET 0, C
+
+_div16_next:
+    DEC A
+    JR NZ, _div16_loop
+
+    ; Result is in BC
+    LD H, B
+    LD L, C
+
+    ; Apply sign
+    POP AF
+    BIT 7, A
+    JR Z, _div16_ret
+
+    ; Negate result
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+
+_div16_ret:
+    POP BC
+    RET
+
+_div16_zero:
+    ; Division by zero - return max value
+    LD HL, 7FFFH
+    RET
+
+; ============================================================
+; _mod16 - 16-bit signed modulo (remainder)
+; Input: HL = dividend, DE = divisor
+; Output: HL = remainder
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _mod16
+_mod16:
+    ; Check for division by zero
+    LD A, D
+    OR E
+    JR Z, _mod16_zero
+
+    PUSH BC
+
+    ; Save dividend sign for remainder
+    LD A, H
+    PUSH AF
+
+    ; Make HL positive
+    BIT 7, H
+    JR Z, _mod16_hl_pos
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+_mod16_hl_pos:
+
+    ; Make DE positive
+    BIT 7, D
+    JR Z, _mod16_de_pos
+    LD A, E
+    CPL
+    LD E, A
+    LD A, D
+    CPL
+    LD D, A
+    INC DE
+_mod16_de_pos:
+
+    ; Unsigned division - we want remainder
+    LD B, H
+    LD C, L             ; BC = dividend
+    LD HL, 0            ; HL = remainder
+
+    LD A, 16
+_mod16_loop:
+    ; Shift BC left into HL
+    SLA C
+    RL B
+    ADC HL, HL
+
+    ; Try to subtract DE from HL
+    OR A
+    SBC HL, DE
+    JR NC, _mod16_sub_ok
+
+    ; Add back
+    ADD HL, DE
+    JR _mod16_next
+
+_mod16_sub_ok:
+    SET 0, C
+
+_mod16_next:
+    DEC A
+    JR NZ, _mod16_loop
+
+    ; HL now contains remainder
+    ; Apply dividend's sign to remainder
+    POP AF
+    BIT 7, A
+    JR Z, _mod16_ret
+
+    ; Negate result
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+
+_mod16_ret:
+    POP BC
+    RET
+
+_mod16_zero:
+    LD HL, 0
+    RET
+
+; ============================================================
+; _raise_constraint_error - Handle constraint error
+; Called when array bounds check fails or other constraint violation.
+; For CP/M, this halts the program with an error.
+; Input: None
+; Output: Does not return
+; Destroys: All
+; ============================================================
+    PUBLIC _raise_constraint_error
+_raise_constraint_error:
+    ; Print error message using BDOS
+    LD DE, _ce_msg
+    LD C, 9             ; BDOS print string
+    CALL 5
+
+    ; Exit to CP/M
+    JP 0                ; Warm boot
+
+_ce_msg:
+    DB 'Constraint_Error$'
+
+; ============================================================
+; _raise_program_error - Handle program error
+; Input: None
+; Output: Does not return
+; ============================================================
+    PUBLIC _raise_program_error
+_raise_program_error:
+    LD DE, _pe_msg
+    LD C, 9
+    CALL 5
+    JP 0
+
+_pe_msg:
+    DB 'Program_Error$'
+
+; ============================================================
+; _raise_storage_error - Handle storage error
+; Input: None
+; Output: Does not return
+; ============================================================
+    PUBLIC _raise_storage_error
+_raise_storage_error:
+    LD DE, _se_msg
+    LD C, 9
+    CALL 5
+    JP 0
+
+_se_msg:
+    DB 'Storage_Error$'
+
+    END

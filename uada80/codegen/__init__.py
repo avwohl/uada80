@@ -6935,6 +6935,7 @@ class Z80CodeGen:
     def _gen_jmp(self, instr: IRInstr) -> None:
         """Generate JMP instruction."""
         if isinstance(instr.dst, Label):
+            self._track_runtime_dep(instr.dst.name)
             self._emit_instr("jp", instr.dst.name)
 
     def _gen_jz(self, instr: IRInstr) -> None:
@@ -6943,6 +6944,7 @@ class Z80CodeGen:
             self._load_to_hl(instr.src1)
             self._emit_instr("ld", "A", "H")
             self._emit_instr("or", "L")
+            self._track_runtime_dep(instr.dst.name)
             self._emit_instr("jp", "Z", instr.dst.name)
 
     def _gen_jnz(self, instr: IRInstr) -> None:
@@ -6951,7 +6953,13 @@ class Z80CodeGen:
             self._load_to_hl(instr.src1)
             self._emit_instr("ld", "A", "H")
             self._emit_instr("or", "L")
+            self._track_runtime_dep(instr.dst.name)
             self._emit_instr("jp", "NZ", instr.dst.name)
+
+    def _track_runtime_dep(self, name: str) -> None:
+        """Track a runtime library dependency if the name is a runtime symbol."""
+        if name.startswith("_") and not name.startswith("__"):
+            self.runtime_deps.add(name)
 
     def _gen_call(self, instr: IRInstr) -> None:
         """Generate CALL instruction."""
