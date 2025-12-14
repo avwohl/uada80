@@ -86,6 +86,18 @@ class Z80CodeGen:
         self._emit("    .Z80    ; Enable Z80 instruction set")
         self._emit("")
 
+        # Generate startup code (entry point for CP/M .COM files)
+        # This must come first in CSEG so it's at address 0100H
+        # Use the first function as the main entry point
+        main_entry = module.functions[0].name if module.functions else None
+        if main_entry:
+            self._emit("; CP/M entry point - execution starts here")
+            self._emit("    CSEG")
+            self._emit("_start:")
+            self._emit(f"    CALL {main_entry}")
+            self._emit("    JP 0        ; Exit to CP/M")
+            self._emit("")
+
         # Generate globals
         if module.globals:
             self._emit("; Global variables")

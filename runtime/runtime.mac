@@ -364,4 +364,82 @@ _raise_storage_error:
 _se_msg:
     DB 'Storage_Error$'
 
+; ============================================================
+; Text_IO Support
+; ============================================================
+
+; ============================================================
+; _put_line - Print string and newline
+; Input: String address on stack (at SP+2)
+; Output: None
+; Destroys: A, DE, HL
+; ============================================================
+    PUBLIC _put_line
+_put_line:
+    ; Get string address from stack
+    LD HL, 2
+    ADD HL, SP
+    LD E, (HL)
+    INC HL
+    LD D, (HL)
+    EX DE, HL           ; HL = string address
+
+    ; Print the string
+    CALL _put_str_hl
+
+    ; Print newline (CR LF)
+    LD E, 13            ; CR
+    LD C, 2
+    CALL 5
+    LD E, 10            ; LF
+    LD C, 2
+    CALL 5
+    RET
+
+; ============================================================
+; _put_string - Print string (no newline)
+; Input: HL = pointer to null-terminated string
+; Output: None
+; Destroys: A, DE, HL
+; ============================================================
+    PUBLIC _put_string
+_put_string:
+    ; HL already contains string address
+    CALL _put_str_hl
+    RET
+
+; ============================================================
+; _put_str_hl - Internal: print null-terminated string
+; Input: HL = pointer to null-terminated string
+; Output: None
+; Destroys: A, DE, HL
+; ============================================================
+_put_str_hl:
+    LD A, (HL)
+    OR A                ; Check for null terminator
+    RET Z
+    LD E, A
+    LD C, 2             ; BDOS: console output
+    PUSH HL
+    CALL 5
+    POP HL
+    INC HL
+    JR _put_str_hl
+
+; ============================================================
+; _new_line - Print newline (CR LF)
+; Input: None
+; Output: None
+; Destroys: A, DE
+; ============================================================
+    PUBLIC _new_line
+_new_line:
+    LD E, 13            ; CR
+    LD C, 2
+    CALL 5
+    LD E, 10            ; LF
+    LD C, 2
+    CALL 5
+    RET
+
     END

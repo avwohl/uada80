@@ -310,7 +310,6 @@ def test_modular_arithmetic():
 
 
 @skip_if_no_tools
-@pytest.mark.skip(reason="Requires Text_IO runtime support")
 def test_text_io_output():
     """Test Ada.Text_IO output."""
     source = """
