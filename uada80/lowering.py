@@ -93,6 +93,7 @@ from uada80.ast_nodes import (
     EntryDecl,
     SubtypeIndication,
     ArrayTypeDef,
+    ActualParameter,
 )
 from uada80.ir import (
     IRType,
@@ -444,16 +445,25 @@ class ASTLowering:
             # No body to generate for imported subprograms
             return
 
+        # Enter the subprogram's scope for symbol lookup
+        # This mirrors what the semantic analyzer does
+        self.symbols.enter_scope(spec.name)
+
         # Determine return type
         return_type = IRType.VOID
         if spec.is_function and spec.return_type:
             if sym and sym.return_type:
                 return_type = self._ada_type_to_ir(sym.return_type)
 
+        # Save builder state (for nested function support)
+        old_function = self.builder.function
+        old_block = self.builder.block
+        old_ctx = self.ctx
+
         # Create function
         func = self.builder.new_function(spec.name, return_type)
 
-        # Create context
+        # Create new context
         self.ctx = LoweringContext(function=func)
 
         # Process parameters
@@ -509,7 +519,11 @@ class ASTLowering:
             if return_type == IRType.VOID:
                 self.builder.ret()
 
-        self.ctx = None
+        # Restore context and builder state, and leave scope
+        self.ctx = old_ctx
+        self.builder.function = old_function
+        self.builder.block = old_block
+        self.symbols.leave_scope()
 
     def _generate_preconditions(self, spec: SubprogramDecl) -> None:
         """Generate precondition checks from Pre aspect."""
@@ -6705,20 +6719,23 @@ class ASTLowering:
                 # Static call (using external name for imported functions)
                 self.builder.call(Label(call_target))
 
-            # Clean up stack (callee may not clean up on Z80)
-            if stack_slots > 0:
-                # Pop arguments off stack (result is in HL, so we use DE for cleanup)
-                for _ in range(stack_slots):
-                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
-                    self.builder.pop(temp)
-
-            # Result is already in HL after call - emit a store-from-HL instruction
-            # Use a special marker that codegen can recognize
+            # Result is already in HL after call - capture it BEFORE cleanup
+            # (cleanup uses POP HL which would destroy the return value)
             self.builder.emit(IRInstr(
                 OpCode.MOV, result,
                 MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
                 comment="capture function return from HL"
             ))
+
+            # Clean up stack (callee may not clean up on Z80)
+            if stack_slots > 0:
+                # Pop arguments off stack
+                for _ in range(stack_slots):
+                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                    self.builder.pop(temp)
+
+            # Skip the duplicate MOV emission below since we already captured HL
+            return result
 
         elif isinstance(expr.name, Dereference):
             # Explicit dereference call: Func_Ptr.all(args)
@@ -10935,9 +10952,41 @@ class ASTLowering:
         return Immediate(0, IRType.WORD)
 
     def _lower_indexed(self, expr: IndexedComponent):
-        """Lower an indexed component (array access)."""
+        """Lower an indexed component (array access or function call).
+
+        In Ada, Foo(X) is syntactically ambiguous - it could be array indexing
+        or a function call. We disambiguate here by checking if the prefix
+        is a function.
+        """
         if self.ctx is None:
             return Immediate(0, IRType.WORD)
+
+        # Check if the prefix is actually a function (not an array)
+        # In Ada, Foo(X) could be either array indexing or function call
+        if isinstance(expr.prefix, Identifier):
+            func_name = expr.prefix.name.lower()
+
+            # Check symbol table first
+            sym = self.symbols.lookup(expr.prefix.name)
+            is_function = sym and sym.kind == SymbolKind.FUNCTION
+
+            # Also check if this name matches any function in the IR module
+            # This handles nested functions and recursive calls where the
+            # symbol table scopes don't match during lowering
+            if not is_function and self.builder.module:
+                for func in self.builder.module.functions:
+                    if func.name.lower() == func_name:
+                        is_function = True
+                        break
+
+            if is_function:
+                # This is a function call, not array indexing
+                # Convert IndexedComponent to FunctionCall
+                func_call = FunctionCall(
+                    name=expr.prefix,
+                    args=[ActualParameter(name=None, value=idx) for idx in expr.indices]
+                )
+                return self._lower_function_call(func_call)
 
         # Get array base address
         base_addr = self._get_array_base(expr.prefix)
