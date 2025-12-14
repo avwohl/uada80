@@ -12,7 +12,7 @@ MAC_SOURCES = tasking.mac fileio.mac float48.mac timer.mac
 MAC_OBJECTS = $(MAC_SOURCES:.mac=.rel)
 
 # Pre-compiled object files (no source available)
-PREBUILT_OBJECTS = strings.rel bounded.rel containers.rel heap.rel math.rel io.rel
+PREBUILT_OBJECTS = strings.rel bounded.rel containers.rel heap.rel math.rel io.rel runtime.rel
 
 OBJECTS = $(PREBUILT_OBJECTS) $(MAC_OBJECTS)
 
