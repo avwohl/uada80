@@ -176,6 +176,35 @@ def test_function_call():
 
 
 @skip_if_no_tools
+def test_function_name_add():
+    """Test that 'Add' can be used as function name (Z80 mnemonic collision test).
+
+    This verifies symbol mangling works correctly - user symbols are prefixed
+    with '_' to avoid collisions with Z80 instruction mnemonics like ADD.
+    """
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        function Add(A, B : Integer) return Integer is
+        begin
+            return A + B;
+        end Add;
+
+        Result : Integer;
+    begin
+        Result := Add(10, 20);
+        Ada.Integer_Text_IO.Put(Result);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "30" in stdout, f"Expected 10+20=30, got: {stdout}"
+
+
+@skip_if_no_tools
 def test_recursive_function():
     """Test recursive function execution with factorial."""
     source = """
