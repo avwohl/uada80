@@ -679,6 +679,8 @@ class ObjectDecl(Decl):
     init_expr: Optional[Expr] = None
     renames: Optional[Expr] = None  # For renaming declarations
     aspects: list[AspectSpecification] = field(default_factory=list)
+    is_atomic: bool = False  # Set by pragma Atomic - wrap accesses in DI/EI
+    is_volatile: bool = False  # Set by pragma Volatile - no caching
 
 
 @dataclass
@@ -700,6 +702,8 @@ class TypeDecl(Decl):
     is_tagged: bool = False
     is_limited: bool = False
     aspects: list[AspectSpecification] = field(default_factory=list)
+    # Analyzed type from semantic analysis (preserves is_packed, etc.)
+    ada_type: Optional[any] = None  # AdaType (avoid circular import)
 
 
 @dataclass

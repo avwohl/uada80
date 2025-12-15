@@ -518,5 +518,256 @@ def test_text_io_get_line():
     assert "11" in stdout  # "Hello World" is 11 characters
 
 
+# ============================================================================
+# Additional Feature Tests
+# ============================================================================
+
+
+@skip_if_no_tools
+def test_nested_procedure():
+    """Test nested procedure calls."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        Result : Integer := 0;
+
+        procedure Inner(X : Integer) is
+        begin
+            Result := Result + X;
+        end Inner;
+
+    begin
+        Inner(10);
+        Inner(20);
+        Inner(12);
+        Ada.Integer_Text_IO.Put(Result);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "42" in stdout
+
+
+@skip_if_no_tools
+def test_out_parameter():
+    """Test out parameter mode."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        procedure Get_Values(A : out Integer; B : out Integer) is
+        begin
+            A := 100;
+            B := 200;
+        end Get_Values;
+
+        X : Integer;
+        Y : Integer;
+    begin
+        Get_Values(X, Y);
+        Ada.Integer_Text_IO.Put(X);
+        Ada.Text_IO.New_Line;
+        Ada.Integer_Text_IO.Put(Y);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "100" in stdout
+    assert "200" in stdout
+
+
+@skip_if_no_tools
+def test_inout_parameter():
+    """Test in out parameter mode."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        procedure Double(X : in out Integer) is
+        begin
+            X := X * 2;
+        end Double;
+
+        N : Integer := 21;
+    begin
+        Double(N);
+        Ada.Integer_Text_IO.Put(N);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "42" in stdout
+
+
+@skip_if_no_tools
+def test_global_variable():
+    """Test global variable access."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        Global : Integer := 10;
+
+        procedure Increment is
+        begin
+            Global := Global + 5;
+        end Increment;
+
+        function Get_Value return Integer is
+        begin
+            return Global;
+        end Get_Value;
+
+    begin
+        Increment;
+        Increment;
+        Increment;
+        Ada.Integer_Text_IO.Put(Get_Value);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "25" in stdout  # 10 + 5 + 5 + 5 = 25
+
+
+@skip_if_no_tools
+def test_record_aggregate():
+    """Test record initialization with aggregate."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        type Point is record
+            X : Integer;
+            Y : Integer;
+        end record;
+
+        P : Point := (X => 30, Y => 12);
+    begin
+        Ada.Integer_Text_IO.Put(P.X + P.Y);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "42" in stdout
+
+
+@skip_if_no_tools
+def test_array_aggregate():
+    """Test array initialization with aggregate."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        type Int_Array is array (1..5) of Integer;
+        A : Int_Array := (10, 8, 12, 7, 5);
+        Sum : Integer := 0;
+    begin
+        for I in 1..5 loop
+            Sum := Sum + A(I);
+        end loop;
+        Ada.Integer_Text_IO.Put(Sum);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "42" in stdout  # 10+8+12+7+5 = 42
+
+
+@skip_if_no_tools
+def test_enumeration_type():
+    """Test enumeration type operations."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        type Color is (Red, Green, Blue);
+        C : Color := Green;
+        N : Integer;
+    begin
+        N := Color'Pos(C);
+        Ada.Integer_Text_IO.Put(N);
+        Ada.Text_IO.New_Line;
+        C := Color'Val(2);
+        N := Color'Pos(C);
+        Ada.Integer_Text_IO.Put(N);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "1" in stdout  # Green is at position 1
+    assert "2" in stdout  # Blue is at position 2
+
+
+@skip_if_no_tools
+def test_multiple_return_paths():
+    """Test function with multiple return statements."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        function Abs_Value(X : Integer) return Integer is
+        begin
+            if X < 0 then
+                return -X;
+            else
+                return X;
+            end if;
+        end Abs_Value;
+    begin
+        Ada.Integer_Text_IO.Put(Abs_Value(-42));
+        Ada.Text_IO.New_Line;
+        Ada.Integer_Text_IO.Put(Abs_Value(42));
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert stdout.count("42") == 2
+
+
+@skip_if_no_tools
+def test_exit_with_name():
+    """Test exit statement with loop name."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        Sum : Integer := 0;
+    begin
+        Outer: for I in 1..10 loop
+            for J in 1..10 loop
+                Sum := Sum + 1;
+                if Sum >= 42 then
+                    exit Outer;
+                end if;
+            end loop;
+        end loop Outer;
+        Ada.Integer_Text_IO.Put(Sum);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "42" in stdout
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -132,6 +132,8 @@ class LocalVariable:
     stack_offset: int
     size: int
     ada_type: Optional["AdaType"] = None
+    is_atomic: bool = False  # pragma Atomic - wrap accesses in DI/EI
+    is_volatile: bool = False  # pragma Volatile - no caching
 
 
 @dataclass
@@ -141,6 +143,9 @@ class LoweringContext:
     function: IRFunction
     locals: dict[str, LocalVariable] = field(default_factory=dict)
     params: dict[str, VReg] = field(default_factory=dict)
+    # Parameters that are passed by reference (out, in out modes)
+    # Maps param name (lowercase) -> True if byref
+    byref_params: dict[str, bool] = field(default_factory=dict)
     loop_exit_label: Optional[str] = None  # For exit statements (innermost loop)
     loop_continue_label: Optional[str] = None  # For continue
     # Named loop labels: maps loop label (lowercase) -> exit label
@@ -155,6 +160,12 @@ class LoweringContext:
     task_id: Optional[VReg] = None
     # Stack size for locals
     locals_size: int = 0
+    # For nested subprograms: enclosing context (None for top-level)
+    enclosing_ctx: Optional["LoweringContext"] = None
+    # For nested subprograms: vreg holding the static link (pointer to enclosing frame)
+    static_link: Optional[VReg] = None
+    # Subprogram name (for lookup in nested subprogram calls)
+    subprogram_name: str = ""
 
 
 class ASTLowering:
@@ -186,6 +197,14 @@ class ASTLowering:
         self._interrupt_handlers: dict[int, str] = {}
         # Procedures marked as interrupt handlers (need special prologue/epilogue)
         self._is_interrupt_handler: set[str] = set()
+        # Track parameter modes for all subprograms (needed for out/in out at call sites)
+        # Maps subprogram name (lowercase) -> list of parameter modes
+        self._subprogram_param_modes: dict[str, list[str]] = {}
+        # Track which subprograms are nested (need static link at call sites)
+        self._nested_subprograms: set[str] = set()
+        # Track which outer variables each nested subprogram needs
+        # Maps subprogram name -> set of outer variable names
+        self._nested_outer_vars: dict[str, set[str]] = {}
 
     def _make_memory_location(
         self,
@@ -325,6 +344,58 @@ class ASTLowering:
         # Store vtable info in the module for codegen
         self.builder.module.vtables[vtable_name] = vtable_data
 
+    def _find_outer_var_refs(
+        self, body: SubprogramBody, enclosing_ctx: LoweringContext, spec
+    ) -> set[str]:
+        """Find references to variables from enclosing scope in a nested subprogram.
+
+        Walks the AST to find Identifier nodes that reference variables defined
+        in the enclosing scope (not local to this subprogram or its parameters).
+        """
+        outer_vars = set()
+
+        # Get the names defined locally in this subprogram
+        local_names = set()
+        for param_spec in spec.parameters:
+            for name in param_spec.names:
+                local_names.add(name.lower())
+        for decl in body.declarations:
+            if isinstance(decl, ObjectDecl):
+                for name in decl.names:
+                    local_names.add(name.lower())
+
+        # Get the names from enclosing scope
+        enclosing_locals = set(enclosing_ctx.locals.keys()) if enclosing_ctx else set()
+
+        # Walk the AST to find identifier references
+        def visit(node):
+            if node is None:
+                return
+            if isinstance(node, Identifier):
+                name = node.name.lower()
+                # If it's not local and is in enclosing scope, it's an outer ref
+                if name not in local_names and name in enclosing_locals:
+                    outer_vars.add(name)
+            # Recursively visit child nodes
+            for attr_name in dir(node):
+                if attr_name.startswith('_'):
+                    continue
+                attr = getattr(node, attr_name, None)
+                if attr is None:
+                    continue
+                if isinstance(attr, list):
+                    for item in attr:
+                        if hasattr(item, '__dict__'):
+                            visit(item)
+                elif hasattr(attr, '__dict__') and not callable(attr):
+                    visit(attr)
+
+        # Visit all statements
+        for stmt in body.statements:
+            visit(stmt)
+
+        return outer_vars
+
     def _new_label(self, prefix: str = "L") -> str:
         """Generate a unique label."""
         name = f"{prefix}{self._label_counter}"
@@ -460,29 +531,82 @@ class ASTLowering:
         old_block = self.builder.block
         old_ctx = self.ctx
 
+        # Detect if this is a nested subprogram (enclosing context exists)
+        is_nested = old_ctx is not None
+
         # Create function
         func = self.builder.new_function(spec.name, return_type)
 
         # Create new context
-        self.ctx = LoweringContext(function=func)
+        self.ctx = LoweringContext(function=func, subprogram_name=spec.name.lower())
 
-        # Process parameters
+        # If nested, set up outer variable access (identify vars first, add params later)
+        outer_var_refs = set()
+        if is_nested:
+            self.ctx.enclosing_ctx = old_ctx
+            # Find outer-scope variables referenced in this subprogram
+            outer_var_refs = self._find_outer_var_refs(body, old_ctx, spec)
+            # Track which outer variables this subprogram needs
+            self._nested_subprograms.add(spec.name.lower())
+            self._nested_outer_vars[spec.name.lower()] = outer_var_refs
+
+        # Process parameters and record their modes for call sites
+        param_modes = []
         for param_spec in spec.parameters:
             self._lower_parameter(param_spec)
+            # Record mode for each parameter name (a param_spec can have multiple names)
+            for _ in param_spec.names:
+                param_modes.append(param_spec.mode or "in")
+        # Store parameter modes for this subprogram (used when lowering calls)
+        self._subprogram_param_modes[spec.name.lower()] = param_modes
+
+        # Add outer variable pointer parameters AFTER regular params
+        # (they are pushed before regular args at call site, so end up at higher offsets)
+        if outer_var_refs:
+            for var_name in outer_var_refs:
+                param_name = f"_outer_{var_name}"
+                ptr_vreg = self.builder.new_vreg(IRType.PTR, param_name)
+                self.ctx.params[param_name] = ptr_vreg
+                self.ctx.byref_params[param_name] = True  # Mark as byref for stores
+                func.params.append(ptr_vreg)
+
+        # Store declarations for later lookup (used by _get_field_offset)
+        self._current_body_declarations = body.declarations
+
+        # First pass: collect pragma Atomic/Volatile annotations for variables
+        atomic_vars: set[str] = set()
+        volatile_vars: set[str] = set()
+        for decl in body.declarations:
+            if isinstance(decl, PragmaStmt):
+                pragma_name = decl.name.lower() if decl.name else ""
+                if pragma_name == "atomic" and decl.args:
+                    for arg in decl.args:
+                        if isinstance(arg, Identifier):
+                            atomic_vars.add(arg.name.lower())
+                            volatile_vars.add(arg.name.lower())  # Atomic implies volatile
+                elif pragma_name == "volatile" and decl.args:
+                    for arg in decl.args:
+                        if isinstance(arg, Identifier):
+                            volatile_vars.add(arg.name.lower())
 
         # Calculate local variable sizes
         stack_offset = 0
         for decl in body.declarations:
             if isinstance(decl, ObjectDecl):
                 for name in decl.names:
-                    size = self._calc_type_size(decl)
-                    vreg = self.builder.new_vreg(IRType.WORD, name)
+                    size = self._calc_type_size(decl, body.declarations)
+                    # Check if this variable has atomic/volatile from pragma
+                    is_atomic = name.lower() in atomic_vars
+                    is_volatile = name.lower() in volatile_vars
+                    vreg = self.builder.new_vreg(IRType.WORD, name, is_atomic=is_atomic, is_volatile=is_volatile)
                     self.ctx.locals[name.lower()] = LocalVariable(
                         name=name,
                         vreg=vreg,
                         stack_offset=stack_offset,
                         size=size,
                         ada_type=decl.type_mark if hasattr(decl, 'type_mark') else None,
+                        is_atomic=is_atomic,
+                        is_volatile=is_volatile,
                     )
                     stack_offset += size
 
@@ -571,9 +695,15 @@ class ASTLowering:
         For unconstrained array parameters (like String), we pass a dope vector
         containing: (data_ptr, first, last) - 6 bytes total for 1D arrays.
         This allows the called function to access bounds at runtime.
+
+        For out and in out parameters, we pass by reference (address of the variable).
+        The callee receives a pointer and dereferences it to read/write the value.
         """
         if self.ctx is None:
             return
+
+        # Check if this is a pass-by-reference parameter (out or in out mode)
+        is_byref = param.mode in ("out", "in out")
 
         # Check if parameter type is unconstrained array
         param_type = None
@@ -612,8 +742,14 @@ class ASTLowering:
                 self.ctx.function.params.append(ptr_vreg)
                 self.ctx.function.params.append(first_vreg)
                 self.ctx.function.params.append(last_vreg)
+            elif is_byref:
+                # Out/in out parameter: pass by reference (pointer)
+                vreg = self.builder.new_vreg(IRType.PTR, f"{name}_ptr")
+                self.ctx.params[name.lower()] = vreg
+                self.ctx.byref_params[name.lower()] = True
+                self.ctx.function.params.append(vreg)
             else:
-                # Constrained type: single value
+                # Constrained type with in mode: single value
                 vreg = self.builder.new_vreg(IRType.WORD, name)
                 self.ctx.params[name.lower()] = vreg
                 self.ctx.function.params.append(vreg)
@@ -936,11 +1072,13 @@ class ASTLowering:
 
         # Get the type for controlled type checks
         ada_type = None
+        type_name = None
         if decl.type_mark:
             # Handle SubtypeIndication (normal case) vs ArrayTypeDef (anonymous array)
             if isinstance(decl.type_mark, SubtypeIndication) and decl.type_mark.type_mark:
                 if isinstance(decl.type_mark.type_mark, Identifier):
-                    type_sym = self.symbols.lookup(decl.type_mark.type_mark.name)
+                    type_name = decl.type_mark.type_mark.name
+                    type_sym = self.symbols.lookup(type_name)
                     if type_sym:
                         ada_type = type_sym.ada_type
             elif isinstance(decl.type_mark, ArrayTypeDef):
@@ -948,19 +1086,79 @@ class ASTLowering:
                 pass
             elif isinstance(decl.type_mark, Identifier):
                 # Direct type name
-                type_sym = self.symbols.lookup(decl.type_mark.name)
+                type_name = decl.type_mark.name
+                type_sym = self.symbols.lookup(type_name)
                 if type_sym:
                     ada_type = type_sym.ada_type
 
+        # Fallback: look up locally-declared types from _current_body_declarations
+        if ada_type is None and type_name and hasattr(self, '_current_body_declarations'):
+            from uada80.ast_nodes import RecordTypeDef, ComponentDecl
+            from uada80.type_system import RecordType, RecordComponent, IntegerType, ArrayType
+            for d in self._current_body_declarations:
+                if isinstance(d, TypeDecl) and d.name.lower() == type_name.lower():
+                    type_def = d.type_def
+                    if isinstance(type_def, RecordTypeDef):
+                        # Build a simple RecordType from the AST RecordTypeDef
+                        components = []
+                        offset = 0
+                        for comp_decl in type_def.components:
+                            for comp_name in comp_decl.names:
+                                # For now, assume all fields are Integer (2 bytes)
+                                comp_type = IntegerType(name="Integer", size_bits=16)
+                                components.append(RecordComponent(
+                                    name=comp_name,
+                                    component_type=comp_type,
+                                    offset_bits=offset * 8,
+                                    size_bits=16,
+                                ))
+                                offset += 2
+                        ada_type = RecordType(
+                            name=type_name,
+                            components=components,
+                            size_bits=offset * 8,
+                        )
+                    elif isinstance(type_def, ArrayTypeDef):
+                        # Build a simple ArrayType from the AST ArrayTypeDef
+                        bounds = []
+                        if type_def.index_subtypes:
+                            idx_range = type_def.index_subtypes[0]
+                            if isinstance(idx_range, RangeExpr):
+                                low = self._eval_static_expr(idx_range.low)
+                                high = self._eval_static_expr(idx_range.high)
+                                bounds.append((low, high))
+                        comp_type = IntegerType(name="Integer", size_bits=16)
+                        ada_type = ArrayType(
+                            name=type_name,
+                            component_type=comp_type,
+                            bounds=bounds,
+                            is_constrained=True,
+                        )
+                    break
+
         # Process initialization
         if decl.init_expr:
-            init_value = self._lower_expr(decl.init_expr)
-
             for name in decl.names:
                 local = self.ctx.locals.get(name.lower())
                 if local:
-                    self.builder.mov(local.vreg, init_value,
-                                    comment=f"init {name}")
+                    # For record/array aggregates, write directly to the local variable
+                    if isinstance(decl.init_expr, Aggregate) and ada_type:
+                        # Get address of local variable
+                        # Calculate frame offset: -(locals_size - stack_offset)
+                        # This matches how field access computes record addresses
+                        frame_offset = -(self.ctx.locals_size - local.stack_offset)
+                        local_addr = self.builder.new_vreg(IRType.PTR, f"_{name}_addr")
+                        self.builder.emit(IRInstr(
+                            OpCode.LEA,
+                            dst=local_addr,
+                            src1=MemoryLocation(offset=frame_offset, ir_type=IRType.PTR, is_frame_offset=True),
+                        ))
+                        # Write aggregate directly to the local
+                        self._lower_aggregate_to_target(decl.init_expr, local_addr, ada_type)
+                    else:
+                        init_value = self._lower_expr(decl.init_expr)
+                        self.builder.mov(local.vreg, init_value,
+                                        comment=f"init {name}")
 
                     # For controlled types with initializer, call Adjust
                     # (Initialize is for default initialization only)
@@ -2921,6 +3119,34 @@ class ASTLowering:
                 if name in self.ctx.params:
                     param = self.ctx.params[name]
 
+                    # For byref parameters (out/in out), store through the pointer
+                    if name in self.ctx.byref_params:
+                        # For controlled types: Finalize old, store, Adjust new
+                        if target_type and self._type_needs_adjustment(target_type):
+                            # Load current value for Finalize
+                            old_val = self.builder.new_vreg(IRType.WORD, f"_{name}_old")
+                            self.builder.emit(IRInstr(
+                                OpCode.LOAD, old_val,
+                                MemoryLocation(offset=0, ir_type=IRType.WORD, base=param),
+                                comment=f"load old {name} for finalize"
+                            ))
+                            self._call_finalize(old_val, target_type)
+                            self.builder.emit(IRInstr(
+                                OpCode.STORE,
+                                dst=MemoryLocation(offset=0, ir_type=IRType.WORD, base=param),
+                                src1=value,
+                                comment=f"store to byref param {name}"
+                            ))
+                            self._call_adjust(value, target_type)
+                        else:
+                            self.builder.emit(IRInstr(
+                                OpCode.STORE,
+                                dst=MemoryLocation(offset=0, ir_type=IRType.WORD, base=param),
+                                src1=value,
+                                comment=f"store to byref param {name}"
+                            ))
+                        return
+
                     # For controlled types: Finalize old, copy, Adjust new
                     if target_type and self._type_needs_adjustment(target_type):
                         self._call_finalize(param, target_type)
@@ -2928,6 +3154,18 @@ class ASTLowering:
                         self._call_adjust(param, target_type)
                     else:
                         self.builder.mov(param, value, comment=f"{name} := ...")
+                    return
+
+                # Check for outer-scope variable (passed as hidden pointer)
+                outer_param_name = f"_outer_{name}"
+                if outer_param_name in self.ctx.params:
+                    ptr_vreg = self.ctx.params[outer_param_name]
+                    self.builder.emit(IRInstr(
+                        OpCode.STORE,
+                        dst=MemoryLocation(offset=0, ir_type=IRType.WORD, base=ptr_vreg),
+                        src1=value,
+                        comment=f"store to outer {name}"
+                    ))
                     return
 
             elif isinstance(stmt.target, IndexedComponent):
@@ -3475,10 +3713,45 @@ class ASTLowering:
             # Check if this is a dispatching call
             is_dispatching = self._is_dispatching_call(sym, stmt.args)
 
+            # Get parameter modes for out/in out handling
+            # First try locally-tracked modes (for nested subprograms), then symbol table
+            param_modes = []
+            proc_name_lower = proc_name.lower() if proc_name else call_target.lower()
+            if proc_name_lower in self._subprogram_param_modes:
+                param_modes = self._subprogram_param_modes[proc_name_lower]
+            elif sym and sym.parameters:
+                param_modes = [p.mode for p in sym.parameters]
+
+            # For nested subprograms, push outer variable addresses (in reverse order)
+            if proc_name_lower in self._nested_outer_vars:
+                outer_vars = self._nested_outer_vars[proc_name_lower]
+                for var_name in reversed(list(outer_vars)):
+                    # Get address of the outer variable
+                    if self.ctx and var_name in self.ctx.locals:
+                        local = self.ctx.locals[var_name]
+                        addr = self.builder.new_vreg(IRType.PTR, f"_{var_name}_addr")
+                        self.builder.emit(IRInstr(
+                            OpCode.LEA, addr,
+                            MemoryLocation(ir_type=IRType.PTR, addr_vreg=local.vreg),
+                            comment=f"addr of outer {var_name}"
+                        ))
+                        self.builder.push(addr)
+
             # Push arguments in reverse order
-            for arg in reversed(effective_args):
-                value = self._lower_expr(arg)
-                self.builder.push(value)
+            for idx, arg in enumerate(reversed(effective_args)):
+                # Check if this argument corresponds to an out/in out parameter
+                # idx is reversed, so we need forward_idx
+                forward_idx = len(effective_args) - 1 - idx
+                param_mode = param_modes[forward_idx] if forward_idx < len(param_modes) else "in"
+
+                if param_mode in ("out", "in out"):
+                    # Pass address of the argument
+                    addr = self._get_arg_address(arg)
+                    self.builder.push(addr)
+                else:
+                    # Pass value
+                    value = self._lower_expr(arg)
+                    self.builder.push(value)
 
             if is_dispatching and sym and sym.vtable_slot >= 0:
                 # Dispatching call - emit DISPATCH instruction
@@ -3496,12 +3769,71 @@ class ASTLowering:
                 # Static call (using external name for imported procedures)
                 self.builder.call(Label(call_target))
 
-            # Clean up stack
-            if effective_args:
+            # Clean up stack (regular args + outer variable addresses)
+            num_args = len(effective_args)
+            if proc_name_lower in self._nested_outer_vars:
+                num_args += len(self._nested_outer_vars[proc_name_lower])
+            if num_args > 0:
                 # Pop arguments (2 bytes each)
-                for _ in effective_args:
+                for _ in range(num_args):
                     temp = self.builder.new_vreg(IRType.WORD, "_discard")
                     self.builder.pop(temp)
+
+    def _get_arg_address(self, arg):
+        """Get the address of an argument for pass-by-reference.
+
+        For out/in out parameters, we pass the address of the variable
+        so the callee can modify it.
+        """
+        if self.ctx is None:
+            return Immediate(0, IRType.PTR)
+
+        if isinstance(arg, Identifier):
+            name = arg.name.lower()
+
+            # Check locals
+            if name in self.ctx.locals:
+                local = self.ctx.locals[name]
+                # Use addr_vreg to get the address of the vreg's storage location
+                # This will be resolved correctly by codegen using register allocator info
+                addr = self.builder.new_vreg(IRType.PTR, f"_{name}_addr")
+                self.builder.emit(IRInstr(
+                    OpCode.LEA, addr,
+                    MemoryLocation(ir_type=IRType.PTR, addr_vreg=local.vreg),
+                    comment=f"addr of local {name}"
+                ))
+                return addr
+
+            # Check params - if it's already a byref param, return its value (address)
+            if name in self.ctx.params:
+                param_vreg = self.ctx.params[name]
+                if name in self.ctx.byref_params:
+                    # Already a pointer, return as-is
+                    return param_vreg
+                # Value param: need to get its address from stack frame
+                # Use addr_vreg to get the address
+                addr = self.builder.new_vreg(IRType.PTR, f"_{name}_addr")
+                self.builder.emit(IRInstr(
+                    OpCode.LEA, addr,
+                    MemoryLocation(ir_type=IRType.PTR, addr_vreg=param_vreg),
+                    comment=f"addr of param {name}"
+                ))
+                return addr
+
+            # Check globals
+            if name in self.globals:
+                addr = self.builder.new_vreg(IRType.PTR, f"_{name}_addr")
+                self.builder.emit(IRInstr(
+                    OpCode.LEA, addr,
+                    MemoryLocation(is_global=True, symbol_name=name, ir_type=IRType.PTR),
+                    comment=f"addr of global {name}"
+                ))
+                return addr
+
+        # For other expressions, evaluate them and the address can't be taken
+        # This is an error case in Ada (can only pass variables to out/in out)
+        # Return a dummy value; semantic analyzer should catch this
+        return self._lower_expr(arg)
 
     def _is_deallocation_call(self, proc_name: str) -> bool:
         """Check if a procedure is an Unchecked_Deallocation instantiation.
@@ -4037,13 +4369,14 @@ class ASTLowering:
             # Check locals
             if name in self.ctx.locals:
                 local = self.ctx.locals[name]
-                # Get address of local array
+                # Calculate frame offset: arrays start at IX-(locals_size - stack_offset)
+                # This matches _get_record_base formula for consistency
+                frame_offset = -(self.ctx.locals_size - local.stack_offset)
                 addr = self.builder.new_vreg(IRType.PTR, f"_{name}_addr")
-                # LEA: load effective address (IX + offset)
                 self.builder.emit(IRInstr(
                     OpCode.LEA,
                     dst=addr,
-                    src1=MemoryLocation(offset=local.stack_offset, ir_type=IRType.PTR),
+                    src1=MemoryLocation(offset=frame_offset, ir_type=IRType.PTR, is_frame_offset=True),
                 ))
                 return addr
 
@@ -4081,13 +4414,53 @@ class ASTLowering:
         element_size = 2  # Default to word size
 
         if isinstance(indexed.prefix, Identifier):
-            sym = self.symbols.lookup(indexed.prefix.name)
+            name = indexed.prefix.name.lower()
+            sym = self.symbols.lookup(name)
             if sym and sym.ada_type and hasattr(sym.ada_type, 'bounds') and sym.ada_type.bounds:
                 bounds_list = list(sym.ada_type.bounds)
             if sym and sym.ada_type and hasattr(sym.ada_type, 'component_type'):
                 comp_type = sym.ada_type.component_type
                 if comp_type:
                     element_size = (comp_type.size_bits + 7) // 8
+
+            # For local variables, try to get bounds from the type declaration
+            if not bounds_list and self.ctx and name in self.ctx.locals:
+                local = self.ctx.locals[name]
+                # local.ada_type may be SubtypeIndication, Identifier, or other
+                type_name = None
+                if local.ada_type:
+                    if hasattr(local.ada_type, 'type_mark'):
+                        # SubtypeIndication
+                        tm = local.ada_type.type_mark
+                        if hasattr(tm, 'name'):
+                            type_name = tm.name.lower()
+                    elif hasattr(local.ada_type, 'name'):
+                        # Direct Identifier
+                        type_name = local.ada_type.name.lower()
+                if type_name:
+                    # Look up the type in local declarations
+                    if hasattr(self, '_current_body_declarations'):
+                        for d in self._current_body_declarations:
+                            if isinstance(d, TypeDecl) and d.name.lower() == type_name:
+                                type_def = d.type_def
+                                if hasattr(type_def, 'index_subtypes') and type_def.index_subtypes:
+                                    idx_range = type_def.index_subtypes[0]
+                                    first = self._eval_static_expr(getattr(idx_range, 'low', None))
+                                    last = self._eval_static_expr(getattr(idx_range, 'high', None))
+                                    if first is not None and last is not None:
+                                        bounds_list = [(first, last)]
+                                    # Get element size
+                                    if hasattr(type_def, 'component_type') and type_def.component_type:
+                                        comp_name = ''
+                                        if isinstance(type_def.component_type, Identifier):
+                                            comp_name = type_def.component_type.name.lower()
+                                        elif hasattr(type_def.component_type, 'name'):
+                                            comp_name = type_def.component_type.name.lower()
+                                        if comp_name in ('character', 'boolean'):
+                                            element_size = 1
+                                        elif comp_name == 'float':
+                                            element_size = 6
+                                break
 
         # Default bounds if not found
         if not bounds_list:
@@ -4152,7 +4525,8 @@ class ASTLowering:
                 self.builder.mul(byte_offset, total_offset, Immediate(element_size, IRType.WORD))
             total_offset = byte_offset
 
-        # Add offset to base address
+        # Calculate element address by adding offset to base
+        # Note: _get_array_base now returns the correct frame offset, so we always ADD
         elem_addr_vreg = self.builder.new_vreg(IRType.PTR, "_elem_addr")
         self.builder.add(elem_addr_vreg, base_addr, total_offset)
 
@@ -4193,24 +4567,55 @@ class ASTLowering:
         if base_addr is None:
             return
 
-        # Get field offset and atomic/volatile flags
-        field_offset = self._get_field_offset(target)
-        field_size = self._get_field_size(target)
+        # Get field bit-level info and atomic/volatile flags
+        byte_offset, bit_offset, bit_size, is_packed = self._get_field_bit_info(target)
         is_atomic, is_volatile = self._get_field_atomic_volatile(target)
 
-        # Calculate field address
-        if field_offset != 0:
+        # Calculate field address (byte-aligned)
+        if byte_offset != 0:
             field_addr = self.builder.new_vreg(IRType.PTR, "_field_addr")
-            self.builder.add(field_addr, base_addr, Immediate(field_offset, IRType.WORD))
+            self.builder.add(field_addr, base_addr, Immediate(byte_offset, IRType.WORD))
         else:
             field_addr = base_addr
 
-        # Store value to field (with atomic/volatile flags for DI/EI)
-        mem = MemoryLocation(
-            base=field_addr, offset=0, ir_type=IRType.WORD,
-            is_atomic=is_atomic, is_volatile=is_volatile
-        )
-        self.builder.store(mem, value)
+        if is_packed and (bit_offset != 0 or bit_size < 8):
+            # Packed field with sub-byte access - generate read-modify-write
+            # Load the byte containing the field
+            byte_val = self.builder.new_vreg(IRType.BYTE, "_packed_byte")
+            mem = MemoryLocation(
+                base=field_addr, offset=0, ir_type=IRType.BYTE,
+                is_atomic=is_atomic, is_volatile=is_volatile
+            )
+            self.builder.load(byte_val, mem)
+
+            # Clear the bits for this field
+            field_mask = ((1 << bit_size) - 1) << bit_offset
+            clear_mask = 0xFF ^ field_mask
+            cleared = self.builder.new_vreg(IRType.BYTE, "_cleared")
+            self.builder.and_(cleared, byte_val, Immediate(clear_mask, IRType.BYTE))
+
+            # Shift and mask the new value, then OR it in
+            masked_val = self.builder.new_vreg(IRType.BYTE, "_masked_val")
+            self.builder.and_(masked_val, value, Immediate((1 << bit_size) - 1, IRType.BYTE))
+
+            if bit_offset > 0:
+                shifted_val = self.builder.new_vreg(IRType.BYTE, "_shifted_val")
+                self.builder.shl(shifted_val, masked_val, Immediate(bit_offset, IRType.BYTE))
+                new_byte = self.builder.new_vreg(IRType.BYTE, "_new_byte")
+                self.builder.or_(new_byte, cleared, shifted_val)
+            else:
+                new_byte = self.builder.new_vreg(IRType.BYTE, "_new_byte")
+                self.builder.or_(new_byte, cleared, masked_val)
+
+            # Store the modified byte back
+            self.builder.store(mem, new_byte)
+        else:
+            # Normal byte-aligned field store
+            mem = MemoryLocation(
+                base=field_addr, offset=0, ir_type=IRType.WORD,
+                is_atomic=is_atomic, is_volatile=is_volatile
+            )
+            self.builder.store(mem, value)
 
     def _get_record_base(self, prefix: Expr) -> Optional[VReg]:
         """Get the base address of a record."""
@@ -4223,11 +4628,15 @@ class ASTLowering:
             # Check locals
             if name in self.ctx.locals:
                 local = self.ctx.locals[name]
+                # Calculate frame offset: records start at IX-(locals_size - stack_offset)
+                # E.g., for a 4-byte record at stack_offset=0 with locals_size=4:
+                #   frame_offset = -(4 - 0) = -4, so record is at IX-4 through IX-1
+                frame_offset = -(self.ctx.locals_size - local.stack_offset)
                 addr = self.builder.new_vreg(IRType.PTR, f"_{name}_addr")
                 self.builder.emit(IRInstr(
                     OpCode.LEA,
                     dst=addr,
-                    src1=MemoryLocation(offset=local.stack_offset, ir_type=IRType.PTR),
+                    src1=MemoryLocation(offset=frame_offset, ir_type=IRType.PTR, is_frame_offset=True),
                 ))
                 return addr
 
@@ -4251,11 +4660,54 @@ class ASTLowering:
         from uada80.type_system import RecordType
 
         if isinstance(selected.prefix, Identifier):
+            var_name = selected.prefix.name.lower()
+
+            # First try symbol table lookup
             sym = self.symbols.lookup(selected.prefix.name)
             if sym and sym.ada_type and isinstance(sym.ada_type, RecordType):
                 for comp in sym.ada_type.components:
                     if comp.name.lower() == selected.selector.lower():
                         return comp.offset_bits // 8
+
+            # If symbol table lookup failed, try to find type from local declarations
+            # This handles locally-declared record types
+            if self.ctx and var_name in self.ctx.locals:
+                local = self.ctx.locals[var_name]
+                type_mark = local.ada_type
+                if type_mark:
+                    # Get type name from type_mark (which is an AST node)
+                    type_name = None
+                    if isinstance(type_mark, SubtypeIndication):
+                        inner = getattr(type_mark, 'type_mark', None)
+                        if isinstance(inner, Identifier):
+                            type_name = inner.name.lower()
+                    elif isinstance(type_mark, Identifier):
+                        type_name = type_mark.name.lower()
+
+                    # Look up the type definition in declarations
+                    if type_name and hasattr(self, '_current_body_declarations'):
+                        for decl in self._current_body_declarations:
+                            if isinstance(decl, TypeDecl) and decl.name.lower() == type_name:
+                                type_def = decl.type_def
+                                # Calculate field offset based on position
+                                if hasattr(type_def, 'components'):
+                                    offset = 0
+                                    for comp in type_def.components:
+                                        # ComponentDecl has 'names' (list), not 'name'
+                                        comp_names = getattr(comp, 'names', [])
+                                        if not comp_names:
+                                            comp_names = [getattr(comp, 'name', '')]
+                                        for cn in comp_names:
+                                            if cn.lower() == selected.selector.lower():
+                                                return offset
+                                            offset += 2  # Each field is 2 bytes
+                                elif hasattr(type_def, 'fields'):
+                                    offset = 0
+                                    for field_name in type_def.fields:
+                                        if field_name.lower() == selected.selector.lower():
+                                            return offset
+                                        offset += 2
+                                break
         return 0
 
     def _get_field_size(self, selected: SelectedName) -> int:
@@ -4269,6 +4721,69 @@ class ASTLowering:
                     if comp.name.lower() == selected.selector.lower():
                         return (comp.component_type.size_bits + 7) // 8
         return 2  # Default to word size
+
+    def _get_field_bit_info(self, selected: SelectedName) -> tuple[int, int, int, bool]:
+        """Get detailed bit-level information for a record field.
+
+        Returns (byte_offset, bit_offset, bit_size, is_packed) tuple.
+        - byte_offset: Offset in bytes from start of record
+        - bit_offset: Bit offset within the byte (0-7)
+        - bit_size: Size of field in bits (packed size if applicable)
+        - is_packed: True if this is a packed field with sub-byte access
+        """
+        from uada80.type_system import RecordType
+
+        if isinstance(selected.prefix, Identifier):
+            var_name = selected.prefix.name.lower()
+
+            # First try symbol table lookup (for global variables)
+            sym = self.symbols.lookup(selected.prefix.name)
+            if sym and sym.ada_type and isinstance(sym.ada_type, RecordType):
+                record_type = sym.ada_type
+                for comp in record_type.components:
+                    if comp.name.lower() == selected.selector.lower():
+                        offset_bits = comp.offset_bits
+                        # Use packed size if set, otherwise component type size
+                        size_bits = comp.size_bits if comp.size_bits else comp.component_type.size_bits
+                        byte_offset = offset_bits // 8
+                        bit_offset = offset_bits % 8
+                        # It's a packed sub-byte field if bit_offset != 0 or size < 8
+                        is_packed = record_type.is_packed and (bit_offset != 0 or size_bits < 8)
+                        return (byte_offset, bit_offset, size_bits, is_packed)
+
+            # If symbol table lookup failed, try to find type from local declarations
+            if self.ctx and var_name in self.ctx.locals:
+                local = self.ctx.locals[var_name]
+                type_mark = local.ada_type
+                if type_mark:
+                    # Get type name from type_mark (which is an AST node)
+                    type_name = None
+                    if isinstance(type_mark, SubtypeIndication):
+                        inner = getattr(type_mark, 'type_mark', None)
+                        if isinstance(inner, Identifier):
+                            type_name = inner.name.lower()
+                    elif isinstance(type_mark, Identifier):
+                        type_name = type_mark.name.lower()
+
+                    # Look up the type from _current_body_declarations
+                    # This preserves pragma Pack info stored on the AST node
+                    if type_name and hasattr(self, '_current_body_declarations'):
+                        for decl in self._current_body_declarations:
+                            if isinstance(decl, TypeDecl) and decl.name.lower() == type_name:
+                                # Use the ada_type stored on the AST node during semantic analysis
+                                if hasattr(decl, 'ada_type') and decl.ada_type and isinstance(decl.ada_type, RecordType):
+                                    record_type = decl.ada_type
+                                    for comp in record_type.components:
+                                        if comp.name.lower() == selected.selector.lower():
+                                            offset_bits = comp.offset_bits
+                                            size_bits = comp.size_bits if comp.size_bits else comp.component_type.size_bits
+                                            byte_offset = offset_bits // 8
+                                            bit_offset = offset_bits % 8
+                                            is_packed = record_type.is_packed and (bit_offset != 0 or size_bits < 8)
+                                            return (byte_offset, bit_offset, size_bits, is_packed)
+                                break
+
+        return (0, 0, 16, False)  # Default to word at offset 0
 
     def _get_field_atomic_volatile(self, selected: SelectedName) -> tuple[bool, bool]:
         """Get the atomic and volatile flags for a record field.
@@ -4345,24 +4860,47 @@ class ASTLowering:
         if prefix_type:
             self._check_variant_discriminant(prefix_type, expr.selector, base_addr)
 
-        # Get field offset and atomic/volatile flags
-        field_offset = self._get_field_offset(expr)
+        # Get field bit-level info and atomic/volatile flags
+        byte_offset, bit_offset, bit_size, is_packed = self._get_field_bit_info(expr)
         is_atomic, is_volatile = self._get_field_atomic_volatile(expr)
 
-        # Calculate field address
-        if field_offset != 0:
+        # Calculate field address (byte-aligned)
+        if byte_offset != 0:
             field_addr = self.builder.new_vreg(IRType.PTR, "_field_addr")
-            self.builder.add(field_addr, base_addr, Immediate(field_offset, IRType.WORD))
+            self.builder.add(field_addr, base_addr, Immediate(byte_offset, IRType.WORD))
         else:
             field_addr = base_addr
 
-        # Load value from field (with atomic/volatile flags for DI/EI)
-        result = self.builder.new_vreg(IRType.WORD, "_field")
-        mem = MemoryLocation(
-            base=field_addr, offset=0, ir_type=IRType.WORD,
-            is_atomic=is_atomic, is_volatile=is_volatile
-        )
-        self.builder.load(result, mem)
+        if is_packed and (bit_offset != 0 or bit_size < 8):
+            # Packed field with sub-byte access - generate bit extraction
+            # Load the byte containing the field
+            byte_val = self.builder.new_vreg(IRType.BYTE, "_packed_byte")
+            mem = MemoryLocation(
+                base=field_addr, offset=0, ir_type=IRType.BYTE,
+                is_atomic=is_atomic, is_volatile=is_volatile
+            )
+            self.builder.load(byte_val, mem)
+
+            result = self.builder.new_vreg(IRType.WORD, "_field")
+            if bit_offset > 0:
+                # Shift right to align the field
+                shifted = self.builder.new_vreg(IRType.BYTE, "_shifted")
+                self.builder.shr(shifted, byte_val, Immediate(bit_offset, IRType.BYTE))
+                # Mask to get only the field bits
+                mask = (1 << bit_size) - 1
+                self.builder.and_(result, shifted, Immediate(mask, IRType.WORD))
+            else:
+                # Field is at bit 0, just mask
+                mask = (1 << bit_size) - 1
+                self.builder.and_(result, byte_val, Immediate(mask, IRType.WORD))
+        else:
+            # Normal byte-aligned field access
+            result = self.builder.new_vreg(IRType.WORD, "_field")
+            mem = MemoryLocation(
+                base=field_addr, offset=0, ir_type=IRType.WORD,
+                is_atomic=is_atomic, is_volatile=is_volatile
+            )
+            self.builder.load(result, mem)
 
         return result
 
@@ -5521,7 +6059,17 @@ class ASTLowering:
 
             # Check params
             if name in self.ctx.params:
-                return self.ctx.params[name]
+                param_vreg = self.ctx.params[name]
+                # For byref parameters (out/in out), dereference the pointer to get value
+                if name in self.ctx.byref_params:
+                    result = self.builder.new_vreg(IRType.WORD, f"_{name}_val")
+                    self.builder.emit(IRInstr(
+                        OpCode.LOAD, result,
+                        MemoryLocation(offset=0, ir_type=IRType.WORD, base=param_vreg),
+                        comment=f"deref byref param {name}"
+                    ))
+                    return result
+                return param_vreg
 
             # Check globals (module-level variables)
             if name in self.globals:
@@ -5975,13 +6523,82 @@ class ASTLowering:
 
         # Check params
         if name in self.ctx.params:
-            return self.ctx.params[name]
+            param_vreg = self.ctx.params[name]
+            # For byref parameters (out/in out), dereference the pointer to get value
+            if name in self.ctx.byref_params:
+                result = self.builder.new_vreg(IRType.WORD, f"_{name}_val")
+                self.builder.emit(IRInstr(
+                    OpCode.LOAD, result,
+                    MemoryLocation(offset=0, ir_type=IRType.WORD, base=param_vreg),
+                    comment=f"deref byref param {name}"
+                ))
+                return result
+            return param_vreg
+
+        # Check enclosing scopes via static link (for nested subprograms)
+        # For outer-scope variables, we have hidden byref parameters with names like "_outer_<varname>"
+        outer_param_name = f"_outer_{name}"
+        if outer_param_name in self.ctx.params:
+            # This is an outer-scope variable passed as a hidden pointer
+            ptr_vreg = self.ctx.params[outer_param_name]
+            result = self.builder.new_vreg(IRType.WORD, f"_{name}_outer")
+            self.builder.emit(IRInstr(
+                OpCode.LOAD, result,
+                MemoryLocation(offset=0, ir_type=IRType.WORD, base=ptr_vreg),
+                comment=f"load {name} from enclosing scope"
+            ))
+            return result
 
         # Check for boolean literals
         if name == "true":
             return Immediate(1, IRType.BOOL)
         if name == "false":
             return Immediate(0, IRType.BOOL)
+
+        # Check if this identifier is a parameterless function call
+        # In Ada, Get_Value without () is still a function call if it's a function with no required params
+        sym = self.symbols.lookup(expr.name)
+        if sym and sym.kind == SymbolKind.FUNCTION:
+            # Check if function has no required parameters
+            has_required_params = False
+            if sym.parameters:
+                for p in sym.parameters:
+                    if p.default_value is None:
+                        has_required_params = True
+                        break
+            if not has_required_params:
+                # This is a parameterless function call - synthesize a FunctionCall and lower it
+                func_call = FunctionCall(name=expr, args=[])
+                return self._lower_function_call(func_call)
+
+        # Also check for nested subprograms tracked locally (not in symbol table)
+        if name in self._subprogram_param_modes:
+            param_modes = self._subprogram_param_modes[name]
+            if len(param_modes) == 0:
+                # This is a parameterless nested function - call it
+                func_call = FunctionCall(name=expr, args=[])
+                return self._lower_function_call(func_call)
+
+        # Check for enumeration literals in symbol table
+        sym = self.symbols.lookup(expr.name)
+        if sym and sym.is_constant and sym.ada_type:
+            from uada80.type_system import EnumerationType
+            if isinstance(sym.ada_type, EnumerationType):
+                # Get the position value for this literal
+                pos = sym.ada_type.positions.get(expr.name)
+                if pos is not None:
+                    return Immediate(pos, IRType.WORD)
+
+        # Fallback: check local type declarations for enum literals
+        if hasattr(self, '_current_body_declarations'):
+            from uada80.ast_nodes import EnumerationTypeDef
+            for d in self._current_body_declarations:
+                if isinstance(d, TypeDecl) and d.type_def:
+                    if isinstance(d.type_def, EnumerationTypeDef) and d.type_def.literals:
+                        # Check if this literal is in this enum type
+                        for i, lit in enumerate(d.type_def.literals):
+                            if lit.lower() == name:
+                                return Immediate(i, IRType.WORD)
 
         # Default
         return Immediate(0, IRType.WORD)
@@ -6672,13 +7289,43 @@ class ASTLowering:
             # Check if this is a dispatching call
             is_dispatching = self._is_dispatching_call(sym, expr.args)
 
+            # Get parameter modes for out/in out handling
+            # First try locally-tracked modes (for nested subprograms), then symbol table
+            param_modes = []
+            func_name_lower = func_name.lower() if func_name else call_target.lower()
+            if func_name_lower in self._subprogram_param_modes:
+                param_modes = self._subprogram_param_modes[func_name_lower]
+            elif sym and sym.parameters:
+                param_modes = [p.mode for p in sym.parameters]
+
+            # For nested subprograms, push outer variable addresses (in reverse order)
+            outer_var_slots = 0
+            if func_name_lower in self._nested_outer_vars:
+                outer_vars = self._nested_outer_vars[func_name_lower]
+                for var_name in reversed(list(outer_vars)):
+                    # Get address of the outer variable
+                    if self.ctx and var_name in self.ctx.locals:
+                        local = self.ctx.locals[var_name]
+                        addr = self.builder.new_vreg(IRType.PTR, f"_{var_name}_addr")
+                        self.builder.emit(IRInstr(
+                            OpCode.LEA, addr,
+                            MemoryLocation(ir_type=IRType.PTR, addr_vreg=local.vreg),
+                            comment=f"addr of outer {var_name}"
+                        ))
+                        self.builder.push(addr)
+                        outer_var_slots += 1
+
             # Push arguments (right to left for cdecl-style calling convention)
             # Track number of stack slots used (for cleanup)
             stack_slots = 0
             for arg_idx, arg in enumerate(reversed(expr.args)):
                 if arg.value:
                     # Check if this argument is an unconstrained array
-                    arg_is_unconstrained = self._is_unconstrained_array_arg(sym, len(expr.args) - 1 - arg_idx)
+                    forward_idx = len(expr.args) - 1 - arg_idx
+                    arg_is_unconstrained = self._is_unconstrained_array_arg(sym, forward_idx)
+
+                    # Check parameter mode for out/in out handling
+                    param_mode = param_modes[forward_idx] if forward_idx < len(param_modes) else "in"
 
                     if arg_is_unconstrained:
                         # Push dope vector: last, first, ptr (reverse order for stack)
@@ -6687,8 +7334,13 @@ class ASTLowering:
                         self.builder.push(first_val)
                         self.builder.push(ptr_val)
                         stack_slots += 3
+                    elif param_mode in ("out", "in out"):
+                        # Pass address of the argument
+                        addr = self._get_arg_address(arg.value)
+                        self.builder.push(addr)
+                        stack_slots += 1
                     else:
-                        # Regular argument
+                        # Regular argument - pass by value
                         value = self._lower_expr(arg.value)
                         self.builder.push(value)
                         stack_slots += 1
@@ -6728,9 +7380,10 @@ class ASTLowering:
             ))
 
             # Clean up stack (callee may not clean up on Z80)
-            if stack_slots > 0:
+            total_slots = stack_slots + outer_var_slots
+            if total_slots > 0:
                 # Pop arguments off stack
-                for _ in range(stack_slots):
+                for _ in range(total_slots):
                     temp = self.builder.new_vreg(IRType.WORD, "_discard")
                     self.builder.pop(temp)
 
@@ -11053,8 +11706,13 @@ class ASTLowering:
             # Record field store
             self._lower_selected_store(target, value)
 
-    def _calc_type_size(self, decl: ObjectDecl) -> int:
-        """Calculate the size in bytes for a local variable declaration."""
+    def _calc_type_size(self, decl: ObjectDecl, declarations: list = None) -> int:
+        """Calculate the size in bytes for a local variable declaration.
+
+        Args:
+            decl: The object declaration
+            declarations: List of sibling declarations to search for local types
+        """
         # Default size for scalar types
         size = 2
 
@@ -11111,6 +11769,96 @@ class ASTLowering:
         elif type_name == 'float':
             return 6  # 48-bit float
 
+        # First try to look up the type in local declarations
+        # This handles locally-declared types that aren't in the symbol table yet
+        if type_name and declarations:
+            for d in declarations:
+                if isinstance(d, TypeDecl) and d.name.lower() == type_name:
+                    # Found the local type declaration
+                    type_def = d.type_def
+                    if hasattr(type_def, 'components') or hasattr(type_def, 'fields'):
+                        # Record type - count fields
+                        fields = getattr(type_def, 'fields', None) or getattr(type_def, 'components', [])
+                        if isinstance(fields, dict):
+                            total = len(fields) * 2  # Each field is 2 bytes by default
+                        else:
+                            total = len(fields) * 2
+                        return max(total, 2)
+                    elif hasattr(type_def, 'index_subtypes'):
+                        # ArrayTypeDef - calculate size from index range
+                        from uada80.ast_nodes import ArrayTypeDef, RangeExpr
+                        if isinstance(type_def, ArrayTypeDef) and type_def.index_subtypes:
+                            idx_range = type_def.index_subtypes[0]
+                            first = None
+                            last = None
+                            # Handle RangeExpr (has 'low' and 'high' attributes)
+                            if isinstance(idx_range, RangeExpr):
+                                first = self._eval_static_expr(idx_range.low)
+                                last = self._eval_static_expr(idx_range.high)
+                            else:
+                                # Check for 'low'/'high' or 'first'/'last' attributes
+                                first = self._eval_static_expr(getattr(idx_range, 'low', None) or
+                                                               getattr(idx_range, 'first', None))
+                                last = self._eval_static_expr(getattr(idx_range, 'high', None) or
+                                                              getattr(idx_range, 'last', None))
+                            if first is not None and last is not None:
+                                elem_count = last - first + 1
+                                # Get element size
+                                elem_size = 2  # Default
+                                if type_def.component_type:
+                                    comp_name = ''
+                                    if isinstance(type_def.component_type, Identifier):
+                                        comp_name = type_def.component_type.name.lower()
+                                    elif hasattr(type_def.component_type, 'name'):
+                                        comp_name = type_def.component_type.name.lower()
+                                    if comp_name in ('character', 'boolean'):
+                                        elem_size = 1
+                                    elif comp_name == 'float':
+                                        elem_size = 6
+                                return elem_count * elem_size
+                    break
+
+        # Try to look up the type in symbol table
+        if type_name:
+            type_sym = self.symbols.lookup(type_name) if self.symbols else None
+            if type_sym and type_sym.ada_type:
+                from uada80.type_system import RecordType, ArrayType, EnumerationType
+                ada_type = type_sym.ada_type
+
+                if isinstance(ada_type, RecordType):
+                    # Calculate total record size from fields
+                    total = 0
+                    for field_name, field_type in ada_type.fields.items():
+                        # Get field size (default to 2 for unknown types)
+                        field_size = 2
+                        if hasattr(field_type, 'name'):
+                            fn = field_type.name.lower()
+                            if fn in ('character', 'boolean'):
+                                field_size = 1
+                            elif fn == 'float':
+                                field_size = 6
+                        total += field_size
+                    return max(total, 2)  # At least 2 bytes
+
+                elif isinstance(ada_type, ArrayType):
+                    # For constrained arrays, calculate element_count * element_size
+                    if ada_type.index_types:
+                        idx_type = ada_type.index_types[0]
+                        if hasattr(idx_type, 'first') and hasattr(idx_type, 'last'):
+                            first = idx_type.first
+                            last = idx_type.last
+                            if isinstance(first, int) and isinstance(last, int):
+                                elem_count = last - first + 1
+                                elem_size = 2  # Default element size
+                                if ada_type.element_type:
+                                    et_name = getattr(ada_type.element_type, 'name', '').lower()
+                                    if et_name in ('character', 'boolean'):
+                                        elem_size = 1
+                                return elem_count * elem_size
+
+                elif isinstance(ada_type, EnumerationType):
+                    return 1  # Enumeration fits in a byte
+
         return size
 
     def _eval_static_expr(self, expr) -> int | None:
@@ -11123,6 +11871,33 @@ class ASTLowering:
             sym = self.symbols.lookup(name) if self.symbols else None
             if sym and hasattr(sym, 'value') and isinstance(sym.value, int):
                 return sym.value
+        if isinstance(expr, UnaryExpr):
+            # Handle unary operators (especially for negative numbers)
+            operand = self._eval_static_expr(expr.operand)
+            if operand is not None:
+                if expr.op == UnaryOp.MINUS:
+                    return -operand
+                if expr.op == UnaryOp.PLUS:
+                    return operand
+                if expr.op == UnaryOp.ABS:
+                    return abs(operand)
+            return None
+        if isinstance(expr, BinaryExpr):
+            # Handle binary expressions
+            left = self._eval_static_expr(expr.left)
+            right = self._eval_static_expr(expr.right)
+            if left is not None and right is not None:
+                if expr.op == BinaryOp.ADD:
+                    return left + right
+                if expr.op == BinaryOp.SUB:
+                    return left - right
+                if expr.op == BinaryOp.MUL:
+                    return left * right
+                if expr.op == BinaryOp.DIV:
+                    return left // right if right != 0 else None
+                if expr.op == BinaryOp.MOD:
+                    return left % right if right != 0 else None
+            return None
         return None
 
     def _get_string_max_length(self, expr) -> int:

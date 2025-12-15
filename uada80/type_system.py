@@ -446,18 +446,51 @@ class RecordType(AdaType):
         if self.size_bits == 0:
             self.size_bits = self._compute_size()
 
+    def _packed_size(self, comp_type: AdaType) -> int:
+        """Get the minimum number of bits needed to store a component when packed.
+
+        For packed records:
+        - Boolean needs only 1 bit
+        - Small enumerations need log2(count) bits
+        - Other types keep their natural size
+        """
+        if isinstance(comp_type, EnumerationType):
+            count = len(comp_type.literals)
+            if count == 2:  # Boolean or two-literal enum
+                return 1
+            elif count <= 4:
+                return 2
+            elif count <= 8:
+                return 3
+            elif count <= 16:
+                return 4
+            elif count <= 32:
+                return 5
+            elif count <= 64:
+                return 6
+            elif count <= 128:
+                return 7
+            # Larger enums stay at their natural size
+        return comp_type.size_bits
+
     def _compute_size(self) -> int:
         """Compute record size based on components.
 
         For variant records, size is computed as discriminants + common components +
         maximum variant size (all variants occupy the same space).
+
+        When is_packed is True:
+        - Boolean fields are packed to 1 bit
+        - Small enumerations are packed to minimum bits
+        - Larger fields (8+ bits) are aligned to byte boundaries for efficiency
+        - This avoids expensive unaligned 16-bit access on Z80
         """
         total_bits = 0
         # Tagged types have a hidden tag field (pointer to vtable)
         if self.is_tagged and not self.is_class_wide:
             total_bits = 16  # Tag is 16-bit pointer on Z80
 
-        # Add discriminants
+        # Add discriminants (always byte-aligned)
         for disc in self.discriminants:
             if total_bits % 8 != 0:
                 total_bits = ((total_bits + 7) // 8) * 8
@@ -466,22 +499,53 @@ class RecordType(AdaType):
 
         # Add common components
         for comp in self.components:
-            if total_bits % 8 != 0:
-                total_bits = ((total_bits + 7) // 8) * 8
-            comp.offset_bits = total_bits
-            total_bits += comp.component_type.size_bits
+            if self.is_packed:
+                packed_size = self._packed_size(comp.component_type)
+                if packed_size < 8:
+                    # Pack small fields at bit level
+                    comp.offset_bits = total_bits
+                    # Override component size for packed access
+                    comp.size_bits = packed_size
+                    total_bits += packed_size
+                else:
+                    # Align to byte boundary for larger fields
+                    if total_bits % 8 != 0:
+                        total_bits = ((total_bits + 7) // 8) * 8
+                    comp.offset_bits = total_bits
+                    total_bits += comp.component_type.size_bits
+            else:
+                # Non-packed: align to byte boundary
+                if total_bits % 8 != 0:
+                    total_bits = ((total_bits + 7) // 8) * 8
+                comp.offset_bits = total_bits
+                total_bits += comp.component_type.size_bits
 
         # Add variant part (size = max of all variants)
         if self.variant_part:
+            # Align variant start to byte boundary
+            if total_bits % 8 != 0:
+                total_bits = ((total_bits + 7) // 8) * 8
             variant_start = total_bits
             max_variant_size = 0
             for variant in self.variant_part.variants:
                 variant_size = 0
                 for comp in variant.components:
-                    if variant_size % 8 != 0:
-                        variant_size = ((variant_size + 7) // 8) * 8
-                    comp.offset_bits = variant_start + variant_size
-                    variant_size += comp.component_type.size_bits
+                    if self.is_packed:
+                        packed_size = self._packed_size(comp.component_type)
+                        if packed_size < 8:
+                            comp.offset_bits = variant_start + variant_size
+                            comp.size_bits = packed_size
+                            variant_size += packed_size
+                        else:
+                            if variant_size % 8 != 0:
+                                variant_size = ((variant_size + 7) // 8) * 8
+                            comp.offset_bits = variant_start + variant_size
+                            variant_size += comp.component_type.size_bits
+                    else:
+                        if variant_size % 8 != 0:
+                            variant_size = ((variant_size + 7) // 8) * 8
+                        comp.offset_bits = variant_start + variant_size
+                        variant_size += comp.component_type.size_bits
                 if variant_size > max_variant_size:
                     max_variant_size = variant_size
             total_bits += max_variant_size

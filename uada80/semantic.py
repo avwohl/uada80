@@ -1392,6 +1392,9 @@ class SemanticAnalyzer:
             self._analyze_package_decl(decl)
         elif isinstance(decl, PackageBody):
             self._analyze_package_body(decl)
+        elif isinstance(decl, PragmaStmt):
+            # Handle pragmas in declarative part (e.g., pragma Atomic)
+            self._analyze_pragma(decl)
 
     def _analyze_object_decl(self, decl: ObjectDecl) -> None:
         """Analyze an object (variable/constant) declaration."""
@@ -1596,6 +1599,7 @@ class SemanticAnalyzer:
 
                 existing.ada_type = ada_type
                 existing.definition = decl
+                decl.ada_type = ada_type  # Store on AST for lowering
                 # Fall through to handle enum literals if applicable
             else:
                 self.error(f"type '{decl.name}' is already defined", decl)
@@ -1619,6 +1623,9 @@ class SemanticAnalyzer:
                                 is_discriminant=True,
                             )
                         )
+
+            # Store the analyzed type on the AST node for lowering to access
+            decl.ada_type = ada_type
 
             symbol = Symbol(
                 name=decl.name,
@@ -2851,6 +2858,9 @@ class SemanticAnalyzer:
                     sym = self.symbols.lookup(entity.name)
                     if sym and sym.ada_type:
                         sym.ada_type.is_packed = True
+                        # Recalculate record layout with packing
+                        if isinstance(sym.ada_type, RecordType):
+                            sym.ada_type.size_bits = sym.ada_type._compute_size()
 
         elif pragma_name == "pure":
             # pragma Pure [(package_name)];

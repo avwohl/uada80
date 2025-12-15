@@ -3095,7 +3095,8 @@ class Z80CodeGen:
         self._emit("    EXTRN _vec_first   ; Get first cursor")
         self._emit("    EXTRN _vec_last    ; Get last cursor")
         self._emit("    EXTRN _vec_append  ; Append element")
-        self._emit("    EXTRN _vec_element ; Get element at cursor")
+        self._emit("    EXTRN _vec_element ; Get element at index")
+        self._emit("    EXTRN _cont_element ; Get element - dispatches by type")
         self._emit("    EXTRN _vec_replace ; Replace element")
         self._emit("    EXTRN _vec_delete_last ; Delete last element")
         self._emit("    EXTRN _vec_capacity ; Get capacity")
@@ -3115,6 +3116,46 @@ class Z80CodeGen:
         self._emit("    EXTRN _list_append ; Append to list")
         self._emit("    EXTRN _list_prepend ; Prepend to list")
         self._emit("    EXTRN _list_delete ; Delete at cursor")
+        self._emit("    EXTRN _list_element ; Get element at index")
+        self._emit("")
+        self._emit("    ; Hash functions")
+        self._emit("    EXTRN _str_hash    ; Hash string (DJB2)")
+        self._emit("    EXTRN _int_hash    ; Hash 16-bit integer")
+        self._emit("")
+        self._emit("    ; Hash map operations")
+        self._emit("    EXTRN _hmap_create ; Create hash map")
+        self._emit("    EXTRN _hmap_find   ; Find value by key")
+        self._emit("    EXTRN _hmap_insert ; Insert key-value pair")
+        self._emit("    EXTRN _hmap_delete ; Delete by key")
+        self._emit("")
+        self._emit("    ; Hash set operations")
+        self._emit("    EXTRN _hset_create  ; Create hash set")
+        self._emit("    EXTRN _hset_contains ; Check membership")
+        self._emit("    EXTRN _hset_insert  ; Insert element")
+        self._emit("    EXTRN _hset_delete  ; Delete element")
+        self._emit("")
+        self._emit("    ; Ordered map operations (BST)")
+        self._emit("    EXTRN _omap_create  ; Create ordered map")
+        self._emit("    EXTRN _omap_find    ; Find value by key")
+        self._emit("    EXTRN _omap_insert  ; Insert key-value")
+        self._emit("    EXTRN _omap_delete  ; Delete by key")
+        self._emit("")
+        self._emit("    ; Ordered set operations (BST)")
+        self._emit("    EXTRN _oset_create  ; Create ordered set")
+        self._emit("    EXTRN _oset_contains ; Check membership")
+        self._emit("    EXTRN _oset_insert  ; Insert element")
+        self._emit("    EXTRN _oset_delete  ; Delete element")
+        self._emit("")
+        self._emit("    ; Container iteration")
+        self._emit("    EXTRN _cont_first   ; Start iteration")
+        self._emit("    EXTRN _cont_next    ; Get next cursor")
+        self._emit("    EXTRN _cont_has_element ; Check cursor valid")
+        self._emit("    EXTRN _cont_cursor_element ; Get element at cursor")
+        self._emit("")
+        self._emit("    ; Container utilities")
+        self._emit("    EXTRN _cont_length  ; Get element count")
+        self._emit("    EXTRN _cont_is_empty ; Check if empty")
+        self._emit("    EXTRN _cont_clear   ; Remove all elements")
         self._emit("")
 
         # Heap operations (from heap.asm)
@@ -3534,6 +3575,39 @@ class Z80CodeGen:
         self._emit("    ret")
         self._emit("")
 
+        # Task abort
+        self._emit("; _TASK_ABORT: Abort a task by ID")
+        self._emit("; Input: HL = task ID to abort")
+        self._emit("_TASK_ABORT:")
+        self._emit("    di")
+        self._emit("    push HL")
+        self._emit("    call _find_task_by_id")
+        self._emit("    ld A, H")
+        self._emit("    or L")
+        self._emit("    jr Z, _abort_not_found")
+        self._emit("    push HL")
+        self._emit("    pop IX")
+        self._emit("    ; Check if already terminated")
+        self._emit("    ld A, (IX+TCB_STATE)")
+        self._emit("    cp TASK_TERMINATED")
+        self._emit("    jr Z, _abort_done")
+        self._emit("    ; Mark as terminated")
+        self._emit("    ld A, TASK_TERMINATED")
+        self._emit("    ld (IX+TCB_STATE), A")
+        self._emit("    ; Decrement task count")
+        self._emit("    ld A, (_task_count)")
+        self._emit("    dec A")
+        self._emit("    ld (_task_count), A")
+        self._emit("_abort_done:")
+        self._emit("    pop HL")
+        self._emit("    ei")
+        self._emit("    ret")
+        self._emit("_abort_not_found:")
+        self._emit("    pop HL")
+        self._emit("    ei")
+        self._emit("    ret")
+        self._emit("")
+
         # Entry queue structure and constants
         self._emit("; Entry queue structure (8 bytes per entry)")
         self._emit("; Entry queues are used for task rendezvous")
@@ -3826,6 +3900,38 @@ class Z80CodeGen:
         self._emit("")
         self._emit("; _SELECT_END: End a select statement")
         self._emit("_SELECT_END:")
+        self._emit("    ret")
+        self._emit("")
+
+        # Task function aliases - lowering emits lowercase, runtime uses uppercase
+        self._emit("; Task runtime aliases (for lowering compatibility)")
+        self._emit("_task_accept_start:")
+        self._emit("    jp _ENTRY_ACCEPT")
+        self._emit("_task_accept_end:")
+        self._emit("    jp _ENTRY_ACCEPT_END")
+        self._emit("_task_select_start:")
+        self._emit("    jp _SELECT_START")
+        self._emit("_task_select_wait:")
+        self._emit("    jp _SELECT_WAIT")
+        self._emit("_task_select_end:")
+        self._emit("    jp _SELECT_END")
+        self._emit("_task_delay:")
+        self._emit("    jp _TASK_DELAY")
+        self._emit("_task_delay_until:")
+        self._emit("    jp _TASK_DELAY_UNTIL")
+        self._emit("_task_abort:")
+        self._emit("    jp _TASK_ABORT")
+        self._emit("")
+        self._emit("; _task_select_register: Register alternative for select")
+        self._emit("; Input: Stack: alternative_index")
+        self._emit("; For now just a placeholder - select waits for any entry")
+        self._emit("_task_select_register:")
+        self._emit("    ret")
+        self._emit("")
+        self._emit("; _task_requeue: Requeue entry call to same or different entry")
+        self._emit("; Input: Stack: entry_id (or 0 for same entry)")
+        self._emit("_task_requeue:")
+        self._emit("    ; Simplified: just return, caller will get rescheduled")
         self._emit("    ret")
         self._emit("")
 
@@ -4968,7 +5074,7 @@ class Z80CodeGen:
         self._emit("    push HL           ; save position (index)")
         self._emit("    ld HL, (_cursor_container)")
         self._emit("    push HL           ; push container")
-        self._emit("    call _vec_element ; for vectors; TODO: dispatch by type")
+        self._emit("    call _cont_element ; dispatch by container type")
         self._emit("    pop BC            ; clean stack")
         self._emit("    pop BC")
         self._emit("    pop IX")
@@ -5043,12 +5149,12 @@ class Z80CodeGen:
         self._emit("    ; Get element at position")
         self._emit("    push BC           ; save position")
         self._emit("    push DE           ; save count")
-        self._emit("    ; Push args for _vec_element")
+        self._emit("    ; Push args for _cont_element (container, index)")
         self._emit("    push BC           ; index")
         self._emit("    ld L, (IX+CONT_FIND_CONT)")
         self._emit("    ld H, (IX+CONT_FIND_CONT+1)")
         self._emit("    push HL           ; container")
-        self._emit("    call _vec_element")
+        self._emit("    call _cont_element ; dispatch by container type")
         self._emit("    pop BC")
         self._emit("    pop BC")
         self._emit("    ; HL = element pointer")
@@ -5744,6 +5850,71 @@ class Z80CodeGen:
         self._emit("    pop IX")
         self._emit("    ret")
         self._emit("")
+
+
+        # List element access (by index)
+        self._emit("; _list_element: Get element at index (0-based)")
+        self._emit("; Input: Stack: list_ptr, index")
+        self._emit("; Output: HL = pointer to element data (0 if out of bounds)")
+        self._emit("LIST_ELEM_LIST       .equ 4")
+        self._emit("LIST_ELEM_IDX        .equ 6")
+        self._emit("")
+        self._emit("_list_element:")
+        self._emit("    push IX")
+        self._emit("    push BC")
+        self._emit("    ld IX, 0")
+        self._emit("    add IX, SP")
+        self._emit("    ; Get list")
+        self._emit("    ld L, (IX+LIST_ELEM_LIST+2)  ; +2 for PUSH BC")
+        self._emit("    ld H, (IX+LIST_ELEM_LIST+3)")
+        self._emit("    push HL")
+        self._emit("    pop IY            ; IY = list")
+        self._emit("    ; Check bounds")
+        self._emit("    ld L, (IX+LIST_ELEM_IDX+2)")
+        self._emit("    ld H, (IX+LIST_ELEM_IDX+3)  ; HL = index")
+        self._emit("    ld E, (IY+CONT_HDR_COUNT)")
+        self._emit("    ld D, (IY+CONT_HDR_COUNT+1) ; DE = count")
+        self._emit("    and A")
+        self._emit("    sbc HL, DE")
+        self._emit("    jr NC, _le_oob    ; index >= count")
+        self._emit("    ; Restore index")
+        self._emit("    ld L, (IX+LIST_ELEM_IDX+2)")
+        self._emit("    ld H, (IX+LIST_ELEM_IDX+3)")
+        self._emit("    ld B, H")
+        self._emit("    ld C, L           ; BC = remaining iterations")
+        self._emit("    ; Start from head")
+        self._emit("    ld L, (IY+LIST_HEAD)")
+        self._emit("    ld H, (IY+LIST_HEAD+1)")
+        self._emit("_le_loop:")
+        self._emit("    ld A, B")
+        self._emit("    or C")
+        self._emit("    jr Z, _le_found   ; index reached")
+        self._emit("    ; Move to next node")
+        self._emit("    push HL")
+        self._emit("    pop IY")
+        self._emit("    ld L, (IY+LIST_NODE_NEXT)")
+        self._emit("    ld H, (IY+LIST_NODE_NEXT+1)")
+        self._emit("    ld A, H")
+        self._emit("    or L")
+        self._emit("    jr Z, _le_oob     ; unexpected end")
+        self._emit("    dec BC")
+        self._emit("    jr _le_loop")
+        self._emit("_le_found:")
+        self._emit("    ; HL = node, return pointer to data")
+        self._emit("    ld DE, LIST_NODE_DATA")
+        self._emit("    add HL, DE")
+        self._emit("    pop BC")
+        self._emit("    pop IX")
+        self._emit("    ret")
+        self._emit("_le_oob:")
+        self._emit("    ld HL, 0          ; out of bounds")
+        self._emit("    pop BC")
+        self._emit("    pop IX")
+        self._emit("    ret")
+        self._emit("")
+
+        # _cont_element is now in runtime library (containers.mac)
+        # It dispatches to _vec_element or _list_element based on container type
 
         self._emit("; Current cursor container (for cursor operations)")
         self._emit("_cursor_container:")
@@ -6454,7 +6625,11 @@ class Z80CodeGen:
         self._emit(f"{mangled_name}:")
 
         # Set up stack frame
-        if func.locals_size > 0 or self.reg_alloc.stack_size > 0:
+        # Always set up frame if we have locals, temps, OR parameters (params accessed via IX)
+        has_frame = (func.locals_size > 0 or
+                     self.reg_alloc.stack_size > 0 or
+                     len(func.params) > 0)
+        if has_frame:
             total_stack = func.locals_size + self.reg_alloc.stack_size
             self._emit_instr("push", "IX")
             self._emit_instr("ld", "IX", "0")
@@ -6510,12 +6685,14 @@ class Z80CodeGen:
                         vregs.add(operand.id)
 
         # Allocate stack slots for local vregs (negative offsets)
-        offset = 0
+        # Start AFTER the space reserved for local variables (func.locals_size)
+        # to avoid overlapping with record/array locals
+        offset = func.locals_size
         for vreg_id in sorted(vregs):
             alloc.vreg_to_stack[vreg_id] = offset
             offset += 2  # All values are 2 bytes for simplicity
 
-        alloc.stack_size = offset
+        alloc.stack_size = offset - func.locals_size  # Only count temp space
         return alloc
 
     def _generate_block(self, block: BasicBlock) -> None:
@@ -6654,9 +6831,14 @@ class Z80CodeGen:
         if isinstance(value, Immediate):
             self._emit_instr("ld", "HL", str(value.value))
         elif isinstance(value, VReg):
+            # Check if atomic - wrap in DI/EI
+            if value.is_atomic:
+                self._emit_instr("di")  # Disable interrupts
             offset = self._vreg_offset(value)
             self._emit_instr("ld", "L", f"(IX{offset:+d})")
             self._emit_instr("ld", "H", f"(IX{offset+1:+d})")
+            if value.is_atomic:
+                self._emit_instr("ei")  # Enable interrupts
         elif isinstance(value, Label):
             self._emit_instr("ld", "HL", value.name)
 
@@ -6665,9 +6847,14 @@ class Z80CodeGen:
         if isinstance(value, Immediate):
             self._emit_instr("ld", "DE", str(value.value))
         elif isinstance(value, VReg):
+            # Check if atomic - wrap in DI/EI
+            if value.is_atomic:
+                self._emit_instr("di")  # Disable interrupts
             offset = self._vreg_offset(value)
             self._emit_instr("ld", "E", f"(IX{offset:+d})")
             self._emit_instr("ld", "D", f"(IX{offset+1:+d})")
+            if value.is_atomic:
+                self._emit_instr("ei")  # Enable interrupts
         elif isinstance(value, Label):
             self._emit_instr("ld", "DE", value.name)
 
@@ -6676,19 +6863,34 @@ class Z80CodeGen:
         if isinstance(value, Immediate):
             self._emit_instr("ld", "A", str(value.value & 0xFF))
         elif isinstance(value, VReg):
+            # Check if atomic - wrap in DI/EI
+            if value.is_atomic:
+                self._emit_instr("di")  # Disable interrupts
             offset = self._vreg_offset(value)
             self._emit_instr("ld", "A", f"(IX{offset:+d})")
+            if value.is_atomic:
+                self._emit_instr("ei")  # Enable interrupts
 
     def _store_from_hl(self, dst: VReg) -> None:
         """Store HL to a vreg."""
+        # Check if atomic - wrap in DI/EI
+        if dst.is_atomic:
+            self._emit_instr("di")  # Disable interrupts
         offset = self._vreg_offset(dst)
         self._emit_instr("ld", f"(IX{offset:+d})", "L")
         self._emit_instr("ld", f"(IX{offset+1:+d})", "H")
+        if dst.is_atomic:
+            self._emit_instr("ei")  # Enable interrupts
 
     def _store_from_a(self, dst: VReg) -> None:
         """Store A to a vreg (byte)."""
+        # Check if atomic - wrap in DI/EI
+        if dst.is_atomic:
+            self._emit_instr("di")  # Disable interrupts
         offset = self._vreg_offset(dst)
         self._emit_instr("ld", f"(IX{offset:+d})", "A")
+        if dst.is_atomic:
+            self._emit_instr("ei")  # Enable interrupts
 
     def _vreg_offset(self, vreg: VReg) -> int:
         """Get the stack offset for a virtual register.
@@ -6723,7 +6925,7 @@ class Z80CodeGen:
 
         # Atomic access: disable interrupts before load
         if mem.is_atomic:
-            self._emit_instr("di", "", "")  # Disable interrupts
+            self._emit_instr("di")  # Disable interrupts
 
         if mem.is_global:
             self._emit_instr("ld", "HL", f"({self._mangle_symbol(mem.symbol_name)})")
@@ -6748,7 +6950,7 @@ class Z80CodeGen:
 
         # Atomic access: re-enable interrupts after load
         if mem.is_atomic:
-            self._emit_instr("ei", "", "")  # Enable interrupts
+            self._emit_instr("ei")  # Enable interrupts
 
     def _gen_store(self, instr: IRInstr) -> None:
         """Generate STORE instruction."""
@@ -6759,7 +6961,7 @@ class Z80CodeGen:
 
         # Atomic access: disable interrupts before store
         if mem.is_atomic:
-            self._emit_instr("di", "", "")  # Disable interrupts
+            self._emit_instr("di")  # Disable interrupts
 
         if mem.is_global:
             self._load_to_hl(instr.src1)
@@ -6786,7 +6988,7 @@ class Z80CodeGen:
 
         # Atomic access: re-enable interrupts after store
         if mem.is_atomic:
-            self._emit_instr("ei", "", "")  # Enable interrupts
+            self._emit_instr("ei")  # Enable interrupts
 
     def _gen_lea(self, instr: IRInstr) -> None:
         """Generate LEA (load effective address) instruction."""
@@ -6794,6 +6996,19 @@ class Z80CodeGen:
             return
 
         mem = instr.src1
+
+        # Handle address of vreg (for out/in out parameter passing)
+        if mem.addr_vreg is not None:
+            # Get the stack offset of the vreg using the same formula as _vreg_offset
+            frame_offset = self._vreg_offset(mem.addr_vreg)
+            self._emit_instr("push", "IX")
+            self._emit_instr("pop", "HL")
+            if frame_offset != 0:
+                self._emit_instr("ld", "DE", str(frame_offset))
+                self._emit_instr("add", "HL", "DE")
+            self._store_from_hl(instr.dst)
+            return
+
         if mem.is_global:
             # Load address of global variable
             self._emit_instr("ld", "HL", self._mangle_symbol(mem.symbol_name))
@@ -6804,11 +7019,19 @@ class Z80CodeGen:
                 self._emit_instr("ld", "DE", str(mem.offset))
                 self._emit_instr("add", "HL", "DE")
         else:
-            # Stack-relative address: IX + offset
+            # Stack-relative address: IX + frame_offset
+            if mem.is_frame_offset:
+                # Offset is already a proper frame offset (negative)
+                frame_offset = mem.offset
+            else:
+                # The mem.offset is a positive stack slot (0, 2, 4, ...)
+                # but locals are at negative offsets from IX
+                # Transform to match _vreg_offset convention: -(offset + 2)
+                frame_offset = -(mem.offset + 2)
             self._emit_instr("push", "IX")
             self._emit_instr("pop", "HL")
-            if mem.offset != 0:
-                self._emit_instr("ld", "DE", str(mem.offset))
+            if frame_offset != 0:
+                self._emit_instr("ld", "DE", str(frame_offset))
                 self._emit_instr("add", "HL", "DE")
 
         self._store_from_hl(instr.dst)
@@ -6993,15 +7216,19 @@ class Z80CodeGen:
             self._emit_instr("inc", "L")
         elif op == OpCode.CMP_GT:
             # GT: not (LT or EQ) - more complex
+            # Layout: LD HL,1 (3) | JP M,$+7 (3) | JR Z,$+4 (2) | JR $+3 (2) | DEC L (1)
+            # JP M at X+3 should jump to DEC L at X+10, so $+7
             self._emit_instr("ld", "HL", "1")
-            self._emit_instr("jp", "M", "$+6")
+            self._emit_instr("jp", "M", "$+7")
             self._emit_instr("jr", "Z", "$+4")
             self._emit_instr("jr", "$+3")
             self._emit_instr("dec", "L")
         elif op == OpCode.CMP_LE:
             # LE: LT or EQ
+            # Layout: LD HL,0 (3) | JP M,$+5 (3) | JR NZ,$+3 (2) | INC L (1)
+            # JP M at X+3 should jump to INC L at X+8, so $+5
             self._emit_instr("ld", "HL", "0")
-            self._emit_instr("jp", "M", "$+4")
+            self._emit_instr("jp", "M", "$+5")
             self._emit_instr("jr", "NZ", "$+3")
             self._emit_instr("inc", "L")
 
@@ -7097,10 +7324,12 @@ class Z80CodeGen:
         if self.current_function:
             total_stack = (self.current_function.locals_size +
                           (self.reg_alloc.stack_size if self.reg_alloc else 0))
-            if total_stack > 0:
-                self._emit_instr("ld", "SP", "IX")
-                self._emit_instr("pop", "IX")
-            else:
+            has_frame = (self.current_function.locals_size > 0 or
+                        (self.reg_alloc.stack_size if self.reg_alloc else 0) > 0 or
+                        len(self.current_function.params) > 0)
+            if has_frame:
+                if total_stack > 0:
+                    self._emit_instr("ld", "SP", "IX")
                 self._emit_instr("pop", "IX")
 
         self._emit_instr("ret")

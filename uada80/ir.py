@@ -39,6 +39,8 @@ class VReg(IRValue):
 
     id: int
     name: str = ""  # Optional name for debugging
+    is_atomic: bool = False  # For pragma Atomic - wrap accesses in DI/EI
+    is_volatile: bool = False  # For pragma Volatile - no caching
 
     def __hash__(self) -> int:
         return hash(self.id)
@@ -92,8 +94,15 @@ class MemoryLocation(IRValue):
     symbol_name: str = ""  # Name of symbol for globals
     is_atomic: bool = False  # pragma Atomic - wrap in DI/EI
     is_volatile: bool = False  # pragma Volatile - no caching
+    is_frame_offset: bool = False  # True if offset is already a frame offset (negative)
+    addr_vreg: Optional[VReg] = None  # If set, compute address of this vreg's storage
+    # Bit-field support for pragma Pack
+    bit_offset: int = 0  # Bit offset within byte (0-7)
+    bit_size: int = 0  # Size in bits (0 = full byte/word)
 
     def __repr__(self) -> str:
+        if self.addr_vreg:
+            return f"&{self.addr_vreg}"
         if self.is_global:
             return f"[{self.symbol_name}]"
         if self.base:
@@ -374,9 +383,9 @@ class IRBuilder:
         """Set the current block for insertion."""
         self.block = block
 
-    def new_vreg(self, ir_type: IRType, name: str = "") -> VReg:
+    def new_vreg(self, ir_type: IRType, name: str = "", is_atomic: bool = False, is_volatile: bool = False) -> VReg:
         """Create a new virtual register."""
-        vreg = VReg(id=self._vreg_counter, name=name, ir_type=ir_type)
+        vreg = VReg(id=self._vreg_counter, name=name, ir_type=ir_type, is_atomic=is_atomic, is_volatile=is_volatile)
         self._vreg_counter += 1
         return vreg
 
@@ -453,6 +462,14 @@ class IRBuilder:
     def not_(self, dst: VReg, src: IRValue, comment: str = "") -> None:
         """Emit a bitwise NOT instruction."""
         self.emit(IRInstr(OpCode.NOT, dst, src, comment=comment))
+
+    def shl(self, dst: VReg, src1: IRValue, src2: IRValue, comment: str = "") -> None:
+        """Emit a shift left instruction."""
+        self.emit(IRInstr(OpCode.SHL, dst, src1, src2, comment=comment))
+
+    def shr(self, dst: VReg, src1: IRValue, src2: IRValue, comment: str = "") -> None:
+        """Emit a shift right instruction."""
+        self.emit(IRInstr(OpCode.SHR, dst, src1, src2, comment=comment))
 
     def cmp(self, src1: IRValue, src2: IRValue, comment: str = "") -> None:
         """Emit a comparison instruction (sets flags)."""
