@@ -1,0 +1,589 @@
+; =========================================
+; Vector Operations for Ada.Containers.Vectors
+; =========================================
+
+    .Z80
+
+; Container type IDs
+CONT_TYPE_VECTOR      EQU 1
+CONT_TYPE_LIST        EQU 2
+CONT_TYPE_HASHED_MAP  EQU 3
+CONT_TYPE_ORDERED_MAP EQU 4
+CONT_TYPE_HASHED_SET  EQU 5
+CONT_TYPE_ORDERED_SET EQU 6
+
+; Container header offsets
+CONT_HDR_TYPE        EQU 0    ; container type ID
+CONT_HDR_FLAGS       EQU 1    ; flags byte
+CONT_HDR_COUNT       EQU 2    ; element count
+CONT_HDR_CAPACITY    EQU 4    ; capacity (vectors) or head ptr (lists)
+CONT_HDR_ELEM_SIZE   EQU 6    ; element size in bytes
+CONT_HDR_SIZE        EQU 8    ; header size
+
+; Vector-specific (after header)
+VEC_DATA_PTR         EQU 8    ; pointer to data array
+VEC_TOTAL_SIZE       EQU 10   ; total structure size
+VEC_ELEM_SIZE        EQU 6    ; alias for element size
+
+; List header offsets
+LIST_HEAD            EQU 8    ; pointer to first node
+LIST_TAIL            EQU 10   ; pointer to last node
+LIST_TOTAL_SIZE      EQU 12   ; total list header size
+
+; List node structure
+LIST_NODE_PREV       EQU 0    ; previous node
+LIST_NODE_NEXT       EQU 2    ; next node
+LIST_NODE_DATA       EQU 4    ; element data starts here
+
+    EXTRN _heap_alloc
+    EXTRN _heap_free
+    EXTRN _mul16
+
+    CSEG
+
+; _vec_create: Create a new vector
+; Input: Stack: element_size, initial_capacity
+; Output: HL = vector pointer (0 if failed)
+    PUBLIC _vec_create
+VEC_CREATE_ELEM_SIZE EQU 4
+VEC_CREATE_CAPACITY  EQU 6
+
+_vec_create:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ; Allocate header
+    ld HL, VEC_TOTAL_SIZE
+    call _heap_alloc
+    ld A, H
+    or L
+    jr Z, vc_fail
+    push HL           ; save header ptr
+    push HL
+    pop IY            ; IY = header
+    ; Initialize header
+    ld (IY+CONT_HDR_TYPE), CONT_TYPE_VECTOR
+    ld (IY+CONT_HDR_FLAGS), 0
+    ld (IY+CONT_HDR_COUNT), 0
+    ld (IY+CONT_HDR_COUNT+1), 0
+    ; Set capacity
+    ld L, (IX+VEC_CREATE_CAPACITY)
+    ld H, (IX+VEC_CREATE_CAPACITY+1)
+    ld (IY+CONT_HDR_CAPACITY), L
+    ld (IY+CONT_HDR_CAPACITY+1), H
+    push HL           ; save capacity
+    ; Set element size
+    ld L, (IX+VEC_CREATE_ELEM_SIZE)
+    ld H, (IX+VEC_CREATE_ELEM_SIZE+1)
+    ld (IY+CONT_HDR_ELEM_SIZE), L
+    ld (IY+CONT_HDR_ELEM_SIZE+1), H
+    ; Allocate data array: capacity * elem_size
+    pop DE            ; capacity
+    call _mul16       ; HL = capacity * elem_size
+    ; Handle zero capacity
+    ld A, H
+    or L
+    jr Z, vc_zero_cap
+    call _heap_alloc
+    ld A, H
+    or L
+    jr Z, vc_fail_free
+    jr vc_store_data
+vc_zero_cap:
+    ld HL, 0          ; null data pointer for zero capacity
+vc_store_data:
+    ; Store data pointer
+    ld (IY+VEC_DATA_PTR), L
+    ld (IY+VEC_DATA_PTR+1), H
+    ; Return header pointer
+    pop HL
+    pop IX
+    ret
+vc_fail_free:
+    pop HL            ; header ptr
+    call _heap_free
+vc_fail:
+    ld HL, 0
+    pop IX
+    ret
+
+; _vec_append: Append element to vector
+; Input: Stack: vector_ptr, element_ptr
+; Output: HL = 1 (success) or 0 (failed)
+    PUBLIC _vec_append
+VEC_APPEND_VEC       EQU 4
+VEC_APPEND_ELEM      EQU 6
+
+_vec_append:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ; Get vector pointer
+    ld L, (IX+VEC_APPEND_VEC)
+    ld H, (IX+VEC_APPEND_VEC+1)
+    push HL
+    pop IY            ; IY = vector
+    ; Check capacity
+    ld L, (IY+CONT_HDR_COUNT)
+    ld H, (IY+CONT_HDR_COUNT+1)
+    ld E, (IY+CONT_HDR_CAPACITY)
+    ld D, (IY+CONT_HDR_CAPACITY+1)
+    or A
+    sbc HL, DE
+    jr NC, va_grow    ; count >= capacity, need to grow
+    jr va_insert
+va_grow:
+    ; Grow vector: allocate new array with 2x capacity
+    push IY
+    push IX
+    ; Calculate new capacity = old_capacity * 2
+    ld L, (IY+CONT_HDR_CAPACITY)
+    ld H, (IY+CONT_HDR_CAPACITY+1)
+    add HL, HL         ; HL = capacity * 2
+    ; If capacity was 0, set to 4
+    ld A, H
+    or L
+    jr NZ, va_grow_calc
+    ld HL, 4           ; minimum capacity
+va_grow_calc:
+    push HL            ; save new capacity
+    ; Calculate new array size = new_capacity * elem_size
+    ld E, (IY+CONT_HDR_ELEM_SIZE)
+    ld D, (IY+CONT_HDR_ELEM_SIZE+1)
+    call _mul16        ; HL = new array size
+    ; Allocate new array
+    call _heap_alloc
+    ld A, H
+    or L
+    jp Z, va_grow_fail
+    push HL            ; save new array ptr
+    ; Re-get vector from stack
+    pop HL             ; new array
+    pop BC             ; new capacity
+    pop IY             ; vector (saved earlier)
+    push IY            ; re-save
+    push BC            ; re-save new capacity
+    push HL            ; re-save new array
+    ex DE, HL          ; DE = new array
+    ; HL = old array
+    ld L, (IY+VEC_DATA_PTR)
+    ld H, (IY+VEC_DATA_PTR+1)
+    ; BC = bytes to copy = count * elem_size
+    push DE            ; save destination
+    ld E, (IY+CONT_HDR_COUNT)
+    ld D, (IY+CONT_HDR_COUNT+1)
+    push HL            ; save source
+    ex DE, HL          ; HL = count
+    ld E, (IY+CONT_HDR_ELEM_SIZE)
+    ld D, (IY+CONT_HDR_ELEM_SIZE+1)
+    call _mul16        ; HL = bytes to copy
+    ld B, H
+    ld C, L            ; BC = byte count
+    pop HL             ; source (old array)
+    pop DE             ; destination (new array)
+    ; Check if anything to copy
+    ld A, B
+    or C
+    jr Z, va_grow_update
+    ldir               ; copy old data
+va_grow_update:
+    ; Free old array (if not null)
+    ld L, (IY+VEC_DATA_PTR)
+    ld H, (IY+VEC_DATA_PTR+1)
+    ld A, H
+    or L
+    jr Z, va_skip_free
+    call _heap_free
+va_skip_free:
+    ; Update vector with new array and capacity
+    pop HL             ; new array
+    ld (IY+VEC_DATA_PTR), L
+    ld (IY+VEC_DATA_PTR+1), H
+    pop HL             ; new capacity
+    ld (IY+CONT_HDR_CAPACITY), L
+    ld (IY+CONT_HDR_CAPACITY+1), H
+    pop BC             ; discard saved IY
+    pop IX             ; restore frame
+    ; Now insert the element
+    jr va_insert
+va_grow_fail:
+    ; Allocation failed, clean up and return 0
+    pop BC             ; discard new capacity
+    pop IY             ; discard saved vector
+    pop IX             ; restore frame
+    ld HL, 0
+    pop IX
+    ret
+va_insert:
+    ; Calculate destination: data_ptr + count * elem_size
+    ld L, (IY+CONT_HDR_COUNT)
+    ld H, (IY+CONT_HDR_COUNT+1)
+    ld E, (IY+CONT_HDR_ELEM_SIZE)
+    ld D, (IY+CONT_HDR_ELEM_SIZE+1)
+    call _mul16       ; HL = offset
+    ld E, (IY+VEC_DATA_PTR)
+    ld D, (IY+VEC_DATA_PTR+1)
+    add HL, DE        ; HL = destination
+    ex DE, HL         ; DE = destination
+    ; Source = element_ptr
+    ld L, (IX+VEC_APPEND_ELEM)
+    ld H, (IX+VEC_APPEND_ELEM+1)
+    ; Copy elem_size bytes
+    ld C, (IY+CONT_HDR_ELEM_SIZE)
+    ld B, (IY+CONT_HDR_ELEM_SIZE+1)
+    ldir              ; copy BC bytes from HL to DE
+    ; Increment count
+    ld L, (IY+CONT_HDR_COUNT)
+    ld H, (IY+CONT_HDR_COUNT+1)
+    inc HL
+    ld (IY+CONT_HDR_COUNT), L
+    ld (IY+CONT_HDR_COUNT+1), H
+    ld HL, 1          ; success
+    pop IX
+    ret
+
+; _vec_element: Get element at index
+; Input: Stack: vector_ptr, index
+; Output: HL = pointer to element (0 if out of bounds)
+    PUBLIC _vec_element
+VEC_ELEMENT_VEC      EQU 4
+VEC_ELEMENT_IDX      EQU 6
+
+_vec_element:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+VEC_ELEMENT_VEC)
+    ld H, (IX+VEC_ELEMENT_VEC+1)
+    push HL
+    pop IY            ; IY = vector
+    ; Bounds check
+    ld L, (IX+VEC_ELEMENT_IDX)
+    ld H, (IX+VEC_ELEMENT_IDX+1)
+    ld E, (IY+CONT_HDR_COUNT)
+    ld D, (IY+CONT_HDR_COUNT+1)
+    or A
+    sbc HL, DE
+    jr NC, ve_oob     ; index >= count
+    ; Calculate address: data_ptr + index * elem_size
+    ld L, (IX+VEC_ELEMENT_IDX)
+    ld H, (IX+VEC_ELEMENT_IDX+1)
+    ld E, (IY+CONT_HDR_ELEM_SIZE)
+    ld D, (IY+CONT_HDR_ELEM_SIZE+1)
+    call _mul16       ; HL = offset
+    ld E, (IY+VEC_DATA_PTR)
+    ld D, (IY+VEC_DATA_PTR+1)
+    add HL, DE        ; HL = element address
+    pop IX
+    ret
+ve_oob:
+    ld HL, 0
+    pop IX
+    ret
+
+; _vec_length: Get vector length
+; Input: Stack: vector_ptr
+; Output: HL = length
+    PUBLIC _vec_length
+VEC_LENGTH_VEC       EQU 4
+
+_vec_length:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+VEC_LENGTH_VEC)
+    ld H, (IX+VEC_LENGTH_VEC+1)
+    push HL
+    pop IY
+    ld L, (IY+CONT_HDR_COUNT)
+    ld H, (IY+CONT_HDR_COUNT+1)
+    pop IX
+    ret
+
+; _vec_is_empty: Check if vector is empty
+; Input: Stack: vector_ptr
+; Output: HL = 1 (empty) or 0 (not empty)
+    PUBLIC _vec_is_empty
+VEC_ISEMPTY_VEC      EQU 4
+
+_vec_is_empty:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+VEC_ISEMPTY_VEC)
+    ld H, (IX+VEC_ISEMPTY_VEC+1)
+    push HL
+    pop IY
+    ld L, (IY+CONT_HDR_COUNT)
+    ld H, (IY+CONT_HDR_COUNT+1)
+    ld A, H
+    or L
+    jr Z, vie_empty
+    ld HL, 0          ; not empty
+    pop IX
+    ret
+vie_empty:
+    ld HL, 1          ; empty
+    pop IX
+    ret
+
+; _vec_clear: Clear all elements from vector
+; Input: Stack: vector_ptr
+    PUBLIC _vec_clear
+VEC_CLEAR_VEC        EQU 4
+
+_vec_clear:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+VEC_CLEAR_VEC)
+    ld H, (IX+VEC_CLEAR_VEC+1)
+    push HL
+    pop IY
+    ; Set count to 0 (keep capacity and data)
+    ld (IY+CONT_HDR_COUNT), 0
+    ld (IY+CONT_HDR_COUNT+1), 0
+    pop IX
+    ret
+
+; _vec_capacity: Get vector capacity
+; Input: Stack: vector_ptr
+; Output: HL = capacity
+    PUBLIC _vec_capacity
+VEC_CAP_VEC          EQU 4
+
+_vec_capacity:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+VEC_CAP_VEC)
+    ld H, (IX+VEC_CAP_VEC+1)
+    push HL
+    pop IY
+    ld L, (IY+CONT_HDR_CAPACITY)
+    ld H, (IY+CONT_HDR_CAPACITY+1)
+    pop IX
+    ret
+
+; _vec_delete_last: Delete last element
+; Input: Stack: vector_ptr
+    PUBLIC _vec_delete_last
+VEC_DELLAST_VEC      EQU 4
+
+_vec_delete_last:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+VEC_DELLAST_VEC)
+    ld H, (IX+VEC_DELLAST_VEC+1)
+    push HL
+    pop IY
+    ; Check if empty
+    ld L, (IY+CONT_HDR_COUNT)
+    ld H, (IY+CONT_HDR_COUNT+1)
+    ld A, H
+    or L
+    jr Z, vdl_done     ; empty, nothing to delete
+    ; Decrement count
+    dec HL
+    ld (IY+CONT_HDR_COUNT), L
+    ld (IY+CONT_HDR_COUNT+1), H
+vdl_done:
+    pop IX
+    ret
+
+; _vec_delete_first: Delete first element
+; Input: Stack: vector_ptr
+    PUBLIC _vec_delete_first
+VEC_DELFIRST_VEC     EQU 4
+
+_vec_delete_first:
+    push IX
+    push BC
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+VEC_DELFIRST_VEC+2)
+    ld H, (IX+VEC_DELFIRST_VEC+3)
+    push HL
+    pop IY
+    ; Check if empty
+    ld L, (IY+CONT_HDR_COUNT)
+    ld H, (IY+CONT_HDR_COUNT+1)
+    ld A, H
+    or L
+    jr Z, vdf_done     ; empty, nothing to delete
+    ; Shift all elements down by elem_size
+    ld E, (IY+CONT_HDR_ELEM_SIZE)
+    ld D, (IY+CONT_HDR_ELEM_SIZE+1)
+    ld L, (IY+VEC_DATA_PTR)
+    ld H, (IY+VEC_DATA_PTR+1)
+    push HL           ; dest = data
+    add HL, DE        ; src = data + elem_size
+    ; Calculate bytes to move = (count - 1) * elem_size
+    push HL           ; save src
+    ld L, (IY+CONT_HDR_COUNT)
+    ld H, (IY+CONT_HDR_COUNT+1)
+    dec HL            ; count - 1
+    ld A, H
+    or L
+    jr Z, vdf_deconly  ; only 1 element, just decrement
+    push DE           ; save elem_size
+    ld E, (IY+CONT_HDR_ELEM_SIZE)
+    ld D, (IY+CONT_HDR_ELEM_SIZE+1)
+    call _mul16       ; HL = (count-1) * elem_size
+    ld B, H
+    ld C, L           ; BC = bytes to move
+    pop DE            ; discard
+    pop HL            ; src
+    pop DE            ; dest
+    ldir              ; move elements
+    jr vdf_dec
+vdf_deconly:
+    pop HL            ; discard src
+    pop HL            ; discard dest
+vdf_dec:
+    ; Decrement count
+    ld L, (IY+CONT_HDR_COUNT)
+    ld H, (IY+CONT_HDR_COUNT+1)
+    dec HL
+    ld (IY+CONT_HDR_COUNT), L
+    ld (IY+CONT_HDR_COUNT+1), H
+vdf_done:
+    pop BC
+    pop IX
+    ret
+
+; _vec_reserve: Reserve capacity
+; Input: Stack: vector_ptr, new_capacity
+; Output: HL = 1 (success) or 0 (failed)
+    PUBLIC _vec_reserve
+VEC_RESERVE_VEC      EQU 4
+VEC_RESERVE_CAP      EQU 6
+
+_vec_reserve:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+VEC_RESERVE_VEC)
+    ld H, (IX+VEC_RESERVE_VEC+1)
+    push HL
+    pop IY
+    ; Check if new capacity > current capacity
+    ld L, (IX+VEC_RESERVE_CAP)
+    ld H, (IX+VEC_RESERVE_CAP+1)
+    ld E, (IY+CONT_HDR_CAPACITY)
+    ld D, (IY+CONT_HDR_CAPACITY+1)
+    or A
+    sbc HL, DE
+    jr Z, vr_ok        ; same capacity
+    jr C, vr_ok        ; smaller capacity, no-op
+    ; Need to grow
+    ld L, (IX+VEC_RESERVE_CAP)
+    ld H, (IX+VEC_RESERVE_CAP+1)
+    push HL           ; new capacity
+    ; Calculate new array size
+    ld E, (IY+CONT_HDR_ELEM_SIZE)
+    ld D, (IY+CONT_HDR_ELEM_SIZE+1)
+    call _mul16       ; HL = new_cap * elem_size
+    call _heap_alloc
+    ld A, H
+    or L
+    jr Z, vr_fail
+    push HL           ; new array
+    ; Copy old data
+    ex DE, HL         ; DE = new array
+    ld L, (IY+VEC_DATA_PTR)
+    ld H, (IY+VEC_DATA_PTR+1)
+    ; BC = bytes to copy = count * elem_size
+    push DE
+    ld E, (IY+CONT_HDR_COUNT)
+    ld D, (IY+CONT_HDR_COUNT+1)
+    push HL
+    ex DE, HL
+    ld E, (IY+CONT_HDR_ELEM_SIZE)
+    ld D, (IY+CONT_HDR_ELEM_SIZE+1)
+    call _mul16
+    ld B, H
+    ld C, L
+    pop HL            ; old array
+    pop DE            ; new array
+    ld A, B
+    or C
+    jr Z, vr_update
+    ldir
+vr_update:
+    ; Free old array
+    ld L, (IY+VEC_DATA_PTR)
+    ld H, (IY+VEC_DATA_PTR+1)
+    ld A, H
+    or L
+    jr Z, vr_skip_free
+    call _heap_free
+vr_skip_free:
+    ; Update vector
+    pop HL            ; new array
+    ld (IY+VEC_DATA_PTR), L
+    ld (IY+VEC_DATA_PTR+1), H
+    pop HL            ; new capacity
+    ld (IY+CONT_HDR_CAPACITY), L
+    ld (IY+CONT_HDR_CAPACITY+1), H
+vr_ok:
+    ld HL, 1
+    pop IX
+    ret
+vr_fail:
+    pop HL            ; discard new capacity
+    ld HL, 0
+    pop IX
+    ret
+
+; _vec_replace: Replace element at index
+; Input: Stack: vector_ptr, index, element_ptr
+; Output: HL = 1 (success) or 0 (out of bounds)
+    PUBLIC _vec_replace
+VEC_REPLACE_VEC      EQU 4
+VEC_REPLACE_IDX      EQU 6
+VEC_REPLACE_ELEM     EQU 8
+
+_vec_replace:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+VEC_REPLACE_VEC)
+    ld H, (IX+VEC_REPLACE_VEC+1)
+    push HL
+    pop IY
+    ; Bounds check
+    ld L, (IX+VEC_REPLACE_IDX)
+    ld H, (IX+VEC_REPLACE_IDX+1)
+    ld E, (IY+CONT_HDR_COUNT)
+    ld D, (IY+CONT_HDR_COUNT+1)
+    or A
+    sbc HL, DE
+    jr NC, vrp_oob
+    ; Calculate destination
+    ld L, (IX+VEC_REPLACE_IDX)
+    ld H, (IX+VEC_REPLACE_IDX+1)
+    ld E, (IY+CONT_HDR_ELEM_SIZE)
+    ld D, (IY+CONT_HDR_ELEM_SIZE+1)
+    call _mul16
+    ld E, (IY+VEC_DATA_PTR)
+    ld D, (IY+VEC_DATA_PTR+1)
+    add HL, DE
+    ex DE, HL         ; DE = destination
+    ; Source = element_ptr
+    ld L, (IX+VEC_REPLACE_ELEM)
+    ld H, (IX+VEC_REPLACE_ELEM+1)
+    ; Copy elem_size bytes
+    ld C, (IY+CONT_HDR_ELEM_SIZE)
+    ld B, (IY+CONT_HDR_ELEM_SIZE+1)
+    ldir
+    ld HL, 1
+    pop IX
+    ret
+vrp_oob:
+    ld HL, 0
+    pop IX
+    ret
+
+    END

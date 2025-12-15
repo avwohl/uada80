@@ -7,12 +7,11 @@ UM80 = PYTHONPATH=$(UM80_PATH) python3 -m um80.um80
 ULIB80 = PYTHONPATH=$(UM80_PATH) python3 -m um80.ulib80
 
 # Source files with .mac extension (macro assembler source)
-# Note: strings, bounded, containers, heap, math, io only have pre-compiled .rel files
-MAC_SOURCES = tasking.mac fileio.mac float48.mac timer.mac
+MAC_SOURCES = runtime.mac containers.mac vectors.mac lists.mac tasking.mac fileio.mac float48.mac timer.mac
 MAC_OBJECTS = $(MAC_SOURCES:.mac=.rel)
 
 # Pre-compiled object files (no source available)
-PREBUILT_OBJECTS = strings.rel bounded.rel containers.rel heap.rel math.rel io.rel runtime.rel
+PREBUILT_OBJECTS = strings.rel bounded.rel heap.rel math.rel io.rel
 
 OBJECTS = $(PREBUILT_OBJECTS) $(MAC_OBJECTS)
 
@@ -32,6 +31,10 @@ clean:
 	rm -f $(MAC_OBJECTS) $(LIBRARY)
 
 # Dependencies for .mac source files
+runtime.rel: runtime.mac
+containers.rel: containers.mac
+vectors.rel: vectors.mac
+lists.rel: lists.mac
 tasking.rel: tasking.mac
 fileio.rel: fileio.mac
 float48.rel: float48.mac
