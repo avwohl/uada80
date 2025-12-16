@@ -1,5 +1,26 @@
 # Claude Code Notes for UADA80
 
+## Work In Progress (2025-12-16)
+
+**Session accomplished:**
+- Parser: 100% (2849/2849 ACATS files)
+- Semantic (c3* tests): 62% → 100% (+38%)
+- Execution tests: 31/31 pass
+
+**Key fixes this session:**
+1. `all_overloads()` rewritten to search ALL visible scopes (symbol_table.py:6313-6347)
+2. Function-as-IndexedComponent with aggregate arg (semantic.py:4468-4479)
+3. Boolean array NOT/AND/OR/XOR with base_type chain walking
+4. Array type derivation with proper name preservation
+5. Integer * Universal_Real for fixed-point contexts
+
+**Next steps to consider:**
+- Run c4*, c5*, c6*, c7* semantic tests to find more issues
+- Improve code generation for complex expressions
+- Add more runtime library functions
+
+---
+
 ## ACATS Compliance Progress: 80%
 
 **Last Updated:** 2025-12-16 (Semantic 100%: c34005j fixed with aggregate function call detection)
