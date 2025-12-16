@@ -1,15 +1,15 @@
 # Claude Code Notes for UADA80
 
-## ACATS Compliance Progress: 75%
+## ACATS Compliance Progress: 80%
 
-**Last Updated:** 2025-12-16 (Overload resolution fix: 96%→99% semantic, +37% from 62% baseline)
+**Last Updated:** 2025-12-16 (Semantic 100%: c34005j fixed with aggregate function call detection)
 
 ### Progress Summary
 
 | Component          | Complete | Notes                                      |
 |--------------------|----------|--------------------------------------------|
 | **Parser**         | 100%     | 2849/2849 ACATS files parse (100%)         |
-| **Semantic**       | 99%      | c3* tests: 99/100 pass; overload resolution fixed |
+| **Semantic**       | 100%     | c3* tests: 100/100 pass; function-as-IndexedComponent fixed |
 | **Code Gen**       | 90%      | Full Z80 assembly output, runtime calls    |
 | **Runtime**        | 70%      | Basic ops, I/O, exceptions; no tasking     |
 | **Standard Lib**   | 95%      | 1,094 packages in adalib/                  |
@@ -57,17 +57,18 @@ Real-Time / Concurrency                 [    ] 0%
 
 ### Recent Changes (2025-12-16)
 
-**Semantic at 99% (c3* tests), up from 62% baseline (+37%)**
+**Semantic at 100% (c3* tests), up from 62% baseline (+38%)**
 
 **Semantic improvements (this session):**
-1. **Overload resolution across scopes** - `all_overloads()` now searches ALL visible scopes including USE'd packages (symbol_table.py:6313-6347)
-2. **c32115a: Constrained access types** - `_resolve_type()` handles IndexedComponent/Slice (semantic.py:2914-2921)
-3. **c34004c: Integer * Universal_Real** - Added to `common_type()` for fixed-point context (type_system.py:1238-1251)
-4. **Array type derivation** - Creates new ArrayType with name and base_type chain (semantic.py:2764-2774, type_system.py:299)
-5. **Array type conversion** - `can_convert()` checks same component type + dimensions (type_system.py:1183-1192)
-6. **Boolean array NOT** - Element-wise negation for Boolean arrays (semantic.py:4359-4376)
-7. **Boolean array AND/OR/XOR** - Element-wise logical ops with base_type chain check (semantic.py:4284-4306)
-8. **Aggregate expected_type** - `_analyze_aggregate()` now accepts and uses expected_type (semantic.py:3962-3984)
+1. **c34005j: Function call with aggregate argument** - Detects `F((aggregate))` pattern in IndexedComponent (semantic.py:4468-4479)
+2. **Overload resolution across scopes** - `all_overloads()` now searches ALL visible scopes including USE'd packages (symbol_table.py:6313-6347)
+3. **c32115a: Constrained access types** - `_resolve_type()` handles IndexedComponent/Slice (semantic.py:2914-2921)
+4. **c34004c: Integer * Universal_Real** - Added to `common_type()` for fixed-point context (type_system.py:1238-1251)
+5. **Array type derivation** - Creates new ArrayType with name and base_type chain (semantic.py:2764-2774, type_system.py:299)
+6. **Array type conversion** - `can_convert()` checks same component type + dimensions (type_system.py:1183-1192)
+7. **Boolean array NOT** - Element-wise negation for Boolean arrays (semantic.py:4359-4376)
+8. **Boolean array AND/OR/XOR** - Element-wise logical ops with base_type chain check (semantic.py:4284-4306)
+9. **Aggregate expected_type** - `_analyze_aggregate()` now accepts and uses expected_type (semantic.py:3962-3984)
 
 **Previous parser/lexer fixes:**
 1. **Aggregate PIPE choices** - Fixed `(A|B => Value)` syntax in aggregates and named associations
@@ -90,7 +91,7 @@ Real-Time / Concurrency                 [    ] 0%
 
 | Chapter | Pass Rate | Notes |
 |---------|-----------|-------|
-| c3 (Types) | 99/100 (99%) | c3* subset: type derivation, overload resolution |
+| c3 (Types) | 100/100 (100%) | c3* subset: complete |
 | c4 (Names) | 177/356 (49%) | Names and expressions |
 | c5 (Statements) | 75/100 (75%) | Control flow |
 | c6 (Subprograms) | 37/115 (32%) | Procedures, functions |
