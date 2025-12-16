@@ -369,13 +369,15 @@ _se_msg:
 ; ============================================================
 
 ; ============================================================
-; _put_line - Print string and newline
+; _put_line / _put_int_line - Print string and newline
 ; Input: String address on stack (at SP+2)
 ; Output: None
 ; Destroys: A, DE, HL
 ; ============================================================
     PUBLIC _put_line
+    PUBLIC _put_int_line
 _put_line:
+_put_int_line:
     ; Get string address from stack
     LD HL, 2
     ADD HL, SP
@@ -800,13 +802,7 @@ _get_line_done:
 ; Simple bump allocator for CP/M - grows from end of program
 ; ============================================================
 
-; Heap pointer - initialized to end of program at startup
-    DSEG
-_heap_ptr:
-    DW 0                    ; Current heap pointer (0 = uninitialized)
-_heap_end:
-    DW 0                    ; End of available memory
-    CSEG
+; Heap pointer - declared in DSEG at end of file
 
 ; ============================================================
 ; _heap_init - Initialize heap (called automatically)
@@ -1213,14 +1209,98 @@ _put_char:
 ; Exception Support
 ; ============================================================
 
+; Exception handler frame layout (8 bytes):
+;   Offset 0-1: Previous handler pointer
+;   Offset 2-3: Stack pointer to restore
+;   Offset 4-5: Handler code address
+;   Offset 6-7: Exception ID to catch (0 = catch all)
+
+; Exception variables declared in DSEG at end of file
+
 ; ============================================================
 ; _exc_do_raise - Raise an exception
-; Input: HL = exception ID
+; Input: _exc_current and _exc_message should be set before calling
 ; Output: Does not return (jumps to handler or terminates)
 ; ============================================================
     PUBLIC _exc_do_raise
 _exc_do_raise:
-    ; For simple runtime, just print and exit
+    ; Get current exception ID
+    LD HL, (_exc_current)
+    LD DE, (_exc_handler)
+
+    ; Check if there's a handler
+    LD A, D
+    OR E
+    JR Z, _exc_unhandled    ; No handler - terminate
+
+    ; DE = handler frame pointer
+    ; HL = exception ID to match
+_exc_search:
+    ; Get exception ID from handler frame (offset 6)
+    PUSH HL                 ; save exception ID
+    LD HL, 6
+    ADD HL, DE              ; HL = &handler_frame[6]
+    LD C, (HL)
+    INC HL
+    LD B, (HL)              ; BC = handler's exception ID
+    POP HL                  ; HL = exception ID
+
+    ; Check if handler matches (BC == HL or BC == 0 for catch-all)
+    LD A, B
+    OR C
+    JR Z, _exc_found        ; BC == 0 means catch all
+
+    ; Check if BC == HL
+    LD A, C
+    CP L
+    JR NZ, _exc_next
+    LD A, B
+    CP H
+    JR Z, _exc_found        ; Match found
+
+_exc_next:
+    ; Get previous handler from frame (offset 0)
+    ; Save exception ID (HL) on stack
+    PUSH HL                 ; save exception ID
+    EX DE, HL               ; HL = handler frame
+    LD E, (HL)
+    INC HL
+    LD D, (HL)              ; DE = previous handler
+    POP HL                  ; HL = exception ID
+
+    ; Check if previous handler exists
+    LD A, D
+    OR E
+    JR Z, _exc_unhandled
+
+    ; Continue search (DE = handler, HL = exc_id)
+    JR _exc_search
+
+_exc_found:
+    ; Found a matching handler at DE
+    ; Get stack pointer from frame (offset 2)
+    LD HL, 2
+    ADD HL, DE
+    LD E, (HL)
+    INC HL
+    LD D, (HL)              ; DE = saved SP
+
+    ; Get handler address from frame (offset 4)
+    INC HL
+    LD C, (HL)
+    INC HL
+    LD B, (HL)              ; BC = handler address
+
+    ; Restore stack pointer
+    EX DE, HL               ; HL = saved SP
+    LD SP, HL
+
+    ; Jump to handler (BC)
+    PUSH BC
+    RET                     ; Pop BC into PC, jump to handler
+
+_exc_unhandled:
+    ; No handler found - print error and terminate
     PUSH HL
     LD DE, _exc_msg
     LD C, 9
@@ -1235,7 +1315,7 @@ _exc_do_raise:
     JP 0                    ; Warm boot
 
 _exc_msg:
-    DB 'Exception raised: $'
+    DB 'Unhandled exception: $'
 
 ; Helper to print integer directly (not via stack)
 _put_int_direct:
@@ -1586,9 +1666,153 @@ _int_hash:
     ret
 
 ; ============================================================
-; Heap start marker (placed at end of BSS)
+; _MEMCPY - Copy memory block
+; Stack: SP+2: count (word), SP+4: src ptr, SP+6: dest ptr
+; Returns: nothing
+; ============================================================
+    PUBLIC _MEMCPY
+_MEMCPY:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+    ; IX+4: count, IX+6: src, IX+8: dest
+    LD C, (IX+4)
+    LD B, (IX+5)        ; BC = count
+    LD A, B
+    OR C
+    JR Z, _memcpy_done  ; if count == 0, done
+    LD L, (IX+6)
+    LD H, (IX+7)        ; HL = src
+    LD E, (IX+8)
+    LD D, (IX+9)        ; DE = dest
+    LDIR                ; copy BC bytes from HL to DE
+_memcpy_done:
+    POP IX
+    RET
+
+; ============================================================
+; _strcat - Concatenate two null-terminated strings
+; Stack: SP+2: s2 ptr, SP+4: s1 ptr
+; Returns: HL = pointer to concatenated string (static buffer)
+; ============================================================
+    PUBLIC _strcat
+_strcat:
+    PUSH IX
+    PUSH BC
+    LD IX, 0
+    ADD IX, SP
+    ; IX+6: s2_ptr, IX+8: s1_ptr
+
+    LD DE, _strcat_buf  ; destination
+
+    ; Copy s1
+    LD L, (IX+8)
+    LD H, (IX+9)        ; HL = s1
+_strcat_copy1:
+    LD A, (HL)
+    OR A
+    JR Z, _strcat_s2
+    LD (DE), A
+    INC HL
+    INC DE
+    JR _strcat_copy1
+
+_strcat_s2:
+    ; Copy s2
+    LD L, (IX+6)
+    LD H, (IX+7)        ; HL = s2
+_strcat_copy2:
+    LD A, (HL)
+    LD (DE), A
+    OR A
+    JR Z, _strcat_done
+    INC HL
+    INC DE
+    JR _strcat_copy2
+
+_strcat_done:
+    LD HL, _strcat_buf  ; return buffer address
+    POP BC
+    POP IX
+    RET
+
+    DSEG
+_strcat_buf:
+    DS 256              ; 256-byte buffer for concatenation
+    CSEG
+
+; ============================================================
+; _STR_CON - Concatenate two strings (alternate interface)
+; Stack: SP+2: s2 ptr, SP+4: s2 len, SP+6: s1 ptr, SP+8: s1 len, SP+10: dest ptr
+; Copies s1 then s2 to dest, returns total length in HL
+; ============================================================
+    PUBLIC _STR_CON
+_STR_CON:
+    PUSH IX
+    PUSH BC
+    LD IX, 0
+    ADD IX, SP
+    ; Stack after pushes: IX+6: s2_ptr, IX+8: s2_len, IX+10: s1_ptr, IX+12: s1_len, IX+14: dest_ptr
+
+    LD E, (IX+14)
+    LD D, (IX+15)       ; DE = dest
+
+    ; Copy s1 to dest
+    LD C, (IX+12)
+    LD B, (IX+13)       ; BC = s1_len
+    LD A, B
+    OR C
+    JR Z, _str_con_s2   ; skip if s1_len == 0
+    LD L, (IX+10)
+    LD H, (IX+11)       ; HL = s1_ptr
+    LDIR                ; copy s1 to dest, DE advances
+
+_str_con_s2:
+    ; Copy s2 to dest (DE already points to end of s1)
+    LD C, (IX+8)
+    LD B, (IX+9)        ; BC = s2_len
+    LD A, B
+    OR C
+    JR Z, _str_con_done ; skip if s2_len == 0
+    LD L, (IX+6)
+    LD H, (IX+7)        ; HL = s2_ptr
+    LDIR                ; copy s2 to dest
+
+_str_con_done:
+    ; Return total length = s1_len + s2_len
+    LD L, (IX+12)
+    LD H, (IX+13)       ; HL = s1_len
+    LD C, (IX+8)
+    LD B, (IX+9)        ; BC = s2_len
+    ADD HL, BC          ; HL = total length
+
+    POP BC
+    POP IX
+    RET
+
+; ============================================================
+; Data Segment (all DSEG declarations consolidated here)
 ; ============================================================
     DSEG
+
+; Heap management variables
+_heap_ptr:
+    DW 0                    ; Current heap pointer (0 = uninitialized)
+_heap_end:
+    DW 0                    ; End of available memory
+
+; Exception handling variables
+    PUBLIC _exc_handler
+    PUBLIC _exc_current
+    PUBLIC _exc_message
+_exc_handler:
+    DW 0                    ; Pointer to current exception handler frame
+_exc_current:
+    DW 0                    ; Current exception ID (1=Constraint_Error, etc)
+_exc_message:
+    DW 0                    ; Pointer to exception message string
+
+; Heap start marker (must be last)
     PUBLIC _heap_start
 _heap_start:
     ; This should be at the end of all static data

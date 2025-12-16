@@ -162,6 +162,12 @@ class OpCode(Enum):
     JMP = auto()  # unconditional jump
     JZ = auto()  # jump if zero
     JNZ = auto()  # jump if not zero
+    JL = auto()  # jump if less (signed), after CMP
+    JLE = auto()  # jump if less or equal (signed), after CMP
+    JG = auto()  # jump if greater (signed), after CMP
+    JGE = auto()  # jump if greater or equal (signed), after CMP
+    JC = auto()  # jump if carry (unsigned less), after CMP
+    JNC = auto()  # jump if no carry (unsigned greater or equal), after CMP
     CALL = auto()  # call subroutine
     CALL_INDIRECT = auto()  # indirect call through function pointer (src1=ptr)
     DISPATCH = auto()  # dispatching call through vtable (src1=object, src2=slot)
@@ -499,17 +505,45 @@ class IRBuilder:
         """Emit a greater-or-equal comparison (signed)."""
         self.emit(IRInstr(OpCode.CMP_GE, dst, src1, src2, comment=comment))
 
-    def jmp(self, target: Label, comment: str = "") -> None:
+    def _ensure_label(self, target: Label | str) -> Label:
+        """Convert string to Label if needed."""
+        return Label(target) if isinstance(target, str) else target
+
+    def jmp(self, target: Label | str, comment: str = "") -> None:
         """Emit an unconditional jump."""
-        self.emit(IRInstr(OpCode.JMP, target, comment=comment))
+        self.emit(IRInstr(OpCode.JMP, self._ensure_label(target), comment=comment))
 
-    def jz(self, cond: IRValue, target: Label, comment: str = "") -> None:
+    def jz(self, cond: IRValue, target: Label | str, comment: str = "") -> None:
         """Emit a jump-if-zero."""
-        self.emit(IRInstr(OpCode.JZ, target, cond, comment=comment))
+        self.emit(IRInstr(OpCode.JZ, self._ensure_label(target), cond, comment=comment))
 
-    def jnz(self, cond: IRValue, target: Label, comment: str = "") -> None:
+    def jnz(self, cond: IRValue, target: Label | str, comment: str = "") -> None:
         """Emit a jump-if-not-zero."""
-        self.emit(IRInstr(OpCode.JNZ, target, cond, comment=comment))
+        self.emit(IRInstr(OpCode.JNZ, self._ensure_label(target), cond, comment=comment))
+
+    def jl(self, target: Label | str, comment: str = "") -> None:
+        """Emit a jump-if-less (signed), used after CMP."""
+        self.emit(IRInstr(OpCode.JL, self._ensure_label(target), comment=comment))
+
+    def jle(self, target: Label | str, comment: str = "") -> None:
+        """Emit a jump-if-less-or-equal (signed), used after CMP."""
+        self.emit(IRInstr(OpCode.JLE, self._ensure_label(target), comment=comment))
+
+    def jg(self, target: Label | str, comment: str = "") -> None:
+        """Emit a jump-if-greater (signed), used after CMP."""
+        self.emit(IRInstr(OpCode.JG, self._ensure_label(target), comment=comment))
+
+    def jge(self, target: Label | str, comment: str = "") -> None:
+        """Emit a jump-if-greater-or-equal (signed), used after CMP."""
+        self.emit(IRInstr(OpCode.JGE, self._ensure_label(target), comment=comment))
+
+    def jc(self, target: Label | str, comment: str = "") -> None:
+        """Emit a jump-if-carry (unsigned less), used after CMP."""
+        self.emit(IRInstr(OpCode.JC, self._ensure_label(target), comment=comment))
+
+    def jnc(self, target: Label | str, comment: str = "") -> None:
+        """Emit a jump-if-no-carry (unsigned >=), used after CMP."""
+        self.emit(IRInstr(OpCode.JNC, self._ensure_label(target), comment=comment))
 
     def call(self, target: Label, comment: str = "") -> None:
         """Emit a call instruction."""

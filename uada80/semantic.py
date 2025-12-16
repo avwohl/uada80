@@ -82,6 +82,7 @@ from uada80.ast_nodes import (
     ContainerAggregate,
     IteratedComponentAssociation,
     ComponentAssociation,
+    ActualParameter,
     FunctionCall,
     TypeConversion,
     QualifiedExpr,
@@ -147,6 +148,7 @@ from uada80.type_system import (
     types_compatible,
     common_type,
     can_convert,
+    same_type,
 )
 
 
@@ -209,6 +211,30 @@ class SemanticAnalyzer:
             self.search_paths.insert(0, adalib_dir)
         self._loaded_packages: dict[str, Symbol] = {}  # Cache of loaded packages
         self._loading_packages: set[str] = set()  # Packages currently being loaded (cycle detection)
+        # Set up standard prelude (ASCII package, etc.)
+        self._setup_standard_prelude()
+
+    def _setup_standard_prelude(self) -> None:
+        """Set up the standard Ada prelude (implicitly visible packages like ASCII)."""
+        # ASCII package - obsolescent but still used in Ada 83 code
+        ascii_pkg = Symbol(name="ASCII", kind=SymbolKind.PACKAGE)
+        ascii_pkg.package_symbols = {}
+        char_type = PREDEFINED_TYPES.get("Character")
+
+        # Define ASCII character constants
+        ascii_chars = {
+            "NUL": 0, "SOH": 1, "STX": 2, "ETX": 3, "EOT": 4, "ENQ": 5, "ACK": 6, "BEL": 7,
+            "BS": 8, "HT": 9, "LF": 10, "VT": 11, "FF": 12, "CR": 13, "SO": 14, "SI": 15,
+            "DLE": 16, "DC1": 17, "DC2": 18, "DC3": 19, "DC4": 20, "NAK": 21, "SYN": 22,
+            "ETB": 23, "CAN": 24, "EM": 25, "SUB": 26, "ESC": 27, "FS": 28, "GS": 29,
+            "RS": 30, "US": 31, "DEL": 127,
+        }
+        for name, val in ascii_chars.items():
+            sym = Symbol(name=name, kind=SymbolKind.CONSTANT, ada_type=char_type)
+            sym.is_constant = True
+            ascii_pkg.package_symbols[name.lower()] = sym
+
+        self.symbols.define(ascii_pkg)
 
     def analyze(self, program: Program) -> SemanticResult:
         """Analyze a complete program."""
@@ -760,6 +786,14 @@ class SemanticAnalyzer:
         old_subprogram = self.current_subprogram
         self.current_subprogram = subprog_symbol
 
+        # If completing a generic, make the generic formal symbols visible
+        if is_completing_generic:
+            generic_decl = getattr(existing, 'generic_decl', None)
+            if generic_decl:
+                # Re-analyze generic formals to add them to current scope
+                for formal in generic_decl.formals:
+                    self._analyze_generic_formal(formal)
+
         # Process parameters (but don't add to symbol if completing generic - already done)
         for param_spec in spec.parameters:
             self._analyze_parameter_spec(param_spec, subprog_symbol,
@@ -1014,21 +1048,28 @@ class SemanticAnalyzer:
 
         elif isinstance(formal, GenericObjectDecl):
             # Generic formal object: X : in Integer := 0
-            # Create a variable symbol (VARIABLE is used for both vars and consts)
-            obj_sym = Symbol(
-                name=formal.name,
-                kind=SymbolKind.VARIABLE,
-            )
-            obj_sym.is_generic_formal = True
-            obj_sym.is_constant = (formal.mode == "in")  # "in" mode = read-only
+            # Or multiple names: F, L : E;
+            # Get list of names, falling back to single name
+            names = getattr(formal, 'names', None) or [formal.name]
 
             # Resolve the type reference
+            resolved_type = None
             if isinstance(formal.type_ref, Identifier):
                 type_sym = self.symbols.lookup(formal.type_ref.name)
                 if type_sym and type_sym.ada_type:
-                    obj_sym.ada_type = type_sym.ada_type
-            self.symbols.define(obj_sym)
-            sym = obj_sym
+                    resolved_type = type_sym.ada_type
+
+            # Create symbol for each name
+            for obj_name in names:
+                obj_sym = Symbol(
+                    name=obj_name,
+                    kind=SymbolKind.VARIABLE,
+                )
+                obj_sym.is_generic_formal = True
+                obj_sym.is_constant = (formal.mode == "in")  # "in" mode = read-only
+                obj_sym.ada_type = resolved_type
+                self.symbols.define(obj_sym)
+                sym = obj_sym  # Last one becomes the representative
 
         elif hasattr(formal, '__class__') and formal.__class__.__name__ == 'GenericSubprogramDecl':
             # Generic formal subprogram
@@ -1052,6 +1093,22 @@ class SemanticAnalyzer:
         # Store the formal symbol on the owner for later retrieval in body analysis
         if sym is not None and owner_symbol is not None:
             owner_symbol.generic_formal_symbols[sym.name.lower()] = sym
+
+    def _count_generic_parameters(self, formals: list) -> int:
+        """Count actual number of generic parameters (accounts for multi-name declarations)."""
+        from uada80.ast_nodes import GenericObjectDecl
+        count = 0
+        for formal in formals:
+            if isinstance(formal, GenericObjectDecl):
+                # Multi-name declaration like "F, L : E" counts as len(names) parameters
+                names = getattr(formal, 'names', None)
+                if names:
+                    count += len(names)
+                else:
+                    count += 1
+            else:
+                count += 1
+        return count
 
     def _analyze_generic_instantiation(self, inst: GenericInstantiation) -> None:
         """Analyze a generic instantiation."""
@@ -1093,8 +1150,8 @@ class SemanticAnalyzer:
             self.error(f"generic '{generic_name}' has no declaration", inst.generic_name)
             return
 
-        # Check number of actual parameters (accounting for defaults)
-        num_formals = len(generic_decl.generic_formals)
+        # Check number of actual parameters (accounting for defaults and multi-name formals)
+        num_formals = self._count_generic_parameters(generic_decl.generic_formals)
         num_actuals = len(inst.actual_parameters)
         # Count formals with default values (including 'is <>' box defaults)
         num_with_defaults = sum(
@@ -1189,7 +1246,7 @@ class SemanticAnalyzer:
 
         gen_symbol.return_type = return_type
 
-        # Process parameters to record their types
+        # Process parameters to record their types and add them to scope
         for param_spec in spec.parameters:
             param_type = self._resolve_type(param_spec.type_mark)
             for param_name in param_spec.names:
@@ -1200,6 +1257,19 @@ class SemanticAnalyzer:
                     mode=param_spec.mode,
                 )
                 gen_symbol.parameters.append(param_symbol)
+                # Also define parameter in current scope for body analysis
+                self.symbols.define(param_symbol)
+
+        # If this is a generic subprogram body, analyze it (for error checking)
+        # The generic formals and parameters are visible in this scope
+        if isinstance(gen_subprog.subprogram, SubprogramBody):
+            body = gen_subprog.subprogram
+            # Analyze local declarations
+            for decl in body.declarations:
+                self._analyze_declaration(decl)
+            # Analyze statements (for symbol resolution checks)
+            for stmt in body.statements:
+                self._analyze_statement(stmt)
 
         self.symbols.leave_scope()
 
@@ -1245,8 +1315,8 @@ class SemanticAnalyzer:
                 self.error(f"generic '{generic_name}' has no declaration", inst.generic_name)
                 return
 
-            # Check number of actual parameters (accounting for defaults)
-            num_formals = len(generic_decl.formals)
+            # Check number of actual parameters (accounting for defaults and multi-name formals)
+            num_formals = self._count_generic_parameters(generic_decl.formals)
             num_actuals = len(inst.actual_parameters)
             # Count formals with default values (including 'is <>' box defaults)
             num_with_defaults = sum(
@@ -1634,6 +1704,12 @@ class SemanticAnalyzer:
                 definition=decl,
             )
             self.symbols.define(symbol)
+
+        # For derived types, inherit primitive operations from parent type
+        if isinstance(decl.type_def, DerivedTypeDef):
+            parent_type = self._resolve_type(decl.type_def.parent_type)
+            if parent_type:
+                self._inherit_primitive_operations(ada_type, parent_type, decl.type_def.parent_type)
 
         # For enumeration types, add literals to symbol table
         # Ada allows the same literal name in different enumeration types (overloading)
@@ -2599,6 +2675,19 @@ class SemanticAnalyzer:
                 size_bits=parent.size_bits,
                 low=parent.low,
                 high=parent.high,
+                base_type=parent,  # Link to parent for derived type compatibility
+            )
+
+        # Handle derivation from enumeration type (e.g., type MyBool is new Boolean)
+        # In Ada, the derived type has the same literals but is a distinct type.
+        # The literals are overloaded to work with both parent and derived types.
+        if isinstance(parent, EnumerationType):
+            return EnumerationType(
+                name=name,
+                size_bits=parent.size_bits,
+                literals=parent.literals.copy(),
+                positions=parent.positions.copy(),
+                base_type=parent,  # Link to parent for derived type compatibility
             )
 
         # Handle tagged type derivation with record extension and interfaces
@@ -2673,6 +2762,18 @@ class SemanticAnalyzer:
                 is_limited=is_limited,
             )
 
+        # Handle derivation from array type
+        if isinstance(parent, ArrayType):
+            return ArrayType(
+                name=name,
+                size_bits=parent.size_bits,
+                index_types=parent.index_types,
+                component_type=parent.component_type,
+                is_constrained=parent.is_constrained,
+                bounds=parent.bounds,
+                base_type=parent,  # Link to parent for derived type compatibility
+            )
+
         return parent
 
     def _build_interface_type(
@@ -2710,13 +2811,107 @@ class SemanticAnalyzer:
         )
 
     # =========================================================================
+    # Primitive Operation Inheritance
+    # =========================================================================
+
+    def _inherit_primitive_operations(
+        self, derived_type: AdaType, parent_type: AdaType, parent_type_expr: Expr
+    ) -> None:
+        """Inherit primitive operations from parent type to derived type.
+
+        When TYPE NEW_T IS NEW A.T is declared, NEW_T inherits the primitive
+        operations of A.T. A primitive operation is a subprogram declared in
+        the same package as the type that has that type as parameter or return type.
+        """
+        # Find the package containing the parent type
+        parent_package: Optional[Symbol] = None
+
+        if isinstance(parent_type_expr, SelectedName):
+            # A.T - look up package A
+            prefix_name = self._get_identifier_name(parent_type_expr.prefix)
+            if prefix_name:
+                parent_package = self.symbols.lookup(prefix_name)
+        else:
+            # Simple name - parent type is in current or enclosing scope
+            # Look for a package in scope that contains this type
+            # For now, skip inheritance for types not from explicit packages
+            return
+
+        if parent_package is None or parent_package.kind != SymbolKind.PACKAGE:
+            return
+
+        # Find primitive operations in the parent package
+        # A primitive operation has the parent type as parameter or return type
+        for sym_name, sym in parent_package.public_symbols.items():
+            if sym.kind not in (SymbolKind.FUNCTION, SymbolKind.PROCEDURE):
+                continue
+
+            # Check if this is a primitive operation of parent_type
+            is_primitive = False
+
+            # Check return type (for functions)
+            if sym.return_type and same_type(sym.return_type, parent_type):
+                is_primitive = True
+
+            # Check parameter types
+            for param in sym.parameters:
+                if param.ada_type and same_type(param.ada_type, parent_type):
+                    is_primitive = True
+                    break
+
+            if not is_primitive:
+                continue
+
+            # Create an inherited version of this primitive
+            # The inherited primitive has the same signature but with
+            # derived_type substituted for parent_type
+            inherited_sym = Symbol(
+                name=sym.name,
+                kind=sym.kind,
+                # Return type: substitute parent_type with derived_type
+                return_type=derived_type if sym.return_type and same_type(sym.return_type, parent_type) else sym.return_type,
+                parameters=[],
+                definition=sym.definition,
+            )
+
+            # Copy parameters, substituting types as needed
+            for param in sym.parameters:
+                param_type = derived_type if param.ada_type and same_type(param.ada_type, parent_type) else param.ada_type
+                inherited_param = Symbol(
+                    name=param.name,
+                    kind=SymbolKind.PARAMETER,
+                    ada_type=param_type,
+                    mode=param.mode,
+                    default_value=param.default_value,
+                )
+                inherited_sym.parameters.append(inherited_param)
+
+            # Define the inherited primitive in current scope
+            self.symbols.define(inherited_sym)
+
+            # Also add to current package's public_symbols if we're in a package
+            # This allows further derivation to find the inherited primitives
+            if self.current_package:
+                self.current_package.public_symbols[sym.name.lower()] = inherited_sym
+
+    # =========================================================================
     # Type Resolution
     # =========================================================================
 
     def _resolve_type(self, type_expr: Expr) -> Optional[AdaType]:
         """Resolve a type expression to an AdaType."""
         if isinstance(type_expr, Identifier):
-            return self.symbols.lookup_type(type_expr.name)
+            type_name = type_expr.name
+            # Check for generic formal type mapping (during instantiation)
+            generic_formals = getattr(self, '_generic_formals', {})
+            if type_name.lower() in generic_formals:
+                actual = generic_formals[type_name.lower()]
+                # The actual might be ActualParameter (wrapping value) or Identifier
+                if hasattr(actual, 'value'):
+                    actual = actual.value
+                if isinstance(actual, Identifier):
+                    return self.symbols.lookup_type(actual.name)
+            return self.symbols.lookup_type(type_name)
         elif isinstance(type_expr, SelectedName):
             # Package.Type
             prefix_name = self._get_identifier_name(type_expr.prefix)
@@ -2726,13 +2921,40 @@ class SemanticAnalyzer:
                 )
                 if symbol and symbol.ada_type:
                     return symbol.ada_type
+        elif isinstance(type_expr, SubtypeIndication):
+            # Delegate to subtype indication resolver
+            return self._resolve_subtype_indication(type_expr)
+        elif isinstance(type_expr, IndexedComponent):
+            # Constrained type: REC(2) parses as IndexedComponent
+            # Extract the base type from the prefix
+            return self._resolve_type(type_expr.prefix)
+        elif isinstance(type_expr, Slice):
+            # Constrained array type: ARR(1..10) parses as Slice
+            # Extract the base type from the prefix
+            return self._resolve_type(type_expr.prefix)
         return None
 
     def _resolve_subtype_indication(
         self, subtype_ind: SubtypeIndication
     ) -> Optional[AdaType]:
-        """Resolve a subtype indication."""
-        return self._resolve_type(subtype_ind.type_mark)
+        """Resolve a subtype indication.
+
+        The type_mark can be:
+        - Identifier: simple type name (e.g., Integer)
+        - SelectedName: qualified name (e.g., Ada.Integer_Text_IO)
+        - Slice: constrained array (e.g., ARRT(1..10)) - prefix is the type
+        - IndexedComponent: constrained type (e.g., Vector(1, 10)) - prefix is the type
+        """
+        type_mark = subtype_ind.type_mark
+
+        # Handle constrained array/type syntax: Type(Constraint)
+        # The parser produces a Slice or IndexedComponent for this
+        if isinstance(type_mark, Slice):
+            return self._resolve_type(type_mark.prefix)
+        elif isinstance(type_mark, IndexedComponent):
+            return self._resolve_type(type_mark.prefix)
+
+        return self._resolve_type(type_mark)
 
     def _get_identifier_name(self, expr: Expr) -> Optional[str]:
         """Get the name from an identifier expression."""
@@ -3118,12 +3340,16 @@ class SemanticAnalyzer:
         # Resolve the return type
         return_type: Optional[AdaType] = None
         if stmt.type_mark:
-            return_type = self._resolve_type(stmt.type_mark)
+            if isinstance(stmt.type_mark, SubtypeIndication):
+                return_type = self._resolve_subtype_indication(stmt.type_mark)
+            else:
+                return_type = self._resolve_type(stmt.type_mark)
         elif self.current_subprogram.return_type:
             return_type = self.current_subprogram.return_type
 
-        # Define the return object
-        if return_type:
+        # Define the return object even if type resolution failed
+        # (allows the body to be analyzed for other errors)
+        if return_type or stmt.object_name:
             self.symbols.define(
                 Symbol(
                     name=stmt.object_name,
@@ -3423,7 +3649,8 @@ class SemanticAnalyzer:
 
         for arg, param in zip(args, subprog.parameters):
             if arg.value:
-                arg_type = self._analyze_expr(arg.value)
+                # Pass expected type for context-dependent expressions (aggregates)
+                arg_type = self._analyze_expr(arg.value, expected_type=param.ada_type)
                 if arg_type and param.ada_type:
                     # For generic instances, accept any type for generic formal parameters
                     if is_generic_instance:
@@ -3542,7 +3769,7 @@ class SemanticAnalyzer:
             # Parenthesized expression - just analyze the inner expression
             return self._analyze_expr(expr.expr, expected_type)
         elif isinstance(expr, Aggregate):
-            return self._analyze_aggregate(expr)
+            return self._analyze_aggregate(expr, expected_type)
         elif isinstance(expr, DeltaAggregate):
             return self._analyze_delta_aggregate(expr)
         elif isinstance(expr, ContainerAggregate):
@@ -3732,8 +3959,13 @@ class SemanticAnalyzer:
         # Delta aggregate has the same type as the base
         return base_type
 
-    def _analyze_aggregate(self, expr: Aggregate) -> Optional[AdaType]:
-        """Analyze an aggregate expression."""
+    def _analyze_aggregate(self, expr: Aggregate, expected_type: Optional[AdaType] = None) -> Optional[AdaType]:
+        """Analyze an aggregate expression.
+
+        Args:
+            expr: The aggregate expression to analyze
+            expected_type: Optional expected type from context (e.g., array type for array aggregate)
+        """
         # Analyze all components, including iterated ones
         element_type = None
         for component in expr.components:
@@ -3745,6 +3977,9 @@ class SemanticAnalyzer:
                     comp_type = self._analyze_expr(component.value)
                     if element_type is None:
                         element_type = comp_type
+        # If we have an expected type, return it (aggregate takes type from context)
+        if expected_type:
+            return expected_type
         # Type is determined by context, but we analyze components
         return None
 
@@ -3910,6 +4145,13 @@ class SemanticAnalyzer:
         if prefix_type is None:
             return None
 
+        # Ada allows implicit dereference for access-to-array types
+        # X(Low..High) where X is access-to-array implicitly dereferences X
+        if isinstance(prefix_type, AccessType):
+            designated = prefix_type.designated_type
+            if isinstance(designated, ArrayType):
+                prefix_type = designated
+
         # Prefix must be an array type
         if not isinstance(prefix_type, ArrayType):
             self.error(
@@ -3963,6 +4205,18 @@ class SemanticAnalyzer:
             expr: The identifier to analyze
             expected_type: Optional expected type for overload resolution
         """
+        # Check for generic formal type mapping (during instantiation)
+        generic_formals = getattr(self, '_generic_formals', {})
+        if expr.name.lower() in generic_formals:
+            actual = generic_formals[expr.name.lower()]
+            # The actual might be ActualParameter (wrapping value) or Identifier
+            if hasattr(actual, 'value'):
+                actual = actual.value
+            if isinstance(actual, Identifier):
+                actual_type = self.symbols.lookup_type(actual.name)
+                if actual_type:
+                    return actual_type
+
         symbol = self.symbols.lookup(expr.name)
         if symbol is None:
             self.error(f"'{expr.name}' not found", expr)
@@ -4035,6 +4289,29 @@ class SemanticAnalyzer:
             if left_type and left_type.kind == TypeKind.UNIVERSAL_INTEGER:
                 if right_type and right_type.kind == TypeKind.MODULAR:
                     return right_type
+            # For arrays of Boolean, these are element-wise logical operators (Ada RM 4.5.1)
+            if (left_type and left_type.kind == TypeKind.ARRAY and
+                isinstance(left_type, ArrayType) and left_type.component_type):
+                comp_type = left_type.component_type
+                # Check if component is Boolean or derived from Boolean
+                is_boolean_component = False
+                if comp_type.name.lower() == 'boolean':
+                    is_boolean_component = True
+                else:
+                    # Walk the base_type chain to check for Boolean
+                    current = comp_type
+                    while hasattr(current, 'base_type') and current.base_type:
+                        current = current.base_type
+                        if current.name.lower() == 'boolean':
+                            is_boolean_component = True
+                            break
+                if is_boolean_component:
+                    # If right type is None (e.g., aggregate without context), re-analyze with expected type
+                    if right_type is None:
+                        right_type = self._analyze_expr(expr.right, expected_type=left_type)
+                    # Both operands must be compatible array types
+                    if right_type and types_compatible(left_type, right_type):
+                        return left_type  # Result is same array type
             # For Boolean, these are logical operators
             self._check_boolean(left_type, expr.left)
             self._check_boolean(right_type, expr.right)
@@ -4090,6 +4367,24 @@ class SemanticAnalyzer:
             # For Universal_Integer, NOT is also bitwise complement
             if operand_type and operand_type.kind == TypeKind.UNIVERSAL_INTEGER:
                 return operand_type
+            # For arrays of Boolean, NOT is element-wise negation (Ada RM 4.5.6)
+            if operand_type and operand_type.kind == TypeKind.ARRAY:
+                if isinstance(operand_type, ArrayType) and operand_type.component_type:
+                    comp_type = operand_type.component_type
+                    # Check if component is Boolean or derived from Boolean
+                    is_boolean_component = False
+                    if comp_type.name.lower() == 'boolean':
+                        is_boolean_component = True
+                    else:
+                        # Walk the base_type chain to check for Boolean
+                        current = comp_type
+                        while hasattr(current, 'base_type') and current.base_type:
+                            current = current.base_type
+                            if current.name.lower() == 'boolean':
+                                is_boolean_component = True
+                                break
+                    if is_boolean_component:
+                        return operand_type  # Returns array of same type
             # For Boolean, NOT is logical negation
             self._check_boolean(operand_type, expr.operand)
             return PREDEFINED_TYPES["Boolean"]
@@ -4193,6 +4488,17 @@ class SemanticAnalyzer:
         if prefix_type is None:
             return None
 
+        # Handle implicit dereference: access-to-array types can be indexed directly
+        if isinstance(prefix_type, AccessType):
+            if isinstance(prefix_type.designated_type, ArrayType):
+                prefix_type = prefix_type.designated_type
+            else:
+                self.error(
+                    f"'{prefix_type.name}' is not an access-to-array type",
+                    expr.prefix,
+                )
+                return None
+
         if not isinstance(prefix_type, ArrayType):
             self.error(f"'{prefix_type.name}' is not an array", expr.prefix)
             return None
@@ -4284,6 +4590,12 @@ class SemanticAnalyzer:
         """Analyze an attribute reference."""
         # Analyze prefix and get its type
         prefix_type = self._analyze_expr(expr.prefix)
+
+        # Handle implicit dereference for access-to-array types
+        # e.g., if V is access-to-array, V'Last implicitly dereferences
+        if isinstance(prefix_type, AccessType):
+            if isinstance(prefix_type.designated_type, ArrayType):
+                prefix_type = prefix_type.designated_type
 
         # Handle attributes based on their name
         attr_lower = expr.attribute.lower()
