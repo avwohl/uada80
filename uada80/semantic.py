@@ -4465,6 +4465,19 @@ class SemanticAnalyzer:
                         )
                 return target_type
 
+            # Check if prefix is a function with a single aggregate argument
+            # This handles cases like IDENT((TRUE, FALSE, TRUE)) where the parser
+            # creates IndexedComponent instead of FunctionCall
+            if (symbol and symbol.kind == SymbolKind.FUNCTION and
+                len(expr.indices) == 1 and
+                isinstance(expr.indices[0], Aggregate)):
+                # This is a function call with an aggregate argument
+                func_params = symbol.parameters if symbol.parameters else []
+                if len(func_params) == 1:
+                    args = [ActualParameter(span=None, name=None, value=expr.indices[0])]
+                    self._check_call_arguments(symbol, args, expr)
+                    return symbol.return_type
+
             # Check if prefix is an access-to-function variable (function pointer call)
             if symbol and symbol.kind in (SymbolKind.VARIABLE, SymbolKind.CONSTANT):
                 if isinstance(symbol.ada_type, AccessSubprogramType):
