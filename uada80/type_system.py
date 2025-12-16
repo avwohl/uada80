@@ -181,6 +181,7 @@ class EnumerationType(AdaType):
     literals: list[str] = field(default_factory=list)
     # Position values (usually 0, 1, 2, ... but can be customized via rep clause)
     positions: dict[str, int] = field(default_factory=dict)
+    base_type: Optional["EnumerationType"] = None  # For derived enumeration types
 
     def __post_init__(self) -> None:
         self.kind = TypeKind.ENUMERATION
@@ -295,6 +296,7 @@ class ArrayType(AdaType):
     is_constrained: bool = True
     # For constrained arrays, the bounds
     bounds: list[tuple[int, int]] = field(default_factory=list)
+    base_type: Optional["ArrayType"] = None  # For derived array types
 
     def __post_init__(self) -> None:
         self.kind = TypeKind.ARRAY
@@ -999,6 +1001,10 @@ def get_root_type(t: AdaType) -> AdaType:
     """Get the root (base) type of a subtype chain."""
     if isinstance(t, IntegerType) and t.base_type:
         return get_root_type(t.base_type)
+    if isinstance(t, EnumerationType) and t.base_type:
+        return get_root_type(t.base_type)
+    if isinstance(t, ArrayType) and t.base_type:
+        return get_root_type(t.base_type)
     return t
 
 
@@ -1009,6 +1015,14 @@ def is_subtype_of(subtype: AdaType, parent: AdaType) -> bool:
 
     # Check base type chain for integer subtypes
     if isinstance(subtype, IntegerType) and subtype.base_type:
+        return is_subtype_of(subtype.base_type, parent)
+
+    # Check base type chain for enumeration subtypes
+    if isinstance(subtype, EnumerationType) and subtype.base_type:
+        return is_subtype_of(subtype.base_type, parent)
+
+    # Check base type chain for array subtypes
+    if isinstance(subtype, ArrayType) and subtype.base_type:
         return is_subtype_of(subtype.base_type, parent)
 
     return False
@@ -1090,6 +1104,24 @@ def types_compatible(t1: AdaType, t2: AdaType) -> bool:
     if is_subtype_of(t1, t2) or is_subtype_of(t2, t1):
         return True
 
+    # String literal compatibility: String is compatible with array-of-character types
+    # In Ada, a string literal can be assigned to any array whose component type
+    # is Character or a type derived from Character.
+    if isinstance(t1, ArrayType) and isinstance(t2, ArrayType):
+        if t1.name == "String" or t2.name == "String":
+            # Check if the other type's component is Character or derived from Character
+            other = t2 if t1.name == "String" else t1
+            comp = other.component_type
+            if comp:
+                # Direct Character type
+                if getattr(comp, 'name', None) == 'Character':
+                    return True
+                # Derived from Character (check base_type chain)
+                while hasattr(comp, 'base_type') and comp.base_type:
+                    if getattr(comp.base_type, 'name', None) == 'Character':
+                        return True
+                    comp = comp.base_type
+
     return False
 
 
@@ -1122,9 +1154,53 @@ def can_convert(from_type: AdaType, to_type: AdaType) -> bool:
     if from_type.kind == TypeKind.UNIVERSAL_REAL and to_type.is_numeric():
         return True
 
-    # Enumeration types are not convertible to each other (except via Pos/Val)
+    # Derived types: conversion between a type and its parent/ancestor is allowed
+    # Check if from_type is derived from to_type or vice versa
+    if hasattr(from_type, 'base_type') and from_type.base_type:
+        if same_type(from_type.base_type, to_type):
+            return True
+        # Check ancestor chain
+        ancestor = from_type.base_type
+        while hasattr(ancestor, 'base_type') and ancestor.base_type:
+            if same_type(ancestor, to_type) or same_type(ancestor.base_type, to_type):
+                return True
+            ancestor = ancestor.base_type
+
+    if hasattr(to_type, 'base_type') and to_type.base_type:
+        if same_type(to_type.base_type, from_type):
+            return True
+        # Check ancestor chain
+        ancestor = to_type.base_type
+        while hasattr(ancestor, 'base_type') and ancestor.base_type:
+            if same_type(ancestor, from_type) or same_type(ancestor.base_type, from_type):
+                return True
+            ancestor = ancestor.base_type
+
+    # Enumeration types that aren't related via derivation are not convertible
     if from_type.kind == TypeKind.ENUMERATION and to_type.kind == TypeKind.ENUMERATION:
         return False
+
+    # Array types: conversion is allowed if they have same component type
+    # and convertible index types (Ada RM 4.6)
+    if from_type.kind == TypeKind.ARRAY and to_type.kind == TypeKind.ARRAY:
+        if isinstance(from_type, ArrayType) and isinstance(to_type, ArrayType):
+            # Check component types are the same
+            if from_type.component_type and to_type.component_type:
+                if same_type(from_type.component_type, to_type.component_type):
+                    # Check index types are convertible (same number of dimensions)
+                    if len(from_type.index_types) == len(to_type.index_types):
+                        return True
+
+    # Access types: conversion between related access types is allowed
+    if from_type.kind == TypeKind.ACCESS and to_type.kind == TypeKind.ACCESS:
+        if isinstance(from_type, AccessType) and isinstance(to_type, AccessType):
+            # Same designated type allows conversion
+            if from_type.designated_type and to_type.designated_type:
+                if same_type(from_type.designated_type, to_type.designated_type):
+                    return True
+                # Also check if designated types are convertible
+                if can_convert(from_type.designated_type, to_type.designated_type):
+                    return True
 
     return False
 
@@ -1158,6 +1234,21 @@ def common_type(t1: AdaType, t2: AdaType) -> Optional[AdaType]:
     if t2.kind == TypeKind.UNIVERSAL_REAL:
         if t1.kind in (TypeKind.FLOAT, TypeKind.FIXED):
             return t1
+
+    # Integer * Universal_Real -> Universal_Real (for fixed-point context)
+    # This allows expressions like N * 0.0078125 where N is Integer
+    # Ada RM allows this when the result is used in a fixed-point context
+    if t1.kind == TypeKind.UNIVERSAL_REAL and t2.kind == TypeKind.INTEGER:
+        return t1  # Universal_Real
+    if t2.kind == TypeKind.UNIVERSAL_REAL and t1.kind == TypeKind.INTEGER:
+        return t2  # Universal_Real
+
+    # Universal_Integer * Universal_Real -> Universal_Real
+    # This allows expressions like 8 * 0.0078125 (both literals)
+    if t1.kind == TypeKind.UNIVERSAL_REAL and t2.kind == TypeKind.UNIVERSAL_INTEGER:
+        return t1  # Universal_Real
+    if t2.kind == TypeKind.UNIVERSAL_REAL and t1.kind == TypeKind.UNIVERSAL_INTEGER:
+        return t2  # Universal_Real
 
     # Subtype and base type -> base type
     if is_subtype_of(t1, t2):

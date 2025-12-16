@@ -73,10 +73,13 @@ def compile_and_run(source: str, timeout: float = 5.0, stdin_input: str = None) 
             return False, proc.stdout, f"Assembly failed: {proc.stderr}"
 
         # Step 3: Link with ul80
-        # Include runtime library if it exists
+        # Use the full library for proper symbol resolution
+        libada = RUNTIME_PATH / "libada.lib"
         runtime_rel = RUNTIME_PATH / "runtime.rel"
         link_cmd = ["python3", "-m", "um80.ul80", "-o", str(com_file), str(rel_file)]
-        if runtime_rel.exists():
+        if libada.exists():
+            link_cmd.append(str(libada))
+        elif runtime_rel.exists():
             link_cmd.append(str(runtime_rel))
 
         proc = subprocess.run(
@@ -767,6 +770,105 @@ def test_exit_with_name():
     success, stdout, stderr = compile_and_run(source)
     assert success, f"Program failed: {stderr}"
     assert "42" in stdout
+
+
+@skip_if_no_tools
+def test_exception_handling_basic():
+    """Test basic exception handling with handler."""
+    source = """
+    with Ada.Text_IO;
+    procedure Test is
+    begin
+        Ada.Text_IO.Put_Line("Before");
+        begin
+            Ada.Text_IO.Put_Line("In block");
+            raise Constraint_Error;
+            Ada.Text_IO.Put_Line("After raise");
+        exception
+            when Constraint_Error =>
+                Ada.Text_IO.Put_Line("Caught CE");
+        end;
+        Ada.Text_IO.Put_Line("After block");
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "Before" in stdout
+    assert "In block" in stdout
+    assert "Caught CE" in stdout
+    assert "After block" in stdout
+    assert "After raise" not in stdout
+
+
+@skip_if_no_tools
+def test_exception_handling_nested():
+    """Test nested exception handlers."""
+    source = """
+    with Ada.Text_IO;
+    procedure Test is
+    begin
+        Ada.Text_IO.Put_Line("Start");
+
+        begin
+            Ada.Text_IO.Put_Line("Outer block");
+            begin
+                Ada.Text_IO.Put_Line("Inner block");
+                raise Program_Error;
+                Ada.Text_IO.Put_Line("After inner raise");
+            exception
+                when Constraint_Error =>
+                    Ada.Text_IO.Put_Line("Inner caught CE");
+            end;
+            Ada.Text_IO.Put_Line("After inner block");
+        exception
+            when Program_Error =>
+                Ada.Text_IO.Put_Line("Outer caught PE");
+        end;
+
+        Ada.Text_IO.Put_Line("Done");
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "Start" in stdout
+    assert "Outer block" in stdout
+    assert "Inner block" in stdout
+    assert "Outer caught PE" in stdout
+    assert "Done" in stdout
+    assert "Inner caught CE" not in stdout
+    assert "After inner raise" not in stdout
+    assert "After inner block" not in stdout
+
+
+@skip_if_no_tools
+def test_exception_handling_when_others():
+    """Test 'when others' catch-all handler."""
+    source = """
+    with Ada.Text_IO;
+    procedure Test is
+    begin
+        Ada.Text_IO.Put_Line("Start");
+
+        begin
+            Ada.Text_IO.Put_Line("In block");
+            raise Storage_Error;
+        exception
+            when others =>
+                Ada.Text_IO.Put_Line("Caught others");
+        end;
+
+        Ada.Text_IO.Put_Line("Done");
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "Start" in stdout
+    assert "In block" in stdout
+    assert "Caught others" in stdout
+    assert "Done" in stdout
 
 
 if __name__ == "__main__":

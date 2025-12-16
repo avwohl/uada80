@@ -812,11 +812,11 @@ class Z80CodeGen:
         self._emit("    pop IX")
         self._emit("    ret")
         self._emit("")
-        self._emit("; _str_concat: Concatenate two null-terminated strings")
+        self._emit("; _strcat: Concatenate two null-terminated strings")
         self._emit("; Input: Stack: str1_ptr (16-bit), str2_ptr (16-bit)")
         self._emit("; Output: HL = pointer to new string (in static buffer)")
         self._emit("; Note: Uses static buffer, not reentrant")
-        self._emit("_str_concat:")
+        self._emit("_strcat:")
         self._emit("    push IX")
         self._emit("    ld IX, 0")
         self._emit("    add IX, SP")
@@ -826,31 +826,31 @@ class Z80CodeGen:
         self._emit("    ld L, (IX+6)")
         self._emit("    ld H, (IX+7)")
         self._emit("    ; Point DE to concatenation buffer")
-        self._emit("    ld DE, _str_concat_buf")
+        self._emit("    ld DE, _strcat_buf")
         self._emit("    push DE  ; save result pointer")
         self._emit("    ; Copy str1")
-        self._emit("_str_concat_copy1:")
+        self._emit("_strcat_copy1:")
         self._emit("    ld A, (HL)")
         self._emit("    or A")
-        self._emit("    jr z, _str_concat_copy2_start")
+        self._emit("    jr z, _strcat_copy2_start")
         self._emit("    ld (DE), A")
         self._emit("    inc HL")
         self._emit("    inc DE")
-        self._emit("    jr _str_concat_copy1")
-        self._emit("_str_concat_copy2_start:")
+        self._emit("    jr _strcat_copy1")
+        self._emit("_strcat_copy2_start:")
         self._emit("    ; Get str2 pointer from stack (at IX+4)")
         self._emit("    ld L, (IX+4)")
         self._emit("    ld H, (IX+5)")
         self._emit("    ; Copy str2")
-        self._emit("_str_concat_copy2:")
+        self._emit("_strcat_copy2:")
         self._emit("    ld A, (HL)")
         self._emit("    ld (DE), A")
         self._emit("    or A")
-        self._emit("    jr z, _str_concat_done")
+        self._emit("    jr z, _strcat_done")
         self._emit("    inc HL")
         self._emit("    inc DE")
-        self._emit("    jr _str_concat_copy2")
-        self._emit("_str_concat_done:")
+        self._emit("    jr _strcat_copy2")
+        self._emit("_strcat_done:")
         self._emit("    pop HL  ; return pointer to buffer")
         self._emit("    pop DE")
         self._emit("    pop BC")
@@ -858,7 +858,7 @@ class Z80CodeGen:
         self._emit("    ret")
         self._emit("")
         self._emit("; Static buffer for string concatenation")
-        self._emit("_str_concat_buf:")
+        self._emit("_strcat_buf:")
         self._emit("    .ds 256  ; max concatenated string length")
         self._emit("")
         self._emit("; _str_len: Get length of null-terminated string")
@@ -6751,6 +6751,18 @@ class Z80CodeGen:
             self._gen_jz(instr)
         elif op == OpCode.JNZ:
             self._gen_jnz(instr)
+        elif op == OpCode.JL:
+            self._gen_jl(instr)
+        elif op == OpCode.JLE:
+            self._gen_jle(instr)
+        elif op == OpCode.JG:
+            self._gen_jg(instr)
+        elif op == OpCode.JGE:
+            self._gen_jge(instr)
+        elif op == OpCode.JC:
+            self._gen_jc(instr)
+        elif op == OpCode.JNC:
+            self._gen_jnc(instr)
         elif op == OpCode.CALL:
             self._gen_call(instr)
         elif op == OpCode.CALL_INDIRECT:
@@ -7038,6 +7050,15 @@ class Z80CodeGen:
 
     def _gen_add(self, instr: IRInstr) -> None:
         """Generate ADD instruction."""
+        # Special case: adding to stack pointer (for stack cleanup)
+        if isinstance(instr.dst, MemoryLocation) and instr.dst.symbol_name == "_SP":
+            # ADD _SP, const -> LD HL, const; ADD HL, SP; LD SP, HL
+            # The immediate value is in src1 (dst=_SP, src1=const)
+            if isinstance(instr.src1, Immediate):
+                self._emit_instr("ld", "HL", str(instr.src1.value))
+                self._emit_instr("add", "HL", "SP")
+                self._emit_instr("ld", "SP", "HL")
+            return
         if not isinstance(instr.dst, VReg):
             return
         self._load_to_hl(instr.src1)
@@ -7258,6 +7279,46 @@ class Z80CodeGen:
             self._track_runtime_dep(instr.dst.name)
             self._emit_instr("jp", "NZ", instr.dst.name)
 
+    def _gen_jl(self, instr: IRInstr) -> None:
+        """Generate JL (jump if less, signed) - after CMP which did SBC HL,DE."""
+        if isinstance(instr.dst, Label):
+            self._track_runtime_dep(instr.dst.name)
+            self._emit_instr("jp", "M", instr.dst.name)
+
+    def _gen_jle(self, instr: IRInstr) -> None:
+        """Generate JLE (jump if less or equal, signed) - after CMP."""
+        if isinstance(instr.dst, Label):
+            self._track_runtime_dep(instr.dst.name)
+            self._emit_instr("jp", "Z", instr.dst.name)
+            self._emit_instr("jp", "M", instr.dst.name)
+
+    def _gen_jg(self, instr: IRInstr) -> None:
+        """Generate JG (jump if greater, signed) - after CMP.
+        Greater means not zero AND not negative (positive non-zero)."""
+        if isinstance(instr.dst, Label):
+            self._track_runtime_dep(instr.dst.name)
+            # Skip if equal (Z=1). JP Z is 3 bytes, next JP P is 3 bytes.
+            self._emit_instr("jp", "Z", "$+6")  # Skip over next JP P
+            self._emit_instr("jp", "P", instr.dst.name)  # Jump if positive
+
+    def _gen_jge(self, instr: IRInstr) -> None:
+        """Generate JGE (jump if greater or equal, signed) - after CMP."""
+        if isinstance(instr.dst, Label):
+            self._track_runtime_dep(instr.dst.name)
+            self._emit_instr("jp", "P", instr.dst.name)
+
+    def _gen_jc(self, instr: IRInstr) -> None:
+        """Generate JC (jump if carry, unsigned less) - after CMP."""
+        if isinstance(instr.dst, Label):
+            self._track_runtime_dep(instr.dst.name)
+            self._emit_instr("jp", "C", instr.dst.name)
+
+    def _gen_jnc(self, instr: IRInstr) -> None:
+        """Generate JNC (jump if no carry, unsigned >=) - after CMP."""
+        if isinstance(instr.dst, Label):
+            self._track_runtime_dep(instr.dst.name)
+            self._emit_instr("jp", "NC", instr.dst.name)
+
     def _track_runtime_dep(self, name: str) -> None:
         """Track a runtime library dependency if the name is a runtime symbol."""
         if name.startswith("_") and not name.startswith("__"):
@@ -7367,6 +7428,11 @@ class Z80CodeGen:
 
         dst = handler label, src1 = exception ID to catch
         """
+        # Track exception global variables as runtime dependencies
+        self._track_runtime_dep("_exc_handler")
+        self._track_runtime_dep("_exc_current")
+        self._track_runtime_dep("_exc_message")
+
         self._emit(f"    ; push exception handler")
 
         # Get handler address
@@ -7445,6 +7511,11 @@ class Z80CodeGen:
 
         src1 = exception ID, src2 = message pointer (optional)
         """
+        # Track exception runtime dependencies
+        self._track_runtime_dep("_exc_current")
+        self._track_runtime_dep("_exc_message")
+        self._track_runtime_dep("_exc_do_raise")
+
         self._emit(f"    ; raise exception")
 
         # Store exception ID
@@ -7466,6 +7537,9 @@ class Z80CodeGen:
 
     def _gen_exc_reraise(self, instr: IRInstr) -> None:
         """Generate re-raise current exception."""
+        # Track exception runtime dependencies
+        self._track_runtime_dep("_exc_do_raise")
+
         self._emit(f"    ; reraise exception")
         # _exc_current and _exc_message already set
         self._emit_instr("call", "_exc_do_raise")

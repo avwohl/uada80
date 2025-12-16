@@ -6311,16 +6311,39 @@ class SymbolTable:
         return None
 
     def all_overloads(self, name: str) -> list[Symbol]:
-        """Get all overloaded symbols with the given name."""
-        symbol = self.lookup(name)
-        if symbol is None:
-            return []
+        """Get all overloaded symbols with the given name from all visible scopes.
 
-        result = []
-        current: Optional[Symbol] = symbol
-        while current is not None:
-            result.append(current)
-            current = current.overloaded_next
+        In Ada, overloading resolution considers all visible declarations of a name,
+        not just the first one found. This method collects overloads from:
+        1. All scopes in the scope chain (current scope outward)
+        2. All USE'd packages in each scope
+        """
+        name_lower = name.lower()
+        result: list[Symbol] = []
+        seen_ids: set[int] = set()  # Track by id to avoid duplicates
+
+        def add_symbol_chain(sym: Optional[Symbol]) -> None:
+            """Add a symbol and its overload chain to results."""
+            current = sym
+            while current is not None:
+                if id(current) not in seen_ids:
+                    seen_ids.add(id(current))
+                    result.append(current)
+                current = current.overloaded_next
+
+        # Search from current scope outward
+        scope: Optional[Scope] = self.current_scope
+        while scope is not None:
+            # Check direct symbols in this scope
+            symbol = scope.lookup_local(name_lower)
+            add_symbol_chain(symbol)
+
+            # Check USE clauses in this scope
+            symbol = scope.lookup_use_clause(name_lower)
+            add_symbol_chain(symbol)
+
+            scope = scope.parent
+
         return result
 
     @property

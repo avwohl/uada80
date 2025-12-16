@@ -274,6 +274,19 @@ class DeltaAggregate(Expr):
 
 
 @dataclass
+class ExtensionAggregate(Expr):
+    """Extension aggregate expression (Ada 95+).
+
+    Syntax: (ancestor_part with component_associations)
+    Example: (Parent_Type with Field => Value)
+    Used to create values of derived record types with extensions.
+    """
+
+    ancestor_part: Expr  # Parent type or expression
+    components: list["ComponentAssociation"]
+
+
+@dataclass
 class ContainerAggregate(Expr):
     """Container aggregate expression (Ada 2022).
 
@@ -391,6 +404,22 @@ class AccessTypeIndication(Expr):
     not_null: bool = False  # not null access
     is_all: bool = False  # access all
     is_protected: bool = False  # access protected (for subprograms)
+
+
+@dataclass
+class AccessSubprogramTypeIndication(Expr):
+    """Anonymous access-to-subprogram type indication.
+
+    Used for return types and parameters:
+    - function F return access function (X : Integer) return Integer
+    - procedure P (Callback : access procedure)
+    """
+
+    is_function: bool  # True for function, False for procedure
+    parameters: list["ParameterSpec"] = field(default_factory=list)
+    return_type: Optional[Expr] = None  # Only for functions
+    not_null: bool = False
+    is_protected: bool = False  # access protected procedure/function
 
 
 @dataclass
@@ -544,6 +573,7 @@ class AccessTypeDef(TypeDef):
     is_access_constant: bool
     designated_type: Expr
     is_not_null: bool = False  # not null access
+    constraint: Optional[Expr] = None  # range constraint for designated subtype
 
 
 @dataclass
@@ -572,6 +602,8 @@ class DerivedTypeDef(TypeDef):
     record_extension: Optional[RecordTypeDef] = None  # For tagged types
     interfaces: list[Expr] = field(default_factory=list)  # Implemented interfaces (Ada 2005)
     constraint: Optional[Expr] = None  # Range constraint for scalar derived types
+    digits_constraint: Optional[Expr] = None  # Precision constraint for derived floating-point
+    delta_constraint: Optional[Expr] = None  # Delta constraint for derived fixed-point
 
 
 @dataclass
@@ -595,8 +627,12 @@ class InterfaceTypeDef(TypeDef):
 
 
 @dataclass
-class SubtypeIndication(ASTNode):
-    """Subtype indication with optional constraints."""
+class SubtypeIndication(Expr):
+    """Subtype indication with optional constraints.
+
+    This is an expression because it can appear in type contexts
+    where an expression is expected (e.g., component declarations).
+    """
 
     type_mark: Expr
     constraint: Optional["Constraint"] = None
@@ -646,6 +682,28 @@ class BoxConstraint(Constraint):
     """
 
     type_mark: Optional[Expr] = None  # The index type (may be implicit)
+
+
+@dataclass
+class DigitsConstraint(Constraint):
+    """Digits constraint for floating-point subtypes.
+
+    Example: subtype My_Float is Float digits 6 range 0.0 .. 1.0;
+    """
+
+    digits: Expr  # Number of decimal digits of precision
+    range_constraint: Optional["RangeExpr"] = None
+
+
+@dataclass
+class DeltaConstraint(Constraint):
+    """Delta constraint for fixed-point subtypes.
+
+    Example: subtype My_Fixed is Fixed delta 0.01 range 0.0 .. 1.0;
+    """
+
+    delta: Expr  # The delta value (smallest representable step)
+    range_constraint: Optional["RangeExpr"] = None
 
 
 # ============================================================================
@@ -875,10 +933,11 @@ class GenericPackageDecl(GenericFormal):
 class GenericObjectDecl(GenericFormal):
     """Generic object formal."""
 
-    name: str  # Single name for now
+    name: str  # Primary name (first in list)
     mode: str  # "in", "out", or "in out"
     type_ref: Expr
     default_value: Optional[Expr] = None
+    names: list[str] = field(default_factory=list)  # All names (F, L : E)
 
 
 @dataclass

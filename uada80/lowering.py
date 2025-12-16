@@ -3208,14 +3208,22 @@ class ASTLowering:
             return
 
         then_label = self._new_label("then")
-        else_label = self._new_label("else")
         end_label = self._new_label("endif")
+
+        # Determine where to jump if main condition is false
+        # If there are elsif parts, jump to first elsif; otherwise jump to else
+        if stmt.elsif_parts:
+            first_elsif_label = self._new_label("elsif")
+            false_target = first_elsif_label
+        else:
+            else_label = self._new_label("else")
+            false_target = else_label
 
         # Evaluate condition
         cond = self._lower_expr(stmt.condition)
 
-        # Jump to else if condition is false (zero)
-        self.builder.jz(cond, Label(else_label))
+        # Jump to elsif/else if condition is false (zero)
+        self.builder.jz(cond, Label(false_target))
 
         # Then block
         then_block = self.builder.new_block(then_label)
@@ -3228,23 +3236,29 @@ class ASTLowering:
             self.builder.jmp(Label(end_label))
 
         # Elsif parts
+        next_elsif_label = first_elsif_label if stmt.elsif_parts else None
         for elsif_cond, elsif_stmts in stmt.elsif_parts:
-            elsif_label = self._new_label("elsif")
-            elsif_block = self.builder.new_block(elsif_label)
+            # Create block for this elsif (using pending label)
+            elsif_block = self.builder.new_block(next_elsif_label)
             self.builder.set_block(elsif_block)
 
+            # Evaluate elsif condition
             cond = self._lower_expr(elsif_cond)
-            next_label = self._new_label("elsif_next")
-            self.builder.jz(cond, Label(next_label))
+            next_elsif_label = self._new_label("elsif_next")
+            self.builder.jz(cond, Label(next_elsif_label))
 
+            # Elsif body
             for s in elsif_stmts:
                 self._lower_statement(s)
 
             if not self._block_has_return(self.builder.block):
                 self.builder.jmp(Label(end_label))
 
-        # Else block
-        else_block = self.builder.new_block(else_label)
+        # Else block - use pending elsif_next label if available, else use else_label
+        if next_elsif_label is not None:
+            else_block = self.builder.new_block(next_elsif_label)
+        else:
+            else_block = self.builder.new_block(else_label)
         self.builder.set_block(else_block)
 
         for s in stmt.else_stmts:
@@ -4189,8 +4203,15 @@ class ASTLowering:
                     self.builder.call(Label("_put_line"))
                     temp = self.builder.new_vreg(IRType.WORD, "_discard")
                     self.builder.pop(temp)
+                elif self._is_string_type(arg_expr):
+                    # String expression - evaluate, print with newline
+                    value = self._lower_expr(arg_expr)
+                    self.builder.push(value)
+                    self.builder.call(Label("_put_line"))
+                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                    self.builder.pop(temp)
                 else:
-                    # Expression - evaluate, convert to string, print with newline
+                    # Integer expression - evaluate, convert to string, print with newline
                     value = self._lower_expr(arg_expr)
                     self.builder.push(value)
                     self.builder.call(Label("_put_int_line"))
@@ -5372,7 +5393,8 @@ class ASTLowering:
         if expr.is_for_all:
             # for all: if predicate is false, set result to false and exit
             early_exit = self.builder.new_label("quant_early_exit")
-            is_true = self.builder.cmp_ne(pred_val, Immediate(0, IRType.WORD))
+            is_true = self.builder.new_vreg(IRType.WORD, "_is_true")
+            self.builder.cmp_ne(is_true, pred_val, Immediate(0, IRType.WORD))
             self.builder.jnz(is_true, early_exit)  # predicate was true, continue
             self.builder.mov(result, Immediate(0, IRType.WORD))
             self.builder.jmp(loop_end)
@@ -5520,11 +5542,11 @@ class ASTLowering:
                                 self.builder.cmp(test_val, Immediate(last_val, IRType.WORD))
                                 self.builder.jg(next_choice)  # X > Last, try next
                                 self.builder.jmp(match_label)
-                                self.builder.label(next_choice.name)
+                                self.builder.label(next_choice)
                                 continue
                         # Type without bounds - always matches
                         self.builder.jmp(match_label)
-                        self.builder.label(next_choice.name)
+                        self.builder.label(next_choice)
                         continue
 
                 # Check for T'Class attribute (class-wide membership test)
@@ -5567,7 +5589,7 @@ class ASTLowering:
 
                             # Branch based on result
                             self.builder.jnz(membership_result, match_label)
-                            self.builder.label(next_choice.name)
+                            self.builder.label(next_choice)
                             continue
 
                 # Single value test (equality)
@@ -5580,16 +5602,16 @@ class ASTLowering:
                 # Others always matches
                 self.builder.jmp(match_label)
 
-            self.builder.label(next_choice.name)
+            self.builder.label(next_choice)
 
         # No match found - result stays 0
         self.builder.jmp(end_label)
 
         # Match found
-        self.builder.label(match_label.name)
+        self.builder.label(match_label)
         self.builder.mov(result, Immediate(1, IRType.WORD))
 
-        self.builder.label(end_label.name)
+        self.builder.label(end_label)
 
         # Handle NOT IN by inverting the result
         if expr.is_not:
@@ -6802,17 +6824,24 @@ class ASTLowering:
             ))
         elif op == BinaryOp.CONCAT:
             # String concatenation: call runtime function
-            self.builder.push(right)  # second string
-            self.builder.push(left)   # first string
-            self.builder.call(Label("_str_concat"))
-            temp = self.builder.new_vreg(IRType.WORD, "_discard")
-            self.builder.pop(temp)
-            self.builder.pop(temp)
-            # Capture result from HL register (pointer to concatenated string)
+            # _strcat expects: s1 at IX+8 (first push), s2 at IX+6 (second push)
+            # Result = s1 + s2 = left + right
+            self.builder.push(left)   # first string (s1) -> will be at IX+8
+            self.builder.push(right)  # second string (s2) -> will be at IX+6
+            self.builder.call(Label("_strcat"))
+            # Capture result from HL register BEFORE stack cleanup
+            # (pop uses HL which would overwrite the result)
             self.builder.emit(IRInstr(
                 OpCode.MOV, result,
                 MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
                 comment="capture string concat result from HL"
+            ))
+            # Now clean up the stack (2 words = 4 bytes)
+            self.builder.emit(IRInstr(
+                OpCode.ADD,
+                MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+                Immediate(4, IRType.WORD),
+                comment="clean up 2 pushed arguments"
             ))
         else:
             # Default: move left to result
@@ -6837,7 +6866,8 @@ class ASTLowering:
         left = self._lower_expr(expr.left)
 
         # Check if left is false (0)
-        is_false = self.builder.cmp_eq(left, Immediate(0, IRType.WORD))
+        is_false = self.builder.new_vreg(IRType.WORD, "_is_false")
+        self.builder.cmp_eq(is_false, left, Immediate(0, IRType.WORD))
         self.builder.jnz(is_false, short_circuit)  # If false, short-circuit
 
         # Left was true, evaluate right
@@ -6870,7 +6900,8 @@ class ASTLowering:
         left = self._lower_expr(expr.left)
 
         # Check if left is true (non-zero)
-        is_true = self.builder.cmp_ne(left, Immediate(0, IRType.WORD))
+        is_true = self.builder.new_vreg(IRType.WORD, "_is_true")
+        self.builder.cmp_ne(is_true, left, Immediate(0, IRType.WORD))
         self.builder.jnz(is_true, short_circuit)  # If true, short-circuit
 
         # Left was false, evaluate right
@@ -11675,10 +11706,68 @@ class ASTLowering:
         elif isinstance(expr, IntegerLiteral):
             return True
         elif isinstance(expr, BinaryExpr):
-            # Arithmetic operations return integer
-            return True
+            # Only arithmetic operations return integer, not CONCAT
+            if expr.op != BinaryOp.CONCAT:
+                return True
 
         return False
+
+    def _is_string_type(self, expr) -> bool:
+        """Check if expression has string type."""
+        if self.ctx is None:
+            return False
+
+        if isinstance(expr, StringLiteral):
+            return True
+        elif isinstance(expr, Identifier):
+            name = expr.name.lower()
+            # Check locals
+            if name in self.ctx.locals:
+                local = self.ctx.locals[name]
+                if local.ada_type:
+                    # Extract type name from ada_type (could be Identifier or SubtypeIndication)
+                    type_name = self._extract_type_name(local.ada_type)
+                    if type_name == 'string':
+                        return True
+                    # Check if it's an array of characters (which is string)
+                    if hasattr(local.ada_type, 'is_string') and local.ada_type.is_string:
+                        return True
+                    # Check component type for array types
+                    if hasattr(local.ada_type, 'component_type'):
+                        comp_name = getattr(local.ada_type.component_type, 'name', '').lower()
+                        if comp_name == 'character':
+                            return True
+                # Check vreg type - PTR often indicates string
+                if local.vreg and local.vreg.ir_type == IRType.PTR:
+                    return True
+            return False
+        elif isinstance(expr, BinaryExpr):
+            # Concatenation returns string
+            if expr.op == BinaryOp.CONCAT:
+                return True
+        elif isinstance(expr, AttributeReference):
+            # 'Image returns string
+            if expr.attribute and expr.attribute.lower() == 'image':
+                return True
+
+        return False
+
+    def _extract_type_name(self, type_node) -> str:
+        """Extract the type name from a type node (Identifier or SubtypeIndication)."""
+        if type_node is None:
+            return ''
+        # Direct Identifier: String, Integer, etc.
+        if isinstance(type_node, Identifier):
+            return type_node.name.lower()
+        # SubtypeIndication: has type_mark field
+        if isinstance(type_node, SubtypeIndication):
+            return self._extract_type_name(type_node.type_mark)
+        # SelectedComponent: Ada.Text_IO.File_Type, etc.
+        if isinstance(type_node, SelectedComponent):
+            return self._extract_type_name(type_node.selector)
+        # Fallback - try name attribute
+        name = getattr(type_node, 'name', '')
+        return name.lower() if isinstance(name, str) else ''
 
     def _store_to_target(self, target, value) -> None:
         """Store a value to a target expression (lvalue)."""

@@ -122,7 +122,7 @@ RUNTIME_CATALOG = {
     "_str_len": RuntimeRoutine("_str_len", RuntimeCategory.STRING, "String length"),
     "_str_cmp": RuntimeRoutine("_str_cmp", RuntimeCategory.STRING, "Compare strings"),
     "_str_copy": RuntimeRoutine("_str_copy", RuntimeCategory.STRING, "Copy string"),
-    "_str_concat": RuntimeRoutine("_str_concat", RuntimeCategory.STRING, "Concatenate strings"),
+    "_strcat": RuntimeRoutine("_strcat", RuntimeCategory.STRING, "Concatenate strings"),
 
     # =========================================================================
     # I/O operations (io.asm)
