@@ -68,38 +68,7 @@ EXP_BIAS        EQU     1023
 EXP_ZERO        EQU     0       ; Zero or denormal
 EXP_INF         EQU     2047    ; Infinity or NaN
 
-; =============================================================================
-; Working memory (internal accumulators)
-; =============================================================================
-
-        DSEG
-
-; Float accumulator A (for first operand and result)
-_f64_acc_a:     DS      8       ; 64-bit accumulator A
-
-; Float accumulator B (for second operand)
-_f64_acc_b:     DS      8       ; 64-bit accumulator B
-
-; Extended mantissa for multiply/divide (need extra bits for precision)
-_f64_mant_ext:  DS      16      ; 128-bit extended mantissa
-
-; Temporary storage
-_f64_temp:      DS      8       ; Temporary 64-bit value
-_f64_exp_a:     DS      2       ; Exponent of A (16-bit for overflow detection)
-_f64_exp_b:     DS      2       ; Exponent of B
-_f64_sign:      DS      1       ; Result sign
-_f64_sign_a:    DS      1       ; Sign of operand A
-_f64_sign_b:    DS      1       ; Sign of operand B
-
-; 64-bit working registers (8 bytes each, little-endian)
-_f64_mant_a:    DS      8       ; Mantissa A with implicit 1 at bit 52
-_f64_mant_b:    DS      8       ; Mantissa B with implicit 1 at bit 52
-_f64_mant_r:    DS      8       ; Result mantissa
-
-; Square root scratch space
-_sqrt_s:        DS      8       ; Input value S
-_sqrt_x:        DS      8       ; Current approximation x
-_sqrt_t:        DS      8       ; Temporary for S/x
+; Working memory declarations moved to end of file to avoid linker segment bug
 
         CSEG
 
@@ -443,7 +412,7 @@ _extract_denormal:
 ; Internal helper: 64x64 bit multiplication -> 128 bit result
 ; Input:  HL = pointer to multiplicand (8 bytes)
 ;         DE = pointer to multiplier (8 bytes)
-; Output: _f64_mant_ext = 128-bit result (16 bytes, little-endian)
+; Output: _mantx = 128-bit result (16 bytes, little-endian)
 ;
 ; Uses shift-and-add algorithm:
 ;   result = 0
@@ -462,7 +431,7 @@ _mul_64x64:
         pop     iy              ; IY = multiplier
 
         ; Clear result (16 bytes)
-        ld      hl, _f64_mant_ext
+        ld      hl, _mantx
         ld      b, 16
         xor     a
 _mul64_clear:
@@ -471,8 +440,8 @@ _mul64_clear:
         djnz    _mul64_clear
 
         ; Copy multiplicand to temp area (we'll shift this)
-        ; Use _f64_acc_a as shifted multiplicand (extended to 16 bytes)
-        ld      hl, _f64_acc_a
+        ; Use _acc_a as shifted multiplicand (extended to 16 bytes)
+        ld      hl, _acc_a
         ld      b, 16
         xor     a
 _mul64_clear_acc:
@@ -483,7 +452,7 @@ _mul64_clear_acc:
         ; Copy original multiplicand to low 8 bytes of acc_a
         push    ix
         pop     hl              ; HL = multiplicand
-        ld      de, _f64_acc_a
+        ld      de, _acc_a
         ld      bc, 8
         ldir
 
@@ -538,8 +507,8 @@ _mul64_mask_done:
 
         ; Bit is set: add shifted multiplicand to result
         ; result += acc_a (16 bytes)
-        ld      hl, _f64_mant_ext
-        ld      de, _f64_acc_a
+        ld      hl, _mantx
+        ld      de, _acc_a
         or      a               ; Clear carry
         ld      c, 16
 _mul64_add_loop:
@@ -553,7 +522,7 @@ _mul64_add_loop:
 
 _mul64_skip_add:
         ; Shift acc_a left by 1 (16 bytes)
-        ld      hl, _f64_acc_a
+        ld      hl, _acc_a
         or      a               ; Clear carry
         ld      c, 16
 _mul64_shift_loop:
@@ -692,10 +661,10 @@ _f64_zero:
         ; Store 8 zero bytes
         xor     a
         ld      b, 8
-_f64_zero_loop:
+_fz_loop:
         ld      (hl), a
         inc     hl
-        djnz    _f64_zero_loop
+        djnz    _fz_loop
 
         pop     ix
         ret
@@ -812,13 +781,13 @@ _f64_itof:
         ld      ix, 0
         add     ix, sp
 
-        ; Get integer value
-        ld      l, (ix+6)
-        ld      h, (ix+7)
+        ; Get integer value (at IX+4,5 - pushed last)
+        ld      l, (ix+4)
+        ld      h, (ix+5)
 
-        ; Get dest pointer
-        ld      e, (ix+4)
-        ld      d, (ix+5)
+        ; Get dest pointer (at IX+6,7 - pushed first)
+        ld      e, (ix+6)
+        ld      d, (ix+7)
         push    de              ; Save dest
 
         ; Check for zero
@@ -840,14 +809,14 @@ _itof_zero_loop:
 _itof_nonzero:
         ; Determine sign and get absolute value
         xor     a
-        ld      (_f64_sign), a  ; Assume positive
+        ld      (_fsign), a  ; Assume positive
 
         bit     7, h            ; Check sign
         jr      z, _itof_positive
 
         ; Negative - negate and set sign
         ld      a, 1
-        ld      (_f64_sign), a
+        ld      (_fsign), a
 
         ; Negate HL (two's complement)
         xor     a
@@ -863,7 +832,7 @@ _itof_positive:
 
         ; Start with exponent = 1023 + 15 (for a 16-bit number at position 15)
         ld      de, 1023 + 15
-        ld      (_f64_exp_a), de
+        ld      (_exp_a), de
 
         ; Shift left until MSB is in bit 15 (or HL = 0)
         ld      a, h
@@ -874,7 +843,7 @@ _itof_positive:
         ld      h, l
         ld      l, 0
         ld      de, 1023 + 7    ; Adjust exponent
-        ld      (_f64_exp_a), de
+        ld      (_exp_a), de
 
 _itof_find_msb:
         ; Normalize: shift until bit 15 is set
@@ -883,9 +852,9 @@ _itof_norm_loop:
         jr      nz, _itof_normalized
 
         add     hl, hl          ; Shift left
-        ld      de, (_f64_exp_a)
+        ld      de, (_exp_a)
         dec     de
-        ld      (_f64_exp_a), de
+        ld      (_exp_a), de
         jr      _itof_norm_loop
 
 _itof_normalized:
@@ -942,52 +911,59 @@ _itof_normalized:
         ld      (de), a
         inc     de
 
-        ; Byte 6 (bits 48-51 of mantissa, bits 0-3 of exp)
-        ; Our H bits 6-3 go to mantissa bits 51-48
-        ; So shift H left by 1, then take high nibble
+        ; Byte 6: mantissa bits 51-48 (low nibble), exp bits 0-3 (high nibble)
+        ; H bits 6-3 contain mantissa bits 51-48
+        ; Shift H right by 3 to get these bits in positions 3-0
 
         ld      a, h
-        sla     a               ; Shift left
-        sla     a
-        sla     a
-        sla     a               ; High nibble now has our bits
+        srl     a               ; Shift right
+        srl     a
+        srl     a               ; Now A bits 3-0 = H bits 6-3 (mantissa 51-48)
+        and     0Fh             ; Mask to low nibble
+        ld      c, a            ; Save mantissa nibble in C
 
-        ; Get low nibble of exponent
+        ; Get exponent bits 0-3 and put in high nibble
         push    hl
-        ld      hl, (_f64_exp_a)
-        ld      b, l            ; B = low byte of exponent
+        ld      hl, (_exp_a)
+        ld      a, l            ; A = low byte of exponent
         pop     hl
 
-        ld      c, a            ; Save mantissa nibble
-        ld      a, b
-        and     0Fh             ; Low 4 bits of exponent
-        or      c               ; Combine with mantissa nibble
+        sla     a               ; Shift exp left by 4 to high nibble
+        sla     a
+        sla     a
+        sla     a
+        or      c               ; Combine: exp high nibble | mantissa low nibble
         ld      (de), a
         inc     de
 
-        ; Byte 7 (bits 4-10 of exp, sign)
-        ld      a, b
-        srl     a
-        srl     a
-        srl     a
-        srl     a               ; Get bits 4-7 of exponent
+        ; Byte 7: exp bits 4-10 (bits 6-0), sign (bit 7)
+        ; Exponent is 11 bits. Low 4 bits were in byte 6 high nibble.
+        ; Now we need bits 4-10 (7 bits) in byte 7 bits 6-0.
 
         push    hl
-        ld      hl, (_f64_exp_a)
-        ld      b, h            ; B = high byte of exponent
-        pop     hl
+        ld      hl, (_exp_a)
+        ; Exp bits 4-7 = (exp_low >> 4)
+        ld      a, l
+        srl     a
+        srl     a
+        srl     a
+        srl     a               ; A = exp bits 4-7 in bits 3-0
+        ld      c, a            ; Save in C
 
-        ld      c, a            ; Save exp bits 4-7
-        ld      a, b
+        ; Exp bits 8-10 = exp_high bits 2-0
+        ; Need to put exp_high bits 2-0 into A bits 6-4
+        ld      a, h
         sla     a
         sla     a
         sla     a
-        sla     a               ; Shift high byte left by 4
-        or      c               ; Combine
+        sla     a               ; Shift left by 4 to position bits 6-4
+        and     70h             ; Mask to bits 6-4 only (3 bits of exp_high)
+        or      c               ; Combine with bits 3-0
+        pop     hl
 
         ; Add sign bit
         ld      c, a
-        ld      a, (_f64_sign)
+        ld      a, (_fsign)
         sla     a
         sla     a
         sla     a
@@ -1003,44 +979,83 @@ _itof_normalized:
 
 ; =============================================================================
 ; _f64_ftoi: Convert 64-bit float to 16-bit signed integer (truncate)
-; Input:  Stack: src_ptr
+; Input:  Stack: src_ptr (pointer to 8-byte IEEE 754 double)
 ; Output: HL = integer value
 ;
-; Algorithm:
-;   1. Extract sign, exponent, mantissa
-;   2. If exp < bias, return 0 (|value| < 1)
-;   3. If exp > bias + 15, overflow
-;   4. Shift mantissa to get integer part
-;   5. Apply sign
+; Simplified implementation that directly accesses the float bytes
+; without using the complex _extract_float helper.
 ; =============================================================================
 _f64_ftoi:
         push    ix
         ld      ix, 0
         add     ix, sp
 
-        ; Extract the float using our helper
+        ; Get source pointer from stack
         ld      l, (ix+4)
         ld      h, (ix+5)       ; HL = src_ptr
-        ld      de, _f64_mant_a
-        call    _extract_float  ; A = sign, BC = exponent
-        ld      (_f64_sign), a
-        ld      (_f64_exp_a), bc
+        ld      (_ftoi_src), hl
 
-        ; Check if value is zero (mantissa is zero)
-        ld      hl, _f64_mant_a
-        call    _is_zero_64
-        jr      z, _ftoi_return_zero
+        ; Get byte 6 and 7 which contain exponent and sign
+        ld      de, 6
+        add     hl, de
+        ld      a, (hl)         ; A = byte 6
+        ld      (_ftoi_b6), a
+        inc     hl
+        ld      a, (hl)         ; A = byte 7
+        ld      (_ftoi_b7), a
 
-        ; Check if exponent < bias (|value| < 1)
-        ld      hl, (_f64_exp_a)
-        ld      de, EXP_BIAS
+        ; Extract 11-bit exponent from byte6 and byte7
+        ; byte6 >> 4 gives exp bits 0-3
+        ; byte7 & 0x7F gives exp bits 4-10
+        ; Full exponent = ((byte7 & 0x7F) << 4) | (byte6 >> 4)
+        ld      a, (_ftoi_b6)
+        srl     a
+        srl     a
+        srl     a
+        srl     a               ; A = byte6 >> 4 = exp bits 0-3
+        ld      c, a
+
+        ld      a, (_ftoi_b7)
+        and     7Fh             ; A = byte7 & 0x7F = exp bits 4-10
+        ld      b, a            ; Save for later
+        sla     a
+        sla     a
+        sla     a
+        sla     a               ; A = (byte7 & 0x7F) << 4
+        or      c               ; A = low 8 bits of exponent
+        ld      c, a
+
+        ld      a, b
+        srl     a
+        srl     a
+        srl     a
+        srl     a               ; A = high 3 bits of exponent
+        ld      b, a            ; BC = 11-bit exponent (0-2047)
+
+        ; Check if exponent < 1023 (value < 1)
+        ld      hl, 1023
+        push    bc              ; Save exponent
+        or      a               ; Clear carry
+        sbc     hl, bc          ; HL = 1023 - exp
+        pop     bc              ; Restore exponent
+        jr      c, _ftoi_ge1    ; If carry, exp > 1023
+        jr      z, _ftoi_ge1    ; If zero, exp = 1023
+
+        ; exp < 1023, value < 1, return 0
+        ld      hl, 0
+        jr      _ftoi_done
+
+_ftoi_ge1:
+        ; exp >= 1023, calculate unbiased exp
+        push    bc
+        pop     hl              ; HL = exponent
+        ld      bc, 1023
         or      a
-        sbc     hl, de          ; HL = exp - bias (unbiased exponent)
+        sbc     hl, bc          ; HL = unbiased exponent
+        ld      a, l
+        ld      (_ftoi_uexp), a
 
-        bit     7, h            ; Negative?
-        jr      nz, _ftoi_return_zero
-
-        ; Check for overflow (exp - bias > 15)
+        ; Check for overflow (exp > 15 means integer part > 32767)
         ld      a, h
         or      a
         jr      nz, _ftoi_overflow
@@ -1048,106 +1063,48 @@ _f64_ftoi:
         cp      16
         jr      nc, _ftoi_overflow
 
-        ; L now contains unbiased exponent (0-15)
-        ; The mantissa has implied 1 at bit 52 (bit 4 of byte 6)
-        ; We need to shift right by (52 - unbiased_exp) to get integer part
-        ; But we only have 16 bits, so effectively shift right by (52 - exp) bits
-        ;
-        ; For exp = 0: shift right 52 bits -> result = 1 (the implied 1)
-        ; For exp = 15: shift right 37 bits -> result uses bits 52-37
-
-        ; Our mantissa bytes 5 and 6 contain:
-        ; Byte 6: bit4=implied1, bits 0-3=mantissa bits 48-51
-        ; Byte 5: mantissa bits 40-47
-        ; Byte 4: mantissa bits 32-39
-        ;
-        ; For 16-bit result, we need at most 16 bits starting from bit 52
-        ; Build a 24-bit value from bytes 4,5,6 and shift accordingly
-
-        ; Get bytes 4,5,6 into registers
-        ld      a, (_f64_mant_a + 6)    ; Has implicit 1 at bit 4
-        ld      h, a                     ; H = byte 6 (bits 52-48)
-        ld      a, (_f64_mant_a + 5)
-        ld      d, a                     ; D = byte 5 (bits 47-40)
-        ld      a, (_f64_mant_a + 4)
-        ld      e, a                     ; E = byte 4 (bits 39-32)
-
-        ; Now we have a 20-bit value in H (bits 4-0), D (bits 12-5), E (bits 20-13)
-        ; With implied 1 at bit 4 of H
-
-        ; Unbiased exponent is in L
-        ; We want to extract the integer part
-
-        ; If exp = 0: result = 1 (just the implied 1)
-        ; If exp = 1: result = 2 or 3 (implied 1 << 1, plus bit 51)
-        ; If exp = n: result = bits from (52) down to (52-n)
-
-        ; Number of bits to include = exp + 1 (including implied 1)
-        ; Shift amount from our 20-bit value: (20 - 4) - exp = 16 - exp
-        ; Wait, let me reconsider.
-
-        ; H has: 000X_XXXX where bit 4 is the implied 1
-        ; So the value represented is (H << 16) | (D << 8) | E, divided by 2^16
-        ; No wait, the implied 1 is at bit 52, bytes 5,6 are bits 40-55
-
-        ; Simpler approach: work with bytes 5,6 (16 bits with implied 1 at bit 12)
-        ; HL = (byte6 << 8) | byte5, with implied 1 at bit 12
-
-        ld      a, (_f64_mant_a + 6)    ; Implied 1 at bit 4
-        ld      h, a
-        ld      a, (_f64_mant_a + 5)    ; Mantissa bits 40-47
+        ; Build mantissa: (byte6 & 0x0F | 0x10) << 8 | byte5
+        ld      hl, (_ftoi_src)
+        ld      de, 5
+        add     hl, de
+        ld      a, (hl)         ; A = byte5
         ld      l, a
 
-        ; Now HL has 16 bits, with the implied 1 at bit 12 of HL
-        ; If exp = 0: integer part is just 1, so shift right 12
-        ; If exp = 12: integer part uses all of H and some of L
-        ; If exp = n: shift right by (12 - n), or left if n > 12
+        ld      a, (_ftoi_b6)
+        and     0Fh             ; mantissa bits 48-51
+        or      10h             ; add implied 1 at bit 4
+        ld      h, a            ; HL = 16-bit value with implied 1 at bit 12
 
-        ; Calculate shift: 12 - exp
+        ; Shift right by (12 - exp) or left by (exp - 12)
         ld      a, 12
-        ld      a, (_f64_exp_a)         ; A = unbiased exp (we saved it above)
-        ld      c, a                    ; C = unbiased exp
-        ; Wait, we had it in L before. Let me get it again.
+        ld      c, a
+        ld      a, (_ftoi_uexp)
+        ld      b, a            ; B = unbiased exp
+        ld      a, c
+        sub     b               ; A = 12 - exp
+        jr      z, _ftoi_apply_sign
+        jp      m, _ftoi_left   ; If negative, shift left
 
-        ; Get unbiased exponent again
-        push    hl                      ; Save mantissa bytes
-        ld      hl, (_f64_exp_a)
-        ld      de, EXP_BIAS
-        or      a
-        sbc     hl, de
-        ld      c, l                    ; C = unbiased exponent (0-15)
-        pop     hl                      ; Restore mantissa bytes
-
-        ; Calculate 12 - exp
-        ld      a, 12
-        sub     c                       ; A = 12 - exp
-
-        jr      z, _ftoi_no_shift       ; No shift needed
-        jp      m, _ftoi_shift_left     ; Need to shift left (exp > 12)
-
-        ; Shift right by A bits
+        ; Shift right A times
         ld      b, a
-_ftoi_shift_right:
+_ftoi_right:
         srl     h
         rr      l
-        djnz    _ftoi_shift_right
+        djnz    _ftoi_right
         jr      _ftoi_apply_sign
 
-_ftoi_shift_left:
-        ; Shift left (exp > 12)
-        neg                             ; A = exp - 12
+_ftoi_left:
+        neg                     ; A = exp - 12
         ld      b, a
-_ftoi_shift_left_loop:
+_ftoi_left_loop:
         sla     l
         rl      h
-        djnz    _ftoi_shift_left_loop
-        jr      _ftoi_apply_sign
+        djnz    _ftoi_left_loop
 
-_ftoi_no_shift:
 _ftoi_apply_sign:
-        ; Apply sign
-        ld      a, (_f64_sign)
-        or      a
+        ; Apply sign from byte7 bit 7
+        ld      a, (_ftoi_b7)
+        bit     7, a
         jr      z, _ftoi_done
 
         ; Negate HL
@@ -1157,28 +1114,23 @@ _ftoi_apply_sign:
         sbc     a, a
         sub     h
         ld      h, a
+        jr      _ftoi_done
+
+_ftoi_overflow:
+        ; Return max or min based on sign
+        ld      a, (_ftoi_b7)
+        bit     7, a
+        jr      z, _ftoi_maxpos
+        ld      hl, 8000h       ; -32768
+        jr      _ftoi_done
+_ftoi_maxpos:
+        ld      hl, 7FFFh       ; 32767
 
 _ftoi_done:
         pop     ix
         ret
 
-_ftoi_return_zero:
-        ld      hl, 0
-        pop     ix
-        ret
-
-_ftoi_overflow:
-        ; Return max positive or min negative
-        ld      a, (_f64_sign)
-        or      a
-        jr      z, _ftoi_max_pos
-        ld      hl, 8000h       ; -32768
-        pop     ix
-        ret
-_ftoi_max_pos:
-        ld      hl, 7FFFh       ; 32767
-        pop     ix
-        ret
+        ; Local variables for _f64_ftoi (declared in DSEG at end of file)
 
 ; =============================================================================
 ; _f64_cmp: Compare two floats
@@ -1423,21 +1375,21 @@ _f64_add:
         ; Extract operand A
         ld      l, (ix+4)
         ld      h, (ix+5)       ; HL = a_ptr
-        ld      de, _f64_mant_a
+        ld      de, _mant_a
         call    _extract_float  ; Returns sign in A, exp in BC
-        ld      (_f64_sign_a), a
-        ld      (_f64_exp_a), bc
+        ld      (_sign_a), a
+        ld      (_exp_a), bc
 
         ; Extract operand B
         ld      l, (ix+6)
         ld      h, (ix+7)       ; HL = b_ptr
-        ld      de, _f64_mant_b
+        ld      de, _mant_b
         call    _extract_float  ; Returns sign in A, exp in BC
-        ld      (_f64_sign_b), a
-        ld      (_f64_exp_b), bc
+        ld      (_sign_b), a
+        ld      (_exp_b), bc
 
         ; Check if A is zero
-        ld      hl, _f64_mant_a
+        ld      hl, _mant_a
         call    _is_zero_64
         jr      nz, _add_check_b_zero
 
@@ -1451,7 +1403,7 @@ _f64_add:
 
 _add_check_b_zero:
         ; Check if B is zero
-        ld      hl, _f64_mant_b
+        ld      hl, _mant_b
         call    _is_zero_64
         jr      nz, _add_align
 
@@ -1465,8 +1417,8 @@ _add_check_b_zero:
 
 _add_align:
         ; Align mantissas by shifting the smaller exponent's mantissa
-        ld      hl, (_f64_exp_a)
-        ld      de, (_f64_exp_b)
+        ld      hl, (_exp_a)
+        ld      de, (_exp_b)
 
         ; Calculate exp_diff = exp_a - exp_b
         or      a               ; Clear carry
@@ -1495,12 +1447,12 @@ _add_align:
 _add_do_shift_b:
         ; Shift mant_b right by A bits
         ld      c, a
-        ld      hl, _f64_mant_b
+        ld      hl, _mant_b
         call    _shift_right_64_n
 
         ; Result exponent = exp_a
-        ld      hl, (_f64_exp_a)
-        ld      (_f64_exp_a), hl        ; Result exp in _f64_exp_a
+        ld      hl, (_exp_a)
+        ld      (_exp_a), hl        ; Result exp in _exp_a
         jr      _add_do_op
 
 _add_shift_a:
@@ -1528,69 +1480,69 @@ _add_shift_a:
 _add_do_shift_a:
         ; Shift mant_a right by A bits
         ld      c, a
-        ld      hl, _f64_mant_a
+        ld      hl, _mant_a
         call    _shift_right_64_n
 
         ; Result exponent = exp_b
-        ld      hl, (_f64_exp_b)
-        ld      (_f64_exp_a), hl        ; Result exp in _f64_exp_a
+        ld      hl, (_exp_b)
+        ld      (_exp_a), hl        ; Result exp in _exp_a
 
 _add_do_op:
         ; Now mantissas are aligned, perform add or subtract
         ; Check if signs are the same
-        ld      a, (_f64_sign_a)
+        ld      a, (_sign_a)
         ld      b, a
-        ld      a, (_f64_sign_b)
+        ld      a, (_sign_b)
         xor     b               ; If zero, same sign (add); if 80h, different (subtract)
         jr      nz, _add_subtract
 
         ; Same sign: add mantissas, keep sign
-        ld      hl, _f64_mant_a
-        ld      de, _f64_mant_b
+        ld      hl, _mant_a
+        ld      de, _mant_b
         call    _add_64
 
         ; Check for overflow (carry into bit 53)
-        ld      a, (_f64_mant_a + 6)
+        ld      a, (_mant_a + 6)
         and     20h             ; Check bit 53 (bit 5 of byte 6)
         jr      z, _add_normalize
 
         ; Overflow: shift right and increment exponent
-        ld      hl, _f64_mant_a
+        ld      hl, _mant_a
         call    _shift_right_64
-        ld      hl, (_f64_exp_a)
+        ld      hl, (_exp_a)
         inc     hl
-        ld      (_f64_exp_a), hl
+        ld      (_exp_a), hl
         jr      _add_normalize
 
 _add_subtract:
         ; Different signs: subtract smaller from larger
         ; First compare magnitudes
-        ld      hl, _f64_mant_a
-        ld      de, _f64_mant_b
+        ld      hl, _mant_a
+        ld      de, _mant_b
         call    _cmp_64
         or      a
         jr      z, _add_return_zero     ; Equal magnitudes, result is zero
         jp      p, _add_sub_a_minus_b
 
         ; mant_a < mant_b: result = mant_b - mant_a, sign = sign_b
-        ld      hl, _f64_mant_b
-        ld      de, _f64_mant_a
+        ld      hl, _mant_b
+        ld      de, _mant_a
         call    _sub_64         ; mant_b = mant_b - mant_a
 
         ; Copy result to mant_a
-        ld      hl, _f64_mant_b
-        ld      de, _f64_mant_a
+        ld      hl, _mant_b
+        ld      de, _mant_a
         call    _copy_64
 
         ; Result sign = sign_b
-        ld      a, (_f64_sign_b)
-        ld      (_f64_sign_a), a
+        ld      a, (_sign_b)
+        ld      (_sign_a), a
         jr      _add_normalize
 
 _add_sub_a_minus_b:
         ; mant_a > mant_b: result = mant_a - mant_b, sign = sign_a
-        ld      hl, _f64_mant_a
-        ld      de, _f64_mant_b
+        ld      hl, _mant_a
+        ld      de, _mant_b
         call    _sub_64         ; mant_a = mant_a - mant_b
         ; Sign stays as sign_a
         jr      _add_normalize
@@ -1604,23 +1556,23 @@ _add_return_zero:
 
 _add_normalize:
         ; Normalize: shift left until bit 52 is set (or mantissa is zero)
-        ld      hl, _f64_mant_a
+        ld      hl, _mant_a
         call    _is_zero_64
         jr      z, _add_return_zero
 
 _add_norm_loop:
-        ld      a, (_f64_mant_a + 6)
+        ld      a, (_mant_a + 6)
         and     10h             ; Check bit 52 (bit 4 of byte 6)
         jr      nz, _add_pack   ; Already normalized
 
         ; Shift mantissa left
-        ld      hl, _f64_mant_a
+        ld      hl, _mant_a
         call    _shift_left_64
 
         ; Decrement exponent
-        ld      hl, (_f64_exp_a)
+        ld      hl, (_exp_a)
         dec     hl
-        ld      (_f64_exp_a), hl
+        ld      (_exp_a), hl
 
         ; Check for underflow (exp <= 0)
         ld      a, h
@@ -1633,11 +1585,11 @@ _add_norm_loop:
 
 _add_pack:
         ; Pack result into IEEE 754 format
-        ld      hl, _f64_mant_a         ; Mantissa
+        ld      hl, _mant_a         ; Mantissa
         ld      e, (ix+8)
         ld      d, (ix+9)               ; DE = result_ptr
-        ld      bc, (_f64_exp_a)        ; Exponent
-        ld      a, (_f64_sign_a)        ; Sign
+        ld      bc, (_exp_a)        ; Exponent
+        ld      a, (_sign_a)        ; Sign
         call    _pack_float
 
 _add_done:
@@ -1661,14 +1613,14 @@ _f64_sub:
         push    hl              ; Save b_ptr
 
         ; Copy b to temp
-        ld      de, _f64_temp
+        ld      de, _ftemp
         ld      bc, 8
         ldir
 
         ; Negate temp (flip sign bit)
-        ld      a, (_f64_temp + 7)
+        ld      a, (_ftemp + 7)
         xor     80h
-        ld      (_f64_temp + 7), a
+        ld      (_ftemp + 7), a
 
         ; Now call add with a and negated b
         ; Push args for _f64_add: result_ptr, temp_ptr, a_ptr
@@ -1676,7 +1628,7 @@ _f64_sub:
         ld      h, (ix+9)
         push    hl              ; result_ptr
 
-        ld      hl, _f64_temp
+        ld      hl, _ftemp
         push    hl              ; negated b_ptr
 
         ld      l, (ix+4)
@@ -1714,13 +1666,13 @@ _f64_mul:
         ; Extract operand A
         ld      l, (ix+4)
         ld      h, (ix+5)       ; HL = a_ptr
-        ld      de, _f64_mant_a
+        ld      de, _mant_a
         call    _extract_float  ; Returns sign in A, exp in BC
-        ld      (_f64_sign_a), a
-        ld      (_f64_exp_a), bc
+        ld      (_sign_a), a
+        ld      (_exp_a), bc
 
         ; Check if A is zero
-        ld      hl, _f64_mant_a
+        ld      hl, _mant_a
         call    _is_zero_64
         jr      nz, _mul_check_b
 
@@ -1731,13 +1683,13 @@ _mul_check_b:
         ; Extract operand B
         ld      l, (ix+6)
         ld      h, (ix+7)       ; HL = b_ptr
-        ld      de, _f64_mant_b
+        ld      de, _mant_b
         call    _extract_float  ; Returns sign in A, exp in BC
-        ld      (_f64_sign_b), a
-        ld      (_f64_exp_b), bc
+        ld      (_sign_b), a
+        ld      (_exp_b), bc
 
         ; Check if B is zero
-        ld      hl, _f64_mant_b
+        ld      hl, _mant_b
         call    _is_zero_64
         jr      nz, _mul_calc
 
@@ -1746,15 +1698,15 @@ _mul_check_b:
 
 _mul_calc:
         ; Calculate result sign (XOR of signs)
-        ld      a, (_f64_sign_a)
+        ld      a, (_sign_a)
         ld      b, a
-        ld      a, (_f64_sign_b)
+        ld      a, (_sign_b)
         xor     b
-        ld      (_f64_sign), a  ; Result sign
+        ld      (_fsign), a  ; Result sign
 
         ; Calculate result exponent: exp_a + exp_b - bias
-        ld      hl, (_f64_exp_a)
-        ld      de, (_f64_exp_b)
+        ld      hl, (_exp_a)
+        ld      de, (_exp_b)
         add     hl, de          ; exp_a + exp_b
 
         ; Subtract bias (1023)
@@ -1792,29 +1744,29 @@ _mul_underflow:
         jp      _mul_return_zero
 
 _mul_exp_ok:
-        ld      (_f64_exp_a), hl        ; Save result exponent
+        ld      (_exp_a), hl        ; Save result exponent
 
         ; Multiply mantissas
         ; mant_a has implicit 1 at bit 52, mant_b has implicit 1 at bit 52
         ; Product will have implicit 1 at bit 104 or 105
-        ld      hl, _f64_mant_a
-        ld      de, _f64_mant_b
-        call    _mul_64x64      ; Result in _f64_mant_ext (16 bytes)
+        ld      hl, _mant_a
+        ld      de, _mant_b
+        call    _mul_64x64      ; Result in _mantx (16 bytes)
 
-        ; The product is in _f64_mant_ext
+        ; The product is in _mantx
         ; We have 53 * 53 = 106 significant bits max
         ; The implicit 1 bits multiply to give result at bit 104 (52+52)
         ; We need to extract bits 104-52 (53 bits) from the 128-bit result
 
         ; First, check if bit 105 (byte 13, bit 1) is set
-        ld      a, (_f64_mant_ext + 13)
+        ld      a, (_mantx + 13)
         and     02h
         jr      z, _mul_check_104
 
         ; Bit 105 is set: shift right and increment exponent
         ; Extract bytes 13-6 (shifted right by 1)
-        ld      hl, _f64_mant_ext + 13
-        ld      de, _f64_mant_r + 7
+        ld      hl, _mantx + 13
+        ld      de, _mant_r + 7
 
         ; Copy high 8 bytes with right shift
         or      a               ; Clear carry
@@ -1828,47 +1780,59 @@ _mul_shift_105:
         djnz    _mul_shift_105
 
         ; Increment exponent
-        ld      hl, (_f64_exp_a)
+        ld      hl, (_exp_a)
         inc     hl
-        ld      (_f64_exp_a), hl
+        ld      (_exp_a), hl
+
+        ; After 1-bit shift during copy, bit 105 is at bit 56
+        ; We need it at bit 52, so shift right by 4 more bits
+        ld      hl, _mant_r
+        ld      c, 4
+        call    _shift_right_64_n
         jr      _mul_normalize
 
 _mul_check_104:
         ; Check bit 104 (byte 13, bit 0)
-        ld      a, (_f64_mant_ext + 13)
+        ld      a, (_mantx + 13)
         and     01h
         jr      z, _mul_normalize_low
 
-        ; Bit 104 is set: extract bytes 13-6 directly
-        ; Copy bytes 6-13 to mant_r
-        ld      hl, _f64_mant_ext + 6
-        ld      de, _f64_mant_r
+        ; Bit 104 is set: extract bytes 6-13 to mant_r
+        ; After extraction, bit 104 is at position 56 (byte 7 bit 0)
+        ; We need it at position 52 (byte 6 bit 4) for IEEE 754
+        ld      hl, _mantx + 6
+        ld      de, _mant_r
         ld      bc, 8
         ldir
+
+        ; Shift right by 4 bits to align bit 56 to bit 52
+        ld      hl, _mant_r
+        ld      c, 4
+        call    _shift_right_64_n
         jr      _mul_normalize
 
 _mul_normalize_low:
         ; Need to shift left to normalize
         ; Copy bytes 6-13 first
-        ld      hl, _f64_mant_ext + 6
-        ld      de, _f64_mant_r
+        ld      hl, _mantx + 6
+        ld      de, _mant_r
         ld      bc, 8
         ldir
 
         ; Shift left until bit 52 is set
 _mul_norm_loop:
-        ld      a, (_f64_mant_r + 6)
+        ld      a, (_mant_r + 6)
         and     10h             ; Check bit 52
         jr      nz, _mul_normalize
 
         ; Shift mant_r left
-        ld      hl, _f64_mant_r
+        ld      hl, _mant_r
         call    _shift_left_64
 
         ; Decrement exponent
-        ld      hl, (_f64_exp_a)
+        ld      hl, (_exp_a)
         dec     hl
-        ld      (_f64_exp_a), hl
+        ld      (_exp_a), hl
 
         ; Check for underflow
         ld      a, h
@@ -1881,12 +1845,12 @@ _mul_norm_loop:
 
 _mul_normalize:
         ; Copy normalized mantissa to mant_a for packing
-        ld      hl, _f64_mant_r
-        ld      de, _f64_mant_a
+        ld      hl, _mant_r
+        ld      de, _mant_a
         call    _copy_64
 
         ; Check exponent bounds
-        ld      hl, (_f64_exp_a)
+        ld      hl, (_exp_a)
         ld      a, h
         or      l
         jr      z, _mul_return_zero     ; Exp = 0
@@ -1894,11 +1858,11 @@ _mul_normalize:
         jr      nz, _mul_return_zero    ; Exp < 0
 
         ; Pack result
-        ld      hl, _f64_mant_a
+        ld      hl, _mant_a
         ld      e, (ix+8)
         ld      d, (ix+9)               ; DE = result_ptr
-        ld      bc, (_f64_exp_a)
-        ld      a, (_f64_sign)
+        ld      bc, (_exp_a)
+        ld      a, (_fsign)
         call    _pack_float
         jr      _mul_done
 
@@ -1931,13 +1895,13 @@ _f64_div:
         ; Extract operand A (dividend)
         ld      l, (ix+4)
         ld      h, (ix+5)       ; HL = a_ptr
-        ld      de, _f64_mant_a
+        ld      de, _mant_a
         call    _extract_float  ; Returns sign in A, exp in BC
-        ld      (_f64_sign_a), a
-        ld      (_f64_exp_a), bc
+        ld      (_sign_a), a
+        ld      (_exp_a), bc
 
         ; Check if A is zero (0 / b = 0)
-        ld      hl, _f64_mant_a
+        ld      hl, _mant_a
         call    _is_zero_64
         jr      nz, _div_check_b
 
@@ -1948,13 +1912,13 @@ _div_check_b:
         ; Extract operand B (divisor)
         ld      l, (ix+6)
         ld      h, (ix+7)       ; HL = b_ptr
-        ld      de, _f64_mant_b
+        ld      de, _mant_b
         call    _extract_float  ; Returns sign in A, exp in BC
-        ld      (_f64_sign_b), a
-        ld      (_f64_exp_b), bc
+        ld      (_sign_b), a
+        ld      (_exp_b), bc
 
         ; Check if B is zero (a / 0 = infinity, return max)
-        ld      hl, _f64_mant_b
+        ld      hl, _mant_b
         call    _is_zero_64
         jr      nz, _div_calc
 
@@ -1978,9 +1942,9 @@ _div_check_b:
         ld      (hl), 0F0h      ; Exponent bits 0-3 = F
         inc     hl
         ; Calculate sign
-        ld      a, (_f64_sign_a)
+        ld      a, (_sign_a)
         ld      b, a
-        ld      a, (_f64_sign_b)
+        ld      a, (_sign_b)
         xor     b
         or      7Fh             ; Exponent bits 4-10 = 7F (total exp = 7FF = infinity)
         ld      (hl), a
@@ -1988,15 +1952,15 @@ _div_check_b:
 
 _div_calc:
         ; Calculate result sign (XOR of signs)
-        ld      a, (_f64_sign_a)
+        ld      a, (_sign_a)
         ld      b, a
-        ld      a, (_f64_sign_b)
+        ld      a, (_sign_b)
         xor     b
-        ld      (_f64_sign), a  ; Result sign
+        ld      (_fsign), a  ; Result sign
 
         ; Calculate result exponent: exp_a - exp_b + bias
-        ld      hl, (_f64_exp_a)
-        ld      de, (_f64_exp_b)
+        ld      hl, (_exp_a)
+        ld      de, (_exp_b)
         or      a               ; Clear carry
         sbc     hl, de          ; exp_a - exp_b
 
@@ -2031,7 +1995,7 @@ _div_underflow:
         jp      _div_return_zero
 
 _div_exp_ok:
-        ld      (_f64_exp_a), hl        ; Save result exponent
+        ld      (_exp_a), hl        ; Save result exponent
 
         ; Divide mantissas using binary long division
         ; We need 53 bits of precision
@@ -2046,76 +2010,82 @@ _div_exp_ok:
         ;     quotient <<= 1
 
         ; Clear quotient (mant_r)
-        ld      hl, _f64_mant_r
+        ld      hl, _mant_r
         call    _zero_64
 
         ; Copy mant_a to temp (will be our remainder)
-        ld      hl, _f64_mant_a
-        ld      de, _f64_temp
+        ld      hl, _mant_a
+        ld      de, _ftemp
         call    _copy_64
 
-        ; We need 53 iterations for 53 bits of quotient
-        ; Start with bit 52 (MSB) down to bit 0
+        ; Binary long division for 53 bits of quotient
+        ; Algorithm: compare, shift-quotient+set-bit, subtract-if-needed, shift-remainder
+        ; This produces bits from MSB (bit 52) to LSB (bit 0)
         ld      b, 53           ; Bit counter
 
 _div_loop:
         push    bc
 
-        ; Shift remainder left by 1
-        ld      hl, _f64_temp
-        call    _shift_left_64
-
-        ; Compare remainder with divisor
-        ld      hl, _f64_temp
-        ld      de, _f64_mant_b
+        ; Compare remainder with divisor (BEFORE shifting remainder)
+        ld      hl, _ftemp
+        ld      de, _mant_b
         call    _cmp_64         ; A = -1 if temp < mant_b, 0 if equal, 1 if greater
 
+        ; Save comparison result
+        push    af
+
         ; Shift quotient left
-        ld      hl, _f64_mant_r
+        ld      hl, _mant_r
         call    _shift_left_64
 
+        ; Restore comparison result
+        pop     af
         cp      -1              ; temp < divisor?
         jr      z, _div_skip_sub
 
         ; remainder >= divisor: subtract and set bit 0 of quotient
-        ld      hl, _f64_temp
-        ld      de, _f64_mant_b
+        ld      hl, _ftemp
+        ld      de, _mant_b
         call    _sub_64         ; temp = temp - mant_b
 
         ; Set bit 0 of quotient
-        ld      a, (_f64_mant_r)
+        ld      a, (_mant_r)
         or      01h
-        ld      (_f64_mant_r), a
+        ld      (_mant_r), a
 
 _div_skip_sub:
+        ; Shift remainder left AFTER comparison (for next iteration)
+        ld      hl, _ftemp
+        call    _shift_left_64
+
         pop     bc
         dec     b
         jr      nz, _div_loop
 
         ; Quotient is in mant_r
         ; Normalize if needed
-        ld      a, (_f64_mant_r + 6)
+        ld      a, (_mant_r + 6)
         and     10h             ; Check bit 52
         jr      nz, _div_normalized
 
         ; May need to shift left
 _div_norm_loop:
-        ld      hl, _f64_mant_r
+        ld      hl, _mant_r
         call    _is_zero_64
         jr      z, _div_return_zero
 
-        ld      a, (_f64_mant_r + 6)
+        ld      a, (_mant_r + 6)
         and     10h             ; Check bit 52
         jr      nz, _div_normalized
 
         ; Shift left
-        ld      hl, _f64_mant_r
+        ld      hl, _mant_r
         call    _shift_left_64
 
         ; Decrement exponent
-        ld      hl, (_f64_exp_a)
+        ld      hl, (_exp_a)
         dec     hl
-        ld      (_f64_exp_a), hl
+        ld      (_exp_a), hl
 
         ; Check for underflow
         ld      a, h
@@ -2128,12 +2098,12 @@ _div_norm_loop:
 
 _div_normalized:
         ; Copy result mantissa to mant_a for packing
-        ld      hl, _f64_mant_r
-        ld      de, _f64_mant_a
+        ld      hl, _mant_r
+        ld      de, _mant_a
         call    _copy_64
 
         ; Check exponent bounds
-        ld      hl, (_f64_exp_a)
+        ld      hl, (_exp_a)
         ld      a, h
         or      l
         jr      z, _div_return_zero
@@ -2141,11 +2111,11 @@ _div_normalized:
         jr      nz, _div_return_zero
 
         ; Pack result
-        ld      hl, _f64_mant_a
+        ld      hl, _mant_a
         ld      e, (ix+8)
         ld      d, (ix+9)               ; DE = result_ptr
-        ld      bc, (_f64_exp_a)
-        ld      a, (_f64_sign)
+        ld      bc, (_exp_a)
+        ld      a, (_fsign)
         call    _pack_float
         jr      _div_done
 
@@ -2376,13 +2346,13 @@ _sqrt_iterate:
         pop     hl
         pop     hl
 
-        ; Compute x + S/x -> _f64_temp
+        ; Compute x + S/x -> _ftemp
         ; Stack order: a_ptr (IX+4), b_ptr (IX+6), result_ptr (IX+8)
         ld      hl, _sqrt_x
         push    hl              ; a_ptr (x)
         ld      hl, _sqrt_t
         push    hl              ; b_ptr (S/x)
-        ld      hl, _f64_temp
+        ld      hl, _ftemp
         push    hl              ; result_ptr
         call    _f64_add
         pop     hl
@@ -2391,10 +2361,10 @@ _sqrt_iterate:
 
         ; Divide by 2: (x + S/x) / 2 -> _sqrt_x
         ; Dividing by 2 is just decrementing exponent by 1
-        ; Extract exponent from _f64_temp, decrement, store in _sqrt_x
+        ; Extract exponent from _ftemp, decrement, store in _sqrt_x
 
-        ; Copy _f64_temp to _sqrt_x
-        ld      hl, _f64_temp
+        ; Copy _ftemp to _sqrt_x
+        ld      hl, _ftemp
         ld      de, _sqrt_x
         ld      bc, 8
         ldir
@@ -2472,13 +2442,13 @@ _f64_floor:
         ; Extract the float
         ld      l, (ix+4)
         ld      h, (ix+5)       ; src_ptr
-        ld      de, _f64_mant_a
+        ld      de, _mant_a
         call    _extract_float  ; A = sign, BC = exponent
-        ld      (_f64_sign), a
-        ld      (_f64_exp_a), bc
+        ld      (_fsign), a
+        ld      (_exp_a), bc
 
         ; Check if value is zero
-        ld      hl, _f64_mant_a
+        ld      hl, _mant_a
         call    _is_zero_64
         jr      nz, _floor_not_zero
 
@@ -2490,7 +2460,7 @@ _f64_floor:
 
 _floor_not_zero:
         ; Check if exponent < bias (|value| < 1)
-        ld      hl, (_f64_exp_a)
+        ld      hl, (_exp_a)
         ld      de, EXP_BIAS
         or      a
         sbc     hl, de
@@ -2501,7 +2471,7 @@ _floor_not_zero:
         ; |value| < 1
         ; If positive: return 0
         ; If negative: return -1
-        ld      a, (_f64_sign)
+        ld      a, (_fsign)
         or      a
         jr      nz, _floor_neg_one
 
@@ -2555,7 +2525,7 @@ _floor_check_large:
         call    _copy_64
 
         ; Get unbiased exponent
-        ld      hl, (_f64_exp_a)
+        ld      hl, (_exp_a)
         ld      de, EXP_BIAS
         or      a
         sbc     hl, de
@@ -2581,7 +2551,7 @@ _floor_check_large:
         ; Simplified: for floor of positive, truncation is correct
         ; For floor of negative, we need to check if there was a fractional part
 
-        ld      a, (_f64_sign)
+        ld      a, (_fsign)
         or      a
         jr      z, _floor_done  ; Positive - truncation is floor
 
@@ -2621,13 +2591,13 @@ _f64_ceil:
         ; Extract the float
         ld      l, (ix+4)
         ld      h, (ix+5)       ; src_ptr
-        ld      de, _f64_mant_a
+        ld      de, _mant_a
         call    _extract_float  ; A = sign, BC = exponent
-        ld      (_f64_sign), a
-        ld      (_f64_exp_a), bc
+        ld      (_fsign), a
+        ld      (_exp_a), bc
 
         ; Check if value is zero
-        ld      hl, _f64_mant_a
+        ld      hl, _mant_a
         call    _is_zero_64
         jr      nz, _ceil_not_zero
 
@@ -2639,7 +2609,7 @@ _f64_ceil:
 
 _ceil_not_zero:
         ; Check if exponent < bias (|value| < 1)
-        ld      hl, (_f64_exp_a)
+        ld      hl, (_exp_a)
         ld      de, EXP_BIAS
         or      a
         sbc     hl, de
@@ -2650,7 +2620,7 @@ _ceil_not_zero:
         ; |value| < 1
         ; If negative: return 0
         ; If positive: return 1
-        ld      a, (_f64_sign)
+        ld      a, (_fsign)
         or      a
         jr      z, _ceil_pos_one
 
@@ -2704,7 +2674,7 @@ _ceil_check_large:
         call    _copy_64
 
         ; For negative, truncation is ceiling
-        ld      a, (_f64_sign)
+        ld      a, (_fsign)
         or      a
         jr      nz, _ceil_done
 
@@ -2743,13 +2713,13 @@ _f64_trunc:
         ; Extract the float
         ld      l, (ix+4)
         ld      h, (ix+5)       ; src_ptr
-        ld      de, _f64_mant_a
+        ld      de, _mant_a
         call    _extract_float  ; A = sign, BC = exponent
-        ld      (_f64_sign), a
-        ld      (_f64_exp_a), bc
+        ld      (_fsign), a
+        ld      (_exp_a), bc
 
         ; Check if value is zero
-        ld      hl, _f64_mant_a
+        ld      hl, _mant_a
         call    _is_zero_64
         jr      nz, _trunc_not_zero
 
@@ -2761,7 +2731,7 @@ _f64_trunc:
 
 _trunc_not_zero:
         ; Check if exponent < bias (|value| < 1)
-        ld      hl, (_f64_exp_a)
+        ld      hl, (_exp_a)
         ld      de, EXP_BIAS
         or      a
         sbc     hl, de
@@ -2797,7 +2767,7 @@ _trunc_check_large:
         call    _copy_64
 
         ; Get unbiased exponent in C
-        ld      hl, (_f64_exp_a)
+        ld      hl, (_exp_a)
         ld      de, EXP_BIAS
         or      a
         sbc     hl, de
@@ -2855,5 +2825,45 @@ _trunc_copy:
 _trunc_done:
         pop     ix
         ret
+
+; =============================================================================
+; Working memory (internal accumulators)
+; Placed at end of file to avoid linker segment calculation bug
+; =============================================================================
+
+        DSEG
+
+; Float accumulator A (for first operand and result)
+_acc_a:     DS      8       ; 64-bit accumulator A
+
+; Float accumulator B (for second operand)
+_acc_b:     DS      8       ; 64-bit accumulator B
+
+; Extended mantissa for multiply/divide (need extra bits for precision)
+_mantx:     DS      16      ; 128-bit extended mantissa
+
+; Temporary storage
+_ftemp:     DS      8       ; Temporary 64-bit value
+_exp_a:     DS      2       ; Exponent of A (16-bit for overflow detection)
+_exp_b:     DS      2       ; Exponent of B
+_fsign:     DS      1       ; Result sign
+_sign_a:    DS      1       ; Sign of operand A
+_sign_b:    DS      1       ; Sign of operand B
+
+; 64-bit working registers (8 bytes each, little-endian)
+_mant_a:    DS      8       ; Mantissa A with implicit 1 at bit 52
+_mant_b:    DS      8       ; Mantissa B with implicit 1 at bit 52
+_mant_r:    DS      8       ; Result mantissa
+
+; Square root scratch space
+_sqrt_s:    DS      8       ; Input value S
+_sqrt_x:    DS      8       ; Current approximation x
+_sqrt_t:    DS      8       ; Temporary for S/x
+
+; Local variables for _f64_ftoi
+_ftoi_src:  DS      2       ; Source pointer
+_ftoi_b6:   DS      1       ; Byte 6 of float
+_ftoi_b7:   DS      1       ; Byte 7 of float
+_ftoi_uexp: DS      2       ; Unbiased exponent
 
         END

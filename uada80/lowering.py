@@ -6356,10 +6356,67 @@ class ASTLowering:
         if self.ctx is None:
             return Immediate(0, IRType.WORD)
 
-        # Get the target type
+        # Get the target type and source type
         target_type = self._resolve_type(expr.type_mark)
+        source_type = self._get_expr_type(expr.operand)
 
-        # Evaluate the operand
+        # Check for Float64 conversions
+        source_is_float64 = self._is_float64_type(source_type)
+        target_is_float64 = self._is_float64_type(target_type)
+
+        # Handle Float64 -> Integer conversion
+        if source_is_float64 and target_type and getattr(target_type, 'kind', None) == TypeKind.INTEGER:
+            # Get pointer to Float64 operand
+            float_ptr = self._lower_float64_operand(expr.operand)
+            # Call _f64_ftoi to convert float to integer
+            result = self.builder.new_vreg(IRType.WORD, "_f64_to_int")
+            self.builder.push(float_ptr)
+            self.builder.call(Label("_f64_ftoi"))
+            # Result is in HL - save it BEFORE cleaning up stack
+            self.builder.emit(IRInstr(
+                OpCode.MOV, result,
+                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                comment="result from _f64_ftoi"
+            ))
+            # Clean up stack (1 word = 2 bytes) without using POP (which would trash HL)
+            # Format: ADD _SP, Immediate (dst=_SP, src1=immediate to add)
+            self.builder.emit(IRInstr(
+                OpCode.ADD,
+                MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+                Immediate(2, IRType.WORD),
+                comment="clean up 1 argument (adjust SP)"
+            ))
+            return result
+
+        # Handle Integer -> Float64 conversion
+        if target_is_float64 and source_type and getattr(source_type, 'kind', None) in (TypeKind.INTEGER, TypeKind.MODULAR):
+            # Evaluate the integer operand
+            int_val = self._lower_expr(expr.operand)
+            # Allocate space for Float64 result
+            result_ptr = self.builder.new_vreg(IRType.PTR, "_int_to_f64")
+            self.builder.emit(IRInstr(
+                OpCode.SUB,
+                MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+                MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+                Immediate(8, IRType.WORD),
+                comment="allocate 8 bytes for float64 result"
+            ))
+            self.builder.emit(IRInstr(
+                OpCode.MOV, result_ptr,
+                MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.PTR),
+                comment="result_ptr = SP"
+            ))
+            # Push result pointer and integer value
+            self.builder.push(result_ptr)
+            self.builder.push(int_val)
+            self.builder.call(Label("_f64_itof"))
+            # Pop arguments (2 words = 4 bytes)
+            discard = self.builder.new_vreg(IRType.WORD, "_pop_discard")
+            self.builder.pop(discard)
+            self.builder.pop(discard)
+            return result_ptr
+
+        # Evaluate the operand for non-float64 cases
         operand_val = self._lower_expr(expr.operand)
 
         # For most Z80 conversions, the representation is the same
@@ -6911,10 +6968,12 @@ class ASTLowering:
             comment="result_ptr = SP"
         ))
 
-        # Push pointers for function call (reverse order for stack)
-        self.builder.push(right_ptr)   # second operand
-        self.builder.push(left_ptr)    # first operand
-        self.builder.push(result_ptr)  # result location
+        # Push pointers for function call
+        # Runtime expects: IX+4=a_ptr, IX+6=b_ptr, IX+8=result_ptr
+        # So push order: result first (ends at highest addr), then b, then a
+        self.builder.push(result_ptr)  # result location (IX+8)
+        self.builder.push(right_ptr)   # second operand (IX+6)
+        self.builder.push(left_ptr)    # first operand (IX+4)
 
         # Select the right function
         if op == BinaryOp.ADD:
