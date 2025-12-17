@@ -2870,5 +2870,51 @@ def test_long_float_comparison():
     assert "LE OK" in stdout, f"LE comparison failed: {stdout}"
 
 
+@skip_if_no_tools
+def test_long_float_negation():
+    """Test Long_Float negation operator."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        X : Long_Float := 5.0;
+        Y : Long_Float;
+        R : Integer;
+    begin
+        Y := -X;
+        R := Integer(Y);
+        Ada.Integer_Text_IO.Put(R);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "-5" in stdout, f"Expected -5, got: {stdout}"
+
+
+@skip_if_no_tools
+def test_long_float_abs():
+    """Test Long_Float abs operator."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        X : Long_Float := -7.0;
+        Y : Long_Float;
+        R : Integer;
+    begin
+        Y := abs X;
+        R := Integer(Y);
+        Ada.Integer_Text_IO.Put(R);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "7" in stdout, f"Expected abs(-7)=7, got: {stdout}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
