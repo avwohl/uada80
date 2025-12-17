@@ -1,29 +1,55 @@
 # Claude Code Notes for UADA80
 
-## Work In Progress (2025-12-16)
+## Work In Progress (2025-12-17)
 
 **Session accomplished:**
 - Parser: 100% (2849/2849 ACATS files)
 - Semantic: 100% (2742/2742 ACATS tests pass)
-- All tests: 6816/6816 pass
-- Execution tests: 31/31 pass
-- Float64: IEEE 754 double precision support added
+- Execution tests: 94/94 pass (all composite type tests now work!)
+- All tests: 6874/6879 pass
+- Fixed: Arrays of records, records with arrays, 2D arrays, nested records
 
 **Key fixes this session:**
+1. **Array of records** - Fixed `P(2).X` access for arrays of records:
+   - Fixed `_get_field_bit_info` to handle IndexedComponent prefix
+   - Fixed `_lower_aggregate_to_target` to recursively init nested aggregates
+   - Fixed element size calculation in `_calc_element_addr`
+2. **Records with arrays** - Fixed `X.Values(2)` access:
+   - Fixed `_get_array_base` to handle SelectedName prefix
+   - Fixed `_calc_element_addr` to get bounds from record field types
+   - Fixed `_calc_type_size` to sum actual field sizes (not just count)
+3. **2D arrays** - Fixed `M(I, J)` for multi-dimensional arrays:
+   - Fixed array type resolution to capture all dimension bounds
+   - Fixed `_lower_aggregate_to_target` to handle multi-dimensional aggregates
+   - Each row aggregate recursively initializes as 1D array
+4. **Nested records** - Fixed `O.I.X` for records within records:
+   - Fixed `_get_record_base` to recursively get nested record base
+   - Field offsets correctly accumulated through nesting
+5. **Record size calculation** - Fixed `_calc_type_size`:
+   - Resolves actual type of each field (including arrays)
+   - Sums actual sizes instead of counting fields
+6. **Local array type resolution** - Fixed to resolve component types:
+   - `_resolve_local_type` now properly resolves array component types
+   - Handles records as array components
+
+**Previous session fixes:**
+1. **Record return values** - Fixed `_current_body_declarations` save/restore in nested functions
+2. **Float64 IR and codegen** - Full support for Long_Float operations
+3. **Character Put fix** - `_put_char` uses stack-based calling convention
+4. **Modular type fix** - Integer(B) type conversion and masking after arithmetic
+5. **Access type fix** - Heap alloc result capture and dereference assignment
+
+**Earlier session fixes:**
 1. `all_overloads()` rewritten to search ALL visible scopes (symbol_table.py:6313-6347)
 2. Function-as-IndexedComponent with aggregate arg (semantic.py:4468-4479)
 3. Boolean array NOT/AND/OR/XOR with base_type chain walking
 4. Array type derivation with proper name preservation
 5. Integer * Universal_Real for fixed-point contexts
-6. Generic subprogram body context - set `current_subprogram` for return statement validation (semantic.py:1267-1277)
-7. **Float64 support** - Added Long_Float and Long_Long_Float types (64-bit IEEE 754)
-   - IRType.FLOAT64 added to ir.py
-   - Long_Float, Long_Long_Float in type_system.py
-   - Runtime library: runtime/float64.mac (neg, abs, cmp, itof, ftoi, copy, zero, one)
-   - External declarations in codegen
+6. Generic subprogram body context - set `current_subprogram` for return statement validation
+7. **Float64 runtime** - Complete in runtime/float64.mac (add, sub, mul, div, trunc, floor, ceil)
 
 **Next steps to consider:**
-- Complete float64 arithmetic (add, sub, mul, div currently simplified)
+- Add Float64 execution test (needs float64.mac linked)
 - Add more runtime library functions
 - Implement MP/M tasking support
 
@@ -42,7 +68,7 @@
 | **Code Gen**       | 90%      | Full Z80 assembly output, runtime calls    |
 | **Runtime**        | 70%      | Basic ops, I/O, exceptions; no tasking     |
 | **Standard Lib**   | 95%      | 1,094 packages in adalib/                  |
-| **Execution Tests**| 100%     | 31/31 end-to-end tests pass                |
+| **Execution Tests**| 100%     | 94/94 pass (composite types all work!)     |
 | **OVERALL**        | **75%**  | Estimated ~3,200/4,725 ACATS tests         |
 
 ### Feature Completion by Category
@@ -140,9 +166,15 @@ Note: All semantic tests pass. The parser handles 100% of ACATS files (2849/2849
 
 ### Known Codegen Issues
 
-1. **String concatenation** - Result handling after `_str_concat` call has stack issues
-2. **Put_Line dispatch** - Calling `_put_int_line` instead of `_put_line` for strings
-3. **String representation** - Mix of null-terminated and length-prefixed strings
+All previously known issues have been resolved:
+- ~~String concatenation~~ - Fixed (uses static buffer)
+- ~~Put_Line dispatch~~ - Fixed (improved `_is_string_type()` detection)
+- ~~String representation~~ - Fixed (standardized on null-terminated C-style)
+- ~~Integer'Image~~ - Fixed (capture result before popping arg)
+
+Current remaining items:
+1. **Float64 arithmetic precision** - Some edge cases may have rounding differences
+2. **Tasking not implemented** - Requires MP/M target for OS-level threading
 
 ### How to Update This Section
 

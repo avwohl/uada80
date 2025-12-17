@@ -459,7 +459,8 @@ class Parser:
                 else:
                     # Use IndexedComponent for now; semantic analysis will resolve
                     indices = [arg.value for arg in args]
-                    name = IndexedComponent(prefix=name, indices=indices, span=self.make_span(start))
+                    name = IndexedComponent(prefix=name, indices=indices,
+                                            actual_params=args, span=self.make_span(start))
 
             else:
                 # No more suffixes
@@ -1495,7 +1496,11 @@ class Parser:
             # Check if it's a function call node, convert to procedure call
             if isinstance(name, IndexedComponent):
                 # Convert indexed component to procedure call
-                args = [ActualParameter(value=idx) for idx in name.indices]
+                # Use actual_params if available (preserves named parameter info)
+                if name.actual_params:
+                    args = name.actual_params
+                else:
+                    args = [ActualParameter(value=idx) for idx in name.indices]
                 self.expect(TokenType.SEMICOLON)
                 return ProcedureCallStmt(name=name.prefix, args=args, span=self.make_span(start))
             else:

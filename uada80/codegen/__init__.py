@@ -129,6 +129,17 @@ class Z80CodeGen:
                 self._emit(f'    DB "{escaped}", 0')
             self._emit("")
 
+        # Generate float64 constants
+        if module.float64_constants:
+            self._emit("; Float64 constants (IEEE 754 double precision)")
+            self._emit("    CSEG")
+            for label, value_bytes in module.float64_constants.items():
+                # Emit 8 bytes in little-endian order
+                byte_str = ", ".join(f"0{b:02X}H" for b in value_bytes)
+                self._emit(f'{label}:')
+                self._emit(f'    DB {byte_str}')
+            self._emit("")
+
         # Generate vtables for tagged types
         if module.vtables:
             self._emit("; Vtables for tagged types (OOP dispatch)")
@@ -3211,6 +3222,7 @@ class Z80CodeGen:
         self._emit("    EXTRN _mul16_32    ; 16-bit multiply, 32-bit result")
         self._emit("    EXTRN _div16       ; 16-bit divide")
         self._emit("    EXTRN _div16_signed ; Signed divide")
+        self._emit("    EXTRN _div16_mod   ; Divide with modulo (for int_to_str)")
         self._emit("    EXTRN _mod16       ; 16-bit modulo")
         self._emit("    EXTRN _abs16       ; Absolute value")
         self._emit("    EXTRN _neg16       ; Negate")
@@ -3226,6 +3238,7 @@ class Z80CodeGen:
         self._emit("")
 
         # I/O operations (from io.asm)
+        # Note: _put_int, _int_to_str, _str_to_int are defined inline - don't declare EXTRN
         self._emit("; I/O operations")
         self._emit("    EXTRN _putchar     ; Output character")
         self._emit("    EXTRN _getchar     ; Input character with echo")
@@ -3233,10 +3246,7 @@ class Z80CodeGen:
         self._emit("    EXTRN _kbhit       ; Check keyboard")
         self._emit("    EXTRN _puts        ; Output string")
         self._emit("    EXTRN _put_newline ; Output CR/LF")
-        self._emit("    EXTRN _put_int     ; Output integer")
         self._emit("    EXTRN _put_hex     ; Output hex")
-        self._emit("    EXTRN _int_to_str  ; Integer to string")
-        self._emit("    EXTRN _str_to_int  ; String to integer")
         self._emit("    EXTRN _fopen       ; Open file")
         self._emit("    EXTRN _fclose      ; Close file")
         self._emit("    EXTRN _fread       ; Read from file")
@@ -6782,6 +6792,8 @@ class Z80CodeGen:
             self._gen_shl(instr)
         elif op == OpCode.SHR:
             self._gen_shr(instr)
+        elif op == OpCode.CMP:
+            self._gen_cmp_flags_only(instr)
         elif op in (OpCode.CMP_EQ, OpCode.CMP_NE, OpCode.CMP_LT,
                     OpCode.CMP_LE, OpCode.CMP_GT, OpCode.CMP_GE):
             self._gen_cmp(instr)
@@ -6816,7 +6828,11 @@ class Z80CodeGen:
         elif op == OpCode.POP:
             self._gen_pop(instr)
         elif op == OpCode.LABEL:
-            pass  # Labels are handled in block generation
+            # Emit inline label (for conditional expressions, case expressions, etc.)
+            if isinstance(instr.dst, Label):
+                self._emit(f"{instr.dst.name}:")
+            elif isinstance(instr.dst, str):
+                self._emit(f"{instr.dst}:")
         elif op == OpCode.LEA:
             self._gen_lea(instr)
         elif op == OpCode.NOP:
@@ -7044,7 +7060,16 @@ class Z80CodeGen:
 
     def _gen_lea(self, instr: IRInstr) -> None:
         """Generate LEA (load effective address) instruction."""
-        if not isinstance(instr.dst, VReg) or not isinstance(instr.src1, MemoryLocation):
+        if not isinstance(instr.dst, VReg):
+            return
+
+        # Handle Label source (for Float64 constants, string literals, etc.)
+        if isinstance(instr.src1, Label):
+            self._emit_instr("ld", "HL", instr.src1.name)
+            self._store_from_hl(instr.dst)
+            return
+
+        if not isinstance(instr.src1, MemoryLocation):
             return
 
         mem = instr.src1
@@ -7108,6 +7133,15 @@ class Z80CodeGen:
 
     def _gen_sub(self, instr: IRInstr) -> None:
         """Generate SUB instruction."""
+        # Special case: SUB _SP, _SP, immediate (stack allocation for aggregates)
+        if isinstance(instr.dst, MemoryLocation) and instr.dst.symbol_name == "_SP":
+            if isinstance(instr.src2, Immediate):
+                size = instr.src2.value
+                # Allocate stack space: SP := SP - size
+                self._emit_instr("ld", "HL", f"-{size}")
+                self._emit_instr("add", "HL", "SP")
+                self._emit_instr("ld", "SP", "HL")
+                return
         if not isinstance(instr.dst, VReg):
             return
         self._load_to_hl(instr.src1)
@@ -7240,6 +7274,24 @@ class Z80CodeGen:
         # Call shift right runtime
         self._emit_instr("call", "_shr16")
         self._store_from_hl(instr.dst)
+
+    def _gen_cmp_flags_only(self, instr: IRInstr) -> None:
+        """Generate comparison instruction that only sets flags (no result storage).
+
+        Used for membership tests and other conditional jumps where we just
+        need to set the Z, S, and C flags for subsequent JL/JG/JZ/etc.
+        """
+        # Load both operands
+        self._load_to_hl(instr.src1)
+        self._load_to_de(instr.src2)
+
+        # Compare HL with DE (HL - DE), setting flags
+        self._emit_instr("or", "A")  # Clear carry
+        self._emit_instr("sbc", "HL", "DE")
+        # Flags are now set:
+        # - Z: set if HL == DE
+        # - S: set if HL < DE (signed)
+        # - C: set if HL < DE (unsigned, borrow)
 
     def _gen_cmp(self, instr: IRInstr) -> None:
         """Generate comparison instruction."""

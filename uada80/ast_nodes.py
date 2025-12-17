@@ -101,6 +101,8 @@ class IndexedComponent(Expr):
 
     prefix: Expr
     indices: list[Expr]
+    # For procedure/function calls with named parameters, preserve full ActualParameter list
+    actual_params: list = field(default_factory=list)
 
 
 @dataclass
