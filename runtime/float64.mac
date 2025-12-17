@@ -2662,9 +2662,9 @@ _ceil_check_large:
         cp      52
         jr      nc, _ceil_copy  ; exp >= 52
 
-        ; Has fractional part
-        ; For negative: just truncate
-        ; For positive: truncate then add 1 if frac != 0
+        ; May have fractional part (need to check)
+        ; For negative: just truncate (truncation = ceiling for negative)
+        ; For positive: truncate then add 1.0 ONLY if had fractional bits
 
         ; Copy source to result
         ld      l, (ix+4)
@@ -2673,13 +2673,74 @@ _ceil_check_large:
         ld      d, (ix+7)
         call    _copy_64
 
-        ; For negative, truncation is ceiling
+        ; Check and zero fractional bytes, tracking if any were non-zero
+        ; Get unbiased exponent in C
+        ld      hl, (_exp_a)
+        ld      de, EXP_BIAS
+        or      a
+        sbc     hl, de
+        ld      c, l            ; C = exp (0-51)
+
+        ; Calculate bytes to check/zero: (51 - exp) / 8
+        ld      a, 51
+        sub     c
+        srl     a
+        srl     a
+        srl     a               ; A = fractional bytes to zero
+
+        ; Track whether we found any non-zero bytes
+        ld      d, 0            ; D = had_frac flag (0 = no fractional bits)
+
+        ; Check and zero fractional bytes
+        ld      l, (ix+6)
+        ld      h, (ix+7)       ; HL = result_ptr
+        ld      b, a
+        or      a
+        jr      z, _ceil_skip_zero
+
+_ceil_zero_bytes:
+        ld      a, (hl)         ; Get current byte
+        or      a
+        jr      z, _ceil_byte_zero
+        ld      d, 1            ; Found non-zero byte - has fractional part
+_ceil_byte_zero:
+        xor     a
+        ld      (hl), a         ; Zero the byte
+        inc     hl
+        djnz    _ceil_zero_bytes
+
+_ceil_skip_zero:
+        ; For negative, truncation is ceiling - we're done
         ld      a, (_fsign)
         or      a
         jr      nz, _ceil_done
 
-        ; Positive - would need to add 1 if fractional part exists
-        ; For now, simplified implementation just truncates
+        ; For positive: only add 1.0 if we had fractional bits
+        ld      a, d            ; D = had_frac flag
+        or      a
+        jr      z, _ceil_done   ; No fractional bits - value was already integer
+
+        ; Positive with fractional part - add 1.0 to result
+        ; First, create 1.0 in _ceil_temp using _f64_one
+        ld      hl, _ceil_temp
+        push    hl
+        call    _f64_one
+        pop     hl
+
+        ; Call _f64_add(result, result, _ceil_temp)
+        ; Push order: result_ptr, b_ptr, a_ptr (last pushed at IX+4)
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl              ; result_ptr (IX+8 in _f64_add)
+        ld      hl, _ceil_temp
+        push    hl              ; b_ptr = 1.0 (IX+6 in _f64_add)
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl              ; a_ptr = result (IX+4 in _f64_add)
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl              ; Clean up stack (6 bytes)
 
         jr      _ceil_done
 
@@ -2865,5 +2926,13 @@ _ftoi_src:  DS      2       ; Source pointer
 _ftoi_b6:   DS      1       ; Byte 6 of float
 _ftoi_b7:   DS      1       ; Byte 7 of float
 _ftoi_uexp: DS      2       ; Unbiased exponent
+
+; Temp for ceiling/floor
+_ceil_temp: DS      8       ; Temp storage for ceiling calculations
+
+        ; Constant 1.0 must be in CSEG for proper initialization
+        CSEG
+; Constant 1.0 for ceiling/floor (0x3FF0_0000_0000_0000 little-endian)
+_const_one: DB      00h, 00h, 00h, 00h, 00h, 00h, 0F0h, 3Fh
 
         END

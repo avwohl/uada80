@@ -7087,6 +7087,7 @@ class ASTLowering:
         self.builder.emit(IRInstr(
             OpCode.SUB,
             MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
             Immediate(8, IRType.WORD),
             comment="allocate 8 bytes for float64 unary result"
         ))
@@ -7115,6 +7116,46 @@ class ASTLowering:
             self.builder.push(operand_ptr)   # src (IX+6)
             self.builder.push(result_ptr)    # dest (IX+4)
             self.builder.call(Label("_f64_abs"))
+
+        # Clean up pushed arguments (2 pointers = 4 bytes)
+        self.builder.emit(IRInstr(
+            OpCode.ADD,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            Immediate(4, IRType.WORD),
+            comment="pop 2 float64 pointers"
+        ))
+
+        # Result is in the allocated stack space, pointed to by result_ptr
+        return result_ptr
+
+    def _lower_float64_math_attr(self, func_name: str, operand_ptr, operand_type):
+        """Lower a Float64 math attribute (floor, ceil, trunc).
+
+        These functions take (dest_ptr, src_ptr) and write the result to dest.
+        The result is a Float64 (not an integer).
+        """
+        # Allocate 8 bytes on stack for result
+        result_ptr = self.builder.new_vreg(IRType.WORD, "_f64math")
+
+        self.builder.emit(IRInstr(
+            OpCode.SUB,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            Immediate(8, IRType.WORD),
+            comment=f"allocate 8 bytes for {func_name} result"
+        ))
+
+        self.builder.emit(IRInstr(
+            OpCode.MOV, result_ptr,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            comment="result_ptr = SP"
+        ))
+
+        # Runtime expects: IX+4=src_ptr, IX+6=dest_ptr
+        # Push order: first pushed ends at higher offset (IX+6)
+        self.builder.push(result_ptr)    # dest (IX+6) - pushed first
+        self.builder.push(operand_ptr)   # src (IX+4) - pushed last
+        self.builder.call(Label(func_name))
 
         # Clean up pushed arguments (2 pointers = 4 bytes)
         self.builder.emit(IRInstr(
@@ -7919,6 +7960,19 @@ class ASTLowering:
                     comment=f"deref rename {name}"
                 ))
                 return result
+            # For Float64 types, return the address of the 8-byte value on stack
+            # Need to resolve the type since ada_type may be AST node (SubtypeIndication)
+            resolved_type = self._resolve_local_type(local.ada_type) if local.ada_type else None
+            if resolved_type and self._is_float64_type(resolved_type):
+                frame_offset = -(self.ctx.locals_size - local.stack_offset)
+                local_addr = self.builder.new_vreg(IRType.PTR, f"_{name}_addr")
+                self.builder.emit(IRInstr(
+                    OpCode.LEA,
+                    dst=local_addr,
+                    src1=MemoryLocation(offset=frame_offset, ir_type=IRType.PTR, is_frame_offset=True),
+                    comment=f"address of {name}"
+                ))
+                return local_addr
             return local.vreg
 
         # Check params
@@ -10110,9 +10164,12 @@ class ASTLowering:
 
         if attr == "ceiling":
             # T'Ceiling(X) - smallest integer >= X
-            # For integer types, this is just the value itself
-            # For fixed-point: divide, then add 1 if remainder > 0
             if expr.args:
+                arg_type = self._get_expr_type(expr.args[0])
+                if self._is_float64_type(arg_type):
+                    # Float64: call _f64_ceil
+                    arg_ptr = self._lower_float64_operand(expr.args[0])
+                    return self._lower_float64_math_attr("_f64_ceil", arg_ptr, arg_type)
                 x = self._lower_expr(expr.args[0])
                 result = self.builder.new_vreg(IRType.WORD, "_ceiling")
                 self.builder.mov(result, x)
@@ -10121,8 +10178,12 @@ class ASTLowering:
 
         if attr == "floor":
             # T'Floor(X) - largest integer <= X
-            # For integer types, this is just the value itself
             if expr.args:
+                arg_type = self._get_expr_type(expr.args[0])
+                if self._is_float64_type(arg_type):
+                    # Float64: call _f64_floor
+                    arg_ptr = self._lower_float64_operand(expr.args[0])
+                    return self._lower_float64_math_attr("_f64_floor", arg_ptr, arg_type)
                 x = self._lower_expr(expr.args[0])
                 result = self.builder.new_vreg(IRType.WORD, "_floor")
                 self.builder.mov(result, x)
@@ -10131,8 +10192,14 @@ class ASTLowering:
 
         if attr == "rounding":
             # T'Rounding(X) - round to nearest integer
-            # For integer types, this is the value itself
+            # For Float64: add 0.5, then truncate (for positive numbers)
+            # Full implementation would check sign
             if expr.args:
+                arg_type = self._get_expr_type(expr.args[0])
+                if self._is_float64_type(arg_type):
+                    # Float64: use trunc for now (TODO: proper rounding)
+                    arg_ptr = self._lower_float64_operand(expr.args[0])
+                    return self._lower_float64_math_attr("_f64_trunc", arg_ptr, arg_type)
                 x = self._lower_expr(expr.args[0])
                 result = self.builder.new_vreg(IRType.WORD, "_rounding")
                 self.builder.mov(result, x)
@@ -10141,8 +10208,12 @@ class ASTLowering:
 
         if attr == "truncation":
             # T'Truncation(X) - truncate toward zero
-            # For integer types, this is the value itself
             if expr.args:
+                arg_type = self._get_expr_type(expr.args[0])
+                if self._is_float64_type(arg_type):
+                    # Float64: call _f64_trunc
+                    arg_ptr = self._lower_float64_operand(expr.args[0])
+                    return self._lower_float64_math_attr("_f64_trunc", arg_ptr, arg_type)
                 x = self._lower_expr(expr.args[0])
                 result = self.builder.new_vreg(IRType.WORD, "_truncation")
                 self.builder.mov(result, x)

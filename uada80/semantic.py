@@ -4798,6 +4798,16 @@ class SemanticAnalyzer:
             # Returns same type as prefix
             return prefix_type
 
+        # Floating-point rounding/truncation attributes
+        # These return the same floating-point type as the prefix
+        if attr_lower in ("floor", "ceiling", "truncation", "rounding",
+                          "machine_rounding", "unbiased_rounding", "machine"):
+            # Analyze the argument if present
+            if expr.args:
+                self._analyze_expr(expr.args[0])
+            # Return the floating-point type (from prefix)
+            return prefix_type
+
         # Default: return Integer for unknown attributes
         return PREDEFINED_TYPES["Integer"]
 
