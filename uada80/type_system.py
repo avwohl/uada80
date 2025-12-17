@@ -964,6 +964,22 @@ def create_predefined_types() -> dict[str, AdaType]:
         digits=6,  # Standard single precision
     )
 
+    # Long_Float type (double precision floating point - 64-bit IEEE 754)
+    types["Long_Float"] = FloatType(
+        name="Long_Float",
+        kind=TypeKind.FLOAT,
+        size_bits=64,
+        digits=15,  # Standard double precision
+    )
+
+    # Long_Long_Float type (extended precision - same as Long_Float on Z80)
+    types["Long_Long_Float"] = FloatType(
+        name="Long_Long_Float",
+        kind=TypeKind.FLOAT,
+        size_bits=64,
+        digits=15,  # Same as Long_Float on Z80
+    )
+
     # Duration type (fixed point for time intervals)
     types["Duration"] = FixedType(
         name="Duration",
