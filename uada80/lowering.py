@@ -7074,6 +7074,59 @@ class ASTLowering:
 
         return result
 
+    def _lower_float64_unary(self, op: UnaryOp, operand_ptr, operand_type):
+        """Lower a Float64 unary operation (negation, abs, plus).
+
+        For negation: calls _f64_neg which flips the sign bit.
+        For abs: calls _f64_abs which clears the sign bit.
+        For plus: just copies the value (no-op).
+        """
+        # Allocate 8 bytes on stack for result
+        result_ptr = self.builder.new_vreg(IRType.WORD, "_f64unary")
+
+        self.builder.emit(IRInstr(
+            OpCode.SUB,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            Immediate(8, IRType.WORD),
+            comment="allocate 8 bytes for float64 unary result"
+        ))
+
+        self.builder.emit(IRInstr(
+            OpCode.MOV, result_ptr,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            comment="result_ptr = SP"
+        ))
+
+        if op == UnaryOp.PLUS:
+            # Plus is just a copy - call _f64_copy
+            # Runtime expects: IX+4=dest_ptr, IX+6=src_ptr
+            self.builder.push(operand_ptr)   # src (IX+6)
+            self.builder.push(result_ptr)    # dest (IX+4)
+            self.builder.call(Label("_f64_copy"))
+        elif op == UnaryOp.MINUS:
+            # Negation - call _f64_neg
+            # Runtime expects: IX+4=dest_ptr, IX+6=src_ptr
+            self.builder.push(operand_ptr)   # src (IX+6)
+            self.builder.push(result_ptr)    # dest (IX+4)
+            self.builder.call(Label("_f64_neg"))
+        elif op == UnaryOp.ABS:
+            # Absolute value - call _f64_abs
+            # Runtime expects: IX+4=dest_ptr, IX+6=src_ptr
+            self.builder.push(operand_ptr)   # src (IX+6)
+            self.builder.push(result_ptr)    # dest (IX+4)
+            self.builder.call(Label("_f64_abs"))
+
+        # Clean up pushed arguments (2 pointers = 4 bytes)
+        self.builder.emit(IRInstr(
+            OpCode.ADD,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            Immediate(4, IRType.WORD),
+            comment="pop 2 float64 pointers"
+        ))
+
+        # Result is in the allocated stack space, pointed to by result_ptr
+        return result_ptr
+
     def _lower_declare_expr(self, expr: DeclareExpr):
         """Lower a declare expression (Ada 2022).
 
@@ -8586,6 +8639,13 @@ class ASTLowering:
         user_op = self._lookup_user_unary_operator(op, expr.operand)
         if user_op is not None:
             return self._call_user_unary_operator(user_op, expr.operand)
+
+        # Check if this is a Float64 operation
+        operand_type = self._get_expr_type(expr.operand)
+        if self._is_float64_type(operand_type):
+            if op in (UnaryOp.MINUS, UnaryOp.ABS, UnaryOp.PLUS):
+                operand_ptr = self._lower_float64_operand(expr.operand)
+                return self._lower_float64_unary(op, operand_ptr, operand_type)
 
         operand = self._lower_expr(expr.operand)
         result = self.builder.new_vreg(IRType.WORD, "_tmp")
