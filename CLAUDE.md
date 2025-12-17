@@ -5,52 +5,44 @@
 **Session accomplished:**
 - Parser: 100% (2849/2849 ACATS files)
 - Semantic: 100% (2742/2742 ACATS tests pass)
-- Execution tests: 94/94 pass (all composite type tests now work!)
-- All tests: 6874/6879 pass
-- Fixed: Arrays of records, records with arrays, 2D arrays, nested records
+- Execution tests: 113/113 pass (including 5 Float64 tests)
+- All tests: 6898/6898 pass
+- Fixed: Float64 multiply, divide, and itof bugs - all Float64 ops now working!
 
 **Key fixes this session:**
-1. **Array of records** - Fixed `P(2).X` access for arrays of records:
-   - Fixed `_get_field_bit_info` to handle IndexedComponent prefix
-   - Fixed `_lower_aggregate_to_target` to recursively init nested aggregates
-   - Fixed element size calculation in `_calc_element_addr`
-2. **Records with arrays** - Fixed `X.Values(2)` access:
-   - Fixed `_get_array_base` to handle SelectedName prefix
-   - Fixed `_calc_element_addr` to get bounds from record field types
-   - Fixed `_calc_type_size` to sum actual field sizes (not just count)
-3. **2D arrays** - Fixed `M(I, J)` for multi-dimensional arrays:
-   - Fixed array type resolution to capture all dimension bounds
-   - Fixed `_lower_aggregate_to_target` to handle multi-dimensional aggregates
-   - Each row aggregate recursively initializes as 1D array
-4. **Nested records** - Fixed `O.I.X` for records within records:
-   - Fixed `_get_record_base` to recursively get nested record base
-   - Field offsets correctly accumulated through nesting
-5. **Record size calculation** - Fixed `_calc_type_size`:
-   - Resolves actual type of each field (including arrays)
-   - Sums actual sizes instead of counting fields
-6. **Local array type resolution** - Fixed to resolve component types:
-   - `_resolve_local_type` now properly resolves array component types
-   - Handles records as array components
+1. **Float64 multiply (`_f64_mul`)** - Fixed mantissa extraction:
+   - After extracting bytes 6-13 from 128-bit product, bit 104 ends at bit 56
+   - Added 4-bit right shift to align bit 56 to bit 52 for IEEE 754 format
+   - Now 3.0 * 4.0 = 12.0 correctly
+2. **Float64 divide (`_f64_div`)** - Fixed two bugs:
+   - Save/restore A register around `_shift_left_64` call (it was destroying comparison result)
+   - Restructured division loop: compare BEFORE shifting, shift remainder at END of loop
+   - Now 10.0 / 2.0 = 5.0 correctly
+3. **Float64 itof (`_f64_itof`)** - Fixed argument order and bit packing:
+   - Swapped IX+4/IX+6 to match calling convention (dest_ptr at IX+6, value at IX+4)
+   - Fixed mantissa packing: shift right by 3, not left by 4 (was losing bits)
+   - Fixed byte 6/7 construction: mantissa in low nibble, exponent in high nibble
+   - Now Integer→Long_Float conversion works correctly
+
+**Float64 test results:** All operations verified:
+- 3.0 + 2.0 = 5.0 ✓
+- 10.0 - 4.0 = 6.0 ✓
+- 3.0 * 4.0 = 12.0 ✓
+- 10.0 / 2.0 = 5.0 ✓
+- itof(7) = 7.0, ftoi(7.0) = 7 ✓
 
 **Previous session fixes:**
-1. **Record return values** - Fixed `_current_body_declarations` save/restore in nested functions
-2. **Float64 IR and codegen** - Full support for Long_Float operations
-3. **Character Put fix** - `_put_char` uses stack-based calling convention
-4. **Modular type fix** - Integer(B) type conversion and masking after arithmetic
-5. **Access type fix** - Heap alloc result capture and dereference assignment
-
-**Earlier session fixes:**
-1. `all_overloads()` rewritten to search ALL visible scopes (symbol_table.py:6313-6347)
-2. Function-as-IndexedComponent with aggregate arg (semantic.py:4468-4479)
-3. Boolean array NOT/AND/OR/XOR with base_type chain walking
-4. Array type derivation with proper name preservation
-5. Integer * Universal_Real for fixed-point contexts
-6. Generic subprogram body context - set `current_subprogram` for return statement validation
-7. **Float64 runtime** - Complete in runtime/float64.mac (add, sub, mul, div, trunc, floor, ceil)
+1. **Float64→Integer conversion** - `_f64_ftoi` rewritten with direct byte access
+2. **Float64 type conversion in lowering** - Proper handling in `_lower_type_conversion`
+3. **Float64 argument order** - Fixed push order for binary ops
+4. **Array of records** - Fixed `P(2).X` access
+5. **Records with arrays** - Fixed `X.Values(2)` access
+6. **2D arrays** - Fixed `M(I, J)` for multi-dimensional arrays
+7. **Nested records** - Fixed `O.I.X` for records within records
 
 **Next steps to consider:**
-- Add Float64 execution test (needs float64.mac linked)
-- Add more runtime library functions
+- Add more Float64 tests (negative numbers, larger values)
+- Implement Float64 comparison operators (_f64_lt, _f64_le, _f64_gt, _f64_ge)
 - Implement MP/M tasking support
 
 ---
@@ -68,7 +60,7 @@
 | **Code Gen**       | 90%      | Full Z80 assembly output, runtime calls    |
 | **Runtime**        | 70%      | Basic ops, I/O, exceptions; no tasking     |
 | **Standard Lib**   | 95%      | 1,094 packages in adalib/                  |
-| **Execution Tests**| 100%     | 94/94 pass (composite types all work!)     |
+| **Execution Tests**| 100%     | 113/113 pass (incl. Float64 tests)         |
 | **OVERALL**        | **75%**  | Estimated ~3,200/4,725 ACATS tests         |
 
 ### Feature Completion by Category

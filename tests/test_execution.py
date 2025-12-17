@@ -2702,5 +2702,132 @@ def test_integer_division():
     assert "2" in stdout
 
 
+# ============================================================================
+# Float64 (Long_Float) Tests
+# ============================================================================
+
+
+@skip_if_no_tools
+def test_long_float_addition():
+    """Test Long_Float addition and conversion to Integer.
+
+    This tests the Float64 runtime library (_f64_add, _f64_ftoi).
+    """
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        X : Long_Float := 3.0;
+        Y : Long_Float := 2.0;
+        Z : Long_Float;
+        I : Integer;
+    begin
+        Z := X + Y;
+        I := Integer(Z);
+        Ada.Integer_Text_IO.Put(I);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "5" in stdout, f"Expected 3.0+2.0=5, got: {stdout}"
+
+
+@skip_if_no_tools
+def test_long_float_subtraction():
+    """Test Long_Float subtraction and conversion to Integer."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        X : Long_Float := 10.0;
+        Y : Long_Float := 4.0;
+        Z : Long_Float;
+        I : Integer;
+    begin
+        Z := X - Y;
+        I := Integer(Z);
+        Ada.Integer_Text_IO.Put(I);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "6" in stdout, f"Expected 10.0-4.0=6, got: {stdout}"
+
+
+@skip_if_no_tools
+def test_long_float_multiplication():
+    """Test Long_Float multiplication and conversion to Integer."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        X : Long_Float := 3.0;
+        Y : Long_Float := 4.0;
+        Z : Long_Float;
+        I : Integer;
+    begin
+        Z := X * Y;
+        I := Integer(Z);
+        Ada.Integer_Text_IO.Put(I);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "12" in stdout, f"Expected 3.0*4.0=12, got: {stdout}"
+
+
+@skip_if_no_tools
+def test_long_float_division():
+    """Test Long_Float division and conversion to Integer."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        X : Long_Float := 10.0;
+        Y : Long_Float := 2.0;
+        Z : Long_Float;
+        I : Integer;
+    begin
+        Z := X / Y;
+        I := Integer(Z);
+        Ada.Integer_Text_IO.Put(I);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "5" in stdout, f"Expected 10.0/2.0=5, got: {stdout}"
+
+
+@skip_if_no_tools
+def test_long_float_itof():
+    """Test Integer to Long_Float conversion."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        I : Integer := 7;
+        X : Long_Float;
+        R : Integer;
+    begin
+        X := Long_Float(I);
+        R := Integer(X);
+        Ada.Integer_Text_IO.Put(R);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "7" in stdout, f"Expected itof(7)=7, got: {stdout}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
