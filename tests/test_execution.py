@@ -2985,5 +2985,28 @@ def test_long_float_truncation():
     assert "3" in stdout, f"Expected truncation(3.9)=3, got: {stdout}"
 
 
+@skip_if_no_tools
+def test_long_float_rounding():
+    """Test Long_Float'Rounding attribute."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        X : Long_Float := 3.5;
+        Y : Long_Float;
+        R : Integer;
+    begin
+        Y := Long_Float'Rounding(X);
+        R := Integer(Y);
+        Ada.Integer_Text_IO.Put(R);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "4" in stdout, f"Expected rounding(3.5)=4, got: {stdout}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
