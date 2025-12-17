@@ -7,7 +7,7 @@ UM80 = PYTHONPATH=$(UM80_PATH) python3 -m um80.um80
 ULIB80 = PYTHONPATH=$(UM80_PATH) python3 -m um80.ulib80
 
 # Source files with .mac extension (macro assembler source)
-MAC_SOURCES = runtime.mac containers.mac vectors.mac lists.mac tasking.mac fileio.mac float48.mac timer.mac
+MAC_SOURCES = runtime.mac containers.mac vectors.mac lists.mac tasking.mac fileio.mac float48.mac float64.mac timer.mac
 MAC_OBJECTS = $(MAC_SOURCES:.mac=.rel)
 
 # Pre-compiled object files (no source available)
@@ -38,4 +38,5 @@ lists.rel: lists.mac
 tasking.rel: tasking.mac
 fileio.rel: fileio.mac
 float48.rel: float48.mac
+float64.rel: float64.mac
 timer.rel: timer.mac

@@ -2955,9 +2955,51 @@ class SemanticAnalyzer:
         # Handle constrained array/type syntax: Type(Constraint)
         # The parser produces a Slice or IndexedComponent for this
         if isinstance(type_mark, Slice):
-            return self._resolve_type(type_mark.prefix)
+            base_type = self._resolve_type(type_mark.prefix)
+            # If base is unconstrained array, create constrained version with bounds
+            if isinstance(base_type, ArrayType) and not base_type.is_constrained:
+                # Extract bounds from slice range
+                slice_range = type_mark.range_expr
+                if isinstance(slice_range, RangeExpr):
+                    low = self._try_eval_static(slice_range.low)
+                    high = self._try_eval_static(slice_range.high)
+                    # Ensure low and high are actual integers
+                    if isinstance(low, int) and isinstance(high, int):
+                        # Create constrained array type with bounds
+                        return ArrayType(
+                            name=f"{base_type.name}({low}..{high})",
+                            kind=base_type.kind,
+                            size_bits=(high - low + 1) * (base_type.component_type.size_bits if base_type.component_type else 8),
+                            component_type=base_type.component_type,
+                            index_types=base_type.index_types,
+                            bounds=[(low, high)],
+                            is_constrained=True,
+                            base_type=base_type,
+                        )
+            return base_type
         elif isinstance(type_mark, IndexedComponent):
-            return self._resolve_type(type_mark.prefix)
+            base_type = self._resolve_type(type_mark.prefix)
+            # If base is unconstrained array, create constrained version
+            if isinstance(base_type, ArrayType) and not base_type.is_constrained:
+                # Extract bounds from indices (could be range or discrete values)
+                if type_mark.indices and len(type_mark.indices) == 1:
+                    idx = type_mark.indices[0]
+                    if isinstance(idx, RangeExpr):
+                        low = self._try_eval_static(idx.low)
+                        high = self._try_eval_static(idx.high)
+                        # Ensure low and high are actual integers
+                        if isinstance(low, int) and isinstance(high, int):
+                            return ArrayType(
+                                name=f"{base_type.name}({low}..{high})",
+                                kind=base_type.kind,
+                                size_bits=(high - low + 1) * (base_type.component_type.size_bits if base_type.component_type else 8),
+                                component_type=base_type.component_type,
+                                index_types=base_type.index_types,
+                                bounds=[(low, high)],
+                                is_constrained=True,
+                                base_type=base_type,
+                            )
+            return base_type
 
         return self._resolve_type(type_mark)
 
@@ -4357,6 +4399,12 @@ class SemanticAnalyzer:
 
         # Concatenation
         if expr.op == BinaryOp.CONCAT:
+            # For arrays, concatenation returns the array type
+            if left_type and left_type.kind == TypeKind.ARRAY:
+                return left_type
+            if right_type and right_type.kind == TypeKind.ARRAY:
+                return right_type
+            # Default to String for string literals
             return PREDEFINED_TYPES["String"]
 
         return left_type

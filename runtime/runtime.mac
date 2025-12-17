@@ -1128,65 +1128,71 @@ _strlen_done:
 
 ; ============================================================
 ; _int_to_str - Convert integer to string
-; Input: HL = integer value, DE = buffer pointer
-; Output: HL = pointer to string (null-terminated)
-; Destroys: A, BC
+; Input: Stack: value (16-bit signed at IX+4)
+; Output: HL = pointer to null-terminated string in static buffer
+; Destroys: A, BC, DE
+; Note: Uses static buffer - not reentrant!
 ; ============================================================
     PUBLIC _int_to_str
 _int_to_str:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
     PUSH BC
-    PUSH DE                 ; save buffer start
+
+    ; Get value from stack (at IX+4)
+    LD L, (IX+4)
+    LD H, (IX+5)
+
+    ; Point DE to end of buffer (work backwards)
+    LD DE, _int_str_buf + 7
+    XOR A
+    LD (DE), A              ; null terminator
+    DEC DE
 
     ; Check for negative
     BIT 7, H
-    JR Z, _i2s_positive
+    PUSH AF                 ; save sign flag
+    JR Z, _i2s_loop
 
-    ; Write minus sign
-    LD A, '-'
-    LD (DE), A
-    INC DE
-
-    ; Negate HL
-    LD A, L
-    CPL
+    ; Negate HL (two's complement)
+    XOR A
+    SUB L
     LD L, A
-    LD A, H
-    CPL
+    SBC A, A
+    SUB H
     LD H, A
-    INC HL
-
-_i2s_positive:
-    ; HL = positive value, DE = buffer position
-    ; Push digits onto stack in reverse order
-    LD B, 0                 ; digit count
 
 _i2s_loop:
+    ; Divide HL by 10, get remainder
     PUSH DE
     LD DE, 10
     CALL _udiv16            ; HL = quotient, DE = remainder
-    LD A, E                 ; A = digit
+    LD A, E                 ; A = digit (remainder)
     POP DE
     ADD A, '0'
-    PUSH AF
-    INC B
+    LD (DE), A
+    DEC DE
 
+    ; Check if HL is zero
     LD A, H
     OR L
     JR NZ, _i2s_loop
 
-    ; Pop digits and write to buffer
-_i2s_write:
-    POP AF
+    ; Add minus sign if needed
+    POP AF                  ; restore sign flag
+    JR Z, _i2s_done
+    LD A, '-'
     LD (DE), A
+    DEC DE
+
+_i2s_done:
+    ; Return pointer to start of string
     INC DE
-    DJNZ _i2s_write
+    EX DE, HL
 
-    ; Null terminate
-    XOR A
-    LD (DE), A
-
-    POP HL                  ; HL = buffer start
     POP BC
+    POP IX
     RET
 
 ; ============================================================
@@ -1201,7 +1207,10 @@ _i2s_write:
 ; ============================================================
     PUBLIC _put_char
 _put_char:
-    LD E, L
+    ; Get character from stack (SP+2, after return address)
+    LD HL, 2
+    ADD HL, SP
+    LD E, (HL)              ; E = character value (low byte only)
     LD C, 2                 ; BDOS console output
     JP 5
 
@@ -1811,6 +1820,10 @@ _exc_current:
     DW 0                    ; Current exception ID (1=Constraint_Error, etc)
 _exc_message:
     DW 0                    ; Pointer to exception message string
+
+; Integer to string conversion buffer
+_int_str_buf:
+    DS 8                    ; -32768 is 6 chars + sign + null
 
 ; Heap start marker (must be last)
     PUBLIC _heap_start
