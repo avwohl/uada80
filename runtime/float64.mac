@@ -56,6 +56,7 @@
         PUBLIC  _f64_floor      ; Floor (round toward -inf)
         PUBLIC  _f64_ceil       ; Ceiling (round toward +inf)
         PUBLIC  _f64_trunc      ; Truncate (round toward 0)
+        PUBLIC  _f64_round      ; Round to nearest (half away from zero)
 
 ; =============================================================================
 ; Constants
@@ -2884,6 +2885,204 @@ _trunc_copy:
         call    _copy_64
 
 _trunc_done:
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_round: Round to nearest (half away from zero)
+; Input:  Stack: result_ptr, src_ptr
+; Output: result = round(src)
+;
+; Algorithm:
+;   - If x >= 0: return trunc(x + 0.5)
+;   - If x < 0: return trunc(x - 0.5)
+; =============================================================================
+_f64_round:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Extract the float to get sign
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; src_ptr
+        ld      de, _mant_a
+        call    _extract_float  ; A = sign, BC = exponent
+        ld      (_fsign), a
+        ld      (_exp_a), bc
+
+        ; Check if value is zero
+        ld      hl, _mant_a
+        call    _is_zero_64
+        jr      nz, _round_not_zero
+
+        ; Zero - return zero
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        call    _zero_64
+        jp      _round_done
+
+_round_not_zero:
+        ; Check if exponent >= 52 (no fractional part)
+        ld      hl, (_exp_a)
+        ld      de, EXP_BIAS
+        or      a
+        sbc     hl, de          ; HL = unbiased exponent
+        bit     7, h
+        jr      nz, _round_small ; exp < 0, |value| < 1
+
+        ld      a, h
+        or      a
+        jp      nz, _round_copy ; exp >= 256, no fractional part
+        ld      a, l
+        cp      52
+        jp      nc, _round_copy ; exp >= 52, no fractional part
+
+        ; Value has fractional part - need to add/subtract 0.5 then truncate
+        ; First, create 0.5 in _ceil_temp
+        ld      hl, _ceil_temp
+        xor     a
+        ld      (hl), a         ; byte 0
+        inc     hl
+        ld      (hl), a         ; byte 1
+        inc     hl
+        ld      (hl), a         ; byte 2
+        inc     hl
+        ld      (hl), a         ; byte 3
+        inc     hl
+        ld      (hl), a         ; byte 4
+        inc     hl
+        ld      (hl), a         ; byte 5
+        inc     hl
+        ld      (hl), 0E0h      ; byte 6 (0.5 = 0x3FE0_0000_0000_0000)
+        inc     hl
+        ld      (hl), 03Fh      ; byte 7
+
+        ; Check sign to decide add or subtract
+        ld      a, (_fsign)
+        or      a
+        jr      nz, _round_negative
+
+        ; Positive: result = trunc(x + 0.5)
+        ; Call _f64_add(result, src, 0.5)
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl              ; result_ptr
+        ld      hl, _ceil_temp
+        push    hl              ; b_ptr = 0.5
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        push    hl              ; a_ptr = src
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Now truncate the result in place
+        ; Call _f64_trunc(result, result)
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl              ; result_ptr (both src and dest)
+        push    hl              ; src_ptr = result
+        call    _f64_trunc
+        pop     hl
+        pop     hl
+        jp      _round_done
+
+_round_negative:
+        ; Negative: result = trunc(x - 0.5)
+        ; First negate 0.5 to get -0.5
+        ld      hl, _ceil_temp+7
+        ld      a, (hl)
+        or      80h             ; Set sign bit
+        ld      (hl), a
+
+        ; Call _f64_add(result, src, -0.5)
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl              ; result_ptr
+        ld      hl, _ceil_temp
+        push    hl              ; b_ptr = -0.5
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        push    hl              ; a_ptr = src
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Now truncate the result in place
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl              ; result_ptr (both src and dest)
+        push    hl              ; src_ptr = result
+        call    _f64_trunc
+        pop     hl
+        pop     hl
+        jr      _round_done
+
+_round_small:
+        ; |value| < 1
+        ; Check if |value| >= 0.5
+        ; If so, return +1 or -1 based on sign
+        ; Otherwise return 0
+        ld      hl, (_exp_a)
+        ld      de, EXP_BIAS - 1  ; exp for 0.5 is 1022
+        or      a
+        sbc     hl, de
+        bit     7, h
+        jr      nz, _round_ret_zero ; exp < 1022, |value| < 0.5
+
+        ; |value| >= 0.5, return +1 or -1
+        ld      a, (_fsign)
+        or      a
+        jr      nz, _round_ret_neg_one
+
+        ; Return 1.0
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl
+        call    _f64_one
+        pop     hl
+        jr      _round_done
+
+_round_ret_neg_one:
+        ; Return -1.0
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        xor     a
+        ld      (hl), a         ; byte 0
+        inc     hl
+        ld      (hl), a         ; byte 1
+        inc     hl
+        ld      (hl), a         ; byte 2
+        inc     hl
+        ld      (hl), a         ; byte 3
+        inc     hl
+        ld      (hl), a         ; byte 4
+        inc     hl
+        ld      (hl), a         ; byte 5
+        inc     hl
+        ld      (hl), 0F0h      ; byte 6
+        inc     hl
+        ld      (hl), 0BFh      ; byte 7 (sign=1, exp=3FF)
+        jr      _round_done
+
+_round_ret_zero:
+        ; Return 0.0
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        call    _zero_64
+        jr      _round_done
+
+_round_copy:
+        ; No fractional part, just copy
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        ld      e, (ix+6)
+        ld      d, (ix+7)
+        call    _copy_64
+
+_round_done:
         pop     ix
         ret
 

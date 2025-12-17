@@ -10191,15 +10191,13 @@ class ASTLowering:
             return self._lower_expr(expr.prefix)
 
         if attr == "rounding":
-            # T'Rounding(X) - round to nearest integer
-            # For Float64: add 0.5, then truncate (for positive numbers)
-            # Full implementation would check sign
+            # T'Rounding(X) - round to nearest integer (half away from zero)
             if expr.args:
                 arg_type = self._get_expr_type(expr.args[0])
                 if self._is_float64_type(arg_type):
-                    # Float64: use trunc for now (TODO: proper rounding)
+                    # Float64: call _f64_round
                     arg_ptr = self._lower_float64_operand(expr.args[0])
-                    return self._lower_float64_math_attr("_f64_trunc", arg_ptr, arg_type)
+                    return self._lower_float64_math_attr("_f64_round", arg_ptr, arg_type)
                 x = self._lower_expr(expr.args[0])
                 result = self.builder.new_vreg(IRType.WORD, "_rounding")
                 self.builder.mov(result, x)
