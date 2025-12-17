@@ -1264,12 +1264,17 @@ class SemanticAnalyzer:
         # The generic formals and parameters are visible in this scope
         if isinstance(gen_subprog.subprogram, SubprogramBody):
             body = gen_subprog.subprogram
+            # Set current_subprogram so return statements are valid
+            old_subprogram = self.current_subprogram
+            self.current_subprogram = gen_symbol
             # Analyze local declarations
             for decl in body.declarations:
                 self._analyze_declaration(decl)
             # Analyze statements (for symbol resolution checks)
             for stmt in body.statements:
                 self._analyze_statement(stmt)
+            # Restore previous context
+            self.current_subprogram = old_subprogram
 
         self.symbols.leave_scope()
 

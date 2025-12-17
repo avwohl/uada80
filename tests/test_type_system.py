@@ -491,3 +491,33 @@ def test_array_attributes():
     assert get_attribute(arr, "Length") == 10
     assert get_attribute(arr, "First") == 1
     assert get_attribute(arr, "Last") == 10
+
+
+def test_predefined_float():
+    """Test predefined Float type (32-bit single precision)."""
+    float_type = PREDEFINED_TYPES["Float"]
+
+    assert float_type.name == "Float"
+    assert float_type.kind == TypeKind.FLOAT
+    assert float_type.size_bits == 32
+    assert float_type.digits == 6  # Single precision has ~6 decimal digits
+
+
+def test_predefined_long_float():
+    """Test predefined Long_Float type (64-bit double precision)."""
+    long_float_type = PREDEFINED_TYPES["Long_Float"]
+
+    assert long_float_type.name == "Long_Float"
+    assert long_float_type.kind == TypeKind.FLOAT
+    assert long_float_type.size_bits == 64
+    assert long_float_type.digits == 15  # Double precision has ~15 decimal digits
+
+
+def test_predefined_long_long_float():
+    """Test predefined Long_Long_Float type (64-bit on Z80)."""
+    llf_type = PREDEFINED_TYPES["Long_Long_Float"]
+
+    assert llf_type.name == "Long_Long_Float"
+    assert llf_type.kind == TypeKind.FLOAT
+    assert llf_type.size_bits == 64
+    assert llf_type.digits == 15

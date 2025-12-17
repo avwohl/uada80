@@ -24,6 +24,7 @@ class IRType(Enum):
     PTR = auto()  # 16-bit pointer
     FIXED = auto()  # 16.16 fixed-point (32-bit)
     FLOAT48 = auto()  # 48-bit floating point (z88dk math48 format)
+    FLOAT64 = auto()  # 64-bit IEEE 754 double precision
 
 
 @dataclass
@@ -653,6 +654,8 @@ def ir_type_size(ir_type: IRType) -> int:
         return 4  # 16.16 fixed point
     if ir_type == IRType.FLOAT48:
         return 6  # 48-bit z88dk format
+    if ir_type == IRType.FLOAT64:
+        return 8  # 64-bit IEEE 754 double
     return 0
 
 
@@ -666,4 +669,6 @@ def ir_type_from_bits(bits: int, signed: bool = True) -> IRType:
         return IRType.DWORD
     if bits <= 48:
         return IRType.FLOAT48
+    if bits <= 64:
+        return IRType.FLOAT64
     return IRType.WORD  # Default fallback
