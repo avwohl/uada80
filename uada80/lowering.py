@@ -7001,6 +7001,79 @@ class ASTLowering:
         # Result is in the allocated stack space, pointed to by result_ptr
         return result_ptr
 
+    def _lower_float64_comparison(self, op: BinaryOp, left_ptr, right_ptr):
+        """Lower a Float64 comparison operation.
+
+        Calls _f64_cmp which returns -1 (a<b), 0 (a==b), or 1 (a>b) in A.
+        Then generates code to check the result based on the comparison op.
+        """
+        # Push pointers for function call
+        # Runtime expects: IX+4=a_ptr, IX+6=b_ptr
+        # So push order: b first (ends at higher addr), then a
+        self.builder.push(right_ptr)   # second operand (IX+6)
+        self.builder.push(left_ptr)    # first operand (IX+4)
+
+        # Always call _f64_cmp - the wrapper functions have a bug with stack offsets
+        self.builder.call(Label("_f64_cmp"))
+
+        # Clean up pushed arguments (2 pointers = 4 bytes)
+        self.builder.emit(IRInstr(
+            OpCode.ADD,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            Immediate(4, IRType.WORD),
+            comment="pop 2 float64 pointers"
+        ))
+
+        # A register now contains: -1 (0xFF) if a<b, 0 if a==b, 1 if a>b
+        # Generate comparison based on op
+        result = self.builder.new_vreg(IRType.WORD, "_f64cmp")
+
+        if op == BinaryOp.EQ:
+            # A == 0 means equal
+            self.builder.emit(IRInstr(
+                OpCode.INLINE_ASM, None, None, None,
+                comment="OR A\nJR NZ, $+5\nLD HL, 1\nJR $+3\nLD HL, 0"
+            ))
+        elif op == BinaryOp.NE:
+            # A != 0 means not equal
+            self.builder.emit(IRInstr(
+                OpCode.INLINE_ASM, None, None, None,
+                comment="OR A\nJR Z, $+5\nLD HL, 1\nJR $+3\nLD HL, 0"
+            ))
+        elif op == BinaryOp.LT:
+            # A == -1 (0xFF) means less than
+            self.builder.emit(IRInstr(
+                OpCode.INLINE_ASM, None, None, None,
+                comment="CP 0FFH\nJR NZ, $+5\nLD HL, 1\nJR $+3\nLD HL, 0"
+            ))
+        elif op == BinaryOp.GT:
+            # A == 1 means greater than
+            self.builder.emit(IRInstr(
+                OpCode.INLINE_ASM, None, None, None,
+                comment="CP 1\nJR NZ, $+5\nLD HL, 1\nJR $+3\nLD HL, 0"
+            ))
+        elif op == BinaryOp.LE:
+            # A != 1 means less or equal (A == -1 or A == 0)
+            self.builder.emit(IRInstr(
+                OpCode.INLINE_ASM, None, None, None,
+                comment="CP 1\nJR Z, $+5\nLD HL, 1\nJR $+3\nLD HL, 0"
+            ))
+        elif op == BinaryOp.GE:
+            # A != -1 means greater or equal (A == 0 or A == 1)
+            self.builder.emit(IRInstr(
+                OpCode.INLINE_ASM, None, None, None,
+                comment="CP 0FFH\nJR Z, $+5\nLD HL, 1\nJR $+3\nLD HL, 0"
+            ))
+
+        # Capture from HL
+        self.builder.emit(IRInstr(
+            OpCode.MOV, result,
+            MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+            comment="capture float64 comparison result"
+        ))
+
+        return result
+
     def _lower_declare_expr(self, expr: DeclareExpr):
         """Lower a declare expression (Ada 2022).
 
@@ -8071,6 +8144,10 @@ class ASTLowering:
                 left_ptr = self._lower_float64_operand(expr.left)
                 right_ptr = self._lower_float64_operand(expr.right)
                 return self._lower_float64_binary(op, left_ptr, right_ptr, left_type or right_type)
+            elif op in (BinaryOp.EQ, BinaryOp.NE, BinaryOp.LT, BinaryOp.LE, BinaryOp.GT, BinaryOp.GE):
+                left_ptr = self._lower_float64_operand(expr.left)
+                right_ptr = self._lower_float64_operand(expr.right)
+                return self._lower_float64_comparison(op, left_ptr, right_ptr)
 
         left = self._lower_expr(expr.left)
         right = self._lower_expr(expr.right)

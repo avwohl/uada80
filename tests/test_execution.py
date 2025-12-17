@@ -2829,5 +2829,46 @@ def test_long_float_itof():
     assert "7" in stdout, f"Expected itof(7)=7, got: {stdout}"
 
 
+@skip_if_no_tools
+def test_long_float_comparison():
+    """Test Long_Float comparison operators."""
+    source = """
+    with Ada.Text_IO;
+    procedure Test is
+        X : Long_Float := 5.0;
+        Y : Long_Float := 3.0;
+        Z : Long_Float := 5.0;
+    begin
+        if X > Y then
+            Ada.Text_IO.Put_Line("GT OK");
+        end if;
+        if Y < X then
+            Ada.Text_IO.Put_Line("LT OK");
+        end if;
+        if X = Z then
+            Ada.Text_IO.Put_Line("EQ OK");
+        end if;
+        if X /= Y then
+            Ada.Text_IO.Put_Line("NE OK");
+        end if;
+        if X >= Z then
+            Ada.Text_IO.Put_Line("GE OK");
+        end if;
+        if Y <= X then
+            Ada.Text_IO.Put_Line("LE OK");
+        end if;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "GT OK" in stdout, f"GT comparison failed: {stdout}"
+    assert "LT OK" in stdout, f"LT comparison failed: {stdout}"
+    assert "EQ OK" in stdout, f"EQ comparison failed: {stdout}"
+    assert "NE OK" in stdout, f"NE comparison failed: {stdout}"
+    assert "GE OK" in stdout, f"GE comparison failed: {stdout}"
+    assert "LE OK" in stdout, f"LE comparison failed: {stdout}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -6754,11 +6754,11 @@ class Z80CodeGen:
 
     def _generate_instr(self, instr: IRInstr) -> None:
         """Generate code for an IR instruction."""
-        # Add comment if present
-        if instr.comment:
-            self._emit(f"    ; {instr.comment}")
-
         op = instr.opcode
+
+        # Add comment if present (but not for INLINE_ASM where comment IS the code)
+        if instr.comment and op != OpCode.INLINE_ASM:
+            self._emit(f"    ; {instr.comment}")
 
         if op == OpCode.MOV:
             self._gen_mov(instr)
