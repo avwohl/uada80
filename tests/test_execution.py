@@ -2916,5 +2916,74 @@ def test_long_float_abs():
     assert "7" in stdout, f"Expected abs(-7)=7, got: {stdout}"
 
 
+@skip_if_no_tools
+def test_long_float_floor():
+    """Test Long_Float'Floor attribute."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        X : Long_Float := 3.7;
+        Y : Long_Float;
+        R : Integer;
+    begin
+        Y := Long_Float'Floor(X);
+        R := Integer(Y);
+        Ada.Integer_Text_IO.Put(R);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "3" in stdout, f"Expected floor(3.7)=3, got: {stdout}"
+
+
+@skip_if_no_tools
+def test_long_float_ceiling():
+    """Test Long_Float'Ceiling attribute."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        X : Long_Float := 3.2;
+        Y : Long_Float;
+        R : Integer;
+    begin
+        Y := Long_Float'Ceiling(X);
+        R := Integer(Y);
+        Ada.Integer_Text_IO.Put(R);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "4" in stdout, f"Expected ceiling(3.2)=4, got: {stdout}"
+
+
+@skip_if_no_tools
+def test_long_float_truncation():
+    """Test Long_Float'Truncation attribute."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        X : Long_Float := 3.9;
+        Y : Long_Float;
+        R : Integer;
+    begin
+        Y := Long_Float'Truncation(X);
+        R := Integer(Y);
+        Ada.Integer_Text_IO.Put(R);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "3" in stdout, f"Expected truncation(3.9)=3, got: {stdout}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
