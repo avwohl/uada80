@@ -3030,5 +3030,47 @@ def test_integer_exponentiation():
     assert "1024" in stdout, f"Expected 2**10=1024, got: {stdout}"
 
 
+@skip_if_no_tools
+def test_long_float_exponentiation():
+    """Test Long_Float ** Integer exponentiation."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        X : Long_Float := 2.0;
+        R : Long_Float;
+        I : Integer;
+    begin
+        -- Test 2.0 ** 10 = 1024.0
+        R := X ** 10;
+        I := Integer(R);
+        Ada.Integer_Text_IO.Put(I);
+        Ada.Text_IO.New_Line;
+
+        -- Test 2.0 ** 0 = 1.0
+        R := X ** 0;
+        I := Integer(R);
+        Ada.Integer_Text_IO.Put(I);
+        Ada.Text_IO.New_Line;
+
+        -- Test 3.0 ** 4 = 81.0
+        R := 3.0 ** 4;
+        I := Integer(R);
+        Ada.Integer_Text_IO.Put(I);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    lines = stdout.strip().split('\n')
+    # Note: values may have leading spaces from Ada.Integer_Text_IO.Put
+    values = [line.strip() for line in lines if line.strip()]
+    assert len(values) >= 3, f"Expected 3 values, got: {values}"
+    assert values[0] == "1024", f"Expected 2.0**10=1024, got: {values[0]}"
+    assert values[1] == "1", f"Expected 2.0**0=1, got: {values[1]}"
+    assert values[2] == "81", f"Expected 3.0**4=81, got: {values[2]}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

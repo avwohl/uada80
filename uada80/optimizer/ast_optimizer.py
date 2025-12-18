@@ -716,10 +716,14 @@ class ASTOptimizer:
                 return IntegerLiteral(value=0, text="0")
 
         # x ** 0 = 1, x ** 1 = x
+        # Note: x ** 0 = 1 only safe when x is a known integer (not Float64)
+        # because IntegerLiteral(1) is wrong type for Float64 ** 0 which should be 1.0
         elif op == BinaryOp.EXP:
-            if right_val == 0:
+            if right_val == 0 and left_val is not None:
+                # Only fold when left is also a constant integer
                 return IntegerLiteral(value=1, text="1")
             if right_val == 1:
+                # x ** 1 = x is type-safe for any x
                 return left
 
         # Boolean: x and True = x, x and False = False

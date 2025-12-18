@@ -7168,6 +7168,47 @@ class ASTLowering:
         # Result is in the allocated stack space, pointed to by result_ptr
         return result_ptr
 
+    def _lower_float64_exp(self, base_ptr, exponent, operand_type):
+        """Lower Float64 ** Integer exponentiation.
+
+        Calls _f64_exp_int(result_ptr, exponent, base_ptr).
+        Stack layout after call:
+          - IX+4 = base_ptr (Float64 pointer)
+          - IX+6 = exponent (Integer)
+          - IX+8 = result_ptr (Float64 pointer)
+        """
+        # Allocate 8 bytes on stack for result
+        result_ptr = self.builder.new_vreg(IRType.PTR, "_f64_exp_result")
+        self.builder.emit(IRInstr(
+            OpCode.SUB,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            Immediate(8, IRType.WORD),
+            comment="allocate 8 bytes for float64 exp result"
+        ))
+        self.builder.emit(IRInstr(
+            OpCode.MOV, result_ptr,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.PTR),
+            comment="result_ptr = SP"
+        ))
+
+        # Push arguments: result_ptr (IX+8), exponent (IX+6), base_ptr (IX+4)
+        self.builder.push(result_ptr)  # result location (IX+8)
+        self.builder.push(exponent)    # integer exponent (IX+6)
+        self.builder.push(base_ptr)    # Float64 base (IX+4)
+
+        self.builder.call(Label("_f64_exp_int"))
+
+        # Clean up pushed arguments (2 pointers + 1 integer = 6 bytes)
+        self.builder.emit(IRInstr(
+            OpCode.ADD,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            Immediate(6, IRType.WORD),
+            comment="pop float64 exp args"
+        ))
+
+        return result_ptr
+
     def _lower_declare_expr(self, expr: DeclareExpr):
         """Lower a declare expression (Ada 2022).
 
@@ -8255,6 +8296,11 @@ class ASTLowering:
                 left_ptr = self._lower_float64_operand(expr.left)
                 right_ptr = self._lower_float64_operand(expr.right)
                 return self._lower_float64_comparison(op, left_ptr, right_ptr)
+            elif op == BinaryOp.EXP and self._is_float64_type(left_type):
+                # Float64 ** Integer exponentiation
+                left_ptr = self._lower_float64_operand(expr.left)
+                right_val = self._lower_expr(expr.right)  # Integer exponent
+                return self._lower_float64_exp(left_ptr, right_val, left_type)
 
         left = self._lower_expr(expr.left)
         right = self._lower_expr(expr.right)
@@ -8819,6 +8865,9 @@ class ASTLowering:
         """Get the Ada type of an expression."""
         if isinstance(expr, IntegerLiteral):
             return PREDEFINED_TYPES.get("Integer")
+        elif isinstance(expr, RealLiteral):
+            # Real literals are Long_Float (Float64) by default
+            return PREDEFINED_TYPES.get("Long_Float")
         elif isinstance(expr, StringLiteral):
             return PREDEFINED_TYPES.get("String")
         elif isinstance(expr, CharacterLiteral):
