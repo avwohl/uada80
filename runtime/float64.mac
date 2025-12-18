@@ -57,6 +57,7 @@
         PUBLIC  _f64_ceil       ; Ceiling (round toward +inf)
         PUBLIC  _f64_trunc      ; Truncate (round toward 0)
         PUBLIC  _f64_round      ; Round to nearest (half away from zero)
+        PUBLIC  _f64_exp_int    ; Float64 ** Integer exponentiation
 
 ; =============================================================================
 ; Constants
@@ -3086,6 +3087,167 @@ _round_done:
         pop     ix
         ret
 
+; Constant 1.0 for ceiling/floor and exponentiation (0x3FF0_0000_0000_0000 little-endian)
+_const_one: DB      00h, 00h, 00h, 00h, 00h, 00h, 0F0h, 3Fh
+
+; =============================================================================
+; _f64_exp_int: Float64 ** Integer exponentiation
+; Input:  Stack: result_ptr (IX+8), exponent (IX+6), base_ptr (IX+4)
+; Output: result = base ** exponent
+;
+; Algorithm: Binary exponentiation (repeated squaring)
+;   - If exp == 0: return 1.0
+;   - If exp < 0: compute base^(-exp), then return 1.0 / result
+;   - If exp > 0: use repeated squaring
+; =============================================================================
+_f64_exp_int:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Get exponent
+        ld      c, (ix+6)
+        ld      b, (ix+7)       ; BC = exponent
+
+        ; Check if exponent is zero -> return 1.0
+        ld      a, b
+        or      c
+        jr      nz, _expint_check_neg
+        ; Exponent is 0, return 1.0
+        ld      l, (ix+8)
+        ld      h, (ix+9)       ; HL = result_ptr
+        push    hl
+        call    _f64_one
+        pop     hl
+        jp      _expint_done
+
+_expint_check_neg:
+        ; Check if exponent is negative
+        bit     7, b
+        jr      z, _expint_positive
+
+        ; Negative exponent: negate it, compute, then take reciprocal
+        ; First, negate BC to get absolute value
+        xor     a
+        sub     c
+        ld      c, a
+        sbc     a, a
+        sub     b
+        ld      b, a            ; BC = -exponent (positive now)
+        ; Save flag that we need reciprocal
+        ld      a, 1
+        ld      (_exp_neg_flag), a
+        jr      _expint_compute
+
+_expint_positive:
+        xor     a
+        ld      (_exp_neg_flag), a
+
+_expint_compute:
+        ; Save exponent to counter (BC still has the abs(exponent))
+        ld      (_exp_counter), bc
+
+        ; Initialize result = 1.0 in _exp_result
+        ld      hl, _exp_result
+        push    hl
+        call    _f64_one
+        pop     hl
+
+        ; Copy base to _exp_base
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = base_ptr
+        ld      de, _exp_base
+        push    bc              ; save counter
+        ld      bc, 8
+        ldir
+        pop     bc              ; restore counter (but use _exp_counter in loop)
+
+_expint_loop:
+        ; Check if exp == 0
+        ld      bc, (_exp_counter)
+        ld      a, b
+        or      c
+        jr      z, _expint_loop_done
+
+        ; Check if exp is odd (low bit set)
+        ld      a, c
+        and     1
+        jr      z, _expint_square
+
+        ; Exp is odd: result = result * base
+        ; Push args for _f64_mul: result_ptr, b_ptr, a_ptr
+        ld      hl, _exp_result
+        push    hl              ; result_ptr (IX+8)
+        ld      hl, _exp_base
+        push    hl              ; b_ptr (IX+6)
+        ld      hl, _exp_result
+        push    hl              ; a_ptr (IX+4)
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+_expint_square:
+        ; base = base * base
+        ; Push args for _f64_mul: result_ptr, b_ptr, a_ptr
+        ld      hl, _exp_base
+        push    hl              ; result_ptr (IX+8)
+        ld      hl, _exp_base
+        push    hl              ; b_ptr (IX+6)
+        ld      hl, _exp_base
+        push    hl              ; a_ptr (IX+4)
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; exp = exp >> 1
+        ld      bc, (_exp_counter)
+        srl     b
+        rr      c
+        ld      (_exp_counter), bc
+
+        jr      _expint_loop
+
+_expint_loop_done:
+        ; Check if we need reciprocal (negative exponent)
+        ld      a, (_exp_neg_flag)
+        or      a
+        jr      z, _expint_store
+
+        ; Need reciprocal: result = 1.0 / result
+        ; First, put 1.0 in _exp_base (reuse as temp)
+        ld      hl, _exp_base
+        push    hl
+        call    _f64_one
+        pop     hl
+
+        ; Now divide: 1.0 / result
+        ; Push args: result_ptr, b_ptr (divisor), a_ptr (dividend)
+        ld      hl, _exp_result
+        push    hl              ; result_ptr (IX+8)
+        ld      hl, _exp_result
+        push    hl              ; b_ptr = result (divisor) (IX+6)
+        ld      hl, _exp_base
+        push    hl              ; a_ptr = 1.0 (dividend) (IX+4)
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+_expint_store:
+        ; Copy result to output
+        ld      l, (ix+8)
+        ld      h, (ix+9)       ; HL = result_ptr
+        ex      de, hl          ; DE = result_ptr
+        ld      hl, _exp_result
+        ld      bc, 8
+        ldir
+
+_expint_done:
+        pop     ix
+        ret
+
 ; =============================================================================
 ; Working memory (internal accumulators)
 ; Placed at end of file to avoid linker segment calculation bug
@@ -3129,9 +3291,10 @@ _ftoi_uexp: DS      2       ; Unbiased exponent
 ; Temp for ceiling/floor
 _ceil_temp: DS      8       ; Temp storage for ceiling calculations
 
-        ; Constant 1.0 must be in CSEG for proper initialization
-        CSEG
-; Constant 1.0 for ceiling/floor (0x3FF0_0000_0000_0000 little-endian)
-_const_one: DB      00h, 00h, 00h, 00h, 00h, 00h, 0F0h, 3Fh
+; Temporary storage for exponentiation
+_exp_result:    DS      8       ; Running result
+_exp_base:      DS      8       ; Current base (squared each iteration)
+_exp_counter:   DS      2       ; Exponent counter
+_exp_neg_flag:  DS      1       ; Flag: 1 if original exponent was negative
 
         END
