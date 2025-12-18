@@ -8304,17 +8304,23 @@ class ASTLowering:
             self.builder.emit(IRInstr(OpCode.REM, result, left, right))
         elif op == BinaryOp.EXP:
             # Exponentiation: call runtime function
-            self.builder.push(right)  # exponent
-            self.builder.push(left)   # base
+            # Push base first, then exponent (ends at lower offset)
+            self.builder.push(left)   # base (IX+10 in runtime)
+            self.builder.push(right)  # exponent (IX+8 in runtime)
             self.builder.call(Label("_exp16"))
-            temp = self.builder.new_vreg(IRType.WORD, "_discard")
-            self.builder.pop(temp)
-            self.builder.pop(temp)
-            # Capture result from HL register
+            # Capture result from HL register BEFORE popping arguments
             self.builder.emit(IRInstr(
                 OpCode.MOV, result,
                 MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
                 comment="capture exponentiation result from HL"
+            ))
+            # Clean up stack (4 bytes for two 16-bit args)
+            # Codegen expects: ADD _SP, immediate (dst=_SP, src1=immediate)
+            self.builder.emit(IRInstr(
+                OpCode.ADD,
+                MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+                Immediate(4, IRType.WORD),
+                comment="clean up stack after _exp16"
             ))
         elif op == BinaryOp.CONCAT:
             # Check if this is array concatenation or string concatenation

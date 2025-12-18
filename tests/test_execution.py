@@ -3008,5 +3008,27 @@ def test_long_float_rounding():
     assert "4" in stdout, f"Expected rounding(3.5)=4, got: {stdout}"
 
 
+@skip_if_no_tools
+def test_integer_exponentiation():
+    """Test Integer ** Natural exponentiation."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        X : Integer := 2;
+        Y : Integer := 10;
+        R : Integer;
+    begin
+        R := X ** Y;
+        Ada.Integer_Text_IO.Put(R);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "1024" in stdout, f"Expected 2**10=1024, got: {stdout}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
