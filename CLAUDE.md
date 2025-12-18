@@ -5,45 +5,44 @@
 **Session accomplished:**
 - Parser: 100% (2849/2849 ACATS files)
 - Semantic: 100% (2742/2742 ACATS tests pass)
-- Execution tests: 113/113 pass (including 5 Float64 tests)
-- All tests: 6898/6898 pass
-- Fixed: Float64 multiply, divide, and itof bugs - all Float64 ops now working!
+- Execution tests: 120/120 pass (12 Float64 tests, all passing)
+- All tests: 6905/6905 pass
+- Complete Float64 IEEE 754 double precision support for Z80
+
+**Float64 features implemented:**
+- Arithmetic: add, sub, mul, div, neg, abs
+- Comparison: eq, ne, lt, le, gt, ge (all operators)
+- Conversion: itof (Integer→Long_Float), ftoi (Long_Float→Integer)
+- Rounding: floor, ceiling, truncation, rounding attributes
+- Math: sqrt
+- Constants: zero, one
+- Copy and type operations
 
 **Key fixes this session:**
-1. **Float64 multiply (`_f64_mul`)** - Fixed mantissa extraction:
-   - After extracting bytes 6-13 from 128-bit product, bit 104 ends at bit 56
-   - Added 4-bit right shift to align bit 56 to bit 52 for IEEE 754 format
-   - Now 3.0 * 4.0 = 12.0 correctly
-2. **Float64 divide (`_f64_div`)** - Fixed two bugs:
-   - Save/restore A register around `_shift_left_64` call (it was destroying comparison result)
-   - Restructured division loop: compare BEFORE shifting, shift remainder at END of loop
-   - Now 10.0 / 2.0 = 5.0 correctly
-3. **Float64 itof (`_f64_itof`)** - Fixed argument order and bit packing:
-   - Swapped IX+4/IX+6 to match calling convention (dest_ptr at IX+6, value at IX+4)
-   - Fixed mantissa packing: shift right by 3, not left by 4 (was losing bits)
-   - Fixed byte 6/7 construction: mantissa in low nibble, exponent in high nibble
-   - Now Integer→Long_Float conversion works correctly
-
-**Float64 test results:** All operations verified:
-- 3.0 + 2.0 = 5.0 ✓
-- 10.0 - 4.0 = 6.0 ✓
-- 3.0 * 4.0 = 12.0 ✓
-- 10.0 / 2.0 = 5.0 ✓
-- itof(7) = 7.0, ftoi(7.0) = 7 ✓
+1. **Float64 identifier lowering** - `_lower_identifier` returns address for Float64 locals:
+   - Was returning `local.vreg` (2-byte value) instead of stack address
+   - Now uses LEA to compute actual 8-byte value address
+   - Fixed `_resolve_local_type` for SubtypeIndication AST nodes
+2. **Float64 ceiling function** - Fixed `_f64_ceil`:
+   - Added `had_frac` flag to track if any fractional bytes were non-zero
+   - Only adds 1.0 if there were actual fractional bits (ceiling(3.0) = 3, not 4)
+   - Uses `_f64_one` to write 1.0 at runtime instead of `_const_one`
+3. **Float64 rounding attribute** - Implemented `_f64_round`:
+   - Round half away from zero: if x >= 0, trunc(x + 0.5); if x < 0, trunc(x - 0.5)
+   - Fixed JR out-of-range errors (changed to JP for long jumps)
 
 **Previous session fixes:**
-1. **Float64→Integer conversion** - `_f64_ftoi` rewritten with direct byte access
-2. **Float64 type conversion in lowering** - Proper handling in `_lower_type_conversion`
-3. **Float64 argument order** - Fixed push order for binary ops
-4. **Array of records** - Fixed `P(2).X` access
-5. **Records with arrays** - Fixed `X.Values(2)` access
-6. **2D arrays** - Fixed `M(I, J)` for multi-dimensional arrays
-7. **Nested records** - Fixed `O.I.X` for records within records
+1. **Float64 multiply** - 4-bit right shift to align bit 56 to bit 52
+2. **Float64 divide** - Save/restore A register around shift calls
+3. **Float64 itof** - Fixed argument order and bit packing
+4. **Float64 comparison operators** - All 6 comparison operators working
+5. **Float64 unary operators** - Negation, abs, plus working
 
 **Next steps to consider:**
-- Add more Float64 tests (negative numbers, larger values)
-- Implement Float64 comparison operators (_f64_lt, _f64_le, _f64_gt, _f64_ge)
-- Implement MP/M tasking support
+- Float64 exponentiation (Float ** Integer)
+- Float64 remainder/mod operations
+- Elementary math functions (sin, cos, exp, log) - complex for Z80
+- MP/M tasking support
 
 ---
 
@@ -60,7 +59,7 @@
 | **Code Gen**       | 90%      | Full Z80 assembly output, runtime calls    |
 | **Runtime**        | 70%      | Basic ops, I/O, exceptions; no tasking     |
 | **Standard Lib**   | 95%      | 1,094 packages in adalib/                  |
-| **Execution Tests**| 100%     | 113/113 pass (incl. Float64 tests)         |
+| **Execution Tests**| 100%     | 120/120 pass (12 Float64 tests)            |
 | **OVERALL**        | **75%**  | Estimated ~3,200/4,725 ACATS tests         |
 
 ### Feature Completion by Category

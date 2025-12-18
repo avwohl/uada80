@@ -1745,11 +1745,6 @@ _strcat_done:
     POP IX
     RET
 
-    DSEG
-_strcat_buf:
-    DS 256              ; 256-byte buffer for concatenation
-    CSEG
-
 ; ============================================================
 ; _STR_CON - Concatenate two strings (alternate interface)
 ; Stack: SP+2: s2 ptr, SP+4: s2 len, SP+6: s1 ptr, SP+8: s1 len, SP+10: dest ptr
@@ -1800,6 +1795,110 @@ _str_con_done:
     RET
 
 ; ============================================================
+; _exp16 - Integer exponentiation (base ** exponent)
+; Caller pushes: base first, then exponent
+; After CALL and frame setup: IX+8=exponent, IX+10=base
+; Returns: HL = base ** exponent
+; Algorithm: Binary exponentiation (repeated squaring)
+; Note: For Ada Integer ** Natural, exponent is always >= 0
+; ============================================================
+    PUBLIC _exp16
+_exp16:
+    PUSH IX
+    PUSH BC
+    PUSH DE
+    LD IX, 0
+    ADD IX, SP
+    ; Caller pushed base first (now at IX+10), then exponent (now at IX+8)
+    LD E, (IX+10)
+    LD D, (IX+11)       ; DE = base
+    LD C, (IX+8)
+    LD B, (IX+9)        ; BC = exponent
+
+    ; Handle special case: exp == 0 -> return 1
+    LD A, B
+    OR C
+    JR NZ, _exp16_loop
+    LD HL, 1
+    JR _exp16_done
+
+_exp16_loop:
+    ; Initialize result = 1
+    LD HL, 1
+
+_exp16_next:
+    ; Check if exp == 0
+    LD A, B
+    OR C
+    JR Z, _exp16_done
+
+    ; Check if exp is odd (low bit set)
+    LD A, C
+    AND 1
+    JR Z, _exp16_square
+
+    ; exp is odd: result = result * base
+    ; Save base and exp
+    PUSH BC             ; save exp
+    PUSH DE             ; save base
+    ; HL = result, DE = base, need HL = HL * DE
+    CALL _mul16_hlde
+    POP DE              ; restore base
+    POP BC              ; restore exp
+
+_exp16_square:
+    ; base = base * base
+    PUSH HL             ; save result
+    EX DE, HL           ; HL = base
+    PUSH HL             ; save base for mul
+    CALL _mul16_hlhl    ; HL = HL * HL
+    EX DE, HL           ; DE = new base
+    POP HL              ; discard saved base
+    POP HL              ; restore result
+
+    ; exp = exp >> 1
+    SRL B
+    RR C
+
+    JR _exp16_next
+
+_exp16_done:
+    POP DE
+    POP BC
+    POP IX
+    RET
+
+; Helper: HL = HL * DE (destroys A, flags)
+; Standard shift-and-add multiplication
+    PUBLIC _mul16_hlde
+_mul16_hlde:
+    PUSH BC
+    ; HL = multiplicand, DE = multiplier
+    ; Result in HL (low 16 bits of product)
+    LD B, H
+    LD C, L             ; BC = multiplicand
+    LD HL, 0            ; HL = result accumulator
+    LD A, 16            ; 16 bits to process
+_mul16_hlde_loop:
+    ADD HL, HL          ; shift result left
+    SLA E               ; shift multiplier (DE) left, high bit to carry
+    RL D
+    JR NC, _mul16_hlde_skip
+    ADD HL, BC          ; if carry (high bit was 1), add multiplicand
+_mul16_hlde_skip:
+    DEC A
+    JR NZ, _mul16_hlde_loop
+    POP BC
+    RET
+
+; Helper: HL = HL * HL (square)
+    PUBLIC _mul16_hlhl
+_mul16_hlhl:
+    LD D, H
+    LD E, L             ; DE = HL
+    JR _mul16_hlde      ; Use same routine
+
+; ============================================================
 ; Data Segment (all DSEG declarations consolidated here)
 ; ============================================================
     DSEG
@@ -1824,6 +1923,10 @@ _exc_message:
 ; Integer to string conversion buffer
 _int_str_buf:
     DS 8                    ; -32768 is 6 chars + sign + null
+
+; String concatenation buffer (moved from middle of CSEG)
+_strcat_buf:
+    DS 256                  ; 256-byte buffer for concatenation
 
 ; Heap start marker (must be last)
     PUBLIC _heap_start
