@@ -67,6 +67,58 @@
 
 ---
 
+## Continuous Integration
+
+GitHub Actions CI is configured for automated testing on every push and pull request to `main`.
+
+### CI Workflows
+
+| Workflow | File | Purpose |
+|----------|------|---------|
+| **Tests** | `.github/workflows/pytest.yml` | Run pytest on Python 3.10, 3.11, 3.12 |
+| **Pylint** | `.github/workflows/pylint.yml` | Code quality check (threshold: 9.5/10) |
+
+### CI Badges
+
+The README displays live CI status badges:
+```markdown
+[![Tests](https://github.com/avwohl/uada80/actions/workflows/pytest.yml/badge.svg)](https://github.com/avwohl/uada80/actions/workflows/pytest.yml)
+[![Pylint](https://github.com/avwohl/uada80/actions/workflows/pylint.yml/badge.svg)](https://github.com/avwohl/uada80/actions/workflows/pylint.yml)
+```
+
+### Test Configuration
+
+The pytest workflow:
+- Installs `um80` from PyPI (includes ul80 linker)
+- Skips execution tests (require cpmemu which isn't pip-installable)
+- Uses `-o addopts=""` to override pyproject.toml coverage settings
+
+Execution tests in `tests/test_execution.py` use a module-level skip marker:
+```python
+pytestmark = skip_if_no_tools  # Skip all tests if cpmemu unavailable
+```
+
+### Running CI Locally
+
+```bash
+# Run tests (same as CI)
+pytest tests/ -v --tb=short -o addopts=""
+
+# Run pylint (same as CI)
+pylint uada80/ --fail-under=9.5
+
+# Check current pylint score
+pylint uada80/
+```
+
+### Current Status
+
+- **Pylint score**: 10.00/10
+- **Tests**: 6907/6907 passing
+- **Execution tests**: Skipped in CI (run locally with cpmemu)
+
+---
+
 ## ACATS Compliance Progress: 80%
 
 **Last Updated:** 2025-12-16 (Semantic 100%: c34005j fixed with aggregate function call detection)
