@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "uada80"
-version = "0.1.0"
+version = "0.2.0"
 description = "Ada compiler targeting Z80 processor"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,7 +25,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "upeep80>=0.1.0",
+    "upeepz80>=0.1.0",
 ]
 
 [project.optional-dependencies]

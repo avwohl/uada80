@@ -1,6 +1,27 @@
 # Claude Code Notes for UADA80
 
-## Work In Progress (2025-12-17)
+## Work In Progress (2025-12-19)
+
+**Session accomplished:**
+- Switched code generator to pure Z80 lowercase assembly output (for upeepz80 compatibility)
+- Integrated upeepz80 peephole optimizer into compilation pipeline
+- All tests: 6907/6907 pass (122 execution tests)
+
+**Z80 Assembly Changes:**
+- All mnemonics now lowercase: `ld`, `push`, `pop`, `jp`, `jr`, `call`, `ret`, etc.
+- All register names lowercase: `hl`, `de`, `bc`, `sp`, `ix`, `iy`, `a`, `b`, `c`, `d`, `e`, `h`, `l`
+- All condition codes lowercase: `z`, `nz`, `c`, `nc`, `p`, `m`, `pe`, `po`
+- Assembler directives remain uppercase: `CSEG`, `DSEG`, `DS`, `DW`, `DB`, `EXTRN`, `PUBLIC`
+
+**Peephole Optimizer Integration:**
+- Uses upeepz80 (sister project at ../upeepz80) for Z80-specific optimizations
+- Applied as Phase 6 after code generation
+- Tracks optimization statistics in `CompilationResult.peephole_stats`
+- Optimizations include: xor a, jr conversion, push/pop elimination, djnz, jump threading
+
+---
+
+## Previous Session (2025-12-17)
 
 **Session accomplished:**
 - Parser: 100% (2849/2849 ACATS files)

@@ -47,7 +47,7 @@ def test_record_field_assignment():
     result = compile_source(source)
     assert result.success
     # Should generate store instructions to computed addresses
-    assert "LD (HL)" in result.output
+    assert "ld (hl)" in result.output
 
 
 def test_record_field_read():
@@ -71,7 +71,7 @@ def test_record_field_read():
     result = compile_source(source)
     assert result.success
     # Should generate load instructions from computed addresses
-    assert "LD E, (HL)" in result.output or "LD D, (HL)" in result.output
+    assert "ld e, (hl)" in result.output or "ld d, (hl)" in result.output
 
 
 def test_record_with_multiple_field_types():
@@ -230,8 +230,8 @@ def test_record_field_offsets():
     assert result.success, "Record field access should compile successfully"
 
     # Verify the assembly contains stores and loads
-    assert "LD (HL)" in result.output  # Stores
-    assert ("LD E, (HL)" in result.output or "LD D, (HL)" in result.output)  # Loads
+    assert "ld (hl)" in result.output  # Stores
+    assert ("ld e, (hl)" in result.output or "ld d, (hl)" in result.output)  # Loads
 
 
 def test_record_total_size():
@@ -259,7 +259,7 @@ def test_record_total_size():
     assert result.success, "Record with mixed field types should compile"
 
     # Verify assembly contains field operations
-    assert "LD (HL)" in result.output
+    assert "ld (hl)" in result.output
 
 
 # ============================================================================
