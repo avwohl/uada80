@@ -3380,6 +3380,34 @@ def test_long_float_tanh():
 
 
 @skip_if_no_tools
+def test_long_float_arcsinh():
+    """Test Ada.Numerics.Elementary_Functions.Arcsinh for Long_Float."""
+    # Test arcsinh(1.0) = ln(1 + sqrt(2)) ≈ 0.8814
+    # arcsinh(1.0) ≈ 0.8814 -> *1000 = 881
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    with Ada.Numerics.Elementary_Functions;
+    procedure Test is
+        X : Long_Float := 1.0;
+        Y : Long_Float;
+        R : Integer;
+    begin
+        Y := Ada.Numerics.Elementary_Functions.Arcsinh(X);
+        R := Integer(Y * 1000.0);
+        Ada.Integer_Text_IO.Put(R);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    val = int(stdout.strip())
+    # arcsinh(1.0) ≈ 0.8814, so *1000 ≈ 881 (allow some tolerance)
+    assert 876 <= val <= 886, f"Expected arcsinh(1.0)*1000≈881, got: {val}"
+
+
+@skip_if_no_tools
 def test_integer_exponentiation():
     """Test Integer ** Natural exponentiation."""
     source = """

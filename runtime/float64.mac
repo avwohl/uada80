@@ -70,6 +70,7 @@
         PUBLIC  _f64_sinh       ; Hyperbolic sine
         PUBLIC  _f64_cosh       ; Hyperbolic cosine
         PUBLIC  _f64_tanh       ; Hyperbolic tangent
+        PUBLIC  _f64_asnh       ; Inverse hyperbolic sine (arcsinh)
         PUBLIC  _f64_e2x        ; Exponential e^x (Taylor series, 8-char name to avoid collision with _f64_exp_int)
         PUBLIC  _f64_log        ; Natural logarithm ln(x)
 
@@ -4825,6 +4826,93 @@ _f64_tanh:
         ret
 
 ; =============================================================================
+; _f64_asnh: Inverse hyperbolic sine using arcsinh(x) = ln(x + sqrt(x² + 1))
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = arcsinh(x)
+; =============================================================================
+_f64_asnh:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input to _asnh_x
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _asnh_x
+        ld      bc, 8
+        ldir
+
+        ; Compute x² -> _asnh_sq
+        ld      hl, _asnh_sq
+        push    hl
+        ld      hl, _asnh_x
+        push    hl
+        ld      hl, _asnh_x
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute x² + 1 -> _asnh_t1
+        ld      hl, _asnh_t1
+        push    hl
+        ld      hl, _const_one_f64
+        push    hl
+        ld      hl, _asnh_sq
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute sqrt(x² + 1) -> _asnh_t2
+        ld      hl, _asnh_t2
+        push    hl
+        ld      hl, _asnh_t1
+        push    hl
+        call    _f64_sqrt
+        pop     hl
+        pop     hl
+
+        ; Compute x + sqrt(x² + 1) -> _asnh_t3
+        ld      hl, _asnh_t3
+        push    hl
+        ld      hl, _asnh_t2
+        push    hl
+        ld      hl, _asnh_x
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute ln(x + sqrt(x² + 1)) -> _asnh_res
+        ld      hl, _asnh_res
+        push    hl
+        ld      hl, _asnh_t3
+        push    hl
+        call    _f64_log
+        pop     hl
+        pop     hl
+
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _asnh_res
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
 ; _f64_e2x: Exponential function e^x using Taylor series
 ; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
 ; Output: result = e^x
@@ -5767,5 +5855,13 @@ _tanh_nex:      DS      8       ; e^(-x)
 _tanh_num:      DS      8       ; Numerator: e^x - e^(-x)
 _tanh_den:      DS      8       ; Denominator: e^x + e^(-x)
 _tanh_res:      DS      8       ; Result
+
+; Temporary storage for arcsinh function
+_asnh_x:        DS      8       ; Input value
+_asnh_sq:       DS      8       ; x²
+_asnh_t1:       DS      8       ; x² + 1
+_asnh_t2:       DS      8       ; sqrt(x² + 1)
+_asnh_t3:       DS      8       ; x + sqrt(x² + 1)
+_asnh_res:      DS      8       ; Result: ln(x + sqrt(x² + 1))
 
         END
