@@ -13682,8 +13682,9 @@ class ASTLowering:
                 func_call = FunctionCall(name=expr.prefix, args=args)
                 return self._lower_function_call(func_call)
 
-        # Handle SelectedName prefix - this is for package-qualified function calls
-        # like Ada.Numerics.Elementary_Functions.Sqrt(X)
+        # Handle SelectedName prefix - could be:
+        # 1. Package-qualified function call: Ada.Numerics.Elementary_Functions.Sqrt(X)
+        # 2. Array field access: X.Values(2) where Values is an array field of record X
         if isinstance(expr.prefix, SelectedName):
             selector = expr.prefix.selector.lower()
 
@@ -13695,14 +13696,34 @@ class ASTLowering:
                     # Float64 sqrt - call _f64_sqrt
                     return self._lower_float64_sqrt(arg_expr)
 
-            # For other SelectedName function calls, treat as function call
-            # Build the FunctionCall and dispatch
-            if expr.actual_params:
-                args = expr.actual_params
-            else:
-                args = [ActualParameter(name=None, value=idx) for idx in expr.indices]
-            func_call = FunctionCall(name=expr.prefix, args=args)
-            return self._lower_function_call(func_call)
+            # Check if this is a record field that is an array (not a function call)
+            # E.g., X.Values(2) where X is a record with array field Values
+            from uada80.type_system import RecordType, ArrayType
+            is_array_field = False
+            rec_prefix = expr.prefix.prefix
+            if isinstance(rec_prefix, Identifier):
+                var_name = rec_prefix.name.lower()
+                if self.ctx and var_name in self.ctx.locals:
+                    local = self.ctx.locals[var_name]
+                    if local.ada_type:
+                        rec_type = self._resolve_local_type(local.ada_type)
+                        if rec_type and isinstance(rec_type, RecordType):
+                            for comp in rec_type.components:
+                                if comp.name.lower() == selector:
+                                    if isinstance(comp.component_type, ArrayType):
+                                        is_array_field = True
+                                    break
+
+            # If it's an array field, fall through to array indexing below
+            if not is_array_field:
+                # For package-qualified function calls, treat as function call
+                # Build the FunctionCall and dispatch
+                if expr.actual_params:
+                    args = expr.actual_params
+                else:
+                    args = [ActualParameter(name=None, value=idx) for idx in expr.indices]
+                func_call = FunctionCall(name=expr.prefix, args=args)
+                return self._lower_function_call(func_call)
 
         # Get array base address
         base_addr = self._get_array_base(expr.prefix)
