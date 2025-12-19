@@ -3,6 +3,44 @@
 ## Work In Progress (2025-12-19)
 
 **Session accomplished:**
+- Float64 remainder (rem) and modulo (mod) operations
+- Fixed Float64 floor for negative numbers
+- Fixed Float64 trunc partial byte masking
+- All tests: 124 execution tests pass, 5591 ACATS tests pass
+
+**Float64 rem/mod implementation:**
+- `_f64_rem`: Remainder with sign following dividend (X rem Y = X - Y * trunc(X/Y))
+- `_f64_mod`: Modulo with sign following divisor (X mod Y = X - Y * floor(X/Y))
+- Added execution tests for both operations
+
+**Float64 floor fix:**
+- Moved `_f64_neg_one` constant from DSEG to CSEG (was uninitialized memory!)
+- Added `_had_frac` flag to track if fractional bits were non-zero
+- Only subtract 1 for negative numbers that actually have fractional parts
+- floor(-3.0) now correctly returns -3 (was incorrectly returning -4)
+
+**Float64 trunc fix:**
+- Added proper partial byte masking (was just zeroing complete bytes)
+- Calculate remaining bits: ((51-exp) % 8) + 1
+- Create mask and apply to partial byte
+- Fixes precision issues in rem/mod calculations
+
+**Complete Float64 feature set:**
+- Arithmetic: add, sub, mul, div, rem, mod, neg, abs, exp_int (**)
+- Comparison: eq, ne, lt, le, gt, ge
+- Conversion: itof, ftoi
+- Rounding: floor, ceiling, truncation, rounding
+- Math: sqrt
+
+**Next steps to consider:**
+- Elementary math functions (sin, cos, exp, log) - complex for Z80
+- MP/M tasking support
+
+---
+
+## Previous Session (2025-12-19)
+
+**Session accomplished:**
 - Switched code generator to pure Z80 lowercase assembly output (for upeepz80 compatibility)
 - Integrated upeepz80 peephole optimizer into compilation pipeline
 - All tests: 6907/6907 pass (122 execution tests)
@@ -21,7 +59,7 @@
 
 ---
 
-## Previous Session (2025-12-17)
+## Session (2025-12-17)
 
 **Session accomplished:**
 - Parser: 100% (2849/2849 ACATS files)
@@ -58,12 +96,6 @@
 3. **Float64 itof** - Fixed argument order and bit packing
 4. **Float64 comparison operators** - All 6 comparison operators working
 5. **Float64 unary operators** - Negation, abs, plus working
-
-**Next steps to consider:**
-- Float64 exponentiation (Float ** Integer)
-- Float64 remainder/mod operations
-- Elementary math functions (sin, cos, exp, log) - complex for Z80
-- MP/M tasking support
 
 ---
 
