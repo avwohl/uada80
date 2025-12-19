@@ -63,6 +63,8 @@
         PUBLIC  _f64_sin        ; Sine (Taylor series)
         PUBLIC  _f64_cos        ; Cosine (Taylor series)
         PUBLIC  _f64_tan        ; Tangent (sin/cos)
+        PUBLIC  _f64_exp        ; Exponential e^x (Taylor series)
+        PUBLIC  _f64_log        ; Natural logarithm ln(x)
 
 ; =============================================================================
 ; Constants
@@ -3951,7 +3953,728 @@ _f64_tan:
         ret
 
 ; =============================================================================
-; Constants for sin/cos (IEEE 754 double precision, little-endian)
+; _f64_exp: Exponential function e^x using Taylor series
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = e^x
+;
+; Uses Taylor series: e^x = 1 + x + x²/2! + x³/3! + x⁴/4! + ...
+; For argument reduction: e^x = e^(n*ln2 + r) = 2^n * e^r where |r| < ln(2)/2
+; =============================================================================
+_f64_exp:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input to _expf_x
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _expf_x
+        ld      bc, 8
+        ldir
+
+        ; Save sign and work with value
+        ; For very negative x, result approaches 0
+        ; For very positive x, result approaches infinity
+        ld      a, (_expf_x + 7)
+        ld      (_expf_sign), a
+        and     7Fh             ; Get absolute value for range check
+        ld      (_expf_x + 7), a
+
+        ; Argument reduction: compute n = round(x / ln(2))
+        ; Then r = x - n * ln(2), and e^x = 2^n * e^r
+        ; For simplicity, if |x| < 1, skip reduction
+        cp      3Fh             ; Exponent < 0x3FF means |x| < 1
+        jr      c, _expf_small
+
+        ; Compute n = x / ln(2) (truncated to integer)
+        ld      hl, _expf_n_tmp
+        push    hl
+        ld      hl, _const_ln2
+        push    hl
+        ld      hl, _expf_x
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Restore original sign for n calculation
+        ld      a, (_expf_sign)
+        and     80h
+        ld      b, a
+        ld      a, (_expf_n_tmp + 7)
+        or      b
+        ld      (_expf_n_tmp + 7), a
+
+        ; Truncate to integer -> _expf_n_int
+        ld      hl, _expf_n_int
+        push    hl
+        ld      hl, _expf_n_tmp
+        push    hl
+        call    _f64_ftoi
+        pop     hl
+        pop     hl
+
+        ; Convert n back to float -> _expf_n_tmp
+        ld      hl, _expf_n_tmp
+        push    hl
+        ld      hl, (_expf_n_int)   ; Load the actual integer VALUE
+        push    hl
+        call    _f64_itof
+        pop     hl
+        pop     hl
+
+        ; Compute r = x - n * ln(2) -> _expf_x
+        ; First: n * ln(2) -> _expf_r
+        ld      hl, _expf_r
+        push    hl
+        ld      hl, _const_ln2
+        push    hl
+        ld      hl, _expf_n_tmp
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Restore original sign to _expf_x
+        ld      a, (_expf_sign)
+        and     80h
+        ld      b, a
+        ld      a, (_expf_x + 7)
+        or      b
+        ld      (_expf_x + 7), a
+
+        ; r = x - n*ln(2)
+        ld      hl, _expf_x
+        push    hl
+        ld      hl, _expf_r
+        push    hl
+        ld      hl, _expf_x
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+        jr      _expf_taylor
+
+_expf_small:
+        ; Restore sign for small values
+        ld      a, (_expf_sign)
+        and     80h
+        ld      b, a
+        ld      a, (_expf_x + 7)
+        or      b
+        ld      (_expf_x + 7), a
+
+        ; n = 0 for small x
+        xor     a
+        ld      (_expf_n_int), a
+        ld      (_expf_n_int + 1), a
+
+_expf_taylor:
+        ; Taylor series: e^r = 1 + r + r²/2! + r³/3! + r⁴/4! + ...
+        ; Initialize result = 1.0
+        ld      hl, _const_one_f64
+        ld      de, _expf_res
+        ld      bc, 8
+        ldir
+
+        ; Term 1: + r
+        ld      hl, _expf_res
+        push    hl
+        ld      hl, _expf_x
+        push    hl
+        ld      hl, _expf_res
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute r² -> _expf_rn
+        ld      hl, _expf_rn
+        push    hl
+        ld      hl, _expf_x
+        push    hl
+        ld      hl, _expf_x
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 2: + r²/2
+        ld      hl, _expf_term
+        push    hl
+        ld      hl, _const_2
+        push    hl
+        ld      hl, _expf_rn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _expf_res
+        push    hl
+        ld      hl, _expf_term
+        push    hl
+        ld      hl, _expf_res
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; r³ = r² * r
+        ld      hl, _expf_rn
+        push    hl
+        ld      hl, _expf_x
+        push    hl
+        ld      hl, _expf_rn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 3: + r³/6
+        ld      hl, _expf_term
+        push    hl
+        ld      hl, _const_6
+        push    hl
+        ld      hl, _expf_rn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _expf_res
+        push    hl
+        ld      hl, _expf_term
+        push    hl
+        ld      hl, _expf_res
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; r⁴ = r³ * r
+        ld      hl, _expf_rn
+        push    hl
+        ld      hl, _expf_x
+        push    hl
+        ld      hl, _expf_rn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 4: + r⁴/24
+        ld      hl, _expf_term
+        push    hl
+        ld      hl, _const_24
+        push    hl
+        ld      hl, _expf_rn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _expf_res
+        push    hl
+        ld      hl, _expf_term
+        push    hl
+        ld      hl, _expf_res
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; r⁵ = r⁴ * r
+        ld      hl, _expf_rn
+        push    hl
+        ld      hl, _expf_x
+        push    hl
+        ld      hl, _expf_rn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 5: + r⁵/120
+        ld      hl, _expf_term
+        push    hl
+        ld      hl, _const_120
+        push    hl
+        ld      hl, _expf_rn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _expf_res
+        push    hl
+        ld      hl, _expf_term
+        push    hl
+        ld      hl, _expf_res
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; r⁶ = r⁵ * r
+        ld      hl, _expf_rn
+        push    hl
+        ld      hl, _expf_x
+        push    hl
+        ld      hl, _expf_rn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 6: + r⁶/720
+        ld      hl, _expf_term
+        push    hl
+        ld      hl, _const_720
+        push    hl
+        ld      hl, _expf_rn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _expf_res
+        push    hl
+        ld      hl, _expf_term
+        push    hl
+        ld      hl, _expf_res
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Now multiply by 2^n if n != 0
+        ; 2^n is done by adding n to the exponent
+        ld      a, (_expf_n_int)
+        ld      c, a
+        ld      a, (_expf_n_int + 1)
+        ld      b, a
+        or      c
+        jp      z, _expf_done   ; n == 0, skip scaling
+
+        ; Scale result by 2^n
+        ; Get current exponent from result
+        ld      a, (_expf_res + 6)
+        ld      l, a
+        ld      a, (_expf_res + 7)
+        and     7Fh             ; Remove sign
+        ld      h, a
+
+        ; Shift to get 11-bit exponent
+        srl     h
+        rr      l
+        srl     h
+        rr      l
+        srl     h
+        rr      l
+        srl     h
+        rr      l               ; HL = exponent (0-2047)
+
+        ; Add n to exponent
+        ld      a, (_expf_n_int)
+        ld      e, a
+        ld      a, (_expf_n_int + 1)
+        ld      d, a
+        ; Check sign of n
+        bit     7, d
+        jr      z, _expf_add_n
+        ; n is negative (two's complement)
+        ; For small negative n, result should still be positive
+        add     hl, de          ; This works for 16-bit signed add
+        jr      _expf_store_exp
+
+_expf_add_n:
+        add     hl, de
+
+_expf_store_exp:
+        ; Shift exponent back and store
+        sla     l
+        rl      h
+        sla     l
+        rl      h
+        sla     l
+        rl      h
+        sla     l
+        rl      h               ; HL = exponent << 4
+
+        ; Store back (preserve sign and mantissa bits)
+        ld      a, (_expf_res + 7)
+        and     80h             ; Keep sign
+        or      h
+        ld      (_expf_res + 7), a
+        ld      a, (_expf_res + 6)
+        and     0Fh             ; Keep mantissa bits
+        or      l
+        ld      (_expf_res + 6), a
+
+_expf_done:
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _expf_res
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_log: Natural logarithm ln(x)
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = ln(x)
+;
+; Uses identity: x = m * 2^e where 1 <= m < 2
+; Then: ln(x) = ln(m) + e * ln(2)
+; For ln(m), use Taylor series for ln(1+y) where y = m - 1:
+;   ln(1+y) = y - y²/2 + y³/3 - y⁴/4 + y⁵/5 - y⁶/6 + ...
+; =============================================================================
+_f64_log:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input to _log_x
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _log_x
+        ld      bc, 8
+        ldir
+
+        ; Check for negative or zero (return NaN/error - just return 0 for now)
+        ld      a, (_log_x + 7)
+        bit     7, a
+        jp      nz, _log_zero   ; Negative -> return 0 (should be NaN)
+
+        ; Check if x is zero
+        ld      hl, _log_x
+        ld      b, 8
+        xor     a
+_log_check_zero:
+        or      (hl)
+        inc     hl
+        djnz    _log_check_zero
+        jp      z, _log_zero    ; x == 0 -> return 0 (should be -inf)
+
+        ; Extract exponent e from IEEE 754
+        ; Exponent is in bits 52-62 (bytes 6-7)
+        ld      a, (_log_x + 6)
+        ld      l, a
+        ld      a, (_log_x + 7)
+        and     7Fh             ; Remove sign (already checked positive)
+        ld      h, a
+
+        ; Shift to get 11-bit exponent
+        srl     h
+        rr      l
+        srl     h
+        rr      l
+        srl     h
+        rr      l
+        srl     h
+        rr      l               ; HL = biased exponent (0-2047)
+
+        ; e = biased_exp - 1023
+        ld      de, 1023
+        or      a               ; Clear carry
+        sbc     hl, de          ; HL = unbiased exponent (signed)
+        ld      (_log_exp), hl
+
+        ; Set exponent to 1023 (so m is in [1, 2))
+        ; Store 1023 << 4 = 0x3FF0 in upper bits
+        ld      a, (_log_x + 6)
+        and     0Fh             ; Keep mantissa bits (lower 4)
+        or      0F0h            ; Set exponent bits to 0x3FF << 4 (low byte)
+        ld      (_log_x + 6), a
+        ld      a, 3Fh          ; High byte of 0x3FF << 4
+        ld      (_log_x + 7), a
+
+        ; Now _log_x contains m in [1, 2)
+        ; Compute y = m - 1
+        ld      hl, _log_y
+        push    hl
+        ld      hl, _const_one_f64
+        push    hl
+        ld      hl, _log_x
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Taylor series: ln(1+y) = y - y²/2 + y³/3 - y⁴/4 + ...
+        ; Initialize result = y
+        ld      hl, _log_y
+        ld      de, _log_result
+        ld      bc, 8
+        ldir
+
+        ; Compute y² -> _log_yn
+        ld      hl, _log_yn
+        push    hl
+        ld      hl, _log_y
+        push    hl
+        ld      hl, _log_y
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 2: - y²/2
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _const_2
+        push    hl
+        ld      hl, _log_yn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _log_result
+        push    hl
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _log_result
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; y³ = y² * y
+        ld      hl, _log_yn
+        push    hl
+        ld      hl, _log_y
+        push    hl
+        ld      hl, _log_yn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 3: + y³/3
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _const_3
+        push    hl
+        ld      hl, _log_yn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _log_result
+        push    hl
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _log_result
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; y⁴ = y³ * y
+        ld      hl, _log_yn
+        push    hl
+        ld      hl, _log_y
+        push    hl
+        ld      hl, _log_yn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 4: - y⁴/4
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _const_4
+        push    hl
+        ld      hl, _log_yn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _log_result
+        push    hl
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _log_result
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; y⁵ = y⁴ * y
+        ld      hl, _log_yn
+        push    hl
+        ld      hl, _log_y
+        push    hl
+        ld      hl, _log_yn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 5: + y⁵/5
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _const_5
+        push    hl
+        ld      hl, _log_yn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _log_result
+        push    hl
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _log_result
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; y⁶ = y⁵ * y
+        ld      hl, _log_yn
+        push    hl
+        ld      hl, _log_y
+        push    hl
+        ld      hl, _log_yn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 6: - y⁶/6
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _const_6
+        push    hl
+        ld      hl, _log_yn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _log_result
+        push    hl
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _log_result
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Now add e * ln(2) to result
+        ; First convert e to float
+        ld      hl, _log_e_float
+        push    hl
+        ld      hl, (_log_exp)      ; Load the actual integer VALUE
+        push    hl
+        call    _f64_itof
+        pop     hl
+        pop     hl
+
+        ; e * ln(2)
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _const_ln2
+        push    hl
+        ld      hl, _log_e_float
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; result = ln(m) + e * ln(2)
+        ld      hl, _log_result
+        push    hl
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _log_result
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        jp      _log_done
+
+_log_zero:
+        ; Return 0 for invalid input (should return NaN or -inf)
+        ld      hl, _const_zero
+        ld      de, _log_result
+        ld      bc, 8
+        ldir
+
+_log_done:
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _log_result
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
+; Constants for sin/cos/exp/log (IEEE 754 double precision, little-endian)
 ; =============================================================================
 
         CSEG
@@ -3992,6 +4715,27 @@ _const_5040:
 ; 40320.0 = 0x40E3B00000000000
 _const_40320:
         DB      00h, 00h, 00h, 00h, 00h, 0B0h, 0E3h, 40h
+
+; 3.0 = 0x4008000000000000
+_const_3:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 08h, 40h
+
+; 4.0 = 0x4010000000000000
+_const_4:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 10h, 40h
+
+; 5.0 = 0x4014000000000000
+_const_5:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 14h, 40h
+
+; ln(2) = 0.6931471805599453
+; Hex: 0x3FE62E42FEFA39EF
+_const_ln2:
+        DB      0EFh, 39h, 0FAh, 0FEh, 42h, 2Eh, 0E6h, 3Fh
+
+; 0.0 = 0x0000000000000000
+_const_zero:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 00h, 00h
 
 ; =============================================================================
 ; Working memory (internal accumulators)
@@ -4066,5 +4810,24 @@ _cos_result:    DS      8       ; Running result
 ; Temporary storage for tan function
 _tan_sin:       DS      8       ; sin(x) result
 _tan_cos:       DS      8       ; cos(x) result
+
+; Temporary storage for exp function (_f64_exp)
+_expf_x:        DS      8       ; Input value (reduced)
+_expf_sign:     DS      1       ; Original sign
+_expf_n_tmp:    DS      8       ; n as float (for argument reduction)
+_expf_n_int:    DS      2       ; n as integer
+_expf_r:        DS      8       ; Reduced argument r
+_expf_rn:       DS      8       ; Powers of r (r², r³, ...)
+_expf_term:     DS      8       ; Current term
+_expf_res:      DS      8       ; Running result
+
+; Temporary storage for log function
+_log_x:         DS      8       ; Input value (modified to mantissa m)
+_log_y:         DS      8       ; y = m - 1
+_log_yn:        DS      8       ; Powers of y (y², y³, ...)
+_log_term:      DS      8       ; Current term
+_log_result:    DS      8       ; Running result
+_log_exp:       DS      2       ; Exponent e (signed integer)
+_log_e_float:   DS      8       ; e as float
 
         END
