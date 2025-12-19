@@ -3134,12 +3134,10 @@ def test_long_float_tan():
 
 
 @skip_if_no_tools
-@pytest.mark.xfail(reason="sin/cos return sinh/cosh - pre-existing bug in Taylor series implementation")
 def test_long_float_cot():
     """Test Ada.Numerics.Elementary_Functions.Cot for Long_Float."""
     # Test cot(1.0) = 1/tan(1.0) ≈ 1/1.5574 ≈ 0.6421
     # cot(1.0) ≈ 0.6421 -> *1000 = 642
-    # NOTE: Currently returns ~1316 (coth) due to sin/cos bug
     source = """
     with Ada.Text_IO;
     with Ada.Integer_Text_IO;

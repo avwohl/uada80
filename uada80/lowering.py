@@ -3528,10 +3528,15 @@ class ASTLowering:
         self.ctx.assignment_target = stmt.target
 
         try:
-            value = self._lower_expr(stmt.value)
-
-            # Get target type for controlled type handling and range checking
+            # Get target type first to determine how to lower the value
             target_type = self._get_target_type(stmt.target)
+
+            # For Float64 targets, use _lower_float64_operand to get a proper pointer
+            # This handles RealLiteral correctly (creates Float64 constant in code segment)
+            if self._is_float64_type(target_type):
+                value = self._lower_float64_operand(stmt.value)
+            else:
+                value = self._lower_expr(stmt.value)
 
             # Emit range check for constrained types
             if target_type:
@@ -7256,130 +7261,136 @@ class ASTLowering:
         return result_ptr
 
     def _lower_float64_sin(self, operand_expr):
-        """Lower Float64 sin function call.
+        """sin(x) = x - x³/6 + x⁵/120 - x⁷/5040 + ...
 
-        Calls _f64_sin(result_ptr, src_ptr).
-        Stack layout after call:
-          - IX+4 = src_ptr (Float64 pointer)
-          - IX+6 = result_ptr (Float64 pointer)
+        Taylor series implementation, inlined for correct operation.
         """
-        # Get the operand as a Float64 pointer
-        operand_ptr = self._lower_float64_operand(operand_expr)
+        x_ptr = self._lower_float64_operand(operand_expr)
+        return self._sin_from_ptr(x_ptr)
 
-        # Allocate 8 bytes on stack for result
-        result_ptr = self.builder.new_vreg(IRType.PTR, "_f64_sin_result")
-        self.builder.emit(IRInstr(
-            OpCode.SUB,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            Immediate(8, IRType.WORD),
-            comment="allocate 8 bytes for sin result"
-        ))
-        self.builder.emit(IRInstr(
-            OpCode.MOV, result_ptr,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.PTR),
-            comment="result_ptr = SP"
-        ))
+    def _sin_from_ptr(self, x_ptr):
+        """Internal helper: compute sin from an already-evaluated pointer."""
+        # Generate local constants (more reliable than runtime constants)
+        const_6 = self._lower_float64_literal(6.0)
+        const_120 = self._lower_float64_literal(120.0)
+        const_5040 = self._lower_float64_literal(5040.0)
 
-        # Push arguments: result_ptr (IX+6), src_ptr (IX+4)
-        self.builder.push(result_ptr)   # result location (IX+6)
-        self.builder.push(operand_ptr)  # source operand (IX+4)
+        # x² = x * x
+        x2 = self._f64_alloc_temp("x2")
+        self._f64_call_binary("_f64_mul", x2, x_ptr, x_ptr)
 
-        self.builder.call(Label("_f64_sin"))
+        # result = x (first term)
+        result = self._f64_alloc_temp("sin_result")
+        self._f64_call_copy(result, x_ptr)
 
-        # Clean up pushed arguments (2 pointers = 4 bytes)
-        self.builder.emit(IRInstr(
-            OpCode.ADD,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            Immediate(4, IRType.WORD),
-            comment="pop sin args"
-        ))
+        # x³ = x * x²
+        xn = self._f64_alloc_temp("xn")
+        self._f64_call_binary("_f64_mul", xn, x_ptr, x2)
 
-        return result_ptr
+        # term = x³ / 6
+        term = self._f64_alloc_temp("term")
+        self._f64_call_binary("_f64_div", term, xn, const_6)
+
+        # result = result - term (subtract x³/6)
+        self._f64_call_binary("_f64_sub", result, result, term)
+
+        # x⁵ = x³ * x²
+        self._f64_call_binary("_f64_mul", xn, xn, x2)
+
+        # term = x⁵ / 120
+        self._f64_call_binary("_f64_div", term, xn, const_120)
+
+        # result = result + term (add x⁵/120)
+        self._f64_call_binary("_f64_add", result, result, term)
+
+        # x⁷ = x⁵ * x²
+        self._f64_call_binary("_f64_mul", xn, xn, x2)
+
+        # term = x⁷ / 5040
+        self._f64_call_binary("_f64_div", term, xn, const_5040)
+
+        # result = result - term (subtract x⁷/5040)
+        self._f64_call_binary("_f64_sub", result, result, term)
+
+        return result
 
     def _lower_float64_cos(self, operand_expr):
-        """Lower Float64 cos function call.
+        """cos(x) = 1 - x²/2 + x⁴/24 - x⁶/720 + ...
 
-        Calls _f64_cos(result_ptr, src_ptr).
-        Stack layout after call:
-          - IX+4 = src_ptr (Float64 pointer)
-          - IX+6 = result_ptr (Float64 pointer)
+        Taylor series implementation, inlined for correct operation.
         """
-        # Get the operand as a Float64 pointer
-        operand_ptr = self._lower_float64_operand(operand_expr)
+        x_ptr = self._lower_float64_operand(operand_expr)
+        return self._cos_from_ptr(x_ptr)
 
-        # Allocate 8 bytes on stack for result
-        result_ptr = self.builder.new_vreg(IRType.PTR, "_f64_cos_result")
-        self.builder.emit(IRInstr(
-            OpCode.SUB,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            Immediate(8, IRType.WORD),
-            comment="allocate 8 bytes for cos result"
-        ))
-        self.builder.emit(IRInstr(
-            OpCode.MOV, result_ptr,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.PTR),
-            comment="result_ptr = SP"
-        ))
+    def _cos_from_ptr(self, x_ptr):
+        """Internal helper: compute cos from an already-evaluated pointer."""
+        # Generate local constants (more reliable than runtime constants)
+        const_1 = self._lower_float64_literal(1.0)
+        const_2 = self._lower_float64_literal(2.0)
+        const_24 = self._lower_float64_literal(24.0)
+        const_720 = self._lower_float64_literal(720.0)
 
-        # Push arguments: result_ptr (IX+6), src_ptr (IX+4)
-        self.builder.push(result_ptr)   # result location (IX+6)
-        self.builder.push(operand_ptr)  # source operand (IX+4)
+        # x² = x * x
+        x2 = self._f64_alloc_temp("x2")
+        self._f64_call_binary("_f64_mul", x2, x_ptr, x_ptr)
 
-        self.builder.call(Label("_f64_cos"))
+        # result = 1.0 (first term)
+        result = self._f64_alloc_temp("cos_result")
+        self._f64_call_copy(result, const_1)
 
-        # Clean up pushed arguments (2 pointers = 4 bytes)
-        self.builder.emit(IRInstr(
-            OpCode.ADD,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            Immediate(4, IRType.WORD),
-            comment="pop cos args"
-        ))
+        # xn = x² (current power, starting at x²)
+        xn = self._f64_alloc_temp("xn")
+        self._f64_call_copy(xn, x2)
 
-        return result_ptr
+        # term = x² / 2
+        term = self._f64_alloc_temp("term")
+        self._f64_call_binary("_f64_div", term, xn, const_2)
+
+        # result = result - term (subtract x²/2)
+        self._f64_call_binary("_f64_sub", result, result, term)
+
+        # x⁴ = x² * x²
+        self._f64_call_binary("_f64_mul", xn, xn, x2)
+
+        # term = x⁴ / 24
+        self._f64_call_binary("_f64_div", term, xn, const_24)
+
+        # result = result + term (add x⁴/24)
+        self._f64_call_binary("_f64_add", result, result, term)
+
+        # x⁶ = x⁴ * x²
+        self._f64_call_binary("_f64_mul", xn, xn, x2)
+
+        # term = x⁶ / 720
+        self._f64_call_binary("_f64_div", term, xn, const_720)
+
+        # result = result - term (subtract x⁶/720)
+        self._f64_call_binary("_f64_sub", result, result, term)
+
+        return result
 
     def _lower_float64_tan(self, operand_expr):
-        """Lower Float64 tan function call.
+        """tan(x) = sin(x) / cos(x)
 
-        Calls _f64_tan(result_ptr, src_ptr).
-        Stack layout after call:
-          - IX+4 = src_ptr (Float64 pointer)
-          - IX+6 = result_ptr (Float64 pointer)
+        Uses inlined sin/cos Taylor series for correct operation.
+        Evaluates operand once and uses same value for both sin and cos.
         """
-        # Get the operand as a Float64 pointer
-        operand_ptr = self._lower_float64_operand(operand_expr)
+        # Evaluate operand once
+        x_ptr = self._lower_float64_operand(operand_expr)
 
-        # Allocate 8 bytes on stack for result
-        result_ptr = self.builder.new_vreg(IRType.PTR, "_f64_tan_result")
-        self.builder.emit(IRInstr(
-            OpCode.SUB,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            Immediate(8, IRType.WORD),
-            comment="allocate 8 bytes for tan result"
-        ))
-        self.builder.emit(IRInstr(
-            OpCode.MOV, result_ptr,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.PTR),
-            comment="result_ptr = SP"
-        ))
+        # Save x to a temporary so stack allocations in sin/cos don't affect it
+        x_saved = self._f64_alloc_temp("tan_x")
+        self._f64_call_copy(x_saved, x_ptr)
 
-        # Push arguments: result_ptr (IX+6), src_ptr (IX+4)
-        self.builder.push(result_ptr)   # result location (IX+6)
-        self.builder.push(operand_ptr)  # source operand (IX+4)
+        # Compute sin(x) and cos(x) using the saved value
+        sin_result = self._sin_from_ptr(x_saved)
+        cos_result = self._cos_from_ptr(x_saved)
 
-        self.builder.call(Label("_f64_tan"))
+        # result = sin(x) / cos(x)
+        result = self._f64_alloc_temp("tan_result")
+        self._f64_call_binary("_f64_div", result, sin_result, cos_result)
 
-        # Clean up pushed arguments (2 pointers = 4 bytes)
-        self.builder.emit(IRInstr(
-            OpCode.ADD,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            Immediate(4, IRType.WORD),
-            comment="pop tan args"
-        ))
-
-        return result_ptr
+        return result
 
     def _lower_float64_cot(self, operand_expr):
         """cot(x) = 1.0 / tan(x)
@@ -7604,6 +7615,27 @@ class ASTLowering:
             comment=f"pop {func_name} args"
         ))
 
+    def _f64_call_copy(self, dest_ptr, src_ptr):
+        """Call _f64_copy with correct argument order: dest = copy of src.
+
+        Note: _f64_copy has different calling convention than other unary functions:
+        - dest_ptr at IX+4 (pushed last)
+        - src_ptr at IX+6 (pushed first)
+        """
+        if self.builder.module:
+            self.builder.module.need_runtime("_f64_copy")
+            if isinstance(src_ptr, Label):
+                self.builder.module.need_runtime(src_ptr.name)
+        self.builder.push(src_ptr)   # pushed first -> IX+6
+        self.builder.push(dest_ptr)  # pushed last -> IX+4
+        self.builder.call(Label("_f64_copy"))
+        self.builder.emit(IRInstr(
+            OpCode.ADD,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            Immediate(4, IRType.WORD),
+            comment="pop _f64_copy args"
+        ))
+
     def _f64_call_binary(self, func_name: str, result_ptr, left_ptr, right_ptr):
         """Call binary Float64 function: result = func(left, right)."""
         # Register runtime dependencies
@@ -7636,13 +7668,17 @@ class ASTLowering:
         """
         x_ptr = self._lower_float64_operand(operand_expr)
 
+        # Generate local constants
+        const_1 = self._lower_float64_literal(1.0)
+        const_2 = self._lower_float64_literal(2.0)
+
         # E_X = exp(x)
         exp_x = self._f64_alloc_temp("exp_x")
         self._f64_call_unary("_f64_e2x", exp_x, x_ptr)
 
         # inv_exp_x = 1.0 / E_X
         inv_exp_x = self._f64_alloc_temp("inv_exp_x")
-        self._f64_call_binary("_f64_div", inv_exp_x, Label("_const_one_f64"), exp_x)
+        self._f64_call_binary("_f64_div", inv_exp_x, const_1, exp_x)
 
         # diff = E_X - 1.0/E_X
         diff = self._f64_alloc_temp("diff")
@@ -7650,7 +7686,7 @@ class ASTLowering:
 
         # result = diff / 2.0
         result = self._f64_alloc_temp("sinh_result")
-        self._f64_call_binary("_f64_div", result, diff, Label("_const_2"))
+        self._f64_call_binary("_f64_div", result, diff, const_2)
 
         return result
 
@@ -7790,13 +7826,17 @@ class ASTLowering:
         """
         x_ptr = self._lower_float64_operand(operand_expr)
 
+        # Generate local constants
+        const_1 = self._lower_float64_literal(1.0)
+        const_2 = self._lower_float64_literal(2.0)
+
         # one_plus_x = 1 + x
         one_plus_x = self._f64_alloc_temp("one_plus_x")
-        self._f64_call_binary("_f64_add", one_plus_x, Label("_const_one_f64"), x_ptr)
+        self._f64_call_binary("_f64_add", one_plus_x, const_1, x_ptr)
 
         # one_minus_x = 1 - x
         one_minus_x = self._f64_alloc_temp("one_minus_x")
-        self._f64_call_binary("_f64_sub", one_minus_x, Label("_const_one_f64"), x_ptr)
+        self._f64_call_binary("_f64_sub", one_minus_x, const_1, x_ptr)
 
         # ratio = (1 + x) / (1 - x)
         ratio = self._f64_alloc_temp("ratio")
@@ -7808,7 +7848,7 @@ class ASTLowering:
 
         # result = log_ratio / 2.0 (equivalent to 0.5 * log_ratio)
         result = self._f64_alloc_temp("arctanh_result")
-        self._f64_call_binary("_f64_div", result, log_ratio, Label("_const_2"))
+        self._f64_call_binary("_f64_div", result, log_ratio, const_2)
 
         return result
 
@@ -7819,13 +7859,17 @@ class ASTLowering:
         """
         x_ptr = self._lower_float64_operand(operand_expr)
 
+        # Generate local constants
+        const_1 = self._lower_float64_literal(1.0)
+        const_2 = self._lower_float64_literal(2.0)
+
         # x_plus_1 = x + 1
         x_plus_1 = self._f64_alloc_temp("x_plus_1")
-        self._f64_call_binary("_f64_add", x_plus_1, x_ptr, Label("_const_one_f64"))
+        self._f64_call_binary("_f64_add", x_plus_1, x_ptr, const_1)
 
         # x_minus_1 = x - 1
         x_minus_1 = self._f64_alloc_temp("x_minus_1")
-        self._f64_call_binary("_f64_sub", x_minus_1, x_ptr, Label("_const_one_f64"))
+        self._f64_call_binary("_f64_sub", x_minus_1, x_ptr, const_1)
 
         # ratio = (x + 1) / (x - 1)
         ratio = self._f64_alloc_temp("ratio")
@@ -7837,7 +7881,7 @@ class ASTLowering:
 
         # result = log_ratio / 2.0 (equivalent to 0.5 * log_ratio)
         result = self._f64_alloc_temp("arccoth_result")
-        self._f64_call_binary("_f64_div", result, log_ratio, Label("_const_2"))
+        self._f64_call_binary("_f64_div", result, log_ratio, const_2)
 
         return result
 

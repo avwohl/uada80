@@ -3,9 +3,38 @@
 ## Work In Progress (2025-12-19)
 
 **Session accomplished:**
+- Fixed sin/cos bug: functions were returning sinh/cosh values
+- Fixed Float64 assignment bug for literal values (e.g., `Result := 1.0`)
+- Inlined sin/cos Taylor series in lowering.py with local constants
+- sin(1.0)=841, cos(1.0)=540, tan(1.0)=1557, cot(1.0)=642 all correct
+
+**Critical fix: Float64 assignment from literals**
+- `_lower_assignment` was calling `_lower_expr` which returns fixed-point for RealLiteral
+- But Float64 assignment expects a pointer from `_lower_float64_operand`
+- **Fix:** Check target type first; use `_lower_float64_operand` for Float64 targets
+
+**Critical fix: Inlined trig functions use local constants**
+- Runtime constants (Label("_const_one_f64"), etc.) don't work correctly with `_f64_call_binary`
+- **Fix:** Generate local constants via `_lower_float64_literal()` in each inlined function
+- Applied to: `_sin_from_ptr`, `_cos_from_ptr`, `_lower_float64_arctanh`, `_lower_float64_arccoth`
+
+**WIP: Still need to update with local constants:**
+- `_lower_float64_cosh` - uses Label("_const_one_f64"), Label("_const_2")
+- `_lower_float64_tanh` - uses Label("_const_2"), Label("_const_one_f64")
+- `_lower_float64_coth` - uses Label("_const_one_f64")
+- `_lower_float64_arcsinh` - may use runtime constants
+- `_lower_float64_arccosh` - may use runtime constants
+- After updating, reinstall with `pip install -e .` and run tests
+
+**Tests:** 138 pass, 6 fail (sinh, cosh, tanh, coth, arctanh, arccoth need constant fixes)
+
+---
+
+## Previous Session (2025-12-19)
+
+**Session accomplished:**
 - Fixed Float64 exponentiation (**) regression caused by symbol collision
 - Added tan, exp, log, arctan functions for Long_Float (Float64)
-- All tests: 6916/6916 pass (131 execution tests)
 
 **Critical fix: 8-character symbol truncation bug**
 - um80 assembler truncates symbols to 8 characters
@@ -28,6 +57,7 @@
 - Math: sqrt, sin, cos, tan, arctan, exp, log
 
 **Next steps to consider:**
+- Fix remaining hyperbolic functions (cosh, tanh, coth need local constants)
 - Additional elementary functions (asin, acos)
 - MP/M tasking support
 
