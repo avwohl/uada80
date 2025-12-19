@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from uada80 import __version__
-from uada80.compiler import Compiler, OutputFormat, compile_file, compile_files
+from uada80.compiler import Compiler, OutputFormat
 
 
 def main():

@@ -11,7 +11,6 @@ Performs:
 
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Optional
 
 from uada80.ast_nodes import (
@@ -91,11 +90,9 @@ from uada80.ast_nodes import (
     QuantifiedExpr,
     DeclareExpr,
     CaseExpr,
-    CaseExprAlternative,
     MembershipTest,
     ExprChoice,
     RangeChoice,
-    OthersChoice,
     Slice,
     Dereference,
     TargetName,
@@ -114,7 +111,6 @@ from uada80.ast_nodes import (
     PrivateTypeDef,
     RealTypeDef,
     SubtypeIndication,
-    ComponentDecl,
     GenericInstantiation,
     GenericTypeDecl,
     # Representation clauses
@@ -122,7 +118,6 @@ from uada80.ast_nodes import (
     AttributeDefinitionClause,
     RecordRepresentationClause,
     EnumerationRepresentationClause,
-    ComponentClause,
 )
 from uada80.symbol_table import SymbolTable, Symbol, SymbolKind
 from uada80.type_system import (
@@ -1005,7 +1000,7 @@ class SemanticAnalyzer:
                          If provided, the formal symbol is stored on this symbol for later
                          retrieval when analyzing the generic body.
         """
-        from uada80.ast_nodes import GenericObjectDecl, GenericSubprogramDecl
+        from uada80.ast_nodes import GenericObjectDecl
 
         sym = None  # The symbol we'll create for this formal
 
@@ -2368,7 +2363,7 @@ class SemanticAnalyzer:
 
         # Add parameters to scope
         for param in body.parameters:
-            param_type = self._resolve_param_type(param.type_mark, param.mode)
+            param_type = self._resolve_type(param.type_mark)
             for name in param.names:
                 self.symbols.define(Symbol(
                     name=name,

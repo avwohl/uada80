@@ -35,6 +35,7 @@ dev = [
     "mypy>=1.5.0",
     "black>=23.7.0",
     "ruff>=0.0.285",
+    "pylint>=3.0.0",
 ]
 
 [project.scripts]
@@ -98,3 +99,67 @@ ignore = [
 [tool.ruff.per-file-ignores]
 "__init__.py" = ["F401"]
 "tests/*.py" = ["N802", "N806"]
+
+[tool.pylint.main]
+# Analyse import fallback blocks
+analyse-fallback-blocks = false
+# Minimum Python version
+py-version = "3.10"
+# Add paths to ignore
+ignore-paths = ["tests/"]
+
+[tool.pylint.messages_control]
+# Disable checks that are too noisy for a compiler project
+disable = [
+    "C0301",  # line-too-long (handled by black/ruff)
+    "C0302",  # too-many-lines (compilers have large modules)
+    "C0415",  # import-outside-toplevel (needed to avoid circular imports)
+    "R0801",  # duplicate-code (some patterns repeat across passes)
+    "R0902",  # too-many-instance-attributes (AST nodes need many attrs)
+    "R0903",  # too-few-public-methods (dataclasses are fine)
+    "R0911",  # too-many-return-statements (complex logic is OK)
+    "R0912",  # too-many-branches (compilers have complex branching)
+    "R0913",  # too-many-arguments (some functions need many args)
+    "R0914",  # too-many-locals (complex functions need locals)
+    "R0915",  # too-many-statements (compilers have long functions)
+    "R0917",  # too-many-positional-arguments
+    "R1705",  # no-else-return (style preference)
+    "R1711",  # useless-return (style preference)
+    "W0107",  # unnecessary-pass (empty class bodies are fine)
+    "W0404",  # reimported (circular import workarounds)
+    "W0613",  # unused-argument (common in interface methods)
+    "W0621",  # redefined-outer-name (intentional shadowing)
+    "W1309",  # f-string-without-interpolation (harmless)
+    "R1702",  # too-many-nested-blocks (complex control flow)
+    "W0201",  # attribute-defined-outside-init (dynamic attributes)
+    "W0212",  # protected-access (internal module access)
+    "W0718",  # broad-exception-caught (fallback handlers)
+    "W0612",  # unused-variable (sometimes needed for unpacking)
+    "W1514",  # unspecified-encoding (default encoding is fine)
+    "R0916",  # too-many-boolean-expressions (complex conditions)
+    "R1724",  # no-else-continue (style preference)
+    "E1128",  # assignment-from-none (placeholder functions)
+    "C0103",  # invalid-name (naming conventions differ)
+    "C0116",  # missing-function-docstring (not all methods need docs)
+    "C0325",  # superfluous-parens (style preference)
+    "R0904",  # too-many-public-methods (large classes OK)
+    "R1714",  # consider-using-in (style preference)
+    "R1723",  # no-else-break (style preference)
+    "R1731",  # consider-using-max-builtin (style preference)
+    "W0401",  # wildcard-import (acceptable for ast_nodes)
+    "W0603",  # global-statement (singleton pattern)
+    "W0614",  # unused-wildcard-import (acceptable for ast_nodes)
+]
+
+[tool.pylint.format]
+# Maximum line length (matches black/ruff)
+max-line-length = 100
+
+[tool.pylint.design]
+# Relax complexity limits for compiler code
+max-args = 10
+max-locals = 30
+max-returns = 10
+max-branches = 20
+max-statements = 100
+max-attributes = 15
