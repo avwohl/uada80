@@ -3,27 +3,19 @@
 ## Work In Progress (2025-12-19)
 
 **Session accomplished:**
-- Float64 remainder (rem) and modulo (mod) operations
-- Fixed Float64 floor for negative numbers
-- Fixed Float64 trunc partial byte masking
-- All tests: 124 execution tests pass, 5591 ACATS tests pass
+- Float64 sqrt function via Ada.Numerics.Elementary_Functions.Sqrt
+- Fixed argument push order bug in _f64_sqrt runtime Newton-Raphson
+- All tests: 125 execution tests, 6909/6910 pass (1 pre-existing failure)
 
-**Float64 rem/mod implementation:**
-- `_f64_rem`: Remainder with sign following dividend (X rem Y = X - Y * trunc(X/Y))
-- `_f64_mod`: Modulo with sign following divisor (X mod Y = X - Y * floor(X/Y))
-- Added execution tests for both operations
-
-**Float64 floor fix:**
-- Moved `_f64_neg_one` constant from DSEG to CSEG (was uninitialized memory!)
-- Added `_had_frac` flag to track if fractional bits were non-zero
-- Only subtract 1 for negative numbers that actually have fractional parts
-- floor(-3.0) now correctly returns -3 (was incorrectly returning -4)
-
-**Float64 trunc fix:**
-- Added proper partial byte masking (was just zeroing complete bytes)
-- Calculate remaining bits: ((51-exp) % 8) + 1
-- Create mask and apply to partial byte
-- Fixes precision issues in rem/mod calculations
+**Float64 sqrt support:**
+- Added `_lower_float64_sqrt()` method for sqrt lowering
+- Added sqrt detection in `_lower_indexed()` for SelectedName prefix
+  - `Ada.Numerics.Elementary_Functions.Sqrt(X)` parses as IndexedComponent
+  - Detects Float64 argument type and calls `_f64_sqrt` runtime
+- Fixed critical bug in runtime _f64_sqrt Newton-Raphson iteration:
+  - `_f64_div`/`_f64_add` expect: a_ptr(IX+4), b_ptr(IX+6), result_ptr(IX+8)
+  - Was pushing in wrong order (a first instead of last)
+  - Must push reverse: result_ptr first, then b_ptr, then a_ptr
 
 **Complete Float64 feature set:**
 - Arithmetic: add, sub, mul, div, rem, mod, neg, abs, exp_int (**)
@@ -35,6 +27,27 @@
 **Next steps to consider:**
 - Elementary math functions (sin, cos, exp, log) - complex for Z80
 - MP/M tasking support
+
+---
+
+## Previous Session (2025-12-19)
+
+**Session accomplished:**
+- Float64 remainder (rem) and modulo (mod) operations
+- Fixed Float64 floor for negative numbers
+- Fixed Float64 trunc partial byte masking
+- All tests: 124 execution tests pass
+
+**Float64 rem/mod implementation:**
+- `_f64_rem`: Remainder with sign following dividend (X rem Y = X - Y * trunc(X/Y))
+- `_f64_mod`: Modulo with sign following divisor (X mod Y = X - Y * floor(X/Y))
+- Added execution tests for both operations
+
+**Float64 floor fix:**
+- Moved `_f64_neg_one` constant from DSEG to CSEG (was uninitialized memory!)
+- Added `_had_frac` flag to track if fractional bits were non-zero
+- Only subtract 1 for negative numbers that actually have fractional parts
+- floor(-3.0) now correctly returns -3 (was incorrectly returning -4)
 
 ---
 
