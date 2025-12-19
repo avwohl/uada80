@@ -143,6 +143,9 @@ class OpCode(Enum):
     NOT = auto()  # dst = ~src
     SHL = auto()  # dst = src1 << src2
     SHR = auto()  # dst = src1 >> src2
+    SAR = auto()  # dst = src1 >> src2 (arithmetic, sign-extend)
+    ROL = auto()  # dst = rotate left src1 by src2
+    ROR = auto()  # dst = rotate right src1 by src2
 
     # Comparison (sets flags only)
     CMP = auto()  # compare src1 with src2, set flags
@@ -636,6 +639,38 @@ class IRBuilder:
     def entry_accept(self, entry_id: IRValue, comment: str = "") -> None:
         """Emit an entry accept instruction."""
         self.emit(IRInstr(OpCode.ENTRY_ACCEPT, src1=entry_id, comment=comment))
+
+    # Additional operations for protected types and tasking
+
+    def set_function(self, func: IRFunction) -> None:
+        """Set the current function for building."""
+        self.function = func
+        if func.blocks:
+            self.block = func.blocks[-1]
+
+    def lea(self, dst: VReg, addr: MemoryLocation, comment: str = "") -> None:
+        """Emit a load effective address instruction."""
+        self.emit(IRInstr(OpCode.LEA, dst, addr, comment=comment))
+
+    def load_mem(self, dst: VReg, addr: MemoryLocation, comment: str = "") -> None:
+        """Emit a load from memory instruction (alias for load)."""
+        self.load(dst, addr, comment=comment)
+
+    def rem(self, dst: VReg, src1: IRValue, src2: IRValue, comment: str = "") -> None:
+        """Emit a remainder (modulo) instruction."""
+        self.emit(IRInstr(OpCode.MOD, dst, src1, src2, comment=comment))
+
+    def rol(self, dst: VReg, src1: IRValue, src2: IRValue, comment: str = "") -> None:
+        """Emit a rotate left instruction."""
+        self.emit(IRInstr(OpCode.ROL, dst, src1, src2, comment=comment))
+
+    def ror(self, dst: VReg, src1: IRValue, src2: IRValue, comment: str = "") -> None:
+        """Emit a rotate right instruction."""
+        self.emit(IRInstr(OpCode.ROR, dst, src1, src2, comment=comment))
+
+    def sar(self, dst: VReg, src1: IRValue, src2: IRValue, comment: str = "") -> None:
+        """Emit a shift arithmetic right instruction."""
+        self.emit(IRInstr(OpCode.SAR, dst, src1, src2, comment=comment))
 
 
 # ============================================================================

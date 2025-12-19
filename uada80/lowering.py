@@ -223,6 +223,8 @@ class ASTLowering:
         self._function_overload_count: dict[str, int] = {}
         # Maps (function name, param count) -> unique label name
         self._function_label_map: dict[tuple[str, int], str] = {}
+        # Global variables (name -> value info)
+        self.globals: dict[str, Any] = {}
 
     def _make_memory_location(
         self,
@@ -1294,7 +1296,7 @@ class ASTLowering:
 
         # Fallback: look up locally-declared types from _current_body_declarations
         if ada_type is None and type_name and hasattr(self, '_current_body_declarations'):
-            from uada80.ast_nodes import RecordTypeDef, ComponentDecl
+            from uada80.ast_nodes import RecordTypeDef
             from uada80.type_system import RecordType, RecordComponent, IntegerType, ArrayType
             for d in self._current_body_declarations:
                 if isinstance(d, TypeDecl) and d.name.lower() == type_name.lower():
@@ -1774,7 +1776,7 @@ class ASTLowering:
         ada_type: the record type
         disc_values: dict mapping discriminant name -> value (vreg or immediate)
         """
-        from uada80.type_system import RecordType, DiscriminantConstraint
+        from uada80.type_system import RecordType
 
         if not isinstance(ada_type, RecordType) or not ada_type.has_discriminants():
             return
@@ -1961,18 +1963,18 @@ class ASTLowering:
         op_name = f"{prot_name}_{body.name}"
 
         # Create IR function for this operation
-        ir_func = IRFunction(name=op_name)
+        ir_func = IRFunction(name=op_name, return_type=IRType.VOID)
         if self.builder.module:
             self.builder.module.functions.append(ir_func)
 
         # Create entry block
-        entry_block = BasicBlock(name=f"L_{op_name}_entry")
+        entry_block = BasicBlock(label=f"L_{op_name}_entry")
         ir_func.blocks.append(entry_block)
         self.builder.set_function(ir_func)
         self.builder.set_block(entry_block)
 
         # Create new context
-        self.ctx = FunctionContext(name=op_name)
+        self.ctx = LoweringContext(function=ir_func, subprogram_name=op_name)
 
         # Emit lock acquisition
         # The protected object address is passed as first implicit parameter
@@ -2039,12 +2041,12 @@ class ASTLowering:
         entry_name = f"{prot_name}_{entry.name}"
 
         # Create IR function for this entry
-        ir_func = IRFunction(name=entry_name)
+        ir_func = IRFunction(name=entry_name, return_type=IRType.VOID)
         if self.builder.module:
             self.builder.module.functions.append(ir_func)
 
         # Create entry block
-        entry_block = BasicBlock(name=f"L_{entry_name}_start")
+        entry_block = BasicBlock(label=f"L_{entry_name}_start")
         ir_func.blocks.append(entry_block)
         self.builder.set_function(ir_func)
         self.builder.set_block(entry_block)
@@ -2068,8 +2070,8 @@ class ASTLowering:
             family_local = LocalVariable(
                 name=entry.family_index,
                 vreg=family_index_vreg,
+                stack_offset=self.ctx.locals_size if self.ctx else 0,
                 size=2,
-                offset=self.ctx.locals_size if self.ctx else 0,
                 ada_type=None  # Type from family_index range
             )
             if self.ctx:
@@ -2479,7 +2481,7 @@ class ASTLowering:
 
         # Get task ID from task object (stored at offset 0 of task object)
         task_id = self.builder.new_vreg(IRType.WORD, "_task_id")
-        self.builder.load_mem(task_id, task_obj, 0, IRType.WORD,
+        self.builder.load_mem(task_id, MemoryLocation(base=task_obj, offset=0, ir_type=IRType.WORD),
                              comment="get task ID from object")
 
         # Set up entry parameters if any
@@ -3239,8 +3241,8 @@ class ASTLowering:
                         prev_local = LocalVariable(
                             name=prev_name,
                             vreg=prev_vreg,
+                            stack_offset=self.ctx.locals_size,
                             size=2,
-                            offset=self.ctx.locals_size,
                             ada_type=None
                         )
                         self.ctx.locals[prev_name.lower()] = prev_local
@@ -4559,7 +4561,7 @@ class ASTLowering:
                     self._inline_params[param_name] = arg_value
 
             # Generate unique labels for this inline instance
-            inline_id = self._get_unique_label()
+            inline_id = self._get_unique_label("inline")
             inline_end_label = f"_inline_end_{inline_id}"
 
             self.builder.emit(IRInstr(OpCode.NOP, comment=f"begin inline {sym.name}"))
@@ -6283,12 +6285,12 @@ class ASTLowering:
         loop_end = self.builder.new_label("quant_end")
 
         # Loop start - check if we're done
-        self.builder.label(loop_start.name)
+        self.builder.label(loop_start)
         self.builder.cmp(loop_var, high_val)
         self.builder.jg(loop_end, comment="exit if loop_var > high")
 
         # Loop body - evaluate predicate
-        self.builder.label(loop_body.name)
+        self.builder.label(loop_body)
 
         # Temporarily bind the loop variable in context for predicate evaluation
         # Save any existing local with the same name
@@ -6298,7 +6300,7 @@ class ASTLowering:
         self.ctx.locals[loop_var_name.lower()] = LocalVariable(
             name=loop_var_name,
             vreg=loop_var,
-            offset=0,
+            stack_offset=0,
             size=2,
             ada_type=None
         )
@@ -6320,14 +6322,14 @@ class ASTLowering:
             self.builder.jnz(is_true, early_exit)  # predicate was true, continue
             self.builder.mov(result, Immediate(0, IRType.WORD))
             self.builder.jmp(loop_end)
-            self.builder.label(early_exit.name)
+            self.builder.label(early_exit)
         else:
             # for some: if predicate is true, set result to true and exit
             continue_loop = self.builder.new_label("quant_continue")
             self.builder.jz(pred_val, continue_loop)  # predicate was false, continue
             self.builder.mov(result, Immediate(1, IRType.WORD))
             self.builder.jmp(loop_end)
-            self.builder.label(continue_loop.name)
+            self.builder.label(continue_loop)
 
         # Increment loop variable and continue
         temp = self.builder.new_vreg(IRType.WORD, "_inc_temp")
@@ -6336,7 +6338,7 @@ class ASTLowering:
         self.builder.jmp(loop_start)
 
         # Loop end
-        self.builder.label(loop_end.name)
+        self.builder.label(loop_end)
 
         return result
 
@@ -7381,7 +7383,7 @@ class ASTLowering:
                     # Register iterator as local for value expression
                     old_local = self.ctx.locals.get(iter_var_name.lower())
                     self.ctx.locals[iter_var_name.lower()] = LocalVariable(
-                        name=iter_var_name, vreg=iter_var, offset=0, size=2, ada_type=None
+                        name=iter_var_name, vreg=iter_var, stack_offset=0, size=2, ada_type=None
                     )
 
                     self.builder.label(loop_start)
@@ -7570,8 +7572,10 @@ class ASTLowering:
                             # For simplicity, assume 0-based or 1-based indexing
                             offset_reg = self.builder.new_vreg(IRType.WORD, "_idx_off")
                             self.builder.mul(offset_reg, idx, Immediate(2, IRType.WORD))
-                            # Create indexed memory location
-                            mem = MemoryLocation(base=agg_addr, index=offset_reg, ir_type=IRType.WORD)
+                            # Create indexed memory location - compute address first
+                            addr_reg = self.builder.new_vreg(IRType.PTR, "_elem_addr")
+                            self.builder.add(addr_reg, agg_addr, offset_reg)
+                            mem = MemoryLocation(base=addr_reg, offset=0, ir_type=IRType.WORD)
                             self.builder.store(mem, value)
                     elif isinstance(choice, RangeChoice):
                         # Range association: (1 .. 5 => 0)
@@ -7582,18 +7586,20 @@ class ASTLowering:
                         self.builder.mov(loop_var, low)
                         loop_start = self.builder.new_label("agg_range_loop")
                         loop_end = self.builder.new_label("agg_range_end")
-                        self.builder.label(loop_start.name)
+                        self.builder.label(loop_start)
                         self.builder.cmp(loop_var, high)
                         self.builder.jg(loop_end)
                         # Store value at index
                         offset_reg = self.builder.new_vreg(IRType.WORD, "_range_off")
                         self.builder.mul(offset_reg, loop_var, Immediate(2, IRType.WORD))
-                        mem = MemoryLocation(base=agg_addr, index=offset_reg, ir_type=IRType.WORD)
+                        addr_reg = self.builder.new_vreg(IRType.PTR, "_elem_addr")
+                        self.builder.add(addr_reg, agg_addr, offset_reg)
+                        mem = MemoryLocation(base=addr_reg, offset=0, ir_type=IRType.WORD)
                         self.builder.store(mem, value)
                         # Increment and loop
                         self.builder.add(loop_var, loop_var, Immediate(1, IRType.WORD))
                         self.builder.jmp(loop_start)
-                        self.builder.label(loop_end.name)
+                        self.builder.label(loop_end)
             else:
                 # Positional aggregate: (1, 2, 3)
                 mem = MemoryLocation(base=agg_addr, offset=positional_offset, ir_type=IRType.WORD)
@@ -7716,7 +7722,6 @@ class ASTLowering:
                     row_count *= (dim_high - dim_low + 1)
                 row_size = row_count * element_size
                 # Create a 1D array type for each row
-                from uada80.type_system import IntegerType
                 row_type = ArrayType(
                     name="row",
                     component_type=target_type.component_type,
@@ -8927,7 +8932,7 @@ class ASTLowering:
                 return sym.ada_type
             # Check local type declarations from current body
             if hasattr(self, '_current_body_declarations') and self._current_body_declarations:
-                from uada80.ast_nodes import ModularTypeDef, RecordTypeDef, ComponentDecl
+                from uada80.ast_nodes import ModularTypeDef, RecordTypeDef
                 from uada80.type_system import RecordType, RecordComponent, IntegerType
                 for d in self._current_body_declarations:
                     if isinstance(d, TypeDecl) and d.name.lower() == type_name:
@@ -10581,13 +10586,15 @@ class ASTLowering:
                     ada_type = sym.ada_type
 
             if ada_type:
-                from uada80.type_system import IntegerType, BooleanType, CharacterType
-                if isinstance(ada_type, BooleanType):
-                    return Immediate(1, IRType.WORD)
-                if isinstance(ada_type, CharacterType):
-                    return Immediate(2, IRType.WORD)
+                from uada80.type_system import IntegerType
+                # Boolean and Character are EnumerationType with specific names
                 if isinstance(ada_type, EnumerationType):
-                    return Immediate(3, IRType.WORD)
+                    type_name = getattr(ada_type, 'name', '').lower()
+                    if type_name == 'boolean':
+                        return Immediate(1, IRType.WORD)
+                    if type_name == 'character':
+                        return Immediate(2, IRType.WORD)
+                    return Immediate(3, IRType.WORD)  # Other enumeration
                 if isinstance(ada_type, ArrayType):
                     return Immediate(6, IRType.WORD)
                 if isinstance(ada_type, RecordType):
@@ -14112,6 +14119,79 @@ class ASTLowering:
                     return local.size
 
         return 80  # Default buffer size
+
+    # --- Stub methods for features not yet implemented ---
+
+    def _setup_parameters(self, params: list) -> None:
+        """Set up parameter locals from parameter list (stub)."""
+        # TODO: Implement parameter setup for subprogram bodies
+        pass
+
+    def _lower_exception_handlers(self, handlers: list) -> None:
+        """Lower exception handlers (stub)."""
+        # TODO: Implement exception handler lowering
+        pass
+
+    def _get_constant_value(self, expr) -> Optional[int]:
+        """Get compile-time constant value from expression (stub)."""
+        # TODO: Implement constant evaluation
+        if hasattr(expr, 'value') and isinstance(expr.value, int):
+            return expr.value
+        return None
+
+    def _get_unique_label(self, prefix: str) -> str:
+        """Get a unique label with given prefix."""
+        return self.builder.new_label(prefix)
+
+    def _get_exception_name(self, exc_id: int) -> str:
+        """Get exception name from ID (stub)."""
+        # TODO: Implement reverse lookup of exception names
+        for name, eid in self._exception_ids.items():
+            if eid == exc_id:
+                return name
+        return f"exception_{exc_id}"
+
+    def _lower_decl(self, decl) -> None:
+        """Lower a declaration (alias for _lower_declaration)."""
+        self._lower_declaration(decl)
+
+    def _load_global(self, name: str) -> VReg:
+        """Load a global variable value (stub)."""
+        result = self.builder.new_vreg(IRType.WORD, f"_{name}")
+        self.builder.load(
+            result,
+            MemoryLocation(is_global=True, symbol_name=name, ir_type=IRType.WORD)
+        )
+        return result
+
+    def _lower_indexed_load(self, target: IndexedComponent) -> VReg:
+        """Load value from array element (stub)."""
+        # Get array base address
+        base = self._lower_expr(target.prefix)
+        # Get index
+        if target.args:
+            idx = self._lower_expr(target.args[0])
+        else:
+            idx = Immediate(0, IRType.WORD)
+        # Calculate offset (assume 2-byte elements)
+        offset = self.builder.new_vreg(IRType.WORD, "_arr_offset")
+        self.builder.mul(offset, idx, Immediate(2, IRType.WORD))
+        # Add to base
+        addr = self.builder.new_vreg(IRType.PTR, "_elem_addr")
+        self.builder.add(addr, base, offset)
+        # Load value
+        result = self.builder.new_vreg(IRType.WORD, "_elem_val")
+        self.builder.load(result, MemoryLocation(base=addr, offset=0, ir_type=IRType.WORD))
+        return result
+
+    def _lower_selected_load(self, target: SelectedName) -> VReg:
+        """Load value from record field (stub)."""
+        # Get record base address
+        base = self._lower_expr(target.prefix)
+        # For now, assume first field at offset 0
+        result = self.builder.new_vreg(IRType.WORD, f"_{target.selector}")
+        self.builder.load(result, MemoryLocation(base=base, offset=0, ir_type=IRType.WORD))
+        return result
 
 
 def lower_to_ir(program: Program, semantic_result: SemanticResult) -> IRModule:
