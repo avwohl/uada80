@@ -66,6 +66,7 @@
         PUBLIC  _f64_atan       ; Arctangent (Taylor series)
         PUBLIC  _f64_asin       ; Arcsine (via atan identity)
         PUBLIC  _f64_acos       ; Arccosine (π/2 - asin)
+        PUBLIC  _f64_at2        ; Two-argument arctangent (8-char name to avoid collision with _f64_atan)
         PUBLIC  _f64_e2x        ; Exponential e^x (Taylor series, 8-char name to avoid collision with _f64_exp_int)
         PUBLIC  _f64_log        ; Natural logarithm ln(x)
 
@@ -4404,6 +4405,159 @@ _f64_acos:
         ret
 
 ; =============================================================================
+; _f64_at2: Two-argument arctangent atan2(y, x)
+; Input:  Stack: result_ptr (IX+8), x_ptr (IX+6), y_ptr (IX+4)
+; Output: result = atan2(y, x) = angle from positive x-axis to point (x,y)
+;
+; Returns angle in radians in range (-π, π]:
+;   atan2(y, x) = atan(y/x)       if x > 0
+;   atan2(y, x) = atan(y/x) + π   if x < 0 and y >= 0
+;   atan2(y, x) = atan(y/x) - π   if x < 0 and y < 0
+;   atan2(y, x) = +π/2            if x = 0 and y > 0
+;   atan2(y, x) = -π/2            if x = 0 and y < 0
+;   atan2(y, x) = 0               if x = 0 and y = 0 (undefined, return 0)
+; =============================================================================
+_f64_at2:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy y to _atan2_y
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = y_ptr
+        ld      de, _atan2_y
+        ld      bc, 8
+        ldir
+
+        ; Copy x to _atan2_x
+        ld      l, (ix+6)
+        ld      h, (ix+7)       ; HL = x_ptr
+        ld      de, _atan2_x
+        ld      bc, 8
+        ldir
+
+        ; Check if x is zero
+        ld      hl, _atan2_x
+        ld      b, 8
+        xor     a
+_atan2_check_x_zero:
+        or      (hl)
+        inc     hl
+        djnz    _atan2_check_x_zero
+        or      a
+        jr      nz, _atan2_x_nonzero
+
+        ; x = 0, check y
+        ld      hl, _atan2_y
+        ld      b, 8
+        xor     a
+_atan2_check_y_zero:
+        or      (hl)
+        inc     hl
+        djnz    _atan2_check_y_zero
+        or      a
+        jr      nz, _atan2_y_nonzero_x_zero
+
+        ; x = 0 and y = 0, return 0
+        ld      hl, _f64_zero
+        ld      de, _atan2_res
+        ld      bc, 8
+        ldir
+        jp      _atan2_done
+
+_atan2_y_nonzero_x_zero:
+        ; x = 0, y != 0: return ±π/2 based on sign of y
+        ld      hl, _const_pi2
+        ld      de, _atan2_res
+        ld      bc, 8
+        ldir
+        ; Check sign of y
+        ld      a, (_atan2_y + 7)
+        bit     7, a
+        jr      z, _atan2_done  ; y > 0, return +π/2
+        ; y < 0, negate result to get -π/2
+        ld      a, (_atan2_res + 7)
+        xor     80h
+        ld      (_atan2_res + 7), a
+        jp      _atan2_done
+
+_atan2_x_nonzero:
+        ; x != 0, compute y/x
+        ld      hl, _atan2_tmp
+        push    hl
+        ld      hl, _atan2_x
+        push    hl
+        ld      hl, _atan2_y
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute atan(y/x)
+        ld      hl, _atan2_res
+        push    hl
+        ld      hl, _atan2_tmp
+        push    hl
+        call    _f64_atan
+        pop     hl
+        pop     hl
+
+        ; Check sign of x
+        ld      a, (_atan2_x + 7)
+        bit     7, a
+        jr      z, _atan2_done  ; x > 0, result is atan(y/x)
+
+        ; x < 0, need to adjust by ±π
+        ; Check sign of y
+        ld      a, (_atan2_y + 7)
+        bit     7, a
+        jr      nz, _atan2_subtract_pi
+
+        ; y >= 0, add π
+        ld      hl, _atan2_res
+        push    hl
+        ld      hl, _const_pi
+        push    hl
+        ld      hl, _atan2_res
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+        jp      _atan2_done
+
+_atan2_subtract_pi:
+        ; y < 0, subtract π
+        ld      hl, _atan2_res
+        push    hl
+        ld      hl, _const_pi
+        push    hl
+        ld      hl, _atan2_res
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+_atan2_done:
+        ; Copy result to output
+        ld      e, (ix+8)
+        ld      d, (ix+9)       ; DE = result_ptr
+        ld      hl, _atan2_res
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
 ; _f64_e2x: Exponential function e^x using Taylor series
 ; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
 ; Output: result = e^x
@@ -5193,6 +5347,11 @@ _const_9:
 _const_pi2:
         DB      18h, 2Dh, 44h, 54h, 0FBh, 21h, 0F9h, 3Fh
 
+; π = 3.141592653589793
+; Hex: 0x400921FB54442D18
+_const_pi:
+        DB      18h, 2Dh, 44h, 54h, 0FBh, 21h, 09h, 40h
+
 ; ln(2) = 0.6931471805599453
 ; Hex: 0x3FE62E42FEFA39EF
 _const_ln2:
@@ -5314,5 +5473,11 @@ _asin_sign:     DS      1       ; Original sign
 ; Arccosine working variables
 _acos_tmp:      DS      8       ; Temporary for asin(x)
 _acos_res:      DS      8       ; Result
+
+; Temporary storage for atan2 function
+_atan2_y:       DS      8       ; y input value
+_atan2_x:       DS      8       ; x input value
+_atan2_tmp:     DS      8       ; Temporary for y/x
+_atan2_res:     DS      8       ; Result
 
         END
