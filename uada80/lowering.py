@@ -7384,7 +7384,8 @@ class ASTLowering:
     def _lower_float64_exp_func(self, operand_expr):
         """Lower Float64 exp function call (Ada.Numerics.Elementary_Functions.Exp).
 
-        Calls _f64_exp(result_ptr, src_ptr).
+        Calls _f64_e2x(result_ptr, src_ptr).
+        Note: Named _f64_e2x (8 chars) to avoid symbol collision with _f64_exp_int.
         Stack layout after call:
           - IX+4 = src_ptr (Float64 pointer)
           - IX+6 = result_ptr (Float64 pointer)
@@ -7411,7 +7412,7 @@ class ASTLowering:
         self.builder.push(result_ptr)   # result location (IX+6)
         self.builder.push(operand_ptr)  # source operand (IX+4)
 
-        self.builder.call(Label("_f64_exp"))
+        self.builder.call(Label("_f64_e2x"))  # Named _f64_e2x to avoid 8-char symbol collision with _f64_exp_int
 
         # Clean up pushed arguments (2 pointers = 4 bytes)
         self.builder.emit(IRInstr(
@@ -13935,7 +13936,7 @@ class ASTLowering:
                 arg_expr = expr.indices[0]
                 arg_type = self._get_expr_type(arg_expr)
                 if self._is_float64_type(arg_type):
-                    # Float64 exp - call _f64_exp
+                    # Float64 exp - call _f64_e2x
                     return self._lower_float64_exp_func(arg_expr)
 
             # Check if this is Ada.Numerics.Elementary_Functions.Log for Float64

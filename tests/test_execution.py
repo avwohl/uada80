@@ -3204,7 +3204,6 @@ def test_integer_exponentiation():
 
 
 @skip_if_no_tools
-@pytest.mark.xfail(reason="Regression after adding exp/log - needs investigation")
 def test_long_float_exponentiation():
     """Test Long_Float ** Integer exponentiation."""
     source = """
