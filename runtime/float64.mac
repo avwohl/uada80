@@ -2337,27 +2337,28 @@ _sqrt_iterate:
         push    bc              ; Save iteration counter
 
         ; Compute S / x -> _sqrt_t
-        ; Stack order: a_ptr (IX+4), b_ptr (IX+6), result_ptr (IX+8)
-        ; So push: a_ptr first, then b_ptr, then result_ptr
-        ld      hl, _sqrt_s
-        push    hl              ; a_ptr (dividend S)
-        ld      hl, _sqrt_x
-        push    hl              ; b_ptr (divisor x)
+        ; Stack order after CALL/PUSH IX: a_ptr (IX+4), b_ptr (IX+6), result_ptr (IX+8)
+        ; Push in reverse order: result_ptr first, then b_ptr, then a_ptr last
         ld      hl, _sqrt_t
-        push    hl              ; result_ptr
+        push    hl              ; result_ptr (will be IX+8)
+        ld      hl, _sqrt_x
+        push    hl              ; b_ptr (divisor x, will be IX+6)
+        ld      hl, _sqrt_s
+        push    hl              ; a_ptr (dividend S, will be IX+4)
         call    _f64_div
         pop     hl              ; Clean up stack
         pop     hl
         pop     hl
 
         ; Compute x + S/x -> _ftemp
-        ; Stack order: a_ptr (IX+4), b_ptr (IX+6), result_ptr (IX+8)
-        ld      hl, _sqrt_x
-        push    hl              ; a_ptr (x)
-        ld      hl, _sqrt_t
-        push    hl              ; b_ptr (S/x)
+        ; Stack order after CALL/PUSH IX: a_ptr (IX+4), b_ptr (IX+6), result_ptr (IX+8)
+        ; Push in reverse order: result_ptr first, then b_ptr, then a_ptr last
         ld      hl, _ftemp
-        push    hl              ; result_ptr
+        push    hl              ; result_ptr (will be IX+8)
+        ld      hl, _sqrt_t
+        push    hl              ; b_ptr (S/x, will be IX+6)
+        ld      hl, _sqrt_x
+        push    hl              ; a_ptr (x, will be IX+4)
         call    _f64_add
         pop     hl
         pop     hl

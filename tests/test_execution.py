@@ -3038,6 +3038,30 @@ def test_long_float_rounding():
 
 
 @skip_if_no_tools
+def test_long_float_sqrt():
+    """Test Ada.Numerics.Elementary_Functions.Sqrt for Long_Float."""
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    with Ada.Numerics.Elementary_Functions;
+    procedure Test is
+        X : Long_Float := 16.0;
+        Y : Long_Float;
+        R : Integer;
+    begin
+        Y := Ada.Numerics.Elementary_Functions.Sqrt(X);
+        R := Integer(Y);
+        Ada.Integer_Text_IO.Put(R);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "4" in stdout, f"Expected sqrt(16.0)=4, got: {stdout}"
+
+
+@skip_if_no_tools
 def test_integer_exponentiation():
     """Test Integer ** Natural exponentiation."""
     source = """
