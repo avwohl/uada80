@@ -3162,6 +3162,34 @@ def test_long_float_arctan():
 
 
 @skip_if_no_tools
+def test_long_float_arcsin():
+    """Test Ada.Numerics.Elementary_Functions.Arcsin for Long_Float."""
+    # Test arcsin(0.5) which equals π/6 ≈ 0.5236
+    # arcsin(0.5) ≈ 0.5236 -> *1000 = 523
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    with Ada.Numerics.Elementary_Functions;
+    procedure Test is
+        X : Long_Float := 0.5;
+        Y : Long_Float;
+        R : Integer;
+    begin
+        Y := Ada.Numerics.Elementary_Functions.Arcsin(X);
+        R := Integer(Y * 1000.0);
+        Ada.Integer_Text_IO.Put(R);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    val = int(stdout.strip())
+    # arcsin(0.5) = π/6 ≈ 0.5236, so *1000 ≈ 523 (allow some tolerance)
+    assert 520 <= val <= 530, f"Expected arcsin(0.5)*1000≈523, got: {val}"
+
+
+@skip_if_no_tools
 def test_long_float_exp():
     """Test Ada.Numerics.Elementary_Functions.Exp for Long_Float."""
     source = """

@@ -64,6 +64,7 @@
         PUBLIC  _f64_cos        ; Cosine (Taylor series)
         PUBLIC  _f64_tan        ; Tangent (sin/cos)
         PUBLIC  _f64_atan       ; Arctangent (Taylor series)
+        PUBLIC  _f64_asin       ; Arcsine (via atan identity)
         PUBLIC  _f64_e2x        ; Exponential e^x (Taylor series, 8-char name to avoid collision with _f64_exp_int)
         PUBLIC  _f64_log        ; Natural logarithm ln(x)
 
@@ -2184,21 +2185,16 @@ _sqrt_check_zero:
         or      a
         jp      z, _sqrt_return_zero
 
-        ; Check for infinity/NaN (exponent = 2047)
+        ; Check for infinity/NaN (exponent = 2047 = 0x7FF)
+        ; For inf/NaN: byte7 & 0x7F = 0x7F AND byte6 & 0xF0 = 0xF0
         ld      a, (_sqrt_s + 7)
-        and     7Fh             ; Remove sign, keep exp high bits
-        ld      b, a
-        ld      a, (_sqrt_s + 6)
-        srl     b               ; Shift in high bit of exp
-        rra                     ; A now has low 8 bits of exp
-        ld      c, a
-        ld      a, b
-        and     07h             ; B has high 3 bits
-        cp      07h
+        and     7Fh             ; Remove sign, keep exp bits [10:4]
+        cp      7Fh             ; All 7 bits set?
         jr      nz, _sqrt_not_special
-        ld      a, c
-        cp      0F0h            ; Exp >= 2032?
-        jp      nc, _sqrt_return_input ; Return input for inf/nan
+        ld      a, (_sqrt_s + 6)
+        and     0F0h            ; Get exp bits [3:0] (in high nibble)
+        cp      0F0h            ; All 4 bits set?
+        jp      z, _sqrt_return_input ; Return input for inf/nan
 
 _sqrt_not_special:
         ; ==========================================================
@@ -4221,6 +4217,139 @@ _atan_apply_sign:
         ret
 
 ; =============================================================================
+; _f64_asin: Arcsine function using identity asin(x) = atan(x / sqrt(1 - x²))
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = asin(x) for -1 <= x <= 1
+;
+; Special cases:
+;   asin(1) = π/2
+;   asin(-1) = -π/2
+;   asin(0) = 0
+; =============================================================================
+_f64_asin:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input to _asin_x
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _asin_x
+        ld      bc, 8
+        ldir
+
+        ; Save original sign
+        ld      a, (_asin_x + 7)
+        ld      (_asin_sign), a
+
+        ; Check for special case: |x| = 1
+        ; 1.0 = 0x3FF0000000000000
+        ld      a, (_asin_x + 7)
+        and     7Fh             ; Clear sign
+        cp      3Fh
+        jr      nz, _asin_compute
+        ld      a, (_asin_x + 6)
+        cp      0F0h
+        jr      nz, _asin_compute
+        ; Check if mantissa is all zeros (exactly 1.0)
+        ld      hl, _asin_x
+        ld      b, 6            ; Check first 6 bytes
+        xor     a
+_asin_check_one:
+        or      (hl)
+        inc     hl
+        djnz    _asin_check_one
+        or      a
+        jr      nz, _asin_compute
+        ; x = ±1.0, return ±π/2
+        ld      hl, _const_pi2
+        ld      de, _asin_res
+        ld      bc, 8
+        ldir
+        ; Apply sign
+        ld      a, (_asin_sign)
+        and     80h
+        ld      b, a
+        ld      a, (_asin_res + 7)
+        and     7Fh
+        or      b
+        ld      (_asin_res + 7), a
+        jp      _asin_done
+
+_asin_compute:
+        ; Compute 1 - x²
+        ; First compute x² -> _asin_x2
+        ld      hl, _asin_x2
+        push    hl
+        ld      hl, _asin_x
+        push    hl
+        ld      hl, _asin_x
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute 1 - x² -> _asin_tmp
+        ld      hl, _asin_tmp
+        push    hl
+        ld      hl, _asin_x2
+        push    hl
+        ld      hl, _const_one_f64
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute sqrt(1 - x²) -> _asin_tmp
+        ld      hl, _asin_tmp
+        push    hl
+        ld      hl, _asin_tmp
+        push    hl
+        call    _f64_sqrt
+        pop     hl
+        pop     hl
+
+        ; Compute x / sqrt(1 - x²) -> _asin_tmp
+        ld      hl, _asin_tmp
+        push    hl
+        ld      hl, _asin_tmp
+        push    hl
+        ld      hl, _asin_x
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute atan(x / sqrt(1 - x²)) -> _asin_res
+        ld      hl, _asin_res
+        push    hl
+        ld      hl, _asin_tmp
+        push    hl
+        call    _f64_atan
+        pop     hl
+        pop     hl
+
+_asin_done:
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _asin_res
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
 ; _f64_e2x: Exponential function e^x using Taylor series
 ; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
 ; Output: result = e^x
@@ -5120,5 +5249,12 @@ _atan_term:     DS      8       ; Current term
 _atan_res:      DS      8       ; Running result
 _atan_sign:     DS      1       ; Original sign
 _atan_reduce:   DS      1       ; Flag: 1 if |x| > 1 reduction applied
+
+; Temporary storage for asin function
+_asin_x:        DS      8       ; Input value
+_asin_x2:       DS      8       ; x²
+_asin_tmp:      DS      8       ; Temporary for sqrt(1-x²) and x/sqrt(1-x²)
+_asin_res:      DS      8       ; Result
+_asin_sign:     DS      1       ; Original sign
 
         END
