@@ -81,6 +81,11 @@
         PUBLIC  _const_one_f64  ; 1.0
         PUBLIC  _const_2        ; 2.0
         PUBLIC  _const_ln10     ; ln(10) ≈ 2.302585
+        PUBLIC  _const_6        ; 6.0 (for sin Taylor series: x³/6)
+        PUBLIC  _const_24       ; 24.0 (for cos Taylor series: x⁴/24)
+        PUBLIC  _const_120      ; 120.0 (for sin Taylor series: x⁵/120)
+        PUBLIC  _const_720      ; 720.0 (for cos Taylor series: x⁶/720)
+        PUBLIC  _const_5040     ; 5040.0 (for sin Taylor series: x⁷/5040)
 
 ; =============================================================================
 ; Constants
@@ -1625,6 +1630,7 @@ _add_done:
 ; _f64_sub: Subtract two 64-bit floats (a - b)
 ; Input:  Stack: result_ptr, b_ptr, a_ptr
 ; Output: result = a - b
+; Note: Uses _sub_temp (not _ftemp) to avoid conflict with _f64_div
 ; =============================================================================
 _f64_sub:
         push    ix
@@ -1632,20 +1638,20 @@ _f64_sub:
         add     ix, sp
 
         ; Negate b and add
-        ; First, copy b to temp and negate
+        ; First, copy b to _sub_temp and negate
         ld      l, (ix+6)
         ld      h, (ix+7)
         push    hl              ; Save b_ptr
 
-        ; Copy b to temp
-        ld      de, _ftemp
+        ; Copy b to _sub_temp
+        ld      de, _sub_temp
         ld      bc, 8
         ldir
 
         ; Negate temp (flip sign bit)
-        ld      a, (_ftemp + 7)
+        ld      a, (_sub_temp + 7)
         xor     80h
-        ld      (_ftemp + 7), a
+        ld      (_sub_temp + 7), a
 
         ; Now call add with a and negated b
         ; Push args for _f64_add: result_ptr, temp_ptr, a_ptr
@@ -1653,7 +1659,7 @@ _f64_sub:
         ld      h, (ix+9)
         push    hl              ; result_ptr
 
-        ld      hl, _ftemp
+        ld      hl, _sub_temp
         push    hl              ; negated b_ptr
 
         ld      l, (ix+4)
@@ -5967,7 +5973,8 @@ _acc_b:     DS      8       ; 64-bit accumulator B
 _mantx:     DS      16      ; 128-bit extended mantissa
 
 ; Temporary storage
-_ftemp:     DS      8       ; Temporary 64-bit value
+_ftemp:     DS      8       ; Temporary 64-bit value (used by div)
+_sub_temp:  DS      8       ; Temporary for subtraction (separate to avoid conflict with div)
 _exp_a:     DS      2       ; Exponent of A (16-bit for overflow detection)
 _exp_b:     DS      2       ; Exponent of B
 _fsign:     DS      1       ; Result sign
