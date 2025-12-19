@@ -7694,6 +7694,20 @@ class ASTLowering:
 
         return result
 
+    def _lower_float64_coth(self, operand_expr):
+        """coth(x) = 1.0 / tanh(x)
+
+        Matches Ada implementation in adalib/ada-numerics-elementary_functions.adb
+        """
+        # First compute tanh(x)
+        tanh_result = self._lower_float64_tanh(operand_expr)
+
+        # result = 1.0 / tanh(x)
+        result = self._f64_alloc_temp("coth_result")
+        self._f64_call_binary("_f64_div", result, Label("_const_one_f64"), tanh_result)
+
+        return result
+
     def _lower_float64_arcsinh(self, operand_expr):
         """arcsinh(x) = log(x + sqrt(x*x + 1))
 
@@ -14403,6 +14417,14 @@ class ASTLowering:
                 if self._is_float64_type(arg_type):
                     # Float64 tanh - call _f64_tanh
                     return self._lower_float64_tanh(arg_expr)
+
+            # Check if this is Ada.Numerics.Elementary_Functions.Coth for Float64
+            if selector == "coth" and expr.indices and len(expr.indices) >= 1:
+                arg_expr = expr.indices[0]
+                arg_type = self._get_expr_type(arg_expr)
+                if self._is_float64_type(arg_type):
+                    # Float64 coth - inlined as 1/tanh(x)
+                    return self._lower_float64_coth(arg_expr)
 
             # Check if this is Ada.Numerics.Elementary_Functions.Arcsinh for Float64
             if selector == "arcsinh" and expr.indices and len(expr.indices) >= 1:
