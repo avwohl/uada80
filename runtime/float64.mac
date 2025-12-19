@@ -58,6 +58,8 @@
         PUBLIC  _f64_trunc      ; Truncate (round toward 0)
         PUBLIC  _f64_round      ; Round to nearest (half away from zero)
         PUBLIC  _f64_exp_int    ; Float64 ** Integer exponentiation
+        PUBLIC  _f64_rem        ; Remainder (sign follows dividend)
+        PUBLIC  _f64_mod        ; Modulo (sign follows divisor)
 
 ; =============================================================================
 ; Constants
@@ -2510,14 +2512,18 @@ _floor_check_large:
         ; If exp >= 52, no fractional part
         ld      a, h
         or      a
-        jr      nz, _floor_copy ; exp >= 256, definitely no frac
+        jp      nz, _floor_copy ; exp >= 256, definitely no frac
         ld      a, l
         cp      52
-        jr      nc, _floor_copy ; exp >= 52
+        jp      nc, _floor_copy ; exp >= 52
 
         ; Has fractional part - need to truncate
         ; For positive: just mask off fractional bits
         ; For negative: mask off frac bits, then subtract 1 if frac != 0
+
+        ; Initialize had_frac flag to 0
+        xor     a
+        ld      (_had_frac), a
 
         ; First, copy source to result
         ld      l, (ix+4)
@@ -2533,33 +2539,93 @@ _floor_check_large:
         sbc     hl, de
         ld      c, l            ; C = unbiased exponent (0-51)
 
-        ; Mask off fractional bits
-        ; Bits 0 to (51 - exp) are fractional
-        ; We need to zero bits 0 to (51 - exp)
+        ; Calculate number of complete fractional bytes
+        ; (51 - exp) / 8
+        ld      a, 51
+        sub     c               ; A = 51 - exp (last fractional bit position)
+        ld      (_frac_bits), a ; Save for later check
+        srl     a
+        srl     a
+        srl     a               ; A = number of complete fractional bytes
 
-        ; For simplicity, just clear the appropriate bytes
-        ; This is an approximation - proper implementation would
-        ; mask individual bits
+        ; Zero complete bytes, tracking if any were non-zero
+        ld      l, (ix+6)
+        ld      h, (ix+7)       ; HL = result_ptr
+        ld      b, a            ; B = bytes to zero
+        or      a
+        jr      z, _floor_mask_partial
 
-        ; Calculate which byte starts fractional part
-        ; bit 0-7 = byte 0, bit 8-15 = byte 1, etc.
-        ; frac bits are 0 to (51-exp)
-        ; Last integer bit is at position (52 - 1 - (51-exp)) = exp
+_floor_zero_bytes:
+        ld      a, (hl)         ; Get current byte
+        or      a
+        jr      z, _floor_zero_next
+        ; Byte was non-zero, set had_frac flag
+        ld      a, 1
+        ld      (_had_frac), a
+_floor_zero_next:
+        xor     a
+        ld      (hl), a
+        inc     hl
+        djnz    _floor_zero_bytes
 
-        ; For exp < 8: clear bytes 0-5, mask byte 6
-        ; For exp >= 8 and < 16: clear bytes 0-4, mask bytes 5,6
-        ; etc.
+_floor_mask_partial:
+        ; HL now points to the partial byte
+        ; Calculate remaining fractional bits: ((51 - exp) % 8) + 1
+        ld      a, 51
+        sub     c               ; A = 51 - exp
+        and     07h             ; A = (51 - exp) % 8 = position within byte
+        inc     a               ; A = position + 1 = count of bits to mask
+        cp      9               ; If 8, all bits already handled by complete byte zeroing
+        jr      nc, _floor_check_neg
 
-        ; Simplified: for floor of positive, truncation is correct
-        ; For floor of negative, we need to check if there was a fractional part
+        ; Create mask: 0xFF << remaining_bits
+        ld      b, a            ; B = shift count
+        ld      a, 0FFh
+_floor_shift_mask:
+        sla     a               ; Shift mask left
+        djnz    _floor_shift_mask
+        ; A now has the mask (e.g., 0xF8 to keep bits 3-7, clear bits 0-2)
+        ld      d, a            ; Save mask in D
 
+        ; Check if the bits we're about to clear are non-zero
+        ld      a, d
+        cpl                     ; Invert mask to get bits we're clearing (e.g., 0x07)
+        and     (hl)            ; AND with byte to get just the fractional bits
+        jr      z, _floor_apply_mask
+        ; Fractional bits were non-zero, set had_frac flag
+        ld      a, 1
+        ld      (_had_frac), a
+
+_floor_apply_mask:
+        ; Apply mask to the byte
+        ld      a, d            ; Get mask back
+        and     (hl)
+        ld      (hl), a
+
+_floor_check_neg:
+        ; For positive numbers, truncation is floor
         ld      a, (_fsign)
         or      a
-        jr      z, _floor_done  ; Positive - truncation is floor
+        jr      z, _floor_done  ; Positive - done
 
-        ; Negative - check if we had fractional bits (approximation)
-        ; For now, just return the truncated value
-        ; A proper implementation would check and subtract 1
+        ; For negative numbers, only subtract 1 if there was a fractional part
+        ld      a, (_had_frac)
+        or      a
+        jr      z, _floor_done  ; No fractional part - trunc is same as floor
+
+        ; floor(x) = trunc(x) - 1 when x < 0 and has fractional part
+        ; _f64_add expects: result_ptr (IX+8), b_ptr (IX+6), a_ptr (IX+4)
+        ; So push in reverse order: result_ptr, b_ptr, a_ptr
+        ld      l, (ix+6)
+        ld      h, (ix+7)       ; HL = result_ptr
+        push    hl              ; result_ptr (will be IX+8)
+        ld      de, _f64_neg_one
+        push    de              ; b_ptr = -1.0 (will be IX+6)
+        push    hl              ; a_ptr = result (will be IX+4)
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
 
         jr      _floor_done
 
@@ -2868,12 +2934,28 @@ _trunc_zero_bytes:
         ; Calculate mask for remaining bits
 
 _trunc_mask_partial:
-        ; Calculate which bits to keep in the current byte
-        ; Bits to keep = 8 - ((52 - exp) % 8)
-        ; But we need to be careful with the boundary
+        ; Calculate remaining fractional bits in this byte
+        ; remaining = ((51 - exp) % 8) + 1 = ((51 - exp) AND 7) + 1
+        ; C still has exp (0-51)
+        ld      a, 51
+        sub     c               ; A = 51 - exp
+        and     07h             ; A = (51 - exp) % 8 = position within byte
+        inc     a               ; A = position + 1 = count of bits to mask
+        cp      9               ; If 8, all bits already handled by complete byte zeroing
+        jr      nc, _trunc_done
 
-        ; Simplified: for now just keep the truncated bytes
-        ; The precision loss is acceptable for most uses
+        ; Create mask: 0xFF << remaining_bits
+        ; We need to zero bits 0 to (remaining-1)
+        ld      b, a            ; B = shift count
+        ld      a, 0FFh
+_trunc_shift_mask:
+        sla     a               ; Shift mask left
+        djnz    _trunc_shift_mask
+        ; A now has the mask (e.g., for 3 remaining bits: 0xF8)
+
+        ; Apply mask to the byte
+        and     (hl)
+        ld      (hl), a
 
         jr      _trunc_done
 
@@ -3090,6 +3172,10 @@ _round_done:
 ; Constant 1.0 for ceiling/floor and exponentiation (0x3FF0_0000_0000_0000 little-endian)
 _const_one: DB      00h, 00h, 00h, 00h, 00h, 00h, 0F0h, 3Fh
 
+; Constant -1.0 for floor of negative numbers (0xBFF0_0000_0000_0000 little-endian)
+_f64_neg_one:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 0F0h, 0BFh
+
 ; =============================================================================
 ; _f64_exp_int: Float64 ** Integer exponentiation
 ; Input:  Stack: result_ptr (IX+8), exponent (IX+6), base_ptr (IX+4)
@@ -3249,6 +3335,140 @@ _expint_done:
         ret
 
 ; =============================================================================
+; Float64 Remainder: X rem Y = X - Y * trunc(X/Y)
+; The sign of the result follows the sign of the dividend (X).
+;
+; Stack layout:
+;   IX+8: Pointer to result (output)
+;   IX+6: Pointer to Y (divisor)
+;   IX+4: Pointer to X (dividend)
+; =============================================================================
+_f64_rem:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Step 1: Compute X / Y into _rem_quotient
+        ld      hl, _rem_quotient
+        push    hl              ; result_ptr (IX+8 for div)
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl              ; Y pointer (IX+6 for div)
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        push    hl              ; X pointer (IX+4 for div)
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Step 2: Truncate quotient (round toward zero)
+        ld      hl, _rem_quotient
+        push    hl              ; result_ptr (IX+6 for trunc)
+        ld      hl, _rem_quotient
+        push    hl              ; src_ptr (IX+4 for trunc)
+        call    _f64_trunc
+        pop     hl
+        pop     hl
+
+        ; Step 3: Compute Y * trunc(X/Y) into _rem_product
+        ld      hl, _rem_product
+        push    hl              ; result_ptr (IX+8 for mul)
+        ld      hl, _rem_quotient
+        push    hl              ; truncated quotient (IX+6 for mul)
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl              ; Y pointer (IX+4 for mul)
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Step 4: Compute X - (Y * trunc(X/Y)) into result
+        ld      l, (ix+8)
+        ld      h, (ix+9)
+        push    hl              ; result_ptr (IX+8 for sub)
+        ld      hl, _rem_product
+        push    hl              ; product (IX+6 for sub)
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        push    hl              ; X pointer (IX+4 for sub)
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        pop     ix
+        ret
+
+; =============================================================================
+; Float64 Modulo: X mod Y = X - Y * floor(X/Y)
+; The sign of the result follows the sign of the divisor (Y).
+;
+; Stack layout:
+;   IX+8: Pointer to result (output)
+;   IX+6: Pointer to Y (divisor)
+;   IX+4: Pointer to X (dividend)
+; =============================================================================
+_f64_mod:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Step 1: Compute X / Y into _rem_quotient
+        ld      hl, _rem_quotient
+        push    hl              ; result_ptr (IX+8 for div)
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl              ; Y pointer (IX+6 for div)
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        push    hl              ; X pointer (IX+4 for div)
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Step 2: Floor quotient (round toward -infinity)
+        ld      hl, _rem_quotient
+        push    hl              ; result_ptr (IX+6 for floor)
+        ld      hl, _rem_quotient
+        push    hl              ; src_ptr (IX+4 for floor)
+        call    _f64_floor
+        pop     hl
+        pop     hl
+
+        ; Step 3: Compute Y * floor(X/Y) into _rem_product
+        ld      hl, _rem_product
+        push    hl              ; result_ptr (IX+8 for mul)
+        ld      hl, _rem_quotient
+        push    hl              ; floored quotient (IX+6 for mul)
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl              ; Y pointer (IX+4 for mul)
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Step 4: Compute X - (Y * floor(X/Y)) into result
+        ld      l, (ix+8)
+        ld      h, (ix+9)
+        push    hl              ; result_ptr (IX+8 for sub)
+        ld      hl, _rem_product
+        push    hl              ; product (IX+6 for sub)
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        push    hl              ; X pointer (IX+4 for sub)
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        pop     ix
+        ret
+
+; =============================================================================
 ; Working memory (internal accumulators)
 ; Placed at end of file to avoid linker segment calculation bug
 ; =============================================================================
@@ -3296,5 +3516,11 @@ _exp_result:    DS      8       ; Running result
 _exp_base:      DS      8       ; Current base (squared each iteration)
 _exp_counter:   DS      2       ; Exponent counter
 _exp_neg_flag:  DS      1       ; Flag: 1 if original exponent was negative
+
+; Temporary storage for rem/mod operations
+_rem_quotient:  DS      8       ; Quotient X/Y
+_rem_product:   DS      8       ; Y * quotient
+_frac_bits:     DS      1       ; Temporary for fractional bits count
+_had_frac:      DS      1       ; Flag: 1 if any fractional bits were non-zero
 
         END

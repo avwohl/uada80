@@ -3101,5 +3101,107 @@ def test_long_float_exponentiation():
     assert values[2] == "81", f"Expected 3.0**4=81, got: {values[2]}"
 
 
+@skip_if_no_tools
+def test_long_float_remainder():
+    """Test Long_Float rem (remainder) operation.
+
+    rem returns the remainder with the sign of the dividend.
+    X rem Y = X - Y * trunc(X/Y)
+    """
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        R : Long_Float;
+        I : Integer;
+    begin
+        -- Test 7.5 rem 2.5 = 0.0 (7.5 / 2.5 = 3.0 exactly)
+        R := 7.5 rem 2.5;
+        I := Integer(R);
+        Ada.Integer_Text_IO.Put(I);
+        Ada.Text_IO.New_Line;
+
+        -- Test 10.0 rem 3.0 = 1.0 (10.0 / 3.0 = 3.33..., trunc = 3, 10 - 9 = 1)
+        R := 10.0 rem 3.0;
+        I := Integer(R);
+        Ada.Integer_Text_IO.Put(I);
+        Ada.Text_IO.New_Line;
+
+        -- Test -10.0 rem 3.0 = -1.0 (sign follows dividend)
+        R := (-10.0) rem 3.0;
+        I := Integer(R);
+        Ada.Integer_Text_IO.Put(I);
+        Ada.Text_IO.New_Line;
+
+        -- Test 10.0 rem -3.0 = 1.0 (sign follows dividend, which is positive)
+        R := 10.0 rem (-3.0);
+        I := Integer(R);
+        Ada.Integer_Text_IO.Put(I);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    lines = stdout.strip().split('\n')
+    values = [line.strip() for line in lines if line.strip()]
+    assert len(values) >= 4, f"Expected 4 values, got: {values}"
+    assert values[0] == "0", f"Expected 7.5 rem 2.5 = 0, got: {values[0]}"
+    assert values[1] == "1", f"Expected 10.0 rem 3.0 = 1, got: {values[1]}"
+    assert values[2] == "-1", f"Expected -10.0 rem 3.0 = -1, got: {values[2]}"
+    assert values[3] == "1", f"Expected 10.0 rem -3.0 = 1, got: {values[3]}"
+
+
+@skip_if_no_tools
+def test_long_float_modulo():
+    """Test Long_Float mod (modulo) operation.
+
+    mod returns the modulo with the sign of the divisor.
+    X mod Y = X - Y * floor(X/Y)
+    """
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        R : Long_Float;
+        I : Integer;
+    begin
+        -- Test 7.5 mod 2.5 = 0.0 (7.5 / 2.5 = 3.0 exactly)
+        R := 7.5 mod 2.5;
+        I := Integer(R);
+        Ada.Integer_Text_IO.Put(I);
+        Ada.Text_IO.New_Line;
+
+        -- Test 10.0 mod 3.0 = 1.0 (10.0 / 3.0 = 3.33..., floor = 3, 10 - 9 = 1)
+        R := 10.0 mod 3.0;
+        I := Integer(R);
+        Ada.Integer_Text_IO.Put(I);
+        Ada.Text_IO.New_Line;
+
+        -- Test -10.0 mod 3.0 = 2.0 (floor(-3.33) = -4, -10 - (3 * -4) = -10 + 12 = 2)
+        R := (-10.0) mod 3.0;
+        I := Integer(R);
+        Ada.Integer_Text_IO.Put(I);
+        Ada.Text_IO.New_Line;
+
+        -- Test 10.0 mod -3.0 = -2.0 (floor(-3.33) = -4, 10 - (-3 * -4) = 10 - 12 = -2)
+        R := 10.0 mod (-3.0);
+        I := Integer(R);
+        Ada.Integer_Text_IO.Put(I);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    lines = stdout.strip().split('\n')
+    values = [line.strip() for line in lines if line.strip()]
+    assert len(values) >= 4, f"Expected 4 values, got: {values}"
+    assert values[0] == "0", f"Expected 7.5 mod 2.5 = 0, got: {values[0]}"
+    assert values[1] == "1", f"Expected 10.0 mod 3.0 = 1, got: {values[1]}"
+    assert values[2] == "2", f"Expected -10.0 mod 3.0 = 2, got: {values[2]}"
+    assert values[3] == "-2", f"Expected 10.0 mod -3.0 = -2, got: {values[3]}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
