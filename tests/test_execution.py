@@ -5,6 +5,7 @@ link with ul80, and run via cpmemu to verify actual execution.
 """
 
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -12,21 +13,34 @@ import pytest
 
 from uada80.compiler import Compiler, OutputFormat
 
-# Paths to tools
+# Paths to tools - check both pip-installed commands and local dev paths
+UM80_CMD = shutil.which("um80")
+UL80_CMD = shutil.which("ul80")
+CPMEMU_CMD = shutil.which("cpmemu")
+
+# Fallback to local dev paths if pip tools not found
 UM80_PATH = Path.home() / "src" / "um80_and_friends"
-CPMEMU = Path.home() / "src" / "cpmemu" / "src" / "cpmemu"
+CPMEMU_LOCAL = Path.home() / "src" / "cpmemu" / "src" / "cpmemu"
 RUNTIME_PATH = Path(__file__).parent.parent / "runtime"
 
 
 def have_execution_tools():
     """Check if execution tools are available."""
-    return UM80_PATH.exists() and CPMEMU.exists()
+    # Need um80/ul80 (pip or local) AND cpmemu (local only, not on pip)
+    have_assembler = UM80_CMD and UL80_CMD
+    have_local_assembler = UM80_PATH.exists()
+    have_emulator = CPMEMU_CMD or CPMEMU_LOCAL.exists()
+
+    return (have_assembler or have_local_assembler) and have_emulator
 
 
 skip_if_no_tools = pytest.mark.skipif(
     not have_execution_tools(),
     reason="Execution tools (um80, cpmemu) not available"
 )
+
+# Apply skip to all tests in this module
+pytestmark = skip_if_no_tools
 
 
 def compile_and_run(source: str, timeout: float = 5.0, stdin_input: str = None) -> tuple[bool, str, str]:
@@ -58,11 +72,18 @@ def compile_and_run(source: str, timeout: float = 5.0, stdin_input: str = None) 
         asm_file.write_text(result.output)
 
         # Step 2: Assemble with um80
-        env = os.environ.copy()
-        env["PYTHONPATH"] = str(UM80_PATH)
+        if UM80_CMD:
+            # Use pip-installed um80
+            asm_cmd = [UM80_CMD, "-o", str(rel_file), str(asm_file)]
+            env = None
+        else:
+            # Use local dev path
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(UM80_PATH)
+            asm_cmd = ["python3", "-m", "um80.um80", "-o", str(rel_file), str(asm_file)]
 
         proc = subprocess.run(
-            ["python3", "-m", "um80.um80", "-o", str(rel_file), str(asm_file)],
+            asm_cmd,
             env=env,
             capture_output=True,
             text=True,
@@ -76,7 +97,14 @@ def compile_and_run(source: str, timeout: float = 5.0, stdin_input: str = None) 
         # Use the full library for proper symbol resolution
         libada = RUNTIME_PATH / "libada.lib"
         runtime_rel = RUNTIME_PATH / "runtime.rel"
-        link_cmd = ["python3", "-m", "um80.ul80", "-o", str(com_file), str(rel_file)]
+
+        if UL80_CMD:
+            # Use pip-installed ul80
+            link_cmd = [UL80_CMD, "-o", str(com_file), str(rel_file)]
+        else:
+            # Use local dev path
+            link_cmd = ["python3", "-m", "um80.ul80", "-o", str(com_file), str(rel_file)]
+
         if libada.exists():
             link_cmd.append(str(libada))
         elif runtime_rel.exists():
@@ -94,8 +122,9 @@ def compile_and_run(source: str, timeout: float = 5.0, stdin_input: str = None) 
             return False, proc.stdout, f"Linking failed: {proc.stderr}"
 
         # Step 4: Run with cpmemu
+        cpmemu_exe = CPMEMU_CMD if CPMEMU_CMD else str(CPMEMU_LOCAL)
         proc = subprocess.run(
-            [str(CPMEMU), "--z80", str(com_file)],
+            [cpmemu_exe, "--z80", str(com_file)],
             capture_output=True,
             text=True,
             timeout=timeout,

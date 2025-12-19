@@ -12,9 +12,9 @@ from typing import Optional
 
 from uada80.ast_nodes import Program
 from uada80.parser import parse, ParseError
-from uada80.semantic import analyze, SemanticResult
+from uada80.semantic import analyze
 from uada80.lowering import lower_to_ir
-from uada80.codegen import generate_z80, Z80CodeGen
+from uada80.codegen import generate_z80
 from uada80.ir import IRModule
 from uada80.optimizer import ASTOptimizer, OptimizerConfig, OptimizationStats
 

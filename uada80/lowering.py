@@ -65,7 +65,6 @@ from uada80.ast_nodes import (
     UnaryOp,
     RangeExpr,
     Aggregate,
-    ComponentAssociation,
     ExprChoice,
     RangeChoice,
     OthersChoice,
@@ -95,7 +94,6 @@ from uada80.ast_nodes import (
     ArrayTypeDef,
     ActualParameter,
     IndexConstraint,
-    BoxConstraint,
 )
 from uada80.ir import (
     IRType,
@@ -13698,25 +13696,6 @@ class ASTLowering:
                 return True
 
         return False
-
-    def _extract_type_name(self, type_node) -> Optional[str]:
-        """Extract type name from an AST node or AdaType."""
-        if type_node is None:
-            return None
-        # If it's an Identifier, return its name
-        if isinstance(type_node, Identifier):
-            return type_node.name
-        # If it's a SubtypeIndication, get the type_mark
-        if isinstance(type_node, SubtypeIndication):
-            if type_node.type_mark:
-                return self._extract_type_name(type_node.type_mark)
-        # If it's a Slice (e.g., String(1..10)), extract from the prefix
-        if isinstance(type_node, Slice):
-            return self._extract_type_name(type_node.prefix)
-        # If it has a name attribute (AdaType), return that
-        if hasattr(type_node, 'name') and isinstance(type_node.name, str):
-            return type_node.name
-        return None
 
     def _is_string_type(self, expr) -> bool:
         """Check if expression has string type."""

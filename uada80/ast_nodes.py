@@ -7,7 +7,7 @@ Based on Ada Reference Manual structure.
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, List, Optional
+from typing import List, Optional
 
 
 @dataclass

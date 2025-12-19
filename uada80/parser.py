@@ -5,7 +5,7 @@ Implements a complete parser for Ada 2012 based on the Ada Reference Manual gram
 """
 
 from typing import Optional
-from .lexer import Token, TokenType, Lexer
+from .lexer import Token, TokenType
 from .ast_nodes import *
 
 
@@ -263,7 +263,7 @@ class Parser:
 
         # 'use all' must be followed by 'type'
         if is_all and not is_type:
-            self.error("Expected 'type' after 'use all'")
+            raise ParseError("Expected 'type' after 'use all'", self.current)
 
         names = [self.parse_name()]
         while self.match(TokenType.COMMA):
@@ -3486,7 +3486,7 @@ class Parser:
             if self.check(TokenType.IDENTIFIER):
                 end_name = self.expect_identifier()
                 if end_name.lower() != name.lower():
-                    self.error(f"end name '{end_name}' does not match task name '{name}'")
+                    raise ParseError(f"end name '{end_name}' does not match task name '{name}'", self.current)
             self.expect(TokenType.SEMICOLON)
 
             return TaskBody(
@@ -3537,7 +3537,7 @@ class Parser:
             if self.check(TokenType.IDENTIFIER):
                 end_name = self.expect_identifier()
                 if end_name.lower() != name.lower():
-                    self.error(f"end name '{end_name}' does not match task name '{name}'")
+                    raise ParseError(f"end name '{end_name}' does not match task name '{name}'", self.current)
 
         self.expect(TokenType.SEMICOLON)
 
@@ -3571,7 +3571,7 @@ class Parser:
         if self.check(TokenType.IDENTIFIER):
             end_name = self.expect_identifier()
             if end_name.lower() != name.lower():
-                self.error(f"end name '{end_name}' does not match task name '{name}'")
+                raise ParseError(f"end name '{end_name}' does not match task name '{name}'", self.current)
         self.expect(TokenType.SEMICOLON)
 
         return TaskBody(
@@ -3704,7 +3704,7 @@ class Parser:
             if self.check(TokenType.IDENTIFIER):
                 end_name = self.expect_identifier()
                 if end_name.lower() != name.lower():
-                    self.error(f"end name '{end_name}' does not match protected name '{name}'")
+                    raise ParseError(f"end name '{end_name}' does not match protected name '{name}'", self.current)
             self.expect(TokenType.SEMICOLON)
 
             return ProtectedBody(
@@ -3756,7 +3756,7 @@ class Parser:
             if self.check(TokenType.IDENTIFIER):
                 end_name = self.expect_identifier()
                 if end_name.lower() != name.lower():
-                    self.error(f"end name '{end_name}' does not match protected name '{name}'")
+                    raise ParseError(f"end name '{end_name}' does not match protected name '{name}'", self.current)
 
         self.expect(TokenType.SEMICOLON)
 
@@ -3809,7 +3809,7 @@ class Parser:
         if self.check(TokenType.IDENTIFIER):
             end_name = self.expect_identifier()
             if end_name.lower() != name.lower():
-                self.error(f"end name '{end_name}' does not match protected name '{name}'")
+                raise ParseError(f"end name '{end_name}' does not match protected name '{name}'", self.current)
         self.expect(TokenType.SEMICOLON)
 
         return ProtectedBody(
