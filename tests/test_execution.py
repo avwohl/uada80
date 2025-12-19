@@ -3190,6 +3190,34 @@ def test_long_float_arcsin():
 
 
 @skip_if_no_tools
+def test_long_float_arccos():
+    """Test Ada.Numerics.Elementary_Functions.Arccos for Long_Float."""
+    # Test arccos(0.5) which equals π/3 ≈ 1.0472
+    # arccos(0.5) ≈ 1.0472 -> *1000 = 1047
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    with Ada.Numerics.Elementary_Functions;
+    procedure Test is
+        X : Long_Float := 0.5;
+        Y : Long_Float;
+        R : Integer;
+    begin
+        Y := Ada.Numerics.Elementary_Functions.Arccos(X);
+        R := Integer(Y * 1000.0);
+        Ada.Integer_Text_IO.Put(R);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    val = int(stdout.strip())
+    # arccos(0.5) = π/3 ≈ 1.0472, so *1000 ≈ 1047 (allow some tolerance)
+    assert 1040 <= val <= 1055, f"Expected arccos(0.5)*1000≈1047, got: {val}"
+
+
+@skip_if_no_tools
 def test_long_float_exp():
     """Test Ada.Numerics.Elementary_Functions.Exp for Long_Float."""
     source = """
