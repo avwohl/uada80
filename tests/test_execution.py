@@ -3134,6 +3134,36 @@ def test_long_float_tan():
 
 
 @skip_if_no_tools
+@pytest.mark.xfail(reason="sin/cos return sinh/cosh - pre-existing bug in Taylor series implementation")
+def test_long_float_cot():
+    """Test Ada.Numerics.Elementary_Functions.Cot for Long_Float."""
+    # Test cot(1.0) = 1/tan(1.0) ≈ 1/1.5574 ≈ 0.6421
+    # cot(1.0) ≈ 0.6421 -> *1000 = 642
+    # NOTE: Currently returns ~1316 (coth) due to sin/cos bug
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    with Ada.Numerics.Elementary_Functions;
+    procedure Test is
+        X : Long_Float := 1.0;
+        Y : Long_Float;
+        R : Integer;
+    begin
+        Y := Ada.Numerics.Elementary_Functions.Cot(X);
+        R := Integer(Y * 1000.0);
+        Ada.Integer_Text_IO.Put(R);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    val = int(stdout.strip())
+    # cot(1.0) ≈ 0.6421, so *1000 ≈ 642 (allow some tolerance for Z80 precision)
+    assert 630 <= val <= 655, f"Expected cot(1.0)*1000≈642, got: {val}"
+
+
+@skip_if_no_tools
 def test_long_float_arctan():
     """Test Ada.Numerics.Elementary_Functions.Arctan for Long_Float."""
     # Test arctan(0.5) which is well within Taylor series convergence range

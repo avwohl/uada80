@@ -7381,6 +7381,20 @@ class ASTLowering:
 
         return result_ptr
 
+    def _lower_float64_cot(self, operand_expr):
+        """cot(x) = 1.0 / tan(x)
+
+        Matches Ada implementation in adalib/ada-numerics-elementary_functions.adb
+        """
+        # First compute tan(x)
+        tan_result = self._lower_float64_tan(operand_expr)
+
+        # result = 1.0 / tan(x)
+        result = self._f64_alloc_temp("cot_result")
+        self._f64_call_binary("_f64_div", result, Label("_const_one_f64"), tan_result)
+
+        return result
+
     def _lower_float64_atan(self, operand_expr):
         """Lower Float64 arctan function call.
 
@@ -14391,6 +14405,14 @@ class ASTLowering:
                 if self._is_float64_type(arg_type):
                     # Float64 tan - call _f64_tan
                     return self._lower_float64_tan(arg_expr)
+
+            # Check if this is Ada.Numerics.Elementary_Functions.Cot for Float64
+            if selector == "cot" and expr.indices and len(expr.indices) >= 1:
+                arg_expr = expr.indices[0]
+                arg_type = self._get_expr_type(arg_expr)
+                if self._is_float64_type(arg_type):
+                    # Float64 cot - inlined as 1/tan(x)
+                    return self._lower_float64_cot(arg_expr)
 
             # Check if this is Ada.Numerics.Elementary_Functions.Arctan for Float64
             if selector == "arctan" and expr.indices and len(expr.indices) >= 1:
