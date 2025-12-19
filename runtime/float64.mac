@@ -68,6 +68,7 @@
         PUBLIC  _f64_acos       ; Arccosine (π/2 - asin)
         PUBLIC  _f64_at2        ; Two-argument arctangent (8-char name to avoid collision with _f64_atan)
         PUBLIC  _f64_sinh       ; Hyperbolic sine
+        PUBLIC  _f64_cosh       ; Hyperbolic cosine
         PUBLIC  _f64_e2x        ; Exponential e^x (Taylor series, 8-char name to avoid collision with _f64_exp_int)
         PUBLIC  _f64_log        ; Natural logarithm ln(x)
 
@@ -4643,6 +4644,90 @@ _f64_sinh:
         ret
 
 ; =============================================================================
+; _f64_cosh: Hyperbolic cosine using cosh(x) = (e^x + e^(-x)) / 2
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = cosh(x)
+; =============================================================================
+_f64_cosh:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input to _cosh_x
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _cosh_x
+        ld      bc, 8
+        ldir
+
+        ; Compute e^x -> _cosh_exp
+        ld      hl, _cosh_exp
+        push    hl
+        ld      hl, _cosh_x
+        push    hl
+        call    _f64_e2x
+        pop     hl
+        pop     hl
+
+        ; Compute -x -> _cosh_tmp (negate x)
+        ld      hl, _cosh_x
+        ld      de, _cosh_tmp
+        ld      bc, 8
+        ldir
+        ld      a, (_cosh_tmp + 7)
+        xor     80h             ; Flip sign bit
+        ld      (_cosh_tmp + 7), a
+
+        ; Compute e^(-x) -> _cosh_tmp
+        ld      hl, _cosh_tmp
+        push    hl
+        ld      hl, _cosh_tmp
+        push    hl
+        call    _f64_e2x
+        pop     hl
+        pop     hl
+
+        ; Compute e^x + e^(-x) -> _cosh_res
+        ld      hl, _cosh_res
+        push    hl
+        ld      hl, _cosh_tmp
+        push    hl
+        ld      hl, _cosh_exp
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Divide by 2 -> _cosh_res
+        ld      hl, _cosh_res
+        push    hl
+        ld      hl, _const_2
+        push    hl
+        ld      hl, _cosh_res
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _cosh_res
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
 ; _f64_e2x: Exponential function e^x using Taylor series
 ; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
 ; Output: result = e^x
@@ -5570,5 +5655,11 @@ _sinh_x:        DS      8       ; Input value
 _sinh_exp:      DS      8       ; e^x
 _sinh_tmp:      DS      8       ; Temporary for -x and e^(-x)
 _sinh_res:      DS      8       ; Result
+
+; Temporary storage for cosh function
+_cosh_x:        DS      8       ; Input value
+_cosh_exp:      DS      8       ; e^x
+_cosh_tmp:      DS      8       ; Temporary for -x and e^(-x)
+_cosh_res:      DS      8       ; Result
 
         END
