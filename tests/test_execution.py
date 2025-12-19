@@ -3352,6 +3352,34 @@ def test_long_float_cosh():
 
 
 @skip_if_no_tools
+def test_long_float_tanh():
+    """Test Ada.Numerics.Elementary_Functions.Tanh for Long_Float."""
+    # Test tanh(1.0) which equals (e - 1/e) / (e + 1/e) ≈ 0.7616
+    # tanh(1.0) ≈ 0.7616 -> *1000 = 762
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    with Ada.Numerics.Elementary_Functions;
+    procedure Test is
+        X : Long_Float := 1.0;
+        Y : Long_Float;
+        R : Integer;
+    begin
+        Y := Ada.Numerics.Elementary_Functions.Tanh(X);
+        R := Integer(Y * 1000.0);
+        Ada.Integer_Text_IO.Put(R);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    val = int(stdout.strip())
+    # tanh(1.0) ≈ 0.7616, so *1000 ≈ 762 (allow some tolerance)
+    assert 757 <= val <= 767, f"Expected tanh(1.0)*1000≈762, got: {val}"
+
+
+@skip_if_no_tools
 def test_integer_exponentiation():
     """Test Integer ** Natural exponentiation."""
     source = """
