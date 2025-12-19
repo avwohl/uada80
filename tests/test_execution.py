@@ -3296,6 +3296,34 @@ def test_long_float_log():
 
 
 @skip_if_no_tools
+def test_long_float_sinh():
+    """Test Ada.Numerics.Elementary_Functions.Sinh for Long_Float."""
+    # Test sinh(1.0) which equals (e - 1/e) / 2 ≈ 1.1752
+    # sinh(1.0) ≈ 1.1752 -> *1000 = 1175
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    with Ada.Numerics.Elementary_Functions;
+    procedure Test is
+        X : Long_Float := 1.0;
+        Y : Long_Float;
+        R : Integer;
+    begin
+        Y := Ada.Numerics.Elementary_Functions.Sinh(X);
+        R := Integer(Y * 1000.0);
+        Ada.Integer_Text_IO.Put(R);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    val = int(stdout.strip())
+    # sinh(1.0) ≈ 1.1752, so *1000 ≈ 1175 (allow some tolerance)
+    assert 1170 <= val <= 1180, f"Expected sinh(1.0)*1000≈1175, got: {val}"
+
+
+@skip_if_no_tools
 def test_integer_exponentiation():
     """Test Integer ** Natural exponentiation."""
     source = """

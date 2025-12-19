@@ -67,6 +67,7 @@
         PUBLIC  _f64_asin       ; Arcsine (via atan identity)
         PUBLIC  _f64_acos       ; Arccosine (π/2 - asin)
         PUBLIC  _f64_at2        ; Two-argument arctangent (8-char name to avoid collision with _f64_atan)
+        PUBLIC  _f64_sinh       ; Hyperbolic sine
         PUBLIC  _f64_e2x        ; Exponential e^x (Taylor series, 8-char name to avoid collision with _f64_exp_int)
         PUBLIC  _f64_log        ; Natural logarithm ln(x)
 
@@ -4558,6 +4559,90 @@ _atan2_done:
         ret
 
 ; =============================================================================
+; _f64_sinh: Hyperbolic sine using sinh(x) = (e^x - e^(-x)) / 2
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = sinh(x)
+; =============================================================================
+_f64_sinh:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input to _sinh_x
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _sinh_x
+        ld      bc, 8
+        ldir
+
+        ; Compute e^x -> _sinh_exp
+        ld      hl, _sinh_exp
+        push    hl
+        ld      hl, _sinh_x
+        push    hl
+        call    _f64_e2x
+        pop     hl
+        pop     hl
+
+        ; Compute -x -> _sinh_tmp (negate x)
+        ld      hl, _sinh_x
+        ld      de, _sinh_tmp
+        ld      bc, 8
+        ldir
+        ld      a, (_sinh_tmp + 7)
+        xor     80h             ; Flip sign bit
+        ld      (_sinh_tmp + 7), a
+
+        ; Compute e^(-x) -> _sinh_tmp
+        ld      hl, _sinh_tmp
+        push    hl
+        ld      hl, _sinh_tmp
+        push    hl
+        call    _f64_e2x
+        pop     hl
+        pop     hl
+
+        ; Compute e^x - e^(-x) -> _sinh_res
+        ld      hl, _sinh_res
+        push    hl
+        ld      hl, _sinh_tmp
+        push    hl
+        ld      hl, _sinh_exp
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Divide by 2 -> _sinh_res
+        ld      hl, _sinh_res
+        push    hl
+        ld      hl, _const_2
+        push    hl
+        ld      hl, _sinh_res
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _sinh_res
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
 ; _f64_e2x: Exponential function e^x using Taylor series
 ; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
 ; Output: result = e^x
@@ -5479,5 +5564,11 @@ _atan2_y:       DS      8       ; y input value
 _atan2_x:       DS      8       ; x input value
 _atan2_tmp:     DS      8       ; Temporary for y/x
 _atan2_res:     DS      8       ; Result
+
+; Temporary storage for sinh function
+_sinh_x:        DS      8       ; Input value
+_sinh_exp:      DS      8       ; e^x
+_sinh_tmp:      DS      8       ; Temporary for -x and e^(-x)
+_sinh_res:      DS      8       ; Result
 
         END
