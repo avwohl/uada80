@@ -62,6 +62,7 @@
         PUBLIC  _f64_mod        ; Modulo (sign follows divisor)
         PUBLIC  _f64_sin        ; Sine (Taylor series)
         PUBLIC  _f64_cos        ; Cosine (Taylor series)
+        PUBLIC  _f64_tan        ; Tangent (sin/cos)
 
 ; =============================================================================
 ; Constants
@@ -3895,6 +3896,61 @@ _cos_small:
         ret
 
 ; =============================================================================
+; _f64_tan: Tangent function
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = tan(src) = sin(src) / cos(src)
+;
+; Note: tan has poles at x = π/2 + n*π where cos(x) = 0
+;       Division by near-zero will give very large results or infinity
+; =============================================================================
+_f64_tan:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Compute sin(x) -> _tan_sin
+        ld      hl, _tan_sin
+        push    hl
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        push    hl
+        call    _f64_sin
+        pop     hl
+        pop     hl
+
+        ; Compute cos(x) -> _tan_cos
+        ld      hl, _tan_cos
+        push    hl
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        push    hl
+        call    _f64_cos
+        pop     hl
+        pop     hl
+
+        ; tan(x) = sin(x) / cos(x)
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        push    de
+        ld      hl, _tan_cos
+        push    hl
+        ld      hl, _tan_sin
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
 ; Constants for sin/cos (IEEE 754 double precision, little-endian)
 ; =============================================================================
 
@@ -4006,5 +4062,9 @@ _cos_x2:        DS      8       ; x²
 _cos_xn:        DS      8       ; Current power (x⁴, x⁶, x⁸, ...)
 _cos_term:      DS      8       ; Current term
 _cos_result:    DS      8       ; Running result
+
+; Temporary storage for tan function
+_tan_sin:       DS      8       ; sin(x) result
+_tan_cos:       DS      8       ; cos(x) result
 
         END
