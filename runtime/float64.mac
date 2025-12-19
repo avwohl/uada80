@@ -63,7 +63,7 @@
         PUBLIC  _f64_sin        ; Sine (Taylor series)
         PUBLIC  _f64_cos        ; Cosine (Taylor series)
         PUBLIC  _f64_tan        ; Tangent (sin/cos)
-        PUBLIC  _f64_exp        ; Exponential e^x (Taylor series)
+        PUBLIC  _f64_e2x        ; Exponential e^x (Taylor series, 8-char name to avoid collision with _f64_exp_int)
         PUBLIC  _f64_log        ; Natural logarithm ln(x)
 
 ; =============================================================================
@@ -3953,14 +3953,15 @@ _f64_tan:
         ret
 
 ; =============================================================================
-; _f64_exp: Exponential function e^x using Taylor series
+; _f64_e2x: Exponential function e^x using Taylor series
 ; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
 ; Output: result = e^x
 ;
 ; Uses Taylor series: e^x = 1 + x + x²/2! + x³/3! + x⁴/4! + ...
 ; For argument reduction: e^x = e^(n*ln2 + r) = 2^n * e^r where |r| < ln(2)/2
+; Note: Named _f64_e2x (8 chars) to avoid collision with _f64_exp_int
 ; =============================================================================
-_f64_exp:
+_f64_e2x:
         push    ix
         ld      ix, 0
         add     ix, sp
@@ -4811,7 +4812,7 @@ _cos_result:    DS      8       ; Running result
 _tan_sin:       DS      8       ; sin(x) result
 _tan_cos:       DS      8       ; cos(x) result
 
-; Temporary storage for exp function (_f64_exp)
+; Temporary storage for exp function (_f64_e2x)
 _expf_x:        DS      8       ; Input value (reduced)
 _expf_sign:     DS      1       ; Original sign
 _expf_n_tmp:    DS      8       ; n as float (for argument reduction)

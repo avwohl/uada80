@@ -3,36 +3,31 @@
 ## Work In Progress (2025-12-19)
 
 **Session accomplished:**
-- Float64 sqrt function via Ada.Numerics.Elementary_Functions.Sqrt
-- Fixed argument push order bug in _f64_sqrt runtime Newton-Raphson
-- Fixed record array field access being treated as function call
-- All tests: 6910/6910 pass (125 execution tests)
+- Fixed Float64 exponentiation (**) regression caused by symbol collision
+- Added tan, exp, log functions for Long_Float (Float64)
+- All tests: 6915/6915 pass (130 execution tests)
 
-**Float64 sqrt support:**
-- Added `_lower_float64_sqrt()` method for sqrt lowering
-- Added sqrt detection in `_lower_indexed()` for SelectedName prefix
-  - `Ada.Numerics.Elementary_Functions.Sqrt(X)` parses as IndexedComponent
-  - Detects Float64 argument type and calls `_f64_sqrt` runtime
-- Fixed critical bug in runtime _f64_sqrt Newton-Raphson iteration:
-  - `_f64_div`/`_f64_add` expect: a_ptr(IX+4), b_ptr(IX+6), result_ptr(IX+8)
-  - Was pushing in wrong order (a first instead of last)
-  - Must push reverse: result_ptr first, then b_ptr, then a_ptr
+**Critical fix: 8-character symbol truncation bug**
+- um80 assembler truncates symbols to 8 characters
+- `_f64_exp` (8 chars) and `_f64_exp_int` (12 chars) both truncated to `_F64_EXP`
+- This caused ** operator to call Taylor series exp() instead of integer exponentiation
+- **Fix:** Renamed `_f64_exp` to `_f64_e2x` (8 unique chars)
+- Lesson: All PUBLIC symbols in runtime/*.mac must be unique within 8 characters
 
-**Record array field access fix:**
-- The sqrt SelectedName handling was too aggressive
-- `X.Values(2)` was incorrectly treated as a function call
-- Fix: Check if SelectedName refers to record field with array type
-- If it's an array field, fall through to array indexing code path
+**New Float64 functions:**
+- `_f64_tan`: tan(x) = sin(x)/cos(x)
+- `_f64_e2x`: e^x using Taylor series with argument reduction via ln(2)
+- `_f64_log`: ln(x) using IEEE 754 decomposition + Taylor series
 
 **Complete Float64 feature set:**
 - Arithmetic: add, sub, mul, div, rem, mod, neg, abs, exp_int (**)
 - Comparison: eq, ne, lt, le, gt, ge
 - Conversion: itof, ftoi
 - Rounding: floor, ceiling, truncation, rounding
-- Math: sqrt
+- Math: sqrt, sin, cos, tan, exp, log
 
 **Next steps to consider:**
-- Elementary math functions (sin, cos, exp, log) - complex for Z80
+- Additional elementary functions (atan, asin, acos)
 - MP/M tasking support
 
 ---
