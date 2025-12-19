@@ -77,6 +77,11 @@
         PUBLIC  _f64_log        ; Natural logarithm ln(x)
         PUBLIC  _f64_lg10       ; Base 10 logarithm log10(x)
 
+        ; Constants used by inlined composite functions
+        PUBLIC  _const_one_f64  ; 1.0
+        PUBLIC  _const_2        ; 2.0
+        PUBLIC  _const_ln10     ; ln(10) ≈ 2.302585
+
 ; =============================================================================
 ; Constants
 ; =============================================================================

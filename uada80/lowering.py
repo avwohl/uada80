@@ -7552,257 +7552,237 @@ class ASTLowering:
 
         return result_ptr
 
-    def _lower_float64_sinh(self, operand_expr):
-        """Lower Float64 hyperbolic sine function call.
+    # =========================================================================
+    # Float64 helper functions for calling primitives with pointer arguments
+    # =========================================================================
 
-        Calls _f64_sinh(result_ptr, src_ptr).
-        Stack layout after call:
-          - IX+4 = src_ptr (Float64 pointer)
-          - IX+6 = result_ptr (Float64 pointer)
-        """
-        # Get the operand as a Float64 pointer
-        operand_ptr = self._lower_float64_operand(operand_expr)
-
-        # Allocate 8 bytes on stack for result
-        result_ptr = self.builder.new_vreg(IRType.PTR, "_f64_sinh_result")
+    def _f64_alloc_temp(self, name: str):
+        """Allocate 8 bytes on stack for a Float64 temporary, return pointer."""
+        temp_ptr = self.builder.new_vreg(IRType.PTR, name)
         self.builder.emit(IRInstr(
             OpCode.SUB,
             MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
             MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
             Immediate(8, IRType.WORD),
-            comment="allocate 8 bytes for sinh result"
+            comment=f"alloc {name}"
         ))
         self.builder.emit(IRInstr(
-            OpCode.MOV, result_ptr,
+            OpCode.MOV, temp_ptr,
             MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.PTR),
-            comment="result_ptr = SP"
+            comment=f"{name} = SP"
         ))
+        return temp_ptr
 
-        # Push arguments: result_ptr (IX+6), src_ptr (IX+4)
-        self.builder.push(result_ptr)   # result location (IX+6)
-        self.builder.push(operand_ptr)  # source operand (IX+4)
-
-        self.builder.call(Label("_f64_sinh"))
-
-        # Clean up pushed arguments (2 pointers = 4 bytes)
+    def _f64_call_unary(self, func_name: str, result_ptr, src_ptr):
+        """Call unary Float64 function: result = func(src)."""
+        # Register runtime dependencies
+        if self.builder.module:
+            self.builder.module.need_runtime(func_name)
+            if isinstance(src_ptr, Label):
+                self.builder.module.need_runtime(src_ptr.name)
+        self.builder.push(result_ptr)
+        self.builder.push(src_ptr)
+        self.builder.call(Label(func_name))
         self.builder.emit(IRInstr(
             OpCode.ADD,
             MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
             Immediate(4, IRType.WORD),
-            comment="pop sinh args"
+            comment=f"pop {func_name} args"
         ))
 
-        return result_ptr
+    def _f64_call_binary(self, func_name: str, result_ptr, left_ptr, right_ptr):
+        """Call binary Float64 function: result = func(left, right)."""
+        # Register runtime dependencies
+        if self.builder.module:
+            self.builder.module.need_runtime(func_name)
+            if isinstance(left_ptr, Label):
+                self.builder.module.need_runtime(left_ptr.name)
+            if isinstance(right_ptr, Label):
+                self.builder.module.need_runtime(right_ptr.name)
+        self.builder.push(result_ptr)
+        self.builder.push(right_ptr)
+        self.builder.push(left_ptr)
+        self.builder.call(Label(func_name))
+        self.builder.emit(IRInstr(
+            OpCode.ADD,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            Immediate(6, IRType.WORD),
+            comment=f"pop {func_name} args"
+        ))
+
+    # =========================================================================
+    # Composite Float64 functions - inlined formulas calling primitives
+    # These match the Ada implementations in adalib/ada-numerics-elementary_functions.adb
+    # =========================================================================
+
+    def _lower_float64_sinh(self, operand_expr):
+        """sinh(x) = (E_X - 1.0/E_X) / 2.0  where E_X = exp(x)
+
+        Matches Ada implementation in adalib/ada-numerics-elementary_functions.adb
+        """
+        x_ptr = self._lower_float64_operand(operand_expr)
+
+        # E_X = exp(x)
+        exp_x = self._f64_alloc_temp("exp_x")
+        self._f64_call_unary("_f64_e2x", exp_x, x_ptr)
+
+        # inv_exp_x = 1.0 / E_X
+        inv_exp_x = self._f64_alloc_temp("inv_exp_x")
+        self._f64_call_binary("_f64_div", inv_exp_x, Label("_const_one_f64"), exp_x)
+
+        # diff = E_X - 1.0/E_X
+        diff = self._f64_alloc_temp("diff")
+        self._f64_call_binary("_f64_sub", diff, exp_x, inv_exp_x)
+
+        # result = diff / 2.0
+        result = self._f64_alloc_temp("sinh_result")
+        self._f64_call_binary("_f64_div", result, diff, Label("_const_2"))
+
+        return result
 
     def _lower_float64_cosh(self, operand_expr):
-        """Lower Float64 hyperbolic cosine function call.
+        """cosh(x) = (E_X + 1.0/E_X) / 2.0  where E_X = exp(x)
 
-        Calls _f64_cosh(result_ptr, src_ptr).
-        Stack layout after call:
-          - IX+4 = src_ptr (Float64 pointer)
-          - IX+6 = result_ptr (Float64 pointer)
+        Matches Ada implementation in adalib/ada-numerics-elementary_functions.adb
         """
-        # Get the operand as a Float64 pointer
-        operand_ptr = self._lower_float64_operand(operand_expr)
+        x_ptr = self._lower_float64_operand(operand_expr)
 
-        # Allocate 8 bytes on stack for result
-        result_ptr = self.builder.new_vreg(IRType.PTR, "_f64_cosh_result")
-        self.builder.emit(IRInstr(
-            OpCode.SUB,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            Immediate(8, IRType.WORD),
-            comment="allocate 8 bytes for cosh result"
-        ))
-        self.builder.emit(IRInstr(
-            OpCode.MOV, result_ptr,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.PTR),
-            comment="result_ptr = SP"
-        ))
+        # E_X = exp(x)
+        exp_x = self._f64_alloc_temp("exp_x")
+        self._f64_call_unary("_f64_e2x", exp_x, x_ptr)
 
-        # Push arguments: result_ptr (IX+6), src_ptr (IX+4)
-        self.builder.push(result_ptr)   # result location (IX+6)
-        self.builder.push(operand_ptr)  # source operand (IX+4)
+        # inv_exp_x = 1.0 / E_X
+        inv_exp_x = self._f64_alloc_temp("inv_exp_x")
+        self._f64_call_binary("_f64_div", inv_exp_x, Label("_const_one_f64"), exp_x)
 
-        self.builder.call(Label("_f64_cosh"))
+        # sum = E_X + 1.0/E_X
+        sum_val = self._f64_alloc_temp("sum")
+        self._f64_call_binary("_f64_add", sum_val, exp_x, inv_exp_x)
 
-        # Clean up pushed arguments (2 pointers = 4 bytes)
-        self.builder.emit(IRInstr(
-            OpCode.ADD,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            Immediate(4, IRType.WORD),
-            comment="pop cosh args"
-        ))
+        # result = sum / 2.0
+        result = self._f64_alloc_temp("cosh_result")
+        self._f64_call_binary("_f64_div", result, sum_val, Label("_const_2"))
 
-        return result_ptr
+        return result
 
     def _lower_float64_tanh(self, operand_expr):
-        """Lower Float64 hyperbolic tangent function call.
+        """tanh(x) = (E_2X - 1.0) / (E_2X + 1.0)  where E_2X = exp(2*x)
 
-        Calls _f64_tanh(result_ptr, src_ptr).
-        Stack layout after call:
-          - IX+4 = src_ptr (Float64 pointer)
-          - IX+6 = result_ptr (Float64 pointer)
+        Matches Ada implementation in adalib/ada-numerics-elementary_functions.adb
         """
-        # Get the operand as a Float64 pointer
-        operand_ptr = self._lower_float64_operand(operand_expr)
+        x_ptr = self._lower_float64_operand(operand_expr)
 
-        # Allocate 8 bytes on stack for result
-        result_ptr = self.builder.new_vreg(IRType.PTR, "_f64_tanh_result")
-        self.builder.emit(IRInstr(
-            OpCode.SUB,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            Immediate(8, IRType.WORD),
-            comment="allocate 8 bytes for tanh result"
-        ))
-        self.builder.emit(IRInstr(
-            OpCode.MOV, result_ptr,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.PTR),
-            comment="result_ptr = SP"
-        ))
+        # two_x = 2.0 * x
+        two_x = self._f64_alloc_temp("two_x")
+        self._f64_call_binary("_f64_mul", two_x, Label("_const_2"), x_ptr)
 
-        # Push arguments: result_ptr (IX+6), src_ptr (IX+4)
-        self.builder.push(result_ptr)   # result location (IX+6)
-        self.builder.push(operand_ptr)  # source operand (IX+4)
+        # E_2X = exp(2*x)
+        exp_2x = self._f64_alloc_temp("exp_2x")
+        self._f64_call_unary("_f64_e2x", exp_2x, two_x)
 
-        self.builder.call(Label("_f64_tanh"))
+        # num = E_2X - 1.0
+        num = self._f64_alloc_temp("num")
+        self._f64_call_binary("_f64_sub", num, exp_2x, Label("_const_one_f64"))
 
-        # Clean up pushed arguments (2 pointers = 4 bytes)
-        self.builder.emit(IRInstr(
-            OpCode.ADD,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            Immediate(4, IRType.WORD),
-            comment="pop tanh args"
-        ))
+        # den = E_2X + 1.0
+        den = self._f64_alloc_temp("den")
+        self._f64_call_binary("_f64_add", den, exp_2x, Label("_const_one_f64"))
 
-        return result_ptr
+        # result = num / den
+        result = self._f64_alloc_temp("tanh_result")
+        self._f64_call_binary("_f64_div", result, num, den)
+
+        return result
 
     def _lower_float64_arcsinh(self, operand_expr):
-        """Lower Float64 inverse hyperbolic sine function call.
+        """arcsinh(x) = log(x + sqrt(x*x + 1))
 
-        Calls _f64_asnh(result_ptr, src_ptr).
-        Stack layout after call:
-          - IX+4 = src_ptr (Float64 pointer)
-          - IX+6 = result_ptr (Float64 pointer)
+        Inlined implementation using primitive Float64 operations.
+        See Ada reference: adalib/ada-numerics-elementary_functions.adb
         """
-        # Get the operand as a Float64 pointer
-        operand_ptr = self._lower_float64_operand(operand_expr)
+        x_ptr = self._lower_float64_operand(operand_expr)
 
-        # Allocate 8 bytes on stack for result
-        result_ptr = self.builder.new_vreg(IRType.PTR, "_f64_arcsinh_result")
-        self.builder.emit(IRInstr(
-            OpCode.SUB,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            Immediate(8, IRType.WORD),
-            comment="allocate 8 bytes for arcsinh result"
-        ))
-        self.builder.emit(IRInstr(
-            OpCode.MOV, result_ptr,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.PTR),
-            comment="result_ptr = SP"
-        ))
+        # x_sq = x * x
+        x_sq = self._f64_alloc_temp("x_sq")
+        self._f64_call_binary("_f64_mul", x_sq, x_ptr, x_ptr)
 
-        # Push arguments: result_ptr (IX+6), src_ptr (IX+4)
-        self.builder.push(result_ptr)   # result location (IX+6)
-        self.builder.push(operand_ptr)  # source operand (IX+4)
+        # x_sq_plus_1 = x*x + 1
+        x_sq_plus_1 = self._f64_alloc_temp("x_sq_plus_1")
+        self._f64_call_binary("_f64_add", x_sq_plus_1, x_sq, Label("_const_one_f64"))
 
-        self.builder.call(Label("_f64_asnh"))
+        # sqrt_val = sqrt(x*x + 1)
+        sqrt_val = self._f64_alloc_temp("sqrt_val")
+        self._f64_call_unary("_f64_sqrt", sqrt_val, x_sq_plus_1)
 
-        # Clean up pushed arguments (2 pointers = 4 bytes)
-        self.builder.emit(IRInstr(
-            OpCode.ADD,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            Immediate(4, IRType.WORD),
-            comment="pop arcsinh args"
-        ))
+        # sum = x + sqrt(x*x + 1)
+        sum_val = self._f64_alloc_temp("sum")
+        self._f64_call_binary("_f64_add", sum_val, x_ptr, sqrt_val)
 
-        return result_ptr
+        # result = log(x + sqrt(x*x + 1))
+        result = self._f64_alloc_temp("arcsinh_result")
+        self._f64_call_unary("_f64_log", result, sum_val)
+
+        return result
 
     def _lower_float64_arccosh(self, operand_expr):
-        """Lower Float64 inverse hyperbolic cosine function call.
+        """arccosh(x) = log(x + sqrt(x*x - 1))
 
-        Calls _f64_acsh(result_ptr, src_ptr).
-        Stack layout after call:
-          - IX+4 = src_ptr (Float64 pointer)
-          - IX+6 = result_ptr (Float64 pointer)
+        Inlined implementation using primitive Float64 operations.
+        See Ada reference: adalib/ada-numerics-elementary_functions.adb
         """
-        # Get the operand as a Float64 pointer
-        operand_ptr = self._lower_float64_operand(operand_expr)
+        x_ptr = self._lower_float64_operand(operand_expr)
 
-        # Allocate 8 bytes on stack for result
-        result_ptr = self.builder.new_vreg(IRType.PTR, "_f64_arccosh_result")
-        self.builder.emit(IRInstr(
-            OpCode.SUB,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            Immediate(8, IRType.WORD),
-            comment="allocate 8 bytes for arccosh result"
-        ))
-        self.builder.emit(IRInstr(
-            OpCode.MOV, result_ptr,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.PTR),
-            comment="result_ptr = SP"
-        ))
+        # x_sq = x * x
+        x_sq = self._f64_alloc_temp("x_sq")
+        self._f64_call_binary("_f64_mul", x_sq, x_ptr, x_ptr)
 
-        # Push arguments: result_ptr (IX+6), src_ptr (IX+4)
-        self.builder.push(result_ptr)   # result location (IX+6)
-        self.builder.push(operand_ptr)  # source operand (IX+4)
+        # x_sq_minus_1 = x*x - 1
+        x_sq_minus_1 = self._f64_alloc_temp("x_sq_minus_1")
+        self._f64_call_binary("_f64_sub", x_sq_minus_1, x_sq, Label("_const_one_f64"))
 
-        self.builder.call(Label("_f64_acsh"))
+        # sqrt_val = sqrt(x*x - 1)
+        sqrt_val = self._f64_alloc_temp("sqrt_val")
+        self._f64_call_unary("_f64_sqrt", sqrt_val, x_sq_minus_1)
 
-        # Clean up pushed arguments (2 pointers = 4 bytes)
-        self.builder.emit(IRInstr(
-            OpCode.ADD,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            Immediate(4, IRType.WORD),
-            comment="pop arccosh args"
-        ))
+        # sum = x + sqrt(x*x - 1)
+        sum_val = self._f64_alloc_temp("sum")
+        self._f64_call_binary("_f64_add", sum_val, x_ptr, sqrt_val)
 
-        return result_ptr
+        # result = log(x + sqrt(x*x - 1))
+        result = self._f64_alloc_temp("arccosh_result")
+        self._f64_call_unary("_f64_log", result, sum_val)
+
+        return result
 
     def _lower_float64_arctanh(self, operand_expr):
-        """Lower Float64 inverse hyperbolic tangent function call.
+        """arctanh(x) = 0.5 * log((1 + x) / (1 - x))
 
-        Calls _f64_atnh(result_ptr, src_ptr).
-        Stack layout after call:
-          - IX+4 = src_ptr (Float64 pointer)
-          - IX+6 = result_ptr (Float64 pointer)
+        Inlined implementation using primitive Float64 operations.
+        See Ada reference: adalib/ada-numerics-elementary_functions.adb
         """
-        # Get the operand as a Float64 pointer
-        operand_ptr = self._lower_float64_operand(operand_expr)
+        x_ptr = self._lower_float64_operand(operand_expr)
 
-        # Allocate 8 bytes on stack for result
-        result_ptr = self.builder.new_vreg(IRType.PTR, "_f64_arctanh_result")
-        self.builder.emit(IRInstr(
-            OpCode.SUB,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            Immediate(8, IRType.WORD),
-            comment="allocate 8 bytes for arctanh result"
-        ))
-        self.builder.emit(IRInstr(
-            OpCode.MOV, result_ptr,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.PTR),
-            comment="result_ptr = SP"
-        ))
+        # one_plus_x = 1 + x
+        one_plus_x = self._f64_alloc_temp("one_plus_x")
+        self._f64_call_binary("_f64_add", one_plus_x, Label("_const_one_f64"), x_ptr)
 
-        # Push arguments: result_ptr (IX+6), src_ptr (IX+4)
-        self.builder.push(result_ptr)   # result location (IX+6)
-        self.builder.push(operand_ptr)  # source operand (IX+4)
+        # one_minus_x = 1 - x
+        one_minus_x = self._f64_alloc_temp("one_minus_x")
+        self._f64_call_binary("_f64_sub", one_minus_x, Label("_const_one_f64"), x_ptr)
 
-        self.builder.call(Label("_f64_atnh"))
+        # ratio = (1 + x) / (1 - x)
+        ratio = self._f64_alloc_temp("ratio")
+        self._f64_call_binary("_f64_div", ratio, one_plus_x, one_minus_x)
 
-        # Clean up pushed arguments (2 pointers = 4 bytes)
-        self.builder.emit(IRInstr(
-            OpCode.ADD,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            Immediate(4, IRType.WORD),
-            comment="pop arctanh args"
-        ))
+        # log_ratio = log((1 + x) / (1 - x))
+        log_ratio = self._f64_alloc_temp("log_ratio")
+        self._f64_call_unary("_f64_log", log_ratio, ratio)
 
-        return result_ptr
+        # result = log_ratio / 2.0 (equivalent to 0.5 * log_ratio)
+        result = self._f64_alloc_temp("arctanh_result")
+        self._f64_call_binary("_f64_div", result, log_ratio, Label("_const_2"))
+
+        return result
 
     def _lower_float64_exp_func(self, operand_expr):
         """Lower Float64 exp function call (Ada.Numerics.Elementary_Functions.Exp).
@@ -7890,46 +7870,19 @@ class ASTLowering:
         return result_ptr
 
     def _lower_float64_log10(self, operand_expr):
-        """Lower Float64 base 10 logarithm function call.
-
-        Calls _f64_lg10(result_ptr, src_ptr).
-        Stack layout after call:
-          - IX+4 = src_ptr (Float64 pointer)
-          - IX+6 = result_ptr (Float64 pointer)
-        """
+        """log10(x) = log(x) / ln(10)"""
         # Get the operand as a Float64 pointer
-        operand_ptr = self._lower_float64_operand(operand_expr)
+        x_ptr = self._lower_float64_operand(operand_expr)
 
-        # Allocate 8 bytes on stack for result
-        result_ptr = self.builder.new_vreg(IRType.PTR, "_f64_log10_result")
-        self.builder.emit(IRInstr(
-            OpCode.SUB,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            Immediate(8, IRType.WORD),
-            comment="allocate 8 bytes for log10 result"
-        ))
-        self.builder.emit(IRInstr(
-            OpCode.MOV, result_ptr,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.PTR),
-            comment="result_ptr = SP"
-        ))
+        # log(x)
+        log_x = self._f64_alloc_temp("log_x")
+        self._f64_call_unary("_f64_log", log_x, x_ptr)
 
-        # Push arguments: result_ptr (IX+6), src_ptr (IX+4)
-        self.builder.push(result_ptr)   # result location (IX+6)
-        self.builder.push(operand_ptr)  # source operand (IX+4)
+        # log(x) / ln(10)
+        result = self._f64_alloc_temp("log10_result")
+        self._f64_call_binary("_f64_div", result, log_x, Label("_const_ln10"))
 
-        self.builder.call(Label("_f64_lg10"))
-
-        # Clean up pushed arguments (2 pointers = 4 bytes)
-        self.builder.emit(IRInstr(
-            OpCode.ADD,
-            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-            Immediate(4, IRType.WORD),
-            comment="pop log10 args"
-        ))
-
-        return result_ptr
+        return result
 
     def _lower_declare_expr(self, expr: DeclareExpr):
         """Lower a declare expression (Ada 2022).
