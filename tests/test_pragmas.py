@@ -532,8 +532,8 @@ class TestPragmaPackRecords:
         # Check that bit manipulation instructions are generated
         output = result.output
         assert output is not None
-        # Should contain AND/OR for bit field manipulation
-        assert "AND" in output or "OR" in output
+        # Should contain and/or for bit field manipulation
+        assert "and" in output or "or" in output
 
     def test_unpacked_record_compiles(self):
         """Test that unpacked records compile correctly."""

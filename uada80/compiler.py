@@ -19,11 +19,11 @@ from uada80.ir import IRModule
 from uada80.optimizer import ASTOptimizer, OptimizerConfig, OptimizationStats
 
 try:
-    from upeep80 import optimize_peephole
+    from upeepz80 import PeepholeOptimizer as Z80PeepholeOptimizer
     HAS_PEEPHOLE = True
 except ImportError:
     HAS_PEEPHOLE = False
-    optimize_peephole = None
+    Z80PeepholeOptimizer = None
 
 
 class OutputFormat(Enum):
@@ -67,6 +67,7 @@ class CompilationResult:
     ast: Optional[Program] = None
     ir: Optional[IRModule] = None
     optimization_stats: Optional[OptimizationStats] = None
+    peephole_stats: Optional[dict[str, int]] = None
 
     @property
     def has_errors(self) -> bool:
@@ -206,10 +207,12 @@ class Compiler:
             )
             return result
 
-        # Phase 6: Peephole optimization (optional)
-        if self.peephole_optimize and optimize_peephole is not None:
+        # Phase 6: Peephole optimization (optional, uses upeepz80)
+        if self.peephole_optimize and Z80PeepholeOptimizer is not None:
             try:
-                asm = optimize_peephole(asm)
+                peephole = Z80PeepholeOptimizer()
+                asm = peephole.optimize(asm)
+                result.peephole_stats = peephole.stats
             except Exception as e:
                 # Optimization failure is non-fatal, use unoptimized code
                 if self.debug:
@@ -384,10 +387,12 @@ class Compiler:
             )
             return result
 
-        # Phase 6: Peephole optimization
-        if self.peephole_optimize and optimize_peephole is not None:
+        # Phase 6: Peephole optimization (uses upeepz80)
+        if self.peephole_optimize and Z80PeepholeOptimizer is not None:
             try:
-                asm = optimize_peephole(asm)
+                peephole = Z80PeepholeOptimizer()
+                asm = peephole.optimize(asm)
+                result.peephole_stats = peephole.stats
             except Exception as e:
                 if self.debug:
                     result.warnings.append(f"Peephole optimization failed: {e}")
