@@ -69,6 +69,7 @@
         PUBLIC  _f64_at2        ; Two-argument arctangent (8-char name to avoid collision with _f64_atan)
         PUBLIC  _f64_sinh       ; Hyperbolic sine
         PUBLIC  _f64_cosh       ; Hyperbolic cosine
+        PUBLIC  _f64_tanh       ; Hyperbolic tangent
         PUBLIC  _f64_e2x        ; Exponential e^x (Taylor series, 8-char name to avoid collision with _f64_exp_int)
         PUBLIC  _f64_log        ; Natural logarithm ln(x)
 
@@ -4728,6 +4729,102 @@ _f64_cosh:
         ret
 
 ; =============================================================================
+; _f64_tanh: Hyperbolic tangent using tanh(x) = (e^x - e^(-x)) / (e^x + e^(-x))
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = tanh(x)
+; =============================================================================
+_f64_tanh:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input to _tanh_x
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _tanh_x
+        ld      bc, 8
+        ldir
+
+        ; Compute e^x -> _tanh_exp
+        ld      hl, _tanh_exp
+        push    hl
+        ld      hl, _tanh_x
+        push    hl
+        call    _f64_e2x
+        pop     hl
+        pop     hl
+
+        ; Compute -x -> _tanh_tmp (negate x)
+        ld      hl, _tanh_x
+        ld      de, _tanh_tmp
+        ld      bc, 8
+        ldir
+        ld      a, (_tanh_tmp + 7)
+        xor     80h             ; Flip sign bit
+        ld      (_tanh_tmp + 7), a
+
+        ; Compute e^(-x) -> _tanh_nex (negative exp)
+        ld      hl, _tanh_nex
+        push    hl
+        ld      hl, _tanh_tmp
+        push    hl
+        call    _f64_e2x
+        pop     hl
+        pop     hl
+
+        ; Compute e^x - e^(-x) -> _tanh_num (numerator for sinh)
+        ld      hl, _tanh_num
+        push    hl
+        ld      hl, _tanh_nex
+        push    hl
+        ld      hl, _tanh_exp
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute e^x + e^(-x) -> _tanh_den (denominator for cosh)
+        ld      hl, _tanh_den
+        push    hl
+        ld      hl, _tanh_nex
+        push    hl
+        ld      hl, _tanh_exp
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute numerator / denominator -> _tanh_res
+        ld      hl, _tanh_res
+        push    hl
+        ld      hl, _tanh_den
+        push    hl
+        ld      hl, _tanh_num
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _tanh_res
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
 ; _f64_e2x: Exponential function e^x using Taylor series
 ; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
 ; Output: result = e^x
@@ -5661,5 +5758,14 @@ _cosh_x:        DS      8       ; Input value
 _cosh_exp:      DS      8       ; e^x
 _cosh_tmp:      DS      8       ; Temporary for -x and e^(-x)
 _cosh_res:      DS      8       ; Result
+
+; Temporary storage for tanh function
+_tanh_x:        DS      8       ; Input value
+_tanh_exp:      DS      8       ; e^x
+_tanh_tmp:      DS      8       ; Temporary for -x
+_tanh_nex:      DS      8       ; e^(-x)
+_tanh_num:      DS      8       ; Numerator: e^x - e^(-x)
+_tanh_den:      DS      8       ; Denominator: e^x + e^(-x)
+_tanh_res:      DS      8       ; Result
 
         END
