@@ -3134,6 +3134,34 @@ def test_long_float_tan():
 
 
 @skip_if_no_tools
+def test_long_float_arctan():
+    """Test Ada.Numerics.Elementary_Functions.Arctan for Long_Float."""
+    # Test arctan(0.5) which is well within Taylor series convergence range
+    # arctan(0.5) ≈ 0.4636476 -> *1000 = 463
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    with Ada.Numerics.Elementary_Functions;
+    procedure Test is
+        X : Long_Float := 0.5;
+        Y : Long_Float;
+        R : Integer;
+    begin
+        Y := Ada.Numerics.Elementary_Functions.Arctan(X);
+        R := Integer(Y * 1000.0);
+        Ada.Integer_Text_IO.Put(R);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    val = int(stdout.strip())
+    # arctan(0.5) ≈ 0.4636, so *1000 ≈ 463 (allow some tolerance)
+    assert 460 <= val <= 470, f"Expected arctan(0.5)*1000≈463, got: {val}"
+
+
+@skip_if_no_tools
 def test_long_float_exp():
     """Test Ada.Numerics.Elementary_Functions.Exp for Long_Float."""
     source = """
