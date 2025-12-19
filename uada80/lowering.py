@@ -6984,6 +6984,10 @@ class ASTLowering:
             func = "_f64_mul"
         elif op == BinaryOp.DIV:
             func = "_f64_div"
+        elif op == BinaryOp.REM:
+            func = "_f64_rem"
+        elif op == BinaryOp.MOD:
+            func = "_f64_mod"
         else:
             # Comparison ops handled differently
             func = "_f64_cmp"
@@ -8291,7 +8295,7 @@ class ASTLowering:
         left_type = self._get_expr_type(expr.left)
         right_type = self._get_expr_type(expr.right)
         if self._is_float64_type(left_type) or self._is_float64_type(right_type):
-            if op in (BinaryOp.ADD, BinaryOp.SUB, BinaryOp.MUL, BinaryOp.DIV):
+            if op in (BinaryOp.ADD, BinaryOp.SUB, BinaryOp.MUL, BinaryOp.DIV, BinaryOp.REM, BinaryOp.MOD):
                 left_ptr = self._lower_float64_operand(expr.left)
                 right_ptr = self._lower_float64_operand(expr.right)
                 return self._lower_float64_binary(op, left_ptr, right_ptr, left_type or right_type)

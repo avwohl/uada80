@@ -2980,6 +2980,8 @@ class Z80CodeGen:
         self._emit("    EXTRN _f64_sub     ; Subtract (a - b)")
         self._emit("    EXTRN _f64_mul     ; Multiply")
         self._emit("    EXTRN _f64_div     ; Divide (a / b)")
+        self._emit("    EXTRN _f64_rem     ; Remainder (sign follows dividend)")
+        self._emit("    EXTRN _f64_mod     ; Modulo (sign follows divisor)")
         self._emit("    EXTRN _f64_neg     ; Negate")
         self._emit("    EXTRN _f64_abs     ; Absolute value")
         self._emit("")
