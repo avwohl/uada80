@@ -65,6 +65,7 @@
         PUBLIC  _f64_tan        ; Tangent (sin/cos)
         PUBLIC  _f64_atan       ; Arctangent (Taylor series)
         PUBLIC  _f64_asin       ; Arcsine (via atan identity)
+        PUBLIC  _f64_acos       ; Arccosine (π/2 - asin)
         PUBLIC  _f64_e2x        ; Exponential e^x (Taylor series, 8-char name to avoid collision with _f64_exp_int)
         PUBLIC  _f64_log        ; Natural logarithm ln(x)
 
@@ -4350,6 +4351,59 @@ _asin_done:
         ret
 
 ; =============================================================================
+; _f64_acos: Arccosine function using identity acos(x) = π/2 - asin(x)
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = acos(x) for -1 <= x <= 1
+;
+; Special cases:
+;   acos(1) = 0
+;   acos(-1) = π
+;   acos(0) = π/2
+; =============================================================================
+_f64_acos:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; First compute asin(x) -> _acos_tmp
+        ld      hl, _acos_tmp
+        push    hl
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        push    hl
+        call    _f64_asin
+        pop     hl
+        pop     hl
+
+        ; Compute π/2 - asin(x) -> _acos_res
+        ld      hl, _acos_res
+        push    hl
+        ld      hl, _acos_tmp
+        push    hl
+        ld      hl, _const_pi2
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _acos_res
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
 ; _f64_e2x: Exponential function e^x using Taylor series
 ; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
 ; Output: result = e^x
@@ -5256,5 +5310,9 @@ _asin_x2:       DS      8       ; x²
 _asin_tmp:      DS      8       ; Temporary for sqrt(1-x²) and x/sqrt(1-x²)
 _asin_res:      DS      8       ; Result
 _asin_sign:     DS      1       ; Original sign
+
+; Arccosine working variables
+_acos_tmp:      DS      8       ; Temporary for asin(x)
+_acos_res:      DS      8       ; Result
 
         END
