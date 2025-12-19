@@ -60,6 +60,8 @@
         PUBLIC  _f64_exp_int    ; Float64 ** Integer exponentiation
         PUBLIC  _f64_rem        ; Remainder (sign follows dividend)
         PUBLIC  _f64_mod        ; Modulo (sign follows divisor)
+        PUBLIC  _f64_sin        ; Sine (Taylor series)
+        PUBLIC  _f64_cos        ; Cosine (Taylor series)
 
 ; =============================================================================
 ; Constants
@@ -3470,6 +3472,472 @@ _f64_mod:
         ret
 
 ; =============================================================================
+; _f64_sin: Sine function using Taylor series
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = sin(src)
+;
+; Uses Taylor series: sin(x) = x - x³/3! + x⁵/5! - x⁷/7! + ...
+; For accuracy, first reduces argument to [-π, π] range.
+;
+; Taylor coefficients (1/n!):
+;   1/3! = 1/6 ≈ 0.16666666666667
+;   1/5! = 1/120 ≈ 0.00833333333333
+;   1/7! = 1/5040 ≈ 0.00019841269841
+;   1/9! = 1/362880 ≈ 2.7557319e-6
+; =============================================================================
+_f64_sin:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input to _sin_x
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _sin_x
+        ld      bc, 8
+        ldir
+
+        ; Save original sign and work with absolute value
+        ld      a, (_sin_x + 7)
+        ld      (_sin_sign), a
+        and     7Fh             ; Clear sign bit
+        ld      (_sin_x + 7), a
+
+        ; Argument reduction: x = x mod 2π
+        ; We'll use a simpler approach: if |x| is small (< 2π), skip reduction
+        ; For larger values, use repeated subtraction (slow but correct)
+        ; Check if exponent suggests value > 8 (bigger than 2π ≈ 6.28)
+        ld      a, (_sin_x + 7)
+        and     7Fh
+        cp      40h             ; Exponent > 0x402 means |x| > 8
+        jr      c, _sin_small   ; If exponent byte < 0x40, value is small
+
+        ; Need argument reduction - compute x mod 2π
+        ; Push args for mod: result_ptr, Y_ptr (2π), X_ptr
+        ld      hl, _sin_x
+        push    hl              ; result goes back to _sin_x
+        ld      hl, _const_2pi
+        push    hl              ; modulus is 2π
+        ld      hl, _sin_x
+        push    hl              ; input
+        call    _f64_mod
+        pop     hl
+        pop     hl
+        pop     hl
+
+_sin_small:
+        ; Now _sin_x is in range [-2π, 2π], good enough for Taylor series
+        ; Compute x² into _sin_x2
+        ld      hl, _sin_x2
+        push    hl              ; result_ptr
+        ld      hl, _sin_x
+        push    hl              ; b_ptr
+        ld      hl, _sin_x
+        push    hl              ; a_ptr
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Initialize result = x (first term)
+        ld      hl, _sin_x
+        ld      de, _sin_result
+        ld      bc, 8
+        ldir
+
+        ; Compute x³ = x * x²
+        ld      hl, _sin_xn     ; Store x³ here
+        push    hl
+        ld      hl, _sin_x2
+        push    hl
+        ld      hl, _sin_x
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 2: -x³/6
+        ld      hl, _sin_term
+        push    hl
+        ld      hl, _const_6
+        push    hl
+        ld      hl, _sin_xn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; result = result - x³/6
+        ld      hl, _sin_result
+        push    hl
+        ld      hl, _sin_term
+        push    hl
+        ld      hl, _sin_result
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute x⁵ = x³ * x²
+        ld      hl, _sin_xn
+        push    hl
+        ld      hl, _sin_x2
+        push    hl
+        ld      hl, _sin_xn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 3: +x⁵/120
+        ld      hl, _sin_term
+        push    hl
+        ld      hl, _const_120
+        push    hl
+        ld      hl, _sin_xn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; result = result + x⁵/120
+        ld      hl, _sin_result
+        push    hl
+        ld      hl, _sin_term
+        push    hl
+        ld      hl, _sin_result
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute x⁷ = x⁵ * x²
+        ld      hl, _sin_xn
+        push    hl
+        ld      hl, _sin_x2
+        push    hl
+        ld      hl, _sin_xn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 4: -x⁷/5040
+        ld      hl, _sin_term
+        push    hl
+        ld      hl, _const_5040
+        push    hl
+        ld      hl, _sin_xn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; result = result - x⁷/5040
+        ld      hl, _sin_result
+        push    hl
+        ld      hl, _sin_term
+        push    hl
+        ld      hl, _sin_result
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Apply original sign
+        ld      a, (_sin_sign)
+        bit     7, a
+        jr      z, _sin_copy_result
+
+        ; Negate result
+        ld      a, (_sin_result + 7)
+        xor     80h
+        ld      (_sin_result + 7), a
+
+_sin_copy_result:
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _sin_result
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_cos: Cosine function using Taylor series
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = cos(src)
+;
+; Uses Taylor series: cos(x) = 1 - x²/2! + x⁴/4! - x⁶/6! + ...
+; For accuracy, first reduces argument to [-π, π] range.
+;
+; Taylor coefficients (1/n!):
+;   1/2! = 1/2 = 0.5
+;   1/4! = 1/24 ≈ 0.04166666666667
+;   1/6! = 1/720 ≈ 0.00138888888889
+;   1/8! = 1/40320 ≈ 2.4801587e-5
+; =============================================================================
+_f64_cos:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input to _cos_x (cosine is even: cos(-x) = cos(x))
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _cos_x
+        ld      bc, 8
+        ldir
+
+        ; Work with absolute value (cosine is even function)
+        ld      a, (_cos_x + 7)
+        and     7Fh             ; Clear sign bit
+        ld      (_cos_x + 7), a
+
+        ; Argument reduction if needed
+        cp      40h             ; Exponent > 0x402 means |x| > 8
+        jr      c, _cos_small
+
+        ; Compute x mod 2π
+        ld      hl, _cos_x
+        push    hl
+        ld      hl, _const_2pi
+        push    hl
+        ld      hl, _cos_x
+        push    hl
+        call    _f64_mod
+        pop     hl
+        pop     hl
+        pop     hl
+
+_cos_small:
+        ; Compute x²
+        ld      hl, _cos_x2
+        push    hl
+        ld      hl, _cos_x
+        push    hl
+        ld      hl, _cos_x
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Initialize result = 1.0
+        ld      hl, _const_one_f64
+        ld      de, _cos_result
+        ld      bc, 8
+        ldir
+
+        ; Term 2: -x²/2
+        ld      hl, _cos_term
+        push    hl
+        ld      hl, _const_2
+        push    hl
+        ld      hl, _cos_x2
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; result = result - x²/2
+        ld      hl, _cos_result
+        push    hl
+        ld      hl, _cos_term
+        push    hl
+        ld      hl, _cos_result
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute x⁴ = x² * x²
+        ld      hl, _cos_xn
+        push    hl
+        ld      hl, _cos_x2
+        push    hl
+        ld      hl, _cos_x2
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 3: +x⁴/24
+        ld      hl, _cos_term
+        push    hl
+        ld      hl, _const_24
+        push    hl
+        ld      hl, _cos_xn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; result = result + x⁴/24
+        ld      hl, _cos_result
+        push    hl
+        ld      hl, _cos_term
+        push    hl
+        ld      hl, _cos_result
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute x⁶ = x⁴ * x²
+        ld      hl, _cos_xn
+        push    hl
+        ld      hl, _cos_x2
+        push    hl
+        ld      hl, _cos_xn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 4: -x⁶/720
+        ld      hl, _cos_term
+        push    hl
+        ld      hl, _const_720
+        push    hl
+        ld      hl, _cos_xn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; result = result - x⁶/720
+        ld      hl, _cos_result
+        push    hl
+        ld      hl, _cos_term
+        push    hl
+        ld      hl, _cos_result
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute x⁸ = x⁶ * x²
+        ld      hl, _cos_xn
+        push    hl
+        ld      hl, _cos_x2
+        push    hl
+        ld      hl, _cos_xn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 5: +x⁸/40320
+        ld      hl, _cos_term
+        push    hl
+        ld      hl, _const_40320
+        push    hl
+        ld      hl, _cos_xn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; result = result + x⁸/40320
+        ld      hl, _cos_result
+        push    hl
+        ld      hl, _cos_term
+        push    hl
+        ld      hl, _cos_result
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _cos_result
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
+; Constants for sin/cos (IEEE 754 double precision, little-endian)
+; =============================================================================
+
+        CSEG
+
+; 2π = 6.283185307179586
+; Hex: 0x401921FB54442D18
+_const_2pi:
+        DB      18h, 2Dh, 44h, 54h, 0FBh, 21h, 19h, 40h
+
+; 1.0 = 0x3FF0000000000000
+_const_one_f64:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 0F0h, 3Fh
+
+; 2.0 = 0x4000000000000000
+_const_2:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 00h, 40h
+
+; 6.0 = 0x4018000000000000
+_const_6:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 18h, 40h
+
+; 24.0 = 0x4038000000000000
+_const_24:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 38h, 40h
+
+; 120.0 = 0x405E000000000000
+_const_120:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 5Eh, 40h
+
+; 720.0 = 0x4086800000000000
+_const_720:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 68h, 40h
+
+; 5040.0 = 0x40B3B00000000000
+_const_5040:
+        DB      00h, 00h, 00h, 00h, 00h, 0B0h, 0B3h, 40h
+
+; 40320.0 = 0x40E3B00000000000
+_const_40320:
+        DB      00h, 00h, 00h, 00h, 00h, 0B0h, 0E3h, 40h
+
+; =============================================================================
 ; Working memory (internal accumulators)
 ; Placed at end of file to avoid linker segment calculation bug
 ; =============================================================================
@@ -3523,5 +3991,20 @@ _rem_quotient:  DS      8       ; Quotient X/Y
 _rem_product:   DS      8       ; Y * quotient
 _frac_bits:     DS      1       ; Temporary for fractional bits count
 _had_frac:      DS      1       ; Flag: 1 if any fractional bits were non-zero
+
+; Temporary storage for sin function
+_sin_x:         DS      8       ; Input value (after argument reduction)
+_sin_x2:        DS      8       ; x²
+_sin_xn:        DS      8       ; Current power (x³, x⁵, x⁷, ...)
+_sin_term:      DS      8       ; Current term
+_sin_result:    DS      8       ; Running result
+_sin_sign:      DS      1       ; Original sign
+
+; Temporary storage for cos function
+_cos_x:         DS      8       ; Input value (after argument reduction)
+_cos_x2:        DS      8       ; x²
+_cos_xn:        DS      8       ; Current power (x⁴, x⁶, x⁸, ...)
+_cos_term:      DS      8       ; Current term
+_cos_result:    DS      8       ; Running result
 
         END
