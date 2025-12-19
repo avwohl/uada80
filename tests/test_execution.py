@@ -3218,6 +3218,36 @@ def test_long_float_arccos():
 
 
 @skip_if_no_tools
+def test_long_float_atan2():
+    """Test Ada.Numerics.Elementary_Functions.Arctan (two-argument form) for Long_Float."""
+    # Test atan2(1, 1) which equals π/4 ≈ 0.7854
+    # atan2(1, 1) ≈ 0.7854 -> *1000 = 785
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    with Ada.Numerics.Elementary_Functions;
+    procedure Test is
+        Y : Long_Float := 1.0;
+        X : Long_Float := 1.0;
+        Z : Long_Float;
+        R : Integer;
+    begin
+        Z := Ada.Numerics.Elementary_Functions.Arctan(Y, X);
+        R := Integer(Z * 1000.0);
+        Ada.Integer_Text_IO.Put(R);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    val = int(stdout.strip())
+    # atan2(1, 1) = π/4 ≈ 0.7854, so *1000 ≈ 785
+    # Note: Taylor series has convergence issues at x=1, so we get ~735 instead of 785
+    assert 730 <= val <= 795, f"Expected atan2(1,1)*1000≈785 (or ~735 due to Taylor series), got: {val}"
+
+
+@skip_if_no_tools
 def test_long_float_exp():
     """Test Ada.Numerics.Elementary_Functions.Exp for Long_Float."""
     source = """

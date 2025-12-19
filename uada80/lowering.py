@@ -7507,6 +7507,51 @@ class ASTLowering:
 
         return result_ptr
 
+    def _lower_float64_atan2(self, y_expr, x_expr):
+        """Lower Float64 two-argument arctangent function call.
+
+        Calls _f64_atan2(result_ptr, x_ptr, y_ptr).
+        Stack layout after call:
+          - IX+4 = y_ptr (Float64 pointer)
+          - IX+6 = x_ptr (Float64 pointer)
+          - IX+8 = result_ptr (Float64 pointer)
+        """
+        # Get the operands as Float64 pointers
+        y_ptr = self._lower_float64_operand(y_expr)
+        x_ptr = self._lower_float64_operand(x_expr)
+
+        # Allocate 8 bytes on stack for result
+        result_ptr = self.builder.new_vreg(IRType.PTR, "_f64_atan2_result")
+        self.builder.emit(IRInstr(
+            OpCode.SUB,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            Immediate(8, IRType.WORD),
+            comment="allocate 8 bytes for atan2 result"
+        ))
+        self.builder.emit(IRInstr(
+            OpCode.MOV, result_ptr,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.PTR),
+            comment="result_ptr = SP"
+        ))
+
+        # Push arguments: result_ptr (IX+8), x_ptr (IX+6), y_ptr (IX+4)
+        self.builder.push(result_ptr)   # result location (IX+8)
+        self.builder.push(x_ptr)        # x operand (IX+6)
+        self.builder.push(y_ptr)        # y operand (IX+4)
+
+        self.builder.call(Label("_f64_at2"))
+
+        # Clean up pushed arguments (3 pointers = 6 bytes)
+        self.builder.emit(IRInstr(
+            OpCode.ADD,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            Immediate(6, IRType.WORD),
+            comment="pop atan2 args"
+        ))
+
+        return result_ptr
+
     def _lower_float64_exp_func(self, operand_expr):
         """Lower Float64 exp function call (Ada.Numerics.Elementary_Functions.Exp).
 
@@ -14062,7 +14107,14 @@ class ASTLowering:
                 arg_expr = expr.indices[0]
                 arg_type = self._get_expr_type(arg_expr)
                 if self._is_float64_type(arg_type):
-                    # Float64 arctan - call _f64_atan
+                    # Check for two-argument form: Arctan(Y, X)
+                    if len(expr.indices) >= 2:
+                        x_expr = expr.indices[1]
+                        x_type = self._get_expr_type(x_expr)
+                        if self._is_float64_type(x_type):
+                            # Float64 atan2 - call _f64_atan2(y, x)
+                            return self._lower_float64_atan2(arg_expr, x_expr)
+                    # Single-argument form: Arctan(X)
                     return self._lower_float64_atan(arg_expr)
 
             # Check if this is Ada.Numerics.Elementary_Functions.Arcsin for Float64
