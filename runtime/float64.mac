@@ -63,6 +63,7 @@
         PUBLIC  _f64_sin        ; Sine (Taylor series)
         PUBLIC  _f64_cos        ; Cosine (Taylor series)
         PUBLIC  _f64_tan        ; Tangent (sin/cos)
+        PUBLIC  _f64_atan       ; Arctangent (Taylor series)
         PUBLIC  _f64_e2x        ; Exponential e^x (Taylor series, 8-char name to avoid collision with _f64_exp_int)
         PUBLIC  _f64_log        ; Natural logarithm ln(x)
 
@@ -3953,6 +3954,273 @@ _f64_tan:
         ret
 
 ; =============================================================================
+; _f64_atan: Arctangent function using Taylor series
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = atan(x)
+;
+; Uses Taylor series: atan(x) = x - x³/3 + x⁵/5 - x⁷/7 + ...
+; For |x| > 1: atan(x) = π/2 - atan(1/x) if x > 0
+;              atan(x) = -π/2 - atan(1/x) if x < 0
+; =============================================================================
+_f64_atan:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input to _atan_x
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _atan_x
+        ld      bc, 8
+        ldir
+
+        ; Save original sign and work with absolute value
+        ld      a, (_atan_x + 7)
+        ld      (_atan_sign), a
+        and     7Fh
+        ld      (_atan_x + 7), a
+
+        ; Check if |x| > 1 (need argument reduction)
+        ; Compare exponent with 1.0 (exponent 0x3FF)
+        ld      a, (_atan_x + 7)
+        cp      3Fh
+        jr      c, _atan_small  ; exponent < 0x3F, so |x| < 1
+        jr      nz, _atan_large ; exponent > 0x3F, so |x| > 1
+        ; Exponent byte 7 is 0x3F, check byte 6
+        ld      a, (_atan_x + 6)
+        cp      0F0h
+        jr      c, _atan_small  ; |x| < 1
+        ; |x| >= 1, check if exactly 1.0 or larger
+        jr      _atan_large
+
+_atan_large:
+        ; |x| > 1: use atan(x) = π/2 - atan(1/x)
+        ; Set reduction flag
+        ld      a, 1
+        ld      (_atan_reduce), a
+
+        ; Compute 1/x -> _atan_x
+        ld      hl, _atan_x
+        push    hl              ; result_ptr
+        ld      hl, _atan_x
+        push    hl              ; divisor (x)
+        ld      hl, _const_one_f64
+        push    hl              ; dividend (1.0)
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+        jr      _atan_taylor
+
+_atan_small:
+        ; |x| <= 1, no reduction needed
+        xor     a
+        ld      (_atan_reduce), a
+
+_atan_taylor:
+        ; Taylor series: atan(x) = x - x³/3 + x⁵/5 - x⁷/7 + ...
+        ; Initialize result = x
+        ld      hl, _atan_x
+        ld      de, _atan_res
+        ld      bc, 8
+        ldir
+
+        ; Compute x² -> _atan_x2
+        ld      hl, _atan_x2
+        push    hl
+        ld      hl, _atan_x
+        push    hl
+        ld      hl, _atan_x
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; x³ = x² * x -> _atan_xn
+        ld      hl, _atan_xn
+        push    hl
+        ld      hl, _atan_x
+        push    hl
+        ld      hl, _atan_x2
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 2: - x³/3
+        ld      hl, _atan_term
+        push    hl
+        ld      hl, _const_3
+        push    hl
+        ld      hl, _atan_xn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _atan_res
+        push    hl
+        ld      hl, _atan_term
+        push    hl
+        ld      hl, _atan_res
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; x⁵ = x³ * x²
+        ld      hl, _atan_xn
+        push    hl
+        ld      hl, _atan_x2
+        push    hl
+        ld      hl, _atan_xn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 3: + x⁵/5
+        ld      hl, _atan_term
+        push    hl
+        ld      hl, _const_5
+        push    hl
+        ld      hl, _atan_xn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _atan_res
+        push    hl
+        ld      hl, _atan_term
+        push    hl
+        ld      hl, _atan_res
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; x⁷ = x⁵ * x²
+        ld      hl, _atan_xn
+        push    hl
+        ld      hl, _atan_x2
+        push    hl
+        ld      hl, _atan_xn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 4: - x⁷/7
+        ld      hl, _atan_term
+        push    hl
+        ld      hl, _const_7
+        push    hl
+        ld      hl, _atan_xn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _atan_res
+        push    hl
+        ld      hl, _atan_term
+        push    hl
+        ld      hl, _atan_res
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; x⁹ = x⁷ * x²
+        ld      hl, _atan_xn
+        push    hl
+        ld      hl, _atan_x2
+        push    hl
+        ld      hl, _atan_xn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 5: + x⁹/9
+        ld      hl, _atan_term
+        push    hl
+        ld      hl, _const_9
+        push    hl
+        ld      hl, _atan_xn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _atan_res
+        push    hl
+        ld      hl, _atan_term
+        push    hl
+        ld      hl, _atan_res
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Check if argument reduction was applied
+        ld      a, (_atan_reduce)
+        or      a
+        jr      z, _atan_apply_sign
+
+        ; Apply reduction: result = π/2 - result
+        ld      hl, _atan_res
+        push    hl
+        ld      hl, _atan_res
+        push    hl
+        ld      hl, _const_pi2
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+_atan_apply_sign:
+        ; Apply original sign
+        ld      a, (_atan_sign)
+        and     80h
+        ld      b, a
+        ld      a, (_atan_res + 7)
+        and     7Fh
+        or      b
+        ld      (_atan_res + 7), a
+
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _atan_res
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
 ; _f64_e2x: Exponential function e^x using Taylor series
 ; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
 ; Output: result = e^x
@@ -4729,6 +4997,19 @@ _const_4:
 _const_5:
         DB      00h, 00h, 00h, 00h, 00h, 00h, 14h, 40h
 
+; 7.0 = 0x401C000000000000
+_const_7:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 1Ch, 40h
+
+; 9.0 = 0x4022000000000000
+_const_9:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 22h, 40h
+
+; π/2 = 1.5707963267948966
+; Hex: 0x3FF921FB54442D18
+_const_pi2:
+        DB      18h, 2Dh, 44h, 54h, 0FBh, 21h, 0F9h, 3Fh
+
 ; ln(2) = 0.6931471805599453
 ; Hex: 0x3FE62E42FEFA39EF
 _const_ln2:
@@ -4830,5 +5111,14 @@ _log_term:      DS      8       ; Current term
 _log_result:    DS      8       ; Running result
 _log_exp:       DS      2       ; Exponent e (signed integer)
 _log_e_float:   DS      8       ; e as float
+
+; Temporary storage for atan function
+_atan_x:        DS      8       ; Input value (after reduction)
+_atan_x2:       DS      8       ; x²
+_atan_xn:       DS      8       ; Current power (x³, x⁵, x⁷, ...)
+_atan_term:     DS      8       ; Current term
+_atan_res:      DS      8       ; Running result
+_atan_sign:     DS      1       ; Original sign
+_atan_reduce:   DS      1       ; Flag: 1 if |x| > 1 reduction applied
 
         END

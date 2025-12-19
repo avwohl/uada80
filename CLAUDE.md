@@ -4,8 +4,8 @@
 
 **Session accomplished:**
 - Fixed Float64 exponentiation (**) regression caused by symbol collision
-- Added tan, exp, log functions for Long_Float (Float64)
-- All tests: 6915/6915 pass (130 execution tests)
+- Added tan, exp, log, arctan functions for Long_Float (Float64)
+- All tests: 6916/6916 pass (131 execution tests)
 
 **Critical fix: 8-character symbol truncation bug**
 - um80 assembler truncates symbols to 8 characters
@@ -16,6 +16,7 @@
 
 **New Float64 functions:**
 - `_f64_tan`: tan(x) = sin(x)/cos(x)
+- `_f64_atan`: arctan(x) using Taylor series with argument reduction for |x| > 1
 - `_f64_e2x`: e^x using Taylor series with argument reduction via ln(2)
 - `_f64_log`: ln(x) using IEEE 754 decomposition + Taylor series
 
@@ -24,10 +25,10 @@
 - Comparison: eq, ne, lt, le, gt, ge
 - Conversion: itof, ftoi
 - Rounding: floor, ceiling, truncation, rounding
-- Math: sqrt, sin, cos, tan, exp, log
+- Math: sqrt, sin, cos, tan, arctan, exp, log
 
 **Next steps to consider:**
-- Additional elementary functions (atan, asin, acos)
+- Additional elementary functions (asin, acos)
 - MP/M tasking support
 
 ---
