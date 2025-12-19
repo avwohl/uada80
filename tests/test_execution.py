@@ -3464,6 +3464,34 @@ def test_long_float_arctanh():
 
 
 @skip_if_no_tools
+def test_long_float_log10():
+    """Test Ada.Numerics.Elementary_Functions.Log10 for Long_Float."""
+    # Test log10(100.0) = 2.0
+    # log10(100.0) * 1000 = 2000
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    with Ada.Numerics.Elementary_Functions;
+    procedure Test is
+        X : Long_Float := 100.0;
+        Y : Long_Float;
+        R : Integer;
+    begin
+        Y := Ada.Numerics.Elementary_Functions.Log10(X);
+        R := Integer(Y * 1000.0);
+        Ada.Integer_Text_IO.Put(R);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    val = int(stdout.strip())
+    # log10(100.0) = 2.0, so *1000 = 2000 (allow some tolerance)
+    assert 1990 <= val <= 2010, f"Expected log10(100.0)*1000=2000, got: {val}"
+
+
+@skip_if_no_tools
 def test_integer_exponentiation():
     """Test Integer ** Natural exponentiation."""
     source = """
