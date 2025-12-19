@@ -7339,6 +7339,48 @@ class ASTLowering:
 
         return result_ptr
 
+    def _lower_float64_tan(self, operand_expr):
+        """Lower Float64 tan function call.
+
+        Calls _f64_tan(result_ptr, src_ptr).
+        Stack layout after call:
+          - IX+4 = src_ptr (Float64 pointer)
+          - IX+6 = result_ptr (Float64 pointer)
+        """
+        # Get the operand as a Float64 pointer
+        operand_ptr = self._lower_float64_operand(operand_expr)
+
+        # Allocate 8 bytes on stack for result
+        result_ptr = self.builder.new_vreg(IRType.PTR, "_f64_tan_result")
+        self.builder.emit(IRInstr(
+            OpCode.SUB,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            Immediate(8, IRType.WORD),
+            comment="allocate 8 bytes for tan result"
+        ))
+        self.builder.emit(IRInstr(
+            OpCode.MOV, result_ptr,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.PTR),
+            comment="result_ptr = SP"
+        ))
+
+        # Push arguments: result_ptr (IX+6), src_ptr (IX+4)
+        self.builder.push(result_ptr)   # result location (IX+6)
+        self.builder.push(operand_ptr)  # source operand (IX+4)
+
+        self.builder.call(Label("_f64_tan"))
+
+        # Clean up pushed arguments (2 pointers = 4 bytes)
+        self.builder.emit(IRInstr(
+            OpCode.ADD,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            Immediate(4, IRType.WORD),
+            comment="pop tan args"
+        ))
+
+        return result_ptr
+
     def _lower_declare_expr(self, expr: DeclareExpr):
         """Lower a declare expression (Ada 2022).
 
@@ -13795,6 +13837,14 @@ class ASTLowering:
                 if self._is_float64_type(arg_type):
                     # Float64 cos - call _f64_cos
                     return self._lower_float64_cos(arg_expr)
+
+            # Check if this is Ada.Numerics.Elementary_Functions.Tan for Float64
+            if selector == "tan" and expr.indices and len(expr.indices) >= 1:
+                arg_expr = expr.indices[0]
+                arg_type = self._get_expr_type(arg_expr)
+                if self._is_float64_type(arg_type):
+                    # Float64 tan - call _f64_tan
+                    return self._lower_float64_tan(arg_expr)
 
             # Check if this is a record field that is an array (not a function call)
             # E.g., X.Values(2) where X is a record with array field Values
