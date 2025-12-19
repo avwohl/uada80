@@ -3380,6 +3380,34 @@ def test_long_float_tanh():
 
 
 @skip_if_no_tools
+def test_long_float_coth():
+    """Test Ada.Numerics.Elementary_Functions.Coth for Long_Float."""
+    # Test coth(1.0) = 1/tanh(1.0) ≈ 1/0.7616 ≈ 1.3130
+    # coth(1.0) ≈ 1.3130 -> *1000 = 1313
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    with Ada.Numerics.Elementary_Functions;
+    procedure Test is
+        X : Long_Float := 1.0;
+        Y : Long_Float;
+        R : Integer;
+    begin
+        Y := Ada.Numerics.Elementary_Functions.Coth(X);
+        R := Integer(Y * 1000.0);
+        Ada.Integer_Text_IO.Put(R);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    val = int(stdout.strip())
+    # coth(1.0) ≈ 1.3130, so *1000 ≈ 1313 (allow some tolerance for Z80 precision)
+    assert 1298 <= val <= 1328, f"Expected coth(1.0)*1000≈1313, got: {val}"
+
+
+@skip_if_no_tools
 def test_long_float_arcsinh():
     """Test Ada.Numerics.Elementary_Functions.Arcsinh for Long_Float."""
     # Test arcsinh(1.0) = ln(1 + sqrt(2)) ≈ 0.8814
