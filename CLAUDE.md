@@ -5,7 +5,8 @@
 **Session accomplished:**
 - Float64 sqrt function via Ada.Numerics.Elementary_Functions.Sqrt
 - Fixed argument push order bug in _f64_sqrt runtime Newton-Raphson
-- All tests: 125 execution tests, 6909/6910 pass (1 pre-existing failure)
+- Fixed record array field access being treated as function call
+- All tests: 6910/6910 pass (125 execution tests)
 
 **Float64 sqrt support:**
 - Added `_lower_float64_sqrt()` method for sqrt lowering
@@ -16,6 +17,12 @@
   - `_f64_div`/`_f64_add` expect: a_ptr(IX+4), b_ptr(IX+6), result_ptr(IX+8)
   - Was pushing in wrong order (a first instead of last)
   - Must push reverse: result_ptr first, then b_ptr, then a_ptr
+
+**Record array field access fix:**
+- The sqrt SelectedName handling was too aggressive
+- `X.Values(2)` was incorrectly treated as a function call
+- Fix: Check if SelectedName refers to record field with array type
+- If it's an array field, fall through to array indexing code path
 
 **Complete Float64 feature set:**
 - Arithmetic: add, sub, mul, div, rem, mod, neg, abs, exp_int (**)
