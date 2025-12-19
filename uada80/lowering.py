@@ -7213,6 +7213,48 @@ class ASTLowering:
 
         return result_ptr
 
+    def _lower_float64_sqrt(self, operand_expr):
+        """Lower Float64 sqrt function call.
+
+        Calls _f64_sqrt(result_ptr, src_ptr).
+        Stack layout after call:
+          - IX+4 = src_ptr (Float64 pointer)
+          - IX+6 = result_ptr (Float64 pointer)
+        """
+        # Get the operand as a Float64 pointer
+        operand_ptr = self._lower_float64_operand(operand_expr)
+
+        # Allocate 8 bytes on stack for result
+        result_ptr = self.builder.new_vreg(IRType.PTR, "_f64_sqrt_result")
+        self.builder.emit(IRInstr(
+            OpCode.SUB,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            Immediate(8, IRType.WORD),
+            comment="allocate 8 bytes for sqrt result"
+        ))
+        self.builder.emit(IRInstr(
+            OpCode.MOV, result_ptr,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.PTR),
+            comment="result_ptr = SP"
+        ))
+
+        # Push arguments: result_ptr (IX+6), src_ptr (IX+4)
+        self.builder.push(result_ptr)   # result location (IX+6)
+        self.builder.push(operand_ptr)  # source operand (IX+4)
+
+        self.builder.call(Label("_f64_sqrt"))
+
+        # Clean up pushed arguments (2 pointers = 4 bytes)
+        self.builder.emit(IRInstr(
+            OpCode.ADD,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            Immediate(4, IRType.WORD),
+            comment="pop sqrt args"
+        ))
+
+        return result_ptr
+
     def _lower_declare_expr(self, expr: DeclareExpr):
         """Lower a declare expression (Ada 2022).
 
@@ -9174,6 +9216,13 @@ class ASTLowering:
             self.builder.emit(IRInstr(OpCode.OR, result, right_part, left_part,
                                       comment="Rotate_Right: combine parts"))
             return result
+
+        # Handle Ada.Numerics.Elementary_Functions.Sqrt for Float64
+        if func_name == "sqrt" and len(expr.args) >= 1:
+            arg_type = self._get_expr_type(expr.args[0].value)
+            if self._is_float64_type(arg_type):
+                # Float64 sqrt - call _f64_sqrt
+                return self._lower_float64_sqrt(expr.args[0].value)
 
         if isinstance(expr.name, Identifier):
             # Resolve overloaded function
@@ -13632,6 +13681,28 @@ class ASTLowering:
                     args = [ActualParameter(name=None, value=idx) for idx in expr.indices]
                 func_call = FunctionCall(name=expr.prefix, args=args)
                 return self._lower_function_call(func_call)
+
+        # Handle SelectedName prefix - this is for package-qualified function calls
+        # like Ada.Numerics.Elementary_Functions.Sqrt(X)
+        if isinstance(expr.prefix, SelectedName):
+            selector = expr.prefix.selector.lower()
+
+            # Check if this is Ada.Numerics.Elementary_Functions.Sqrt for Float64
+            if selector == "sqrt" and expr.indices and len(expr.indices) >= 1:
+                arg_expr = expr.indices[0]
+                arg_type = self._get_expr_type(arg_expr)
+                if self._is_float64_type(arg_type):
+                    # Float64 sqrt - call _f64_sqrt
+                    return self._lower_float64_sqrt(arg_expr)
+
+            # For other SelectedName function calls, treat as function call
+            # Build the FunctionCall and dispatch
+            if expr.actual_params:
+                args = expr.actual_params
+            else:
+                args = [ActualParameter(name=None, value=idx) for idx in expr.indices]
+            func_call = FunctionCall(name=expr.prefix, args=args)
+            return self._lower_function_call(func_call)
 
         # Get array base address
         base_addr = self._get_array_base(expr.prefix)
