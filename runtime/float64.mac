@@ -72,6 +72,7 @@
         PUBLIC  _f64_tanh       ; Hyperbolic tangent
         PUBLIC  _f64_asnh       ; Inverse hyperbolic sine (arcsinh)
         PUBLIC  _f64_acsh       ; Inverse hyperbolic cosine (arccosh)
+        PUBLIC  _f64_atnh       ; Inverse hyperbolic tangent (arctanh)
         PUBLIC  _f64_e2x        ; Exponential e^x (Taylor series, 8-char name to avoid collision with _f64_exp_int)
         PUBLIC  _f64_log        ; Natural logarithm ln(x)
 
@@ -5002,6 +5003,97 @@ _f64_acsh:
         ret
 
 ; =============================================================================
+; _f64_atnh: Inverse hyperbolic tangent using arctanh(x) = (1/2) * ln((1+x)/(1-x))
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = arctanh(x)
+; Note: Only valid for |x| < 1
+; =============================================================================
+_f64_atnh:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input to _atnh_x
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _atnh_x
+        ld      bc, 8
+        ldir
+
+        ; Compute 1 + x -> _atnh_num
+        ld      hl, _atnh_num
+        push    hl
+        ld      hl, _atnh_x
+        push    hl
+        ld      hl, _const_one_f64
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute 1 - x -> _atnh_den
+        ld      hl, _atnh_den
+        push    hl
+        ld      hl, _atnh_x
+        push    hl
+        ld      hl, _const_one_f64
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute (1 + x) / (1 - x) -> _atnh_quo
+        ld      hl, _atnh_quo
+        push    hl
+        ld      hl, _atnh_den
+        push    hl
+        ld      hl, _atnh_num
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute ln((1 + x) / (1 - x)) -> _atnh_log
+        ld      hl, _atnh_log
+        push    hl
+        ld      hl, _atnh_quo
+        push    hl
+        call    _f64_log
+        pop     hl
+        pop     hl
+
+        ; Compute ln / 2 -> _atnh_res
+        ld      hl, _atnh_res
+        push    hl
+        ld      hl, _const_2
+        push    hl
+        ld      hl, _atnh_log
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _atnh_res
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
 ; _f64_e2x: Exponential function e^x using Taylor series
 ; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
 ; Output: result = e^x
@@ -5960,5 +6052,13 @@ _acsh_t1:       DS      8       ; x² - 1
 _acsh_t2:       DS      8       ; sqrt(x² - 1)
 _acsh_t3:       DS      8       ; x + sqrt(x² - 1)
 _acsh_res:      DS      8       ; Result: ln(x + sqrt(x² - 1))
+
+; Temporary storage for arctanh function
+_atnh_x:        DS      8       ; Input value
+_atnh_num:      DS      8       ; 1 + x
+_atnh_den:      DS      8       ; 1 - x
+_atnh_quo:      DS      8       ; (1 + x) / (1 - x)
+_atnh_log:      DS      8       ; ln((1 + x) / (1 - x))
+_atnh_res:      DS      8       ; Result: (1/2) * ln((1 + x) / (1 - x))
 
         END
