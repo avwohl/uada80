@@ -7798,6 +7798,35 @@ class ASTLowering:
 
         return result
 
+    def _lower_float64_arccoth(self, operand_expr):
+        """arccoth(x) = 0.5 * log((x + 1) / (x - 1))
+
+        Matches Ada implementation in adalib/ada-numerics-elementary_functions.adb
+        """
+        x_ptr = self._lower_float64_operand(operand_expr)
+
+        # x_plus_1 = x + 1
+        x_plus_1 = self._f64_alloc_temp("x_plus_1")
+        self._f64_call_binary("_f64_add", x_plus_1, x_ptr, Label("_const_one_f64"))
+
+        # x_minus_1 = x - 1
+        x_minus_1 = self._f64_alloc_temp("x_minus_1")
+        self._f64_call_binary("_f64_sub", x_minus_1, x_ptr, Label("_const_one_f64"))
+
+        # ratio = (x + 1) / (x - 1)
+        ratio = self._f64_alloc_temp("ratio")
+        self._f64_call_binary("_f64_div", ratio, x_plus_1, x_minus_1)
+
+        # log_ratio = log((x + 1) / (x - 1))
+        log_ratio = self._f64_alloc_temp("log_ratio")
+        self._f64_call_unary("_f64_log", log_ratio, ratio)
+
+        # result = log_ratio / 2.0 (equivalent to 0.5 * log_ratio)
+        result = self._f64_alloc_temp("arccoth_result")
+        self._f64_call_binary("_f64_div", result, log_ratio, Label("_const_2"))
+
+        return result
+
     def _lower_float64_exp_func(self, operand_expr):
         """Lower Float64 exp function call (Ada.Numerics.Elementary_Functions.Exp).
 
@@ -14449,6 +14478,14 @@ class ASTLowering:
                 if self._is_float64_type(arg_type):
                     # Float64 arctanh - call _f64_atnh
                     return self._lower_float64_arctanh(arg_expr)
+
+            # Check if this is Ada.Numerics.Elementary_Functions.Arccoth for Float64
+            if selector == "arccoth" and expr.indices and len(expr.indices) >= 1:
+                arg_expr = expr.indices[0]
+                arg_type = self._get_expr_type(arg_expr)
+                if self._is_float64_type(arg_type):
+                    # Float64 arccoth - inlined as 0.5 * log((x+1)/(x-1))
+                    return self._lower_float64_arccoth(arg_expr)
 
             # Check if this is Ada.Numerics.Elementary_Functions.Exp for Float64
             if selector == "exp" and expr.indices and len(expr.indices) >= 1:
