@@ -3492,6 +3492,34 @@ def test_long_float_arctanh():
 
 
 @skip_if_no_tools
+def test_long_float_arccoth():
+    """Test Ada.Numerics.Elementary_Functions.Arccoth for Long_Float."""
+    # Test arccoth(2.0) = 0.5 * ln((2+1)/(2-1)) = 0.5 * ln(3) ≈ 0.5493
+    # arccoth(2.0) ≈ 0.5493 -> *1000 = 549
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    with Ada.Numerics.Elementary_Functions;
+    procedure Test is
+        X : Long_Float := 2.0;
+        Y : Long_Float;
+        R : Integer;
+    begin
+        Y := Ada.Numerics.Elementary_Functions.Arccoth(X);
+        R := Integer(Y * 1000.0);
+        Ada.Integer_Text_IO.Put(R);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    val = int(stdout.strip())
+    # arccoth(2.0) ≈ 0.5493, so *1000 ≈ 549 (allow some tolerance)
+    assert 540 <= val <= 560, f"Expected arccoth(2.0)*1000≈549, got: {val}"
+
+
+@skip_if_no_tools
 def test_long_float_log10():
     """Test Ada.Numerics.Elementary_Functions.Log10 for Long_Float."""
     # Test log10(100.0) = 2.0
