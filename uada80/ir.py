@@ -314,6 +314,7 @@ class IRModule:
     float64_constants: dict[str, bytes] = field(default_factory=dict)  # label -> 8 bytes IEEE 754
     vtables: dict[str, list[str]] = field(default_factory=dict)  # vtable_name -> [proc_names]
     runtime_deps: set[str] = field(default_factory=set)  # Runtime routines needed from libada.lib
+    enum_tables: dict[str, list[tuple[str, int]]] = field(default_factory=dict)  # label -> [(name, value)]
 
     def add_function(self, func: IRFunction) -> None:
         """Add a function to the module."""
@@ -330,6 +331,10 @@ class IRModule:
     def add_float64(self, label: str, value: bytes) -> None:
         """Add a Float64 constant (8 bytes IEEE 754 little-endian)."""
         self.float64_constants[label] = value
+
+    def add_enum_table(self, label: str, entries: list[tuple[str, int]]) -> None:
+        """Add an enumeration lookup table for 'Value attribute."""
+        self.enum_tables[label] = entries
 
     def need_runtime(self, routine_name: str) -> None:
         """Mark a runtime library routine as needed."""

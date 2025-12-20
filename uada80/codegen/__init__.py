@@ -146,6 +146,19 @@ class Z80CodeGen:
                     self._emit(f"    DW {proc_name}  ; slot {proc_names.index(proc_name)}")
             self._emit("")
 
+        # Generate enumeration lookup tables for 'Value attribute
+        if module.enum_tables:
+            self._emit("; Enumeration lookup tables for 'Value attribute")
+            self._emit("    CSEG")
+            for label, entries in module.enum_tables.items():
+                self._emit(f"{label}:")
+                self._emit(f"    DB {len(entries)}  ; count")
+                for name, value in entries:
+                    # Store uppercase name (null-terminated) followed by value byte
+                    escaped = name.upper().replace('"', '\\"')
+                    self._emit(f'    DB "{escaped}", 0, {value}')
+            self._emit("")
+
         # Generate code
         self._emit("    CSEG")
         self._emit("")

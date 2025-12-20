@@ -1442,6 +1442,106 @@ _s2b_done:
     RET
 
 ; ============================================================
+; _e_val - Enumeration'Value: lookup string in enum table
+; Input on stack:
+;   IX+4 = table pointer (pushed last)
+;   IX+6 = string pointer (pushed first)
+; Output: HL = enumeration value (position)
+; Table format:
+;   1 byte: count of entries
+;   For each entry: null-terminated UPPERCASE string, then 1-byte value
+; Notes:
+;   - Case-insensitive comparison
+;   - Returns 0 if not found (should raise Constraint_Error)
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _e_val
+_e_val:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+
+    ; Get table pointer (IX+4)
+    LD L, (IX+4)
+    LD H, (IX+5)
+    ; HL = table pointer
+
+    ; Read count
+    LD A, (HL)
+    INC HL
+    LD B, A                 ; B = count of entries
+    OR A
+    JR Z, _ev_not_found     ; Empty table
+
+_ev_loop:
+    PUSH BC                 ; Save count
+    PUSH HL                 ; Save current table position
+
+    ; Get search string pointer (IX+6)
+    LD E, (IX+6)
+    LD D, (IX+7)
+    ; DE = search string pointer
+    ; HL = table entry string pointer
+
+    ; Compare strings (case-insensitive)
+_ev_cmp:
+    LD A, (DE)              ; Get search char
+    ; Convert to uppercase
+    CP 'a'
+    JR C, _ev_no_upper1
+    CP 'z'+1
+    JR NC, _ev_no_upper1
+    AND 0DFH                ; Convert to uppercase
+_ev_no_upper1:
+    LD C, A                 ; C = uppercase search char
+
+    LD A, (HL)              ; Get table char (already uppercase)
+    CP C
+    JR NZ, _ev_next_entry   ; Mismatch
+
+    ; Characters match - check if end of both strings
+    OR A                    ; Was it null terminator?
+    JR Z, _ev_found         ; Yes, both strings ended - match!
+
+    INC HL
+    INC DE
+    JR _ev_cmp
+
+_ev_next_entry:
+    ; Strings don't match - skip to end of this entry
+    POP HL                  ; Restore table position
+    ; Skip past string to find null
+_ev_skip_str:
+    LD A, (HL)
+    INC HL
+    OR A
+    JR NZ, _ev_skip_str
+    ; HL now points to value byte
+    INC HL                  ; Skip value byte, point to next entry
+
+    POP BC                  ; Restore count
+    DJNZ _ev_loop           ; Next entry
+
+_ev_not_found:
+    ; Not found - return 0
+    LD HL, 0
+    JR _ev_done
+
+_ev_found:
+    ; Match found!
+    ; HL points to the null terminator
+    POP DE                  ; Discard saved table position
+    POP BC                  ; Discard saved count
+    INC HL                  ; Skip null to get value byte
+    LD L, (HL)              ; Get value
+    LD H, 0
+    ; Fall through to done
+
+_ev_done:
+    POP IX
+    RET
+
+; ============================================================
 ; Character I/O
 ; ============================================================
 
