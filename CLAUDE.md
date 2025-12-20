@@ -1,6 +1,42 @@
 # Claude Code Notes for UADA80
 
-## Session (2025-12-20) - MP/M II Tasking
+## Session (2025-12-20) - Protected Types Working
+
+**Session accomplished:**
+- Fixed protected type implementation - basic protected objects now work correctly
+- Created separate `protlock.mac` module to fix linker symbol resolution issue
+- Added ProtectedType handling in semantic analyzer for `Counter.Increment` syntax
+- Added `test_protected_type_basic` execution test
+
+**Protected Type Implementation:**
+- Single protected objects (protected Counter is...) compile and execute correctly
+- Protected procedures and functions work with proper lock/unlock semantics
+- Lock byte initialization and component access fixed in lowering.py
+- Byte store generation fixed in codegen for protected lock byte
+
+**Key Fixes:**
+1. **Linker symbol resolution** - TASKING module symbols pointed to wrong addresses
+   - Created `runtime/protlock.mac` with just `_PROT_LCK` and `_PROT_ULK`
+   - Linked before TASKING module so correct symbols take precedence
+2. **Semantic analysis** - `_analyze_selected_name` didn't handle ProtectedType
+   - Added lookup of operations in protected type for `Counter.Increment` syntax
+   - Returns function return type or None for procedures
+3. **Protected object initialization** - Lock byte and components properly initialized
+4. **Byte store generation** - Fixed `_gen_store` to handle `IRType.BYTE` correctly
+
+**Files Modified:**
+- `runtime/protlock.mac` (new) - Minimal protected lock/unlock module
+- `runtime/tasking.mac` - Removed lock/unlock code (now in protlock.mac)
+- `runtime/Makefile` - Added protlock.mac to build
+- `uada80/semantic.py` - Added ProtectedType handling
+- `uada80/lowering.py` - Protected object initialization and component access
+- `uada80/codegen/__init__.py` - Byte store generation fix
+
+**Tests:** 147 execution tests pass, 6932 total tests pass
+
+---
+
+## Previous Session (2025-12-20) - MP/M II Tasking
 
 **Session accomplished:**
 - Implemented MP/M II tasking runtime (`runtime/mpm_task.mac`)
@@ -251,8 +287,8 @@ pylint uada80/
 ### Current Status
 
 - **Pylint score**: 10.00/10
-- **Tests**: 6907/6907 passing
-- **Execution tests**: Skipped in CI (run locally with cpmemu)
+- **Tests**: 6932/6932 passing
+- **Execution tests**: 147 pass (skipped in CI, run locally with cpmemu)
 
 ---
 
@@ -269,7 +305,7 @@ pylint uada80/
 | **Code Gen**       | 90%      | Full Z80 assembly output, runtime calls    |
 | **Runtime**        | 70%      | Basic ops, I/O, exceptions; no tasking     |
 | **Standard Lib**   | 95%      | 1,094 packages in adalib/                  |
-| **Execution Tests**| 100%     | 120/120 pass (12 Float64 tests)            |
+| **Execution Tests**| 100%     | 147/147 pass (incl. protected types)       |
 | **OVERALL**        | **75%**  | Estimated ~3,200/4,725 ACATS tests         |
 
 ### Feature Completion by Category
@@ -294,7 +330,7 @@ Contracts (Pre/Post/Invariant)          [=== ] 90%
 Ada 2012 Features                       [=== ] 95%
 Ada 2022 Features                       [==  ] 70%
 Tasking                                 [==  ] 50%
-Protected Types                         [==  ] 50%
+Protected Types                         [=== ] 65%
 Real-Time / Concurrency                 [    ] 0%
 ```
 
