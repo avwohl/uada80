@@ -116,9 +116,12 @@ from uada80.type_system import (
     PREDEFINED_TYPES,
     AccessType,
     RecordType,
+    RecordComponent,
     ArrayType,
     EnumerationType,
     ProtectedType,
+    ProtectedOperation,
+    EntryInfo,
 )
 from uada80.semantic import SemanticResult
 
@@ -168,6 +171,8 @@ class LoweringContext:
     static_link: Optional[VReg] = None
     # Subprogram name (for lookup in nested subprogram calls)
     subprogram_name: str = ""
+    # Protected types declared in this scope: name -> ProtectedType
+    protected_types: dict[str, "ProtectedType"] = field(default_factory=dict)
 
 
 class ASTLowering:
@@ -1922,11 +1927,73 @@ class ASTLowering:
 
         Protected types provide mutual exclusion for their operations.
         The type includes a lock byte at offset 0 for synchronization.
+
+        For single protected objects (which is what most are), this creates
+        both the type AND allocates the object in the current stack frame.
         """
-        # Protected type declarations are handled during semantic analysis.
-        # The type layout is computed there (lock byte + components).
-        # We just need to ensure the protected operations are registered.
-        pass
+        if self.ctx is None:
+            return
+
+        # Build protected type info from the declaration
+        entries = []
+        operations = []
+        components = []
+
+        for item in decl.items:
+            if isinstance(item, EntryDecl):
+                entries.append(EntryInfo(
+                    name=item.name,
+                    parameter_types=[],
+                ))
+            elif isinstance(item, SubprogramDecl):
+                operations.append(ProtectedOperation(
+                    name=item.name,
+                    kind="function" if item.is_function else "procedure",
+                    parameter_types=[],
+                    return_type=None,
+                ))
+            elif isinstance(item, ObjectDecl):
+                # Private component - calculate size
+                from uada80.type_system import IntegerType
+                for name in item.names:
+                    comp_size = self._calc_type_size(item, [])
+                    # Use a simple Integer type as placeholder for component_type
+                    comp_type = IntegerType(name="Integer", size_bits=comp_size * 8)
+                    components.append(RecordComponent(
+                        name=name,
+                        component_type=comp_type,
+                        offset_bits=0,
+                        size_bits=comp_size * 8,
+                    ))
+
+        # Create the protected type
+        prot_type = ProtectedType(
+            name=decl.name,
+            entries=entries,
+            operations=operations,
+            components=components,
+        )
+
+        # Register in context for later lookup
+        self.ctx.protected_types[decl.name.lower()] = prot_type
+
+        # Allocate stack space for the protected object instance
+        # Layout: 1-byte lock + components
+        total_size = 1  # Lock byte
+        for comp in components:
+            comp_bytes = (comp.size_bits // 8) if comp.size_bits else 2
+            total_size += comp_bytes
+
+        # Create a local variable for the protected object
+        vreg = self.builder.new_vreg(IRType.WORD, decl.name)
+        self.ctx.locals[decl.name.lower()] = LocalVariable(
+            name=decl.name,
+            vreg=vreg,
+            stack_offset=self.ctx.locals_size,
+            size=total_size,
+            ada_type=prot_type,
+        )
+        self.ctx.locals_size += total_size
 
     def _lower_protected_body(self, decl: ProtectedBody) -> None:
         """Lower a protected body (implementation of protected operations).
@@ -1936,17 +2003,26 @@ class ASTLowering:
         if self.ctx is None:
             return
 
-        # Get the protected type information
-        prot_sym = self.symbols.lookup(decl.name)
-        if not prot_sym or not isinstance(prot_sym.ada_type, ProtectedType):
+        # Get the protected type information from ctx.protected_types first
+        prot_name = decl.name.lower()
+        prot_type = None
+        if prot_name in self.ctx.protected_types:
+            prot_type = self.ctx.protected_types[prot_name]
+        else:
+            # Fallback to symbol table lookup
+            prot_sym = self.symbols.lookup(decl.name)
+            if prot_sym and isinstance(prot_sym.ada_type, ProtectedType):
+                prot_type = prot_sym.ada_type
+
+        if prot_type is None:
             return
 
         # Lower each operation body with lock wrapper
         for item in decl.items:
             if isinstance(item, SubprogramBody):
-                self._lower_protected_operation(decl.name, item, prot_sym.ada_type)
+                self._lower_protected_operation(decl.name, item, prot_type)
             elif isinstance(item, EntryBody):
-                self._lower_protected_entry(decl.name, item, prot_sym.ada_type)
+                self._lower_protected_entry(decl.name, item, prot_type)
 
     def _lower_protected_operation(self, prot_name: str, body: SubprogramBody, prot_type: ProtectedType) -> None:
         """Lower a protected operation (procedure/function) body.
@@ -1956,14 +2032,21 @@ class ASTLowering:
         2. Execute operation body
         3. Release lock
         """
-        # Save current context
+        # Save current builder and context state
+        old_function = self.builder.function
+        old_block = self.builder.block
         old_ctx = self.ctx
 
         # Create the operation name (Protected_Name.Operation_Name)
-        op_name = f"{prot_name}_{body.name}"
+        op_name = f"{prot_name}_{body.spec.name}"
+
+        # Determine return type for functions
+        return_type = IRType.VOID
+        if body.spec.is_function:
+            return_type = IRType.WORD  # Default to WORD for Integer return
 
         # Create IR function for this operation
-        ir_func = IRFunction(name=op_name, return_type=IRType.VOID)
+        ir_func = IRFunction(name=op_name, return_type=return_type)
         if self.builder.module:
             self.builder.module.functions.append(ir_func)
 
@@ -1988,14 +2071,15 @@ class ASTLowering:
         self.builder.pop(temp)
 
         # Lower the parameters (after the implicit protected object param)
-        self._setup_parameters(body.params)
+        for param in body.spec.parameters:
+            self._lower_parameter(param)
 
         # Lower the declarations
-        for d in body.decls:
+        for d in body.declarations:
             self._lower_declaration(d)
 
         # Lower the statements
-        for stmt in body.stmts:
+        for stmt in body.statements:
             self._lower_statement(stmt)
 
         # Emit lock release before return
@@ -2004,14 +2088,16 @@ class ASTLowering:
         self.builder.pop(temp)
 
         # Return
-        if body.subprogram_kind == "function":
+        if body.spec.is_function:
             # Function: result was set in local "_result"
             result_local = self.ctx.locals.get("_result")
             if result_local:
                 self.builder.push(result_local.vreg)
         self.builder.ret()
 
-        # Restore context
+        # Restore builder and context state
+        self.builder.function = old_function
+        self.builder.block = old_block
         self.ctx = old_ctx
 
     def _lower_protected_entry(self, prot_name: str, entry: EntryBody, prot_type: ProtectedType) -> None:
@@ -4252,6 +4338,61 @@ class ASTLowering:
             self._lower_deallocation_call(stmt.args)
             return
 
+        # Check if this is a protected type operation call (Counter.Increment)
+        if isinstance(stmt.name, SelectedName):
+            prefix = stmt.name.prefix
+            selector = stmt.name.selector
+
+            # Check if prefix is a protected object
+            if isinstance(prefix, Identifier):
+                prefix_name = prefix.name.lower()
+
+                # First check ctx.protected_types (set during lowering)
+                prot_type = None
+                if self.ctx and prefix_name in self.ctx.protected_types:
+                    prot_type = self.ctx.protected_types[prefix_name]
+                else:
+                    # Fallback to symbol table lookup
+                    prot_sym = self.symbols.lookup(prefix_name) if self.symbols else None
+                    if prot_sym and hasattr(prot_sym, 'ada_type') and isinstance(prot_sym.ada_type, ProtectedType):
+                        prot_type = prot_sym.ada_type
+
+                if prot_type:
+                    # This is a call to a protected operation
+                    # Generate: push protected object address, then call operation
+                    prot_type_name = prot_type.name if hasattr(prot_type, 'name') else prefix_name
+                    op_name = f"{prot_type_name}_{selector}"
+
+                    # Get address of protected object (it's a local variable)
+                    if self.ctx and prefix_name in self.ctx.locals:
+                        local = self.ctx.locals[prefix_name]
+                        prot_addr = self.builder.new_vreg(IRType.PTR, "_prot_obj")
+                        self.builder.emit(IRInstr(
+                            OpCode.LEA, prot_addr,
+                            MemoryLocation(ir_type=IRType.PTR, addr_vreg=local.vreg),
+                            comment=f"addr of protected object {prefix_name}"
+                        ))
+                        self.builder.push(prot_addr)
+                    else:
+                        # Protected object may be global or not found - push 0 as placeholder
+                        self.builder.push(Immediate(0, IRType.PTR))
+
+                    # Push any additional arguments
+                    if stmt.args:
+                        for arg in reversed(stmt.args):
+                            val = self._lower_expr(arg)
+                            self.builder.push(val)
+
+                    # Call the protected operation
+                    self.builder.call(Label(op_name), comment=f"call protected {selector}")
+
+                    # Clean up stack
+                    num_args = (len(stmt.args) if stmt.args else 0) + 1  # +1 for protected object
+                    for _ in range(num_args):
+                        temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                        self.builder.pop(temp)
+                    return
+
         if isinstance(stmt.name, Identifier):
             # Resolve overloaded procedure
             sym = self._resolve_overload(stmt.name.name, stmt.args)
@@ -6101,6 +6242,61 @@ class ASTLowering:
         """Lower a selected component (record field access or pointer dereference)."""
         if self.ctx is None:
             return Immediate(0, IRType.WORD)
+
+        # Check if this is a protected type function call (e.g., Counter.Value)
+        if isinstance(expr.prefix, Identifier):
+            prefix_name = expr.prefix.name.lower()
+            selector = expr.selector
+
+            # Check ctx.protected_types first
+            prot_type = None
+            if self.ctx and prefix_name in self.ctx.protected_types:
+                prot_type = self.ctx.protected_types[prefix_name]
+            else:
+                # Fallback to symbol table lookup
+                prot_sym = self.symbols.lookup(prefix_name) if self.symbols else None
+                if prot_sym and hasattr(prot_sym, 'ada_type') and isinstance(prot_sym.ada_type, ProtectedType):
+                    prot_type = prot_sym.ada_type
+
+            if prot_type:
+                # Check if the selector is a function in this protected type
+                for op in prot_type.operations:
+                    if op.name.lower() == selector.lower() and op.kind == "function":
+                        # It's a protected function call
+                        prot_type_name = prot_type.name if hasattr(prot_type, 'name') else prefix_name
+                        func_label = f"{prot_type_name}_{selector}"
+
+                        result = self.builder.new_vreg(IRType.WORD, "_prot_func_result")
+
+                        # Get address of protected object (it's a local variable)
+                        if prefix_name in self.ctx.locals:
+                            local = self.ctx.locals[prefix_name]
+                            prot_addr = self.builder.new_vreg(IRType.PTR, "_prot_obj")
+                            self.builder.emit(IRInstr(
+                                OpCode.LEA, prot_addr,
+                                MemoryLocation(ir_type=IRType.PTR, addr_vreg=local.vreg),
+                                comment=f"addr of protected object {prefix_name}"
+                            ))
+                            self.builder.push(prot_addr)
+                        else:
+                            # Protected object may be global or not found - push 0
+                            self.builder.push(Immediate(0, IRType.PTR))
+
+                        # Call the protected function
+                        self.builder.call(Label(func_label), comment=f"call protected function {selector}")
+
+                        # Capture result from HL
+                        self.builder.emit(IRInstr(
+                            OpCode.MOV, result,
+                            MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                            comment="capture protected function return from HL"
+                        ))
+
+                        # Clean up stack (just the protected object address)
+                        temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                        self.builder.pop(temp)
+
+                        return result
 
         # Check if this is a function call from a nested package (e.g., Inner.Get)
         if isinstance(expr.prefix, Identifier):
@@ -10392,6 +10588,69 @@ class ASTLowering:
             if self._is_float64_type(arg_type):
                 # Float64 sqrt - call _f64_sqrt
                 return self._lower_float64_sqrt(expr.args[0].value)
+
+        # Check if this is a protected type function call (Counter.Value)
+        if isinstance(expr.name, SelectedName):
+            prefix = expr.name.prefix
+            selector = expr.name.selector
+
+            # Check if prefix is a protected object
+            if isinstance(prefix, Identifier):
+                prefix_name = prefix.name.lower()
+
+                # First check ctx.protected_types (set during lowering)
+                prot_type = None
+                if self.ctx and prefix_name in self.ctx.protected_types:
+                    prot_type = self.ctx.protected_types[prefix_name]
+                else:
+                    # Fallback to symbol table lookup
+                    prot_sym = self.symbols.lookup(prefix_name) if self.symbols else None
+                    if prot_sym and hasattr(prot_sym, 'ada_type') and isinstance(prot_sym.ada_type, ProtectedType):
+                        prot_type = prot_sym.ada_type
+
+                if prot_type:
+                    # This is a call to a protected function
+                    # Generate: push protected object address, call function, get result
+                    prot_type_name = prot_type.name if hasattr(prot_type, 'name') else prefix_name
+                    func_label = f"{prot_type_name}_{selector}"
+
+                    # Get address of protected object (it's a local variable)
+                    if self.ctx and prefix_name in self.ctx.locals:
+                        local = self.ctx.locals[prefix_name]
+                        prot_addr = self.builder.new_vreg(IRType.PTR, "_prot_obj")
+                        self.builder.emit(IRInstr(
+                            OpCode.LEA, prot_addr,
+                            MemoryLocation(ir_type=IRType.PTR, addr_vreg=local.vreg),
+                            comment=f"addr of protected object {prefix_name}"
+                        ))
+                        self.builder.push(prot_addr)
+                    else:
+                        # Protected object may be global or not found - push 0 as placeholder
+                        self.builder.push(Immediate(0, IRType.PTR))
+
+                    # Push any additional arguments
+                    if expr.args:
+                        for arg in reversed(expr.args):
+                            val = self._lower_expr(arg.value if hasattr(arg, 'value') else arg)
+                            self.builder.push(val)
+
+                    # Call the protected function
+                    self.builder.call(Label(func_label), comment=f"call protected function {selector}")
+
+                    # Capture result from HL
+                    self.builder.emit(IRInstr(
+                        OpCode.MOV, result,
+                        MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                        comment="capture protected function return from HL"
+                    ))
+
+                    # Clean up stack
+                    num_args = (len(expr.args) if expr.args else 0) + 1  # +1 for protected object
+                    for _ in range(num_args):
+                        temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                        self.builder.pop(temp)
+
+                    return result
 
         if isinstance(expr.name, Identifier):
             # Resolve overloaded function
