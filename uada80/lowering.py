@@ -4247,6 +4247,11 @@ class ASTLowering:
             self._lower_text_io_call(proc_name, stmt.args, is_integer_io)
             return
 
+        # Check for Text_IO/Sequential_IO file operations
+        if proc_name in ("create", "open", "close", "delete", "reset", "flush"):
+            self._lower_file_operation(proc_name, stmt.args)
+            return
+
         # Check if this is a Free (Unchecked_Deallocation instantiation)
         if self._is_deallocation_call(proc_name):
             self._lower_deallocation_call(stmt.args)
@@ -4742,61 +4747,197 @@ class ASTLowering:
             parts.insert(0, current.name)
         return ".".join(parts)
 
+    def _is_file_type(self, expr) -> bool:
+        """Check if expression is a File_Type (for file-based I/O)."""
+        if isinstance(expr, Identifier):
+            name = expr.name.lower()
+            # Check local type
+            if self.ctx and name in self.ctx.locals:
+                local = self.ctx.locals[name]
+                if hasattr(local, 'type_ref') and local.type_ref:
+                    type_name = str(local.type_ref).lower()
+                    return "file_type" in type_name
+                # Also check the ada_type attribute
+                if hasattr(local, 'ada_type') and local.ada_type:
+                    type_name = str(local.ada_type).lower()
+                    return "file_type" in type_name
+            # Check symbol table
+            if self.symbol_table:
+                sym = self.symbol_table.lookup(expr.name)
+                if sym:
+                    if hasattr(sym, 'type_ref') and sym.type_ref:
+                        type_name = str(sym.type_ref).lower()
+                        return "file_type" in type_name
+                    if hasattr(sym, 'ada_type') and sym.ada_type:
+                        type_name = str(sym.ada_type).lower()
+                        return "file_type" in type_name
+        return False
+
     def _lower_text_io_call(self, proc_name: str, args: list, is_integer_io: bool = False) -> None:
-        """Lower a Text_IO procedure call to runtime calls."""
+        """Lower a Text_IO procedure call to runtime calls.
+
+        Supports both console I/O (single arg) and file I/O (File_Type first arg).
+        """
+        # Check if first arg is File_Type for file-based operations
+        is_file_based = False
+        file_handle = None
+        item_arg_idx = 0
+
+        if args and len(args) >= 2:
+            first_arg = args[0].value
+            if self._is_file_type(first_arg):
+                is_file_based = True
+                file_handle = self._lower_expr(first_arg)
+                item_arg_idx = 1
+
         if proc_name == "put":
-            if args and args[0].value:
-                # Determine if it's a string literal or expression
-                arg_expr = args[0].value
+            if args and len(args) > item_arg_idx and args[item_arg_idx].value:
+                arg_expr = args[item_arg_idx].value
                 if isinstance(arg_expr, StringLiteral):
-                    # Create string constant and print it
+                    # Create string constant
                     label = self.builder.new_string_label()
                     if self.builder.module:
-                        # Add $ terminator for CP/M BDOS function 9
                         self.builder.module.add_string(label, arg_expr.value)
-                    # Call _put_string runtime
-                    self.builder.emit(IRInstr(
-                        OpCode.MOV,
-                        dst=self.builder.new_vreg(IRType.PTR, "_str"),
-                        src1=Label(label),
-                    ))
-                    self.builder.call(Label("_put_string"))
+
+                    if is_file_based:
+                        # File-based: call _file_write(handle, buffer, length)
+                        str_len = len(arg_expr.value)
+                        self.builder.push(Immediate(str_len, IRType.WORD))
+                        self.builder.push(Label(label))
+                        self.builder.push(file_handle)
+                        self.builder.call(Label("_file_write"), comment="Put to file")
+                        for _ in range(3):
+                            temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                            self.builder.pop(temp)
+                    else:
+                        # Console: call _put_string
+                        self.builder.emit(IRInstr(
+                            OpCode.MOV,
+                            dst=self.builder.new_vreg(IRType.PTR, "_str"),
+                            src1=Label(label),
+                        ))
+                        self.builder.call(Label("_put_string"))
                 else:
                     # Expression - evaluate and print
                     value = self._lower_expr(arg_expr)
-                    self.builder.push(value)
-                    # Check if this is a Character type - call _put_char instead of _put_int
-                    if self._is_character_type(arg_expr):
-                        self.builder.call(Label("_put_char"))
+                    if is_file_based:
+                        # For file output, we need to convert to string first
+                        # For now, just write the raw bytes (works for characters)
+                        if self._is_character_type(arg_expr):
+                            # Single character to file
+                            self.builder.push(Immediate(1, IRType.WORD))
+                            # Need address of value - push value then get SP
+                            self.builder.push(value)
+                            # Use stack location as buffer
+                            sp_reg = self.builder.new_vreg(IRType.PTR, "_sp")
+                            self.builder.emit(IRInstr(OpCode.GETSP, dst=sp_reg))
+                            self.builder.push(sp_reg)
+                            self.builder.push(file_handle)
+                            self.builder.call(Label("_file_write"), comment="Put char to file")
+                            for _ in range(4):
+                                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                                self.builder.pop(temp)
+                        else:
+                            # Integer to file - would need conversion
+                            self.builder.push(value)
+                            self.builder.call(Label("_put_int"))
+                            temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                            self.builder.pop(temp)
                     else:
-                        self.builder.call(Label("_put_int"))
-                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
-                    self.builder.pop(temp)
+                        # Console
+                        self.builder.push(value)
+                        if self._is_character_type(arg_expr):
+                            self.builder.call(Label("_put_char"))
+                        else:
+                            self.builder.call(Label("_put_int"))
+                        temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                        self.builder.pop(temp)
 
         elif proc_name == "put_line":
-            if args and args[0].value:
-                arg_expr = args[0].value
+            # Determine if file-based (first arg is File_Type)
+            put_line_file_based = False
+            put_line_file_handle = None
+            put_line_item_idx = 0
+            if args and len(args) >= 2:
+                first_arg = args[0].value
+                if self._is_file_type(first_arg):
+                    put_line_file_based = True
+                    put_line_file_handle = self._lower_expr(first_arg)
+                    put_line_item_idx = 1
+
+            if args and len(args) > put_line_item_idx and args[put_line_item_idx].value:
+                arg_expr = args[put_line_item_idx].value
                 if isinstance(arg_expr, StringLiteral):
-                    # Create string constant and print it with newline
+                    # Create string constant
                     label = self.builder.new_string_label()
                     if self.builder.module:
                         self.builder.module.add_string(label, arg_expr.value)
-                    # Load string address and call _put_line
-                    str_reg = self.builder.new_vreg(IRType.PTR, "_str")
-                    self.builder.mov(str_reg, Label(label))
-                    self.builder.push(str_reg)
-                    self.builder.call(Label("_put_line"))
-                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
-                    self.builder.pop(temp)
+
+                    if put_line_file_based:
+                        # File-based: write string then newline
+                        str_len = len(arg_expr.value)
+                        self.builder.push(Immediate(str_len, IRType.WORD))
+                        self.builder.push(Label(label))
+                        self.builder.push(put_line_file_handle)
+                        self.builder.call(Label("_file_write"), comment="Put_Line to file")
+                        for _ in range(3):
+                            temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                            self.builder.pop(temp)
+                        # Write newline
+                        nl_label = self.builder.new_string_label()
+                        if self.builder.module:
+                            self.builder.module.add_string(nl_label, "\r\n")
+                        self.builder.push(Immediate(2, IRType.WORD))
+                        self.builder.push(Label(nl_label))
+                        self.builder.push(put_line_file_handle)
+                        self.builder.call(Label("_file_write"), comment="newline to file")
+                        for _ in range(3):
+                            temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                            self.builder.pop(temp)
+                    else:
+                        # Console
+                        str_reg = self.builder.new_vreg(IRType.PTR, "_str")
+                        self.builder.mov(str_reg, Label(label))
+                        self.builder.push(str_reg)
+                        self.builder.call(Label("_put_line"))
+                        temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                        self.builder.pop(temp)
                 elif self._is_string_type(arg_expr):
-                    # String expression - evaluate, print with newline
                     value = self._lower_expr(arg_expr)
-                    self.builder.push(value)
-                    self.builder.call(Label("_put_line"))
-                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
-                    self.builder.pop(temp)
+                    if put_line_file_based:
+                        # For file, write string then newline
+                        # Get string length - use _str_len runtime
+                        self.builder.push(value)
+                        self.builder.call(Label("_str_len"))
+                        len_reg = self.builder.new_vreg(IRType.WORD, "_len")
+                        self.builder.mov(len_reg, MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD))
+                        temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                        self.builder.pop(temp)
+                        # Write string
+                        self.builder.push(len_reg)
+                        self.builder.push(value)
+                        self.builder.push(put_line_file_handle)
+                        self.builder.call(Label("_file_write"), comment="Put_Line string to file")
+                        for _ in range(3):
+                            temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                            self.builder.pop(temp)
+                        # Write newline
+                        nl_label = self.builder.new_string_label()
+                        if self.builder.module:
+                            self.builder.module.add_string(nl_label, "\r\n")
+                        self.builder.push(Immediate(2, IRType.WORD))
+                        self.builder.push(Label(nl_label))
+                        self.builder.push(put_line_file_handle)
+                        self.builder.call(Label("_file_write"), comment="newline to file")
+                        for _ in range(3):
+                            temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                            self.builder.pop(temp)
+                    else:
+                        self.builder.push(value)
+                        self.builder.call(Label("_put_line"))
+                        temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                        self.builder.pop(temp)
                 else:
-                    # Integer expression - evaluate, convert to string, print with newline
                     value = self._lower_expr(arg_expr)
                     self.builder.push(value)
                     self.builder.call(Label("_put_int_line"))
@@ -4804,46 +4945,104 @@ class ASTLowering:
                     self.builder.pop(temp)
             else:
                 # Just print newline
-                self.builder.call(Label("_new_line"))
+                if put_line_file_based:
+                    nl_label = self.builder.new_string_label()
+                    if self.builder.module:
+                        self.builder.module.add_string(nl_label, "\r\n")
+                    self.builder.push(Immediate(2, IRType.WORD))
+                    self.builder.push(Label(nl_label))
+                    self.builder.push(put_line_file_handle)
+                    self.builder.call(Label("_file_write"), comment="newline to file")
+                    for _ in range(3):
+                        temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                        self.builder.pop(temp)
+                else:
+                    self.builder.call(Label("_new_line"))
 
         elif proc_name == "new_line":
-            self.builder.call(Label("_new_line"))
+            # Check for file-based new_line
+            if is_file_based:
+                nl_label = self.builder.new_string_label()
+                if self.builder.module:
+                    self.builder.module.add_string(nl_label, "\r\n")
+                self.builder.push(Immediate(2, IRType.WORD))
+                self.builder.push(Label(nl_label))
+                self.builder.push(file_handle)
+                self.builder.call(Label("_file_write"), comment="New_Line to file")
+                for _ in range(3):
+                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                    self.builder.pop(temp)
+            else:
+                self.builder.call(Label("_new_line"))
 
         elif proc_name == "get":
             # Get single character or integer into output parameter
-            if args and args[0].value:
-                arg_expr = args[0].value
+            # Check for file-based Get(File, Item)
+            get_file_based = False
+            get_file_handle = None
+            get_item_idx = 0
+            if args and len(args) >= 2:
+                first_arg = args[0].value
+                if self._is_file_type(first_arg):
+                    get_file_based = True
+                    get_file_handle = self._lower_expr(first_arg)
+                    get_item_idx = 1
 
-                # Use is_integer_io flag or check type of output parameter
-                # For Integer_Text_IO.Get: call _get_int
-                # For Text_IO.Get: call _get_char
-                if is_integer_io or self._is_integer_type(arg_expr):
-                    self.builder.call(Label("_get_int"))
+            if args and len(args) > get_item_idx and args[get_item_idx].value:
+                arg_expr = args[get_item_idx].value
+
+                if get_file_based:
+                    # File-based: read one byte from file
+                    # Allocate temp buffer on stack
+                    temp_buf = self.builder.new_vreg(IRType.PTR, "_buf")
+                    self.builder.emit(IRInstr(OpCode.GETSP, dst=temp_buf))
+                    self.builder.push(Immediate(0, IRType.WORD))  # Reserve space
+                    # Read 1 byte
+                    self.builder.push(Immediate(1, IRType.WORD))
+                    self.builder.push(temp_buf)
+                    self.builder.push(get_file_handle)
+                    self.builder.call(Label("_file_read"), comment="Get from file")
+                    for _ in range(3):
+                        temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                        self.builder.pop(temp)
+                    # Result is in the temp buffer
+                    result = self.builder.new_vreg(IRType.WORD, "_char")
+                    self.builder.pop(result)  # Pop the reserved space (contains char)
+                    self._store_to_target(arg_expr, result)
                 else:
-                    self.builder.call(Label("_get_char"))
+                    # Console-based
+                    if is_integer_io or self._is_integer_type(arg_expr):
+                        self.builder.call(Label("_get_int"))
+                    else:
+                        self.builder.call(Label("_get_char"))
 
-                # Result is in HL, store to output parameter
-                result = MemoryLocation(
-                    is_global=False,
-                    symbol_name="_HL",
-                    ir_type=IRType.WORD,
-                )
-                self._store_to_target(arg_expr, result)
+                    result = MemoryLocation(
+                        is_global=False,
+                        symbol_name="_HL",
+                        ir_type=IRType.WORD,
+                    )
+                    self._store_to_target(arg_expr, result)
 
         elif proc_name == "get_line":
             # Get line into output string parameter
-            # Ada.Text_IO.Get_Line(Item : out String; Last : out Natural)
-            if args and len(args) >= 1 and args[0].value:
-                arg_expr = args[0].value
+            # Check for file-based Get_Line(File, Item, Last)
+            get_line_file_based = False
+            get_line_file_handle = None
+            get_line_item_idx = 0
+            if args and len(args) >= 2:
+                first_arg = args[0].value
+                if self._is_file_type(first_arg):
+                    get_line_file_based = True
+                    get_line_file_handle = self._lower_expr(first_arg)
+                    get_line_item_idx = 1
 
-                # Get address of destination buffer
+            if args and len(args) > get_line_item_idx and args[get_line_item_idx].value:
+                arg_expr = args[get_line_item_idx].value
+
                 if isinstance(arg_expr, Identifier):
                     name = arg_expr.name.lower()
                     if self.ctx and name in self.ctx.locals:
                         local = self.ctx.locals[name]
-                        # LEA: get address of buffer
-                        # Locals are at negative offsets from IX
-                        # offset = -(locals_size - stack_offset)
                         neg_offset = -(self.ctx.locals_size - local.stack_offset)
                         addr_reg = self.builder.new_vreg(IRType.PTR, "_buf")
                         self.builder.emit(IRInstr(
@@ -4851,26 +5050,260 @@ class ASTLowering:
                             dst=addr_reg,
                             src1=MemoryLocation(offset=neg_offset, ir_type=IRType.PTR),
                         ))
-                        self.builder.push(addr_reg)
-                        # Push max length (from type bounds if available)
                         max_len = self._get_string_max_length(arg_expr)
-                        self.builder.push(Immediate(max_len, IRType.WORD))
-                        # Call runtime to read line
-                        self.builder.call(Label("_get_line"))
-                        # Result in HL is the length read (Last)
-                        # Store Last BEFORE stack cleanup (pop clobbers HL)
-                        if len(args) >= 2 and args[1].value:
-                            last_expr = args[1].value
-                            result = MemoryLocation(
-                                is_global=False,
-                                symbol_name="_HL",
-                                ir_type=IRType.WORD,
-                            )
-                            self._store_to_target(last_expr, result)
-                        # Clean up stack (2 word args = 4 bytes)
-                        temp = self.builder.new_vreg(IRType.WORD, "_discard")
-                        self.builder.pop(temp)
-                        self.builder.pop(temp)
+
+                        if get_line_file_based:
+                            # File-based: read line from file
+                            self.builder.push(Immediate(max_len, IRType.WORD))
+                            self.builder.push(addr_reg)
+                            self.builder.push(get_line_file_handle)
+                            self.builder.call(Label("_file_read"), comment="Get_Line from file")
+                            # Result in HL is bytes read
+                            last_idx = get_line_item_idx + 1
+                            if len(args) > last_idx and args[last_idx].value:
+                                last_expr = args[last_idx].value
+                                result = MemoryLocation(
+                                    is_global=False,
+                                    symbol_name="_HL",
+                                    ir_type=IRType.WORD,
+                                )
+                                self._store_to_target(last_expr, result)
+                            for _ in range(3):
+                                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                                self.builder.pop(temp)
+                        else:
+                            # Console-based
+                            self.builder.push(addr_reg)
+                            self.builder.push(Immediate(max_len, IRType.WORD))
+                            self.builder.call(Label("_get_line"))
+                            if len(args) >= 2 and args[1].value:
+                                last_expr = args[1].value
+                                result = MemoryLocation(
+                                    is_global=False,
+                                    symbol_name="_HL",
+                                    ir_type=IRType.WORD,
+                                )
+                                self._store_to_target(last_expr, result)
+                            temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                            self.builder.pop(temp)
+                            self.builder.pop(temp)
+
+    def _lower_file_operation(self, op: str, args: list) -> None:
+        """Lower file I/O operations (Create, Open, Close, Delete, Reset, Flush).
+
+        These operations work with File_Type parameters and call the runtime
+        file I/O functions (_file_open, _file_create, _file_close, etc.)
+        """
+        if not args:
+            return
+
+        if op == "create":
+            # Create(File : in out File_Type; Mode := Out_File; Name := ""; Form := "")
+            # First arg is the File variable (in out)
+            # Name is the filename (usually 3rd positional or named)
+            file_arg = args[0].value
+            file_addr = self._get_lvalue_address(file_arg)
+
+            # Get filename - usually 3rd arg or default to empty string
+            filename_val = None
+            if len(args) >= 3 and args[2].value:
+                name_arg = args[2].value
+                if isinstance(name_arg, StringLiteral):
+                    # Create string constant
+                    label = self.builder.new_string_label()
+                    if self.builder.module:
+                        self.builder.module.add_string(label, name_arg.value)
+                    filename_val = Label(label)
+                else:
+                    filename_val = self._lower_expr(name_arg)
+            else:
+                # Check for named parameter "Name"
+                for arg in args[1:]:
+                    if arg.name and arg.name.lower() == "name" and arg.value:
+                        if isinstance(arg.value, StringLiteral):
+                            label = self.builder.new_string_label()
+                            if self.builder.module:
+                                self.builder.module.add_string(label, arg.value.value)
+                            filename_val = Label(label)
+                        else:
+                            filename_val = self._lower_expr(arg.value)
+                        break
+
+            if filename_val:
+                # Push filename pointer
+                self.builder.push(filename_val)
+                # Call _file_create
+                self.builder.call(Label("_file_create"), comment="Text_IO.Create")
+                # Result in HL is file handle
+                # Store to file variable
+                result = MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD)
+                self._store_to_address(file_addr, result)
+                # Clean up stack
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+
+        elif op == "open":
+            # Open(File : in out File_Type; Mode : File_Mode; Name : String; Form := "")
+            file_arg = args[0].value
+            file_addr = self._get_lvalue_address(file_arg)
+
+            # Get mode - 2nd arg (0=read, 1=write, 2=read/write)
+            mode_val = Immediate(0, IRType.WORD)  # Default In_File
+            if len(args) >= 2 and args[1].value:
+                mode_arg = args[1].value
+                if isinstance(mode_arg, Identifier):
+                    mode_name = mode_arg.name.lower()
+                    if mode_name == "in_file":
+                        mode_val = Immediate(0, IRType.WORD)
+                    elif mode_name == "out_file":
+                        mode_val = Immediate(1, IRType.WORD)
+                    elif mode_name in ("append_file", "inout_file"):
+                        mode_val = Immediate(2, IRType.WORD)
+                else:
+                    mode_val = self._lower_expr(mode_arg)
+
+            # Get filename - 3rd arg
+            filename_val = None
+            if len(args) >= 3 and args[2].value:
+                name_arg = args[2].value
+                if isinstance(name_arg, StringLiteral):
+                    label = self.builder.new_string_label()
+                    if self.builder.module:
+                        self.builder.module.add_string(label, name_arg.value)
+                    filename_val = Label(label)
+                else:
+                    filename_val = self._lower_expr(name_arg)
+
+            if filename_val:
+                # Push mode, then filename
+                self.builder.push(mode_val)
+                self.builder.push(filename_val)
+                # Call _file_open(filename, mode) - args in reverse order on stack
+                self.builder.call(Label("_file_open"), comment="Text_IO.Open")
+                # Result in HL is file handle
+                result = MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD)
+                self._store_to_address(file_addr, result)
+                # Clean up stack (2 words)
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.pop(temp)
+
+        elif op == "close":
+            # Close(File : in out File_Type)
+            file_arg = args[0].value
+            file_val = self._lower_expr(file_arg)
+            self.builder.push(file_val)
+            self.builder.call(Label("_file_close"), comment="Text_IO.Close")
+            temp = self.builder.new_vreg(IRType.WORD, "_discard")
+            self.builder.pop(temp)
+
+        elif op == "delete":
+            # Delete(File : in out File_Type) - close and delete
+            file_arg = args[0].value
+            file_val = self._lower_expr(file_arg)
+            # First close
+            self.builder.push(file_val)
+            self.builder.call(Label("_file_close"), comment="Text_IO.Delete (close)")
+            temp = self.builder.new_vreg(IRType.WORD, "_discard")
+            self.builder.pop(temp)
+            # Then delete (would need filename - for now just close)
+            # TODO: Implement proper file deletion
+
+        elif op == "reset":
+            # Reset(File : in out File_Type; Mode : File_Mode := In_File)
+            # For now, just close and reopen is too complex
+            # Simple implementation: just rewind to start
+            file_arg = args[0].value
+            file_val = self._lower_expr(file_arg)
+            # For now, just call close - proper reset would need to track filename
+            self.builder.push(file_val)
+            self.builder.call(Label("_file_close"), comment="Text_IO.Reset (close only)")
+            temp = self.builder.new_vreg(IRType.WORD, "_discard")
+            self.builder.pop(temp)
+
+        elif op == "flush":
+            # Flush(File : File_Type)
+            # For now, no-op - CP/M flushes on close
+            pass
+
+    def _get_lvalue_address(self, expr):
+        """Get the address of an lvalue expression for storing into."""
+        if isinstance(expr, Identifier):
+            name = expr.name.lower()
+            if self.ctx and name in self.ctx.locals:
+                local = self.ctx.locals[name]
+                neg_offset = -(self.ctx.locals_size - local.stack_offset)
+                addr_reg = self.builder.new_vreg(IRType.PTR, "_addr")
+                self.builder.emit(IRInstr(
+                    OpCode.LEA,
+                    dst=addr_reg,
+                    src1=MemoryLocation(offset=neg_offset, ir_type=IRType.PTR),
+                ))
+                return addr_reg
+            else:
+                # Global variable
+                return Label(f"_{name}")
+        return None
+
+    def _store_to_address(self, addr, value):
+        """Store a value to an address (for file handle storage)."""
+        if addr is None:
+            return
+        if isinstance(addr, Label):
+            self.builder.store(addr, value)
+        else:
+            # Indirect store through pointer
+            self.builder.store_indirect(addr, value)
+
+    def _get_type_size(self, expr) -> int:
+        """Get the size in bytes of an expression's type.
+
+        Used for Sequential_IO and stream operations.
+        """
+        # Try to determine size from type
+        if isinstance(expr, Identifier):
+            name = expr.name.lower()
+            if self.ctx and name in self.ctx.locals:
+                local = self.ctx.locals[name]
+                if local.size:
+                    return local.size
+                if local.type_ref:
+                    return self._sizeof_type(local.type_ref)
+            if self.symbol_table:
+                sym = self.symbol_table.lookup(expr.name)
+                if sym and sym.type_ref:
+                    return self._sizeof_type(sym.type_ref)
+        # Default to word size (2 bytes)
+        return 2
+
+    def _sizeof_type(self, type_ref) -> int:
+        """Calculate size of a type in bytes."""
+        if type_ref is None:
+            return 2
+        type_name = str(type_ref).lower()
+        # Standard types
+        if type_name in ("integer", "natural", "positive"):
+            return 2
+        if type_name in ("character", "boolean"):
+            return 1
+        if type_name in ("long_integer",):
+            return 4
+        if type_name in ("long_float", "float64"):
+            return 8
+        if type_name in ("short_integer",):
+            return 2
+        # Check for array/record in symbol table
+        if self.symbol_table:
+            sym = self.symbol_table.lookup(str(type_ref))
+            if sym:
+                if hasattr(sym, 'size') and sym.size:
+                    return sym.size
+                if hasattr(sym, 'type_def') and sym.type_def:
+                    td = sym.type_def
+                    if hasattr(td, 'size') and td.size:
+                        return td.size
+        # Default
+        return 2
 
     def _lower_case(self, stmt: CaseStmt) -> None:
         """Lower a case statement."""
@@ -7697,13 +8130,17 @@ class ASTLowering:
         """
         x_ptr = self._lower_float64_operand(operand_expr)
 
+        # Generate local constants
+        const_1 = self._lower_float64_literal(1.0)
+        const_2 = self._lower_float64_literal(2.0)
+
         # E_X = exp(x)
         exp_x = self._f64_alloc_temp("exp_x")
         self._f64_call_unary("_f64_e2x", exp_x, x_ptr)
 
         # inv_exp_x = 1.0 / E_X
         inv_exp_x = self._f64_alloc_temp("inv_exp_x")
-        self._f64_call_binary("_f64_div", inv_exp_x, Label("_const_one_f64"), exp_x)
+        self._f64_call_binary("_f64_div", inv_exp_x, const_1, exp_x)
 
         # sum = E_X + 1.0/E_X
         sum_val = self._f64_alloc_temp("sum")
@@ -7711,7 +8148,7 @@ class ASTLowering:
 
         # result = sum / 2.0
         result = self._f64_alloc_temp("cosh_result")
-        self._f64_call_binary("_f64_div", result, sum_val, Label("_const_2"))
+        self._f64_call_binary("_f64_div", result, sum_val, const_2)
 
         return result
 
@@ -7722,9 +8159,13 @@ class ASTLowering:
         """
         x_ptr = self._lower_float64_operand(operand_expr)
 
+        # Generate local constants
+        const_1 = self._lower_float64_literal(1.0)
+        const_2 = self._lower_float64_literal(2.0)
+
         # two_x = 2.0 * x
         two_x = self._f64_alloc_temp("two_x")
-        self._f64_call_binary("_f64_mul", two_x, Label("_const_2"), x_ptr)
+        self._f64_call_binary("_f64_mul", two_x, const_2, x_ptr)
 
         # E_2X = exp(2*x)
         exp_2x = self._f64_alloc_temp("exp_2x")
@@ -7732,11 +8173,11 @@ class ASTLowering:
 
         # num = E_2X - 1.0
         num = self._f64_alloc_temp("num")
-        self._f64_call_binary("_f64_sub", num, exp_2x, Label("_const_one_f64"))
+        self._f64_call_binary("_f64_sub", num, exp_2x, const_1)
 
         # den = E_2X + 1.0
         den = self._f64_alloc_temp("den")
-        self._f64_call_binary("_f64_add", den, exp_2x, Label("_const_one_f64"))
+        self._f64_call_binary("_f64_add", den, exp_2x, const_1)
 
         # result = num / den
         result = self._f64_alloc_temp("tanh_result")
@@ -7752,9 +8193,12 @@ class ASTLowering:
         # First compute tanh(x)
         tanh_result = self._lower_float64_tanh(operand_expr)
 
+        # Generate local constant
+        const_1 = self._lower_float64_literal(1.0)
+
         # result = 1.0 / tanh(x)
         result = self._f64_alloc_temp("coth_result")
-        self._f64_call_binary("_f64_div", result, Label("_const_one_f64"), tanh_result)
+        self._f64_call_binary("_f64_div", result, const_1, tanh_result)
 
         return result
 
@@ -11525,21 +11969,25 @@ class ASTLowering:
 
         if attr == "write":
             # T'Write(Stream, Item) - Write Item to Stream
-            # For Z80, we implement basic streaming to memory buffer
+            # Stream is treated as a file handle on Z80/CP/M
             if len(expr.args) >= 2:
                 stream = self._lower_expr(expr.args[0])
-                item = self._lower_expr(expr.args[1])
+                item_arg = expr.args[1]
+                # Get address of item
+                item_addr = self._get_lvalue_address(item_arg)
+                if item_addr is None:
+                    # For expressions, evaluate and store to temp
+                    item_val = self._lower_expr(item_arg)
+                    self.builder.push(item_val)
+                    item_addr = self.builder.new_vreg(IRType.PTR, "_item_addr")
+                    self.builder.emit(IRInstr(OpCode.GETSP, dst=item_addr))
                 # Get item size
-                item_size = 2  # Default word
-                if isinstance(expr.args[1], Identifier):
-                    sym = self.symbols.lookup(expr.args[1].name)
-                    if sym and sym.ada_type and hasattr(sym.ada_type, 'size_bits'):
-                        item_size = (sym.ada_type.size_bits + 7) // 8
-                # Call stream write
+                item_size = self._get_type_size(item_arg)
+                # Call file write (stream = file handle)
                 self.builder.push(Immediate(item_size, IRType.WORD))
-                self.builder.push(item)
+                self.builder.push(item_addr)
                 self.builder.push(stream)
-                self.builder.call(Label("_stream_write"), comment="T'Write")
+                self.builder.call(Label("_file_write"), comment="T'Write")
                 for _ in range(3):
                     temp = self.builder.new_vreg(IRType.WORD, "_discard")
                     self.builder.pop(temp)
@@ -11547,20 +11995,21 @@ class ASTLowering:
 
         if attr == "read":
             # T'Read(Stream, Item) - Read Item from Stream
+            # Stream is treated as a file handle on Z80/CP/M
             if len(expr.args) >= 2:
                 stream = self._lower_expr(expr.args[0])
-                item_addr = self._lower_expr(expr.args[1])
+                item_arg = expr.args[1]
+                # Get address of item for writing result
+                item_addr = self._get_lvalue_address(item_arg)
+                if item_addr is None:
+                    item_addr = self._lower_expr(item_arg)
                 # Get item size
-                item_size = 2
-                if isinstance(expr.args[1], Identifier):
-                    sym = self.symbols.lookup(expr.args[1].name)
-                    if sym and sym.ada_type and hasattr(sym.ada_type, 'size_bits'):
-                        item_size = (sym.ada_type.size_bits + 7) // 8
-                # Call stream read
+                item_size = self._get_type_size(item_arg)
+                # Call file read (stream = file handle)
                 self.builder.push(Immediate(item_size, IRType.WORD))
                 self.builder.push(item_addr)
                 self.builder.push(stream)
-                self.builder.call(Label("_stream_read"), comment="T'Read")
+                self.builder.call(Label("_file_read"), comment="T'Read")
                 for _ in range(3):
                     temp = self.builder.new_vreg(IRType.WORD, "_discard")
                     self.builder.pop(temp)
@@ -11568,32 +12017,49 @@ class ASTLowering:
 
         if attr == "input":
             # T'Input(Stream) - Read and return value from Stream
+            # For Z80, read a word (2 bytes) from the stream/file
             result = self.builder.new_vreg(IRType.WORD, "_stream_input")
             if expr.args:
                 stream = self._lower_expr(expr.args[0])
+                # Allocate temp buffer on stack
+                self.builder.push(Immediate(0, IRType.WORD))  # Reserve space
+                temp_buf = self.builder.new_vreg(IRType.PTR, "_buf")
+                self.builder.emit(IRInstr(OpCode.GETSP, dst=temp_buf))
+                # Read 2 bytes
+                self.builder.push(Immediate(2, IRType.WORD))
+                self.builder.push(temp_buf)
                 self.builder.push(stream)
-                self.builder.call(Label("_stream_input"), comment="T'Input")
-                temp = self.builder.new_vreg(IRType.WORD, "_discard")
-                self.builder.pop(temp)
-                # Result is in HL
-                self.builder.emit(IRInstr(
-                    OpCode.MOV, result,
-                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
-                    comment="capture T'Input result"
-                ))
+                self.builder.call(Label("_file_read"), comment="T'Input")
+                for _ in range(3):
+                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                    self.builder.pop(temp)
+                # Pop result from stack
+                self.builder.pop(result)
             return result
 
         if attr == "output":
             # T'Output(Stream, Item) - Write Item with tag to Stream
+            # For Z80, this is similar to T'Write but includes type tag
             if len(expr.args) >= 2:
                 stream = self._lower_expr(expr.args[0])
-                item = self._lower_expr(expr.args[1])
-                self.builder.push(item)
+                item_arg = expr.args[1]
+                # Get address of item
+                item_addr = self._get_lvalue_address(item_arg)
+                if item_addr is None:
+                    item_val = self._lower_expr(item_arg)
+                    self.builder.push(item_val)
+                    item_addr = self.builder.new_vreg(IRType.PTR, "_item_addr")
+                    self.builder.emit(IRInstr(OpCode.GETSP, dst=item_addr))
+                # Get item size
+                item_size = self._get_type_size(item_arg)
+                # Write item to stream (stream = file handle)
+                self.builder.push(Immediate(item_size, IRType.WORD))
+                self.builder.push(item_addr)
                 self.builder.push(stream)
-                self.builder.call(Label("_stream_output"), comment="T'Output")
-                temp = self.builder.new_vreg(IRType.WORD, "_discard")
-                self.builder.pop(temp)
-                self.builder.pop(temp)
+                self.builder.call(Label("_file_write"), comment="T'Output")
+                for _ in range(3):
+                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                    self.builder.pop(temp)
             return Immediate(0, IRType.WORD)
 
         if attr == "external_tag":
@@ -13409,14 +13875,20 @@ class ASTLowering:
         # Sequential I/O operations
         if attr == "read":
             # Sequential_IO.Read(File, Item)
+            # File is the file handle, Item is the output variable
             if len(expr.args) >= 2:
                 file_val = self._lower_expr(expr.args[0])
-                item_addr = self._lower_expr(expr.args[1])
-                item_size = 2  # Default word size
+                item_arg = expr.args[1]
+                # Get address of item for writing result
+                item_addr = self._get_lvalue_address(item_arg)
+                if item_addr is None:
+                    item_addr = self._lower_expr(item_arg)
+                # Determine item size from type
+                item_size = self._get_type_size(item_arg)
                 self.builder.push(Immediate(item_size, IRType.WORD))
                 self.builder.push(item_addr)
                 self.builder.push(file_val)
-                self.builder.call(Label("_seq_read"), comment="Sequential_IO.Read")
+                self.builder.call(Label("_file_read"), comment="Sequential_IO.Read")
                 for _ in range(3):
                     temp = self.builder.new_vreg(IRType.WORD, "_discard")
                     self.builder.pop(temp)
@@ -13424,14 +13896,25 @@ class ASTLowering:
 
         if attr == "write":
             # Sequential_IO.Write(File, Item)
+            # File is the file handle, Item is the value to write
             if len(expr.args) >= 2:
                 file_val = self._lower_expr(expr.args[0])
-                item = self._lower_expr(expr.args[1])
-                item_size = 2  # Default word size
+                item_arg = expr.args[1]
+                # Get address of item for reading value
+                item_addr = self._get_lvalue_address(item_arg)
+                if item_addr is None:
+                    # For literals or expressions, we need to evaluate and store to temp
+                    item_val = self._lower_expr(item_arg)
+                    # Push value to stack and use stack address
+                    self.builder.push(item_val)
+                    item_addr = self.builder.new_vreg(IRType.PTR, "_item_addr")
+                    self.builder.emit(IRInstr(OpCode.GETSP, dst=item_addr))
+                # Determine item size from type
+                item_size = self._get_type_size(item_arg)
                 self.builder.push(Immediate(item_size, IRType.WORD))
-                self.builder.push(item)
+                self.builder.push(item_addr)
                 self.builder.push(file_val)
-                self.builder.call(Label("_seq_write"), comment="Sequential_IO.Write")
+                self.builder.call(Label("_file_write"), comment="Sequential_IO.Write")
                 for _ in range(3):
                     temp = self.builder.new_vreg(IRType.WORD, "_discard")
                     self.builder.pop(temp)
