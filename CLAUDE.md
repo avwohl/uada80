@@ -1,6 +1,35 @@
 # Claude Code Notes for UADA80
 
-## Work In Progress (2025-12-19)
+## Session (2025-12-20)
+
+**Session accomplished:**
+- Fixed remaining Float64 hyperbolic functions: cosh, tanh, coth
+- Implemented CP/M file I/O support (Text_IO and Sequential_IO)
+- Implemented stream attributes (T'Read, T'Write, T'Input, T'Output)
+- All 146 execution tests pass, all 6931 total tests pass
+
+**File I/O Implementation:**
+- Text_IO.Create, Open, Close, Delete, Reset, Flush now call `_file_*` runtime
+- File-based Put, Put_Line, Get, Get_Line for Text_IO.File_Type
+- Sequential_IO.Read/Write use `_file_read`/`_file_write`
+- Helper methods: `_is_file_type()`, `_get_lvalue_address()`, `_get_type_size()`, `_sizeof_type()`
+
+**Stream Attributes:**
+- T'Write, T'Read, T'Input, T'Output now use file I/O functions
+- Streams are treated as file handles on Z80/CP/M
+
+**Critical fix: Local constants for hyperbolic functions**
+- `_lower_float64_cosh`, `_lower_float64_tanh`, `_lower_float64_coth` were using
+  runtime constants `Label("_const_one_f64")` and `Label("_const_2")` which don't work
+  correctly with `_f64_call_binary`
+- **Fix:** Generate local constants via `_lower_float64_literal()` in each function
+- All hyperbolic functions now work: sinh, cosh, tanh, coth, arcsinh, arccosh, arctanh, arccoth
+
+**Tests:** 146 execution tests pass, 6931 total tests pass
+
+---
+
+## Previous Session (2025-12-19)
 
 **Session accomplished:**
 - Fixed sin/cos bug: functions were returning sinh/cosh values
@@ -17,16 +46,6 @@
 - Runtime constants (Label("_const_one_f64"), etc.) don't work correctly with `_f64_call_binary`
 - **Fix:** Generate local constants via `_lower_float64_literal()` in each inlined function
 - Applied to: `_sin_from_ptr`, `_cos_from_ptr`, `_lower_float64_arctanh`, `_lower_float64_arccoth`
-
-**WIP: Still need to update with local constants:**
-- `_lower_float64_cosh` - uses Label("_const_one_f64"), Label("_const_2")
-- `_lower_float64_tanh` - uses Label("_const_2"), Label("_const_one_f64")
-- `_lower_float64_coth` - uses Label("_const_one_f64")
-- `_lower_float64_arcsinh` - may use runtime constants
-- `_lower_float64_arccosh` - may use runtime constants
-- After updating, reinstall with `pip install -e .` and run tests
-
-**Tests:** 138 pass, 6 fail (sinh, cosh, tanh, coth, arctanh, arccoth need constant fixes)
 
 ---
 
