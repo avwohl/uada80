@@ -1,0 +1,1173 @@
+; =========================================
+; MP/M II Tasking Runtime
+; =========================================
+; Ada tasking support using MP/M II operating system primitives
+;
+; This runtime implements Ada tasking by mapping:
+; - Ada tasks to MP/M II subprocesses (P_CREATE)
+; - Task entries to MP/M II message queues (Q_MAKE/Q_READ/Q_WRITE)
+; - Delay statements to P_DELAY
+; - Protected types to system flags (DEV_WAITFLAG/DEV_SETFLAG)
+;
+; MP/M II BDOS Functions Used:
+; 131 DEV_POLL     - Poll I/O device
+; 132 DEV_WAITFLAG - Wait on system flag (for protected types)
+; 133 DEV_SETFLAG  - Set system flag
+; 134 Q_MAKE       - Create message queue
+; 135 Q_OPEN       - Open message queue
+; 136 Q_DELETE     - Delete message queue
+; 137 Q_READ       - Read from queue (blocking)
+; 138 Q_CREAD      - Conditional read (non-blocking)
+; 139 Q_WRITE      - Write to queue (blocking)
+; 140 Q_CWRITE     - Conditional write (non-blocking)
+; 141 P_DELAY      - Delay process
+; 142 P_DISPATCH   - Yield to scheduler
+; 143 P_TERM       - Terminate process
+; 144 P_CREATE     - Create subprocess
+; 145 P_PRIORITY   - Set process priority
+; 156 P_PDADR      - Get process descriptor address
+; 157 P_ABORT      - Abort a process
+
+    .Z80    ; Enable Z80 instruction set
+
+    CSEG
+
+; Export all public routines (8-char limit for um80)
+    PUBLIC _TASK_INI        ; Initialize tasking system
+    PUBLIC _TASK_CRE        ; Create a new task (subprocess)
+    PUBLIC _TASK_YLD        ; Yield to scheduler
+    PUBLIC _TASK_TRM        ; Terminate current task
+    PUBLIC _TASK_DLY        ; Delay for ticks
+    PUBLIC _TASK_DLU        ; Delay until time
+    PUBLIC _TASK_ABT        ; Abort a task
+    PUBLIC _ENTRY_CL        ; Call a task entry
+    PUBLIC _ENTRY_AC        ; Accept an entry call
+    PUBLIC _ENTRY_AE        ; Accept end
+    PUBLIC _SELC_ST         ; Select start
+    PUBLIC _SELC_WT         ; Select wait
+    PUBLIC _SELC_EN         ; Select end
+    PUBLIC _PROT_LCK        ; Protected type lock
+    PUBLIC _PROT_ULK        ; Protected type unlock
+    PUBLIC _PROT_ENQ        ; Protected entry queue
+    PUBLIC _PROT_REB        ; Protected re-evaluate barriers
+    PUBLIC _REQUEUE         ; Requeue statement
+    PUBLIC _PAR_STR         ; Parallel start
+    PUBLIC _PAR_SST         ; Parallel sequence start
+    PUBLIC _PAR_SEN         ; Parallel sequence end
+    PUBLIC _PAR_END         ; Parallel end
+    PUBLIC _tick_cnt        ; System tick counter
+    PUBLIC _task_cur        ; Current task ID
+
+; External dependencies
+    EXTRN _heap_alloc
+    EXTRN _raise_tasking_error
+
+; =========================================
+; BDOS Function Numbers
+; =========================================
+
+BDOS        EQU 5           ; BDOS entry point
+
+; MP/M II specific functions
+B_DEVPOLL   EQU 131         ; Poll I/O device
+B_WAITFLAG  EQU 132         ; Wait on system flag
+B_SETFLAG   EQU 133         ; Set system flag
+B_QMAKE     EQU 134         ; Create message queue
+B_QOPEN     EQU 135         ; Open message queue
+B_QDELETE   EQU 136         ; Delete message queue
+B_QREAD     EQU 137         ; Read from queue (blocking)
+B_QCREAD    EQU 138         ; Conditional read
+B_QWRITE    EQU 139         ; Write to queue (blocking)
+B_QCWRITE   EQU 140         ; Conditional write
+B_PDELAY    EQU 141         ; Delay process
+B_PDISPATCH EQU 142         ; Yield to scheduler
+B_PTERM     EQU 143         ; Terminate process
+B_PCREATE   EQU 144         ; Create subprocess
+B_PPRIORITY EQU 145         ; Set priority
+B_PPDADR    EQU 156         ; Get process descriptor address
+B_PABORT    EQU 157         ; Abort a process
+
+; =========================================
+; Configuration
+; =========================================
+
+MAX_TASKS       EQU 8       ; Maximum concurrent tasks
+MAX_ENTRIES     EQU 32      ; Maximum entry queues
+ENTRY_MSG_SIZE  EQU 16      ; Size of entry call message
+DEFAULT_PRIO    EQU 128     ; Default task priority (mid-range)
+TASK_STACK_SIZE EQU 256     ; Default task stack size
+
+; =========================================
+; Data Structures
+; =========================================
+;
+; Task Descriptor (TD) - 32 bytes per task
+; Used to track Ada task state and map to MP/M process
+;   +0:  process_id (2 bytes) - MP/M process ID
+;   +2:  entry_queue (2 bytes) - pointer to entry queue descriptor
+;   +4:  state (1 byte) - Ada task state
+;   +5:  priority (1 byte) - task priority
+;   +6:  parent_id (2 bytes) - parent task ID
+;   +8:  task_name (8 bytes) - name for debugging
+;   +16: reserved (16 bytes)
+;
+; Entry Queue Descriptor (EQD) - 20 bytes per entry
+; Maps an Ada entry to an MP/M message queue
+;   +0:  queue_id (2 bytes) - MP/M queue ID (from Q_MAKE)
+;   +2:  entry_id (2 bytes) - Ada entry identifier
+;   +4:  task_id (2 bytes) - owning task ID
+;   +6:  msg_count (1 byte) - number of buffered messages
+;   +7:  msg_size (1 byte) - size of each message
+;   +8:  queue_name (8 bytes) - MP/M queue name
+;   +16: qpb (4 bytes) - Queue Parameter Block for MP/M
+;
+; Entry Message (EM) - 16 bytes
+; Message sent through queue for entry call
+;   +0:  caller_id (2 bytes) - calling task ID
+;   +2:  entry_id (2 bytes) - entry being called
+;   +4:  params_ptr (2 bytes) - pointer to parameters
+;   +6:  result_ptr (2 bytes) - pointer for return values
+;   +8:  status (1 byte) - call status
+;   +9:  reserved (7 bytes)
+
+; Task states
+TS_INACTIVE     EQU 0       ; Task not created
+TS_ACTIVATING   EQU 1       ; Task being created
+TS_READY        EQU 2       ; Ready to run
+TS_RUNNING      EQU 3       ; Currently executing
+TS_WAITING      EQU 4       ; Waiting (delay, entry, etc.)
+TS_COMPLETED    EQU 5       ; Task finished
+TS_TERMINATED   EQU 6       ; Task aborted
+
+; Task descriptor offsets
+TD_PROCESS_ID   EQU 0
+TD_ENTRY_QUEUE  EQU 2
+TD_STATE        EQU 4
+TD_PRIORITY     EQU 5
+TD_PARENT_ID    EQU 6
+TD_TASK_NAME    EQU 8
+TD_SIZE         EQU 32
+
+; Entry queue descriptor offsets
+EQD_QUEUE_ID    EQU 0
+EQD_ENTRY_ID    EQU 2
+EQD_TASK_ID     EQU 4
+EQD_MSG_COUNT   EQU 6
+EQD_MSG_SIZE    EQU 7
+EQD_QUEUE_NAME  EQU 8
+EQD_QPB         EQU 16
+EQD_SIZE        EQU 20
+
+; Entry message offsets
+EM_CALLER_ID    EQU 0
+EM_ENTRY_ID     EQU 2
+EM_PARAMS_PTR   EQU 4
+EM_RESULT_PTR   EQU 6
+EM_STATUS       EQU 8
+EM_SIZE         EQU 16
+
+; =========================================
+; Data Section
+; =========================================
+
+    DSEG
+
+_task_cur:
+    DS 2                    ; Current task ID (index into task array)
+_tick_cnt:
+    DS 2                    ; Tick counter (read from MP/M TOD)
+_task_count:
+    DS 1                    ; Number of active tasks
+_next_task_id:
+    DS 2                    ; Next task ID to assign
+_next_entry_id:
+    DS 2                    ; Next entry ID to assign
+
+; Task descriptor array
+_task_array:
+    DS MAX_TASKS * TD_SIZE
+
+; Entry queue descriptor array
+_entry_array:
+    DS MAX_ENTRIES * EQD_SIZE
+
+; Temporary message buffer for entry calls
+_entry_msg:
+    DS EM_SIZE
+
+; Process Descriptor template for P_CREATE
+; See MP/M II Programmer's Guide for PD structure
+_pd_template:
+    DS 2                    ; +0: PD link (set by system)
+    DS 1                    ; +2: Status
+    DS 1                    ; +3: Priority
+    DS 2                    ; +4: Flags
+    DS 8                    ; +6: Process name (8 chars)
+    DS 2                    ; +14: UDA segment
+    DS 2                    ; +16: Disk set mask
+    DS 2                    ; +18: Starting address
+_pd_template_size EQU 20
+
+; Queue Parameter Block for Q_xxx calls
+_qpb:
+    DS 2                    ; +0: Queue ID (filled by Q_OPEN/Q_MAKE)
+    DS 8                    ; +2: Queue name (8 chars)
+    DS 2                    ; +10: Message length
+    DS 2                    ; +12: Number of messages
+    DS 2                    ; +14: Buffer address (for Q_MAKE)
+_qpb_size EQU 16
+
+; Abort Parameter Block for P_ABORT
+_apb:
+    DS 2                    ; +0: Process ID (console << 8 | process)
+    DS 2                    ; +2: Termination code
+_apb_size EQU 4
+
+; Queue message buffer (shared)
+_qmsg_buf:
+    DS EM_SIZE
+
+; =========================================
+; Code Section
+; =========================================
+
+    CSEG
+
+; -----------------------------------------
+; _TASK_INI: Initialize tasking system
+; Called once at program start
+; -----------------------------------------
+_TASK_INI:
+    push HL
+    push DE
+    push BC
+
+    ; Clear task descriptor array
+    ld HL, _task_array
+    ld DE, _task_array + 1
+    ld BC, MAX_TASKS * TD_SIZE - 1
+    ld (HL), 0
+    ldir
+
+    ; Clear entry queue array
+    ld HL, _entry_array
+    ld DE, _entry_array + 1
+    ld BC, MAX_ENTRIES * EQD_SIZE - 1
+    ld (HL), 0
+    ldir
+
+    ; Initialize main task (task 0) - represents the main program
+    ld IX, _task_array
+    ld (IX+TD_STATE), TS_RUNNING
+    ld (IX+TD_PRIORITY), DEFAULT_PRIO
+    ld (IX+TD_PROCESS_ID), 0     ; Main process ID = 0
+    ld (IX+TD_PROCESS_ID+1), 0
+
+    ; Initialize counters
+    ld A, 1
+    ld (_task_count), A
+    ld HL, 1
+    ld (_next_task_id), HL
+    ld HL, 1
+    ld (_next_entry_id), HL
+    xor A
+    ld (_task_cur), A
+    ld (_task_cur+1), A
+
+    pop BC
+    pop DE
+    pop HL
+    ret
+
+; -----------------------------------------
+; _TASK_CRE: Create a new task (subprocess)
+; Input: HL = entry point address
+;        DE = task name pointer (8 chars, can be 0)
+; Output: HL = task ID (0 on failure)
+; -----------------------------------------
+_TASK_CRE:
+    push IX
+    push IY
+    push BC
+    push DE             ; save task name
+    push HL             ; save entry point
+
+    ; Find free task slot
+    ld IX, _task_array
+    ld B, MAX_TASKS
+    xor A
+    ld C, A             ; C = slot index
+_tc_find:
+    ld A, (IX+TD_STATE)
+    cp TS_INACTIVE
+    jr Z, _tc_found
+    ld DE, TD_SIZE
+    add IX, DE
+    inc C
+    djnz _tc_find
+
+    ; No free slot
+    pop HL
+    pop DE
+    ld HL, 0
+    pop BC
+    pop IY
+    pop IX
+    ret
+
+_tc_found:
+    ; IX = task descriptor, C = slot index
+    ld (IX+TD_STATE), TS_ACTIVATING
+    ld (IX+TD_PRIORITY), DEFAULT_PRIO
+
+    ; Get current task as parent
+    ld HL, (_task_cur)
+    ld (IX+TD_PARENT_ID), L
+    ld (IX+TD_PARENT_ID+1), H
+
+    ; Store task name if provided
+    pop HL              ; entry point
+    pop DE              ; task name
+    ld A, D
+    or E
+    jr Z, _tc_no_name
+
+    ; Copy task name (8 chars)
+    push IX
+    pop IY              ; IY = task descriptor
+    push HL             ; save entry point
+    ld HL, TD_TASK_NAME
+    push IY
+    pop BC              ; BC = task descriptor base
+    add HL, BC          ; HL = &task_name
+    ex DE, HL           ; DE = dest, HL = source (task name)
+    ld BC, 8
+    ldir
+    pop HL              ; restore entry point
+    jr _tc_create_proc
+
+_tc_no_name:
+    ; Default name "TASK_nn"
+    push IX
+    pop IY
+    push HL             ; save entry point
+    ld (IY+TD_TASK_NAME), 'T'
+    ld (IY+TD_TASK_NAME+1), 'A'
+    ld (IY+TD_TASK_NAME+2), 'S'
+    ld (IY+TD_TASK_NAME+3), 'K'
+    ld (IY+TD_TASK_NAME+4), '_'
+    ld A, C
+    add A, '0'
+    ld (IY+TD_TASK_NAME+5), A
+    ld (IY+TD_TASK_NAME+6), ' '
+    ld (IY+TD_TASK_NAME+7), ' '
+    pop HL              ; restore entry point
+
+_tc_create_proc:
+    ; Build process descriptor for MP/M P_CREATE
+    ; HL = entry point
+    push IX             ; save task descriptor
+
+    ; Set up PD template
+    ld IX, _pd_template
+    ld (IX+0), 0        ; Link (system sets)
+    ld (IX+1), 0
+    ld (IX+2), 0        ; Status
+    ld (IX+3), DEFAULT_PRIO  ; Priority
+    ld (IX+4), 0        ; Flags low
+    ld (IX+5), 0        ; Flags high
+
+    ; Copy process name from task name
+    pop IY              ; IY = task descriptor
+    push IY
+    ld DE, _pd_template + 6
+    push IY
+    pop HL
+    ld BC, TD_TASK_NAME
+    add HL, BC          ; HL = &task_name
+    ld BC, 8
+    ldir
+
+    ; Set starting address
+    pop IX              ; IX = task descriptor
+    pop HL              ; HL = entry point (was saved)
+    push IX
+    push HL             ; save entry point again
+    ld IX, _pd_template
+    ld (IX+18), L       ; Starting address low
+    ld (IX+19), H       ; Starting address high
+
+    ; Call MP/M P_CREATE (BDOS 144)
+    ld C, B_PCREATE
+    ld DE, _pd_template
+    call BDOS
+
+    ; A = 0 on success, non-zero on error
+    or A
+    jr NZ, _tc_fail
+
+    ; Success - HL contains new process ID
+    pop DE              ; discard entry point
+    pop IX              ; IX = task descriptor
+
+    ; Store process ID
+    ld (IX+TD_PROCESS_ID), L
+    ld (IX+TD_PROCESS_ID+1), H
+    ld (IX+TD_STATE), TS_READY
+
+    ; Increment task count
+    ld A, (_task_count)
+    inc A
+    ld (_task_count), A
+
+    ; Return task ID (slot index in HL)
+    push IX
+    pop HL
+    ld DE, _task_array
+    or A
+    sbc HL, DE
+    ; HL = offset, divide by TD_SIZE to get index
+    ; TD_SIZE = 32 = 2^5, so shift right 5 times
+    srl H
+    rr L
+    srl H
+    rr L
+    srl H
+    rr L
+    srl H
+    rr L
+    srl H
+    rr L
+    ; HL = task index
+
+    pop BC
+    pop IY
+    pop IX
+    ret
+
+_tc_fail:
+    pop HL              ; discard entry point
+    pop IX              ; IX = task descriptor
+    ld (IX+TD_STATE), TS_INACTIVE
+    ld HL, 0
+    pop BC
+    pop IY
+    pop IX
+    ret
+
+; -----------------------------------------
+; _TASK_YLD: Voluntarily yield to scheduler
+; Calls MP/M P_DISPATCH
+; -----------------------------------------
+_TASK_YLD:
+    ld C, B_PDISPATCH
+    jp BDOS             ; Tail call
+
+; -----------------------------------------
+; _TASK_TRM: Terminate current task
+; Calls MP/M P_TERM
+; -----------------------------------------
+_TASK_TRM:
+    ; Mark task as completed
+    ld HL, (_task_cur)
+    call _get_task_desc
+    ld A, H
+    or L
+    jr Z, _tt_do_term
+    push HL
+    pop IX
+    ld (IX+TD_STATE), TS_COMPLETED
+
+    ; Decrement task count
+    ld A, (_task_count)
+    dec A
+    ld (_task_count), A
+
+_tt_do_term:
+    ; Call MP/M P_TERM
+    ld C, B_PTERM
+    ld E, 0             ; Termination code 0 = normal
+    jp BDOS             ; Does not return
+
+; -----------------------------------------
+; _TASK_DLY: Delay for HL ticks
+; Input: HL = number of ticks to delay
+; -----------------------------------------
+_TASK_DLY:
+    ex DE, HL           ; DE = ticks
+    ld C, B_PDELAY
+    jp BDOS             ; Tail call
+
+; -----------------------------------------
+; _TASK_DLU: Delay until absolute time
+; Input: HL = target tick count
+; Computes relative delay and calls P_DELAY
+; -----------------------------------------
+_TASK_DLU:
+    ; Get current tick count
+    push HL             ; save target
+    call _get_ticks
+    pop DE              ; DE = target
+    ex DE, HL           ; HL = target, DE = current
+    or A
+    sbc HL, DE          ; HL = target - current
+    jr NC, _dlu_delay
+    ld HL, 0            ; Already past, no delay
+_dlu_delay:
+    ex DE, HL           ; DE = ticks to delay
+    ld C, B_PDELAY
+    jp BDOS             ; Tail call
+
+; -----------------------------------------
+; _TASK_ABT: Abort a task
+; Input: HL = task ID to abort
+; -----------------------------------------
+_TASK_ABT:
+    push IX
+    push HL             ; save task ID
+
+    ; Get task descriptor
+    call _get_task_desc
+    ld A, H
+    or L
+    jr Z, _ta_done      ; Invalid task ID
+
+    push HL
+    pop IX
+
+    ; Check if already terminated
+    ld A, (IX+TD_STATE)
+    cp TS_COMPLETED
+    jr Z, _ta_done
+    cp TS_TERMINATED
+    jr Z, _ta_done
+    cp TS_INACTIVE
+    jr Z, _ta_done
+
+    ; Get process ID for abort
+    ld L, (IX+TD_PROCESS_ID)
+    ld H, (IX+TD_PROCESS_ID+1)
+
+    ; Set up abort parameter block
+    ld IX, _apb
+    ld (IX+0), L        ; Process ID low
+    ld (IX+1), H        ; Process ID high
+    ld (IX+2), 1        ; Termination code (abort)
+    ld (IX+3), 0
+
+    ; Call MP/M P_ABORT
+    ld C, B_PABORT
+    ld DE, _apb
+    call BDOS
+
+    ; Mark task as terminated
+    pop HL              ; restore task ID
+    push HL
+    call _get_task_desc
+    push HL
+    pop IX
+    ld (IX+TD_STATE), TS_TERMINATED
+
+    ; Decrement task count
+    ld A, (_task_count)
+    dec A
+    ld (_task_count), A
+
+_ta_done:
+    pop HL
+    pop IX
+    ret
+
+; -----------------------------------------
+; _ENTRY_CL: Call a task entry
+; Stack: [ret] entry_id, task_id, params_ptr
+; Blocks caller until entry is accepted
+; -----------------------------------------
+_ENTRY_CL:
+    push IX
+    push IY
+
+    ; Set up stack frame
+    ld IX, 0
+    add IX, SP
+    ; IX+4 = ret addr, IX+6 = entry_id, IX+8 = task_id, IX+10 = params_ptr
+
+    ; Get parameters
+    ld L, (IX+8)        ; task_id low
+    ld H, (IX+9)        ; task_id high
+    push HL             ; save task_id
+
+    ld E, (IX+6)        ; entry_id low
+    ld D, (IX+7)        ; entry_id high
+    push DE             ; save entry_id
+
+    ld L, (IX+10)       ; params_ptr low
+    ld H, (IX+11)       ; params_ptr high
+    push HL             ; save params_ptr
+
+    ; Find or create entry queue for this entry
+    pop BC              ; BC = params_ptr
+    pop DE              ; DE = entry_id
+    pop HL              ; HL = task_id
+    push BC             ; save params_ptr
+    push DE             ; save entry_id
+    push HL             ; save task_id
+
+    call _find_entry_queue
+    ld A, H
+    or L
+    jp Z, _ec_error     ; No queue for this entry
+
+    ; HL = entry queue descriptor
+    push HL
+    pop IY              ; IY = EQD
+
+    ; Build entry message in _entry_msg
+    ld IX, _entry_msg
+
+    ; Set caller ID (current task)
+    ld HL, (_task_cur)
+    ld (IX+EM_CALLER_ID), L
+    ld (IX+EM_CALLER_ID+1), H
+
+    ; Set entry ID
+    pop HL              ; task_id (discard)
+    pop DE              ; entry_id
+    ld (IX+EM_ENTRY_ID), E
+    ld (IX+EM_ENTRY_ID+1), D
+
+    ; Set params pointer
+    pop HL              ; params_ptr
+    ld (IX+EM_PARAMS_PTR), L
+    ld (IX+EM_PARAMS_PTR+1), H
+
+    ; Result pointer (same as params for in-out)
+    ld (IX+EM_RESULT_PTR), L
+    ld (IX+EM_RESULT_PTR+1), H
+
+    ; Status = 0 (pending)
+    xor A
+    ld (IX+EM_STATUS), A
+
+    ; Open the queue and write message
+    ; Set up QPB with queue name from EQD
+    ld IX, _qpb
+    push IY
+    pop HL
+    ld DE, EQD_QUEUE_NAME
+    add HL, DE          ; HL = queue name in EQD
+    ld DE, _qpb + 2     ; DE = queue name in QPB
+    ld BC, 8
+    ldir
+
+    ; Open queue (if not already open)
+    ld C, B_QOPEN
+    ld DE, _qpb
+    call BDOS
+    ; Queue ID now at _qpb+0
+
+    ; Write message to queue (blocking)
+    ld IX, _qpb
+    ld (IX+10), LOW EM_SIZE    ; Message length
+    ld (IX+11), HIGH EM_SIZE
+    ld HL, _entry_msg
+    ld (IX+14), L       ; Buffer address
+    ld (IX+15), H
+
+    ld C, B_QWRITE
+    ld DE, _qpb
+    call BDOS
+
+    ; Entry call complete
+    pop IY
+    pop IX
+    ret
+
+_ec_error:
+    ; Clean up stack and raise tasking error
+    pop HL
+    pop HL
+    pop HL
+    pop IY
+    pop IX
+    jp _raise_tasking_error
+
+; -----------------------------------------
+; _ENTRY_AC: Accept an entry call
+; Input: HL = entry_id to accept
+; Output: HL = params_ptr from caller (0 if none)
+; Blocks until a matching entry call arrives
+; -----------------------------------------
+_ENTRY_AC:
+    push IX
+    push IY
+    push HL             ; save entry_id
+
+    ; Find entry queue for this entry
+    ld DE, (_task_cur)  ; task_id = current task
+    call _find_entry_queue
+    ld A, H
+    or L
+    jr Z, _ea_no_queue
+
+    push HL
+    pop IY              ; IY = EQD
+
+    ; Set up QPB from EQD
+    ld IX, _qpb
+    push IY
+    pop HL
+    ld DE, EQD_QUEUE_NAME
+    add HL, DE
+    ld DE, _qpb + 2
+    ld BC, 8
+    ldir
+
+    ; Open queue
+    ld C, B_QOPEN
+    ld DE, _qpb
+    call BDOS
+
+    ; Read message from queue (blocking)
+    ld IX, _qpb
+    ld (IX+10), LOW EM_SIZE
+    ld (IX+11), HIGH EM_SIZE
+    ld HL, _qmsg_buf
+    ld (IX+14), L
+    ld (IX+15), H
+
+    ld C, B_QREAD       ; Blocking read
+    ld DE, _qpb
+    call BDOS
+
+    ; Message received, return params pointer
+    ld IX, _qmsg_buf
+    ld L, (IX+EM_PARAMS_PTR)
+    ld H, (IX+EM_PARAMS_PTR+1)
+
+    pop DE              ; discard saved entry_id
+    pop IY
+    pop IX
+    ret
+
+_ea_no_queue:
+    ; No queue - create one
+    pop HL              ; entry_id
+    ld DE, (_task_cur)  ; task_id
+    call _create_entry_queue
+    ; Try accept again
+    pop IY
+    pop IX
+    jr _ENTRY_AC
+
+; -----------------------------------------
+; _ENTRY_AE: Mark end of accept body
+; Called when accept body completes
+; -----------------------------------------
+_ENTRY_AE:
+    ; In MP/M implementation, the caller is unblocked when Q_READ completes
+    ; Nothing special needed here
+    ret
+
+; -----------------------------------------
+; Select statement support
+; -----------------------------------------
+
+; _SELC_ST: Begin a select statement
+_SELC_ST:
+    ; In MP/M, we use conditional queue reads to check alternatives
+    ret
+
+; _SELC_WT: Wait for one of the registered alternatives
+; Input: Stack contains array of entry_ids and count
+; Output: HL = index of selected alternative
+_SELC_WT:
+    push IX
+    push IY
+
+    ; For now, implement simple round-robin check
+    ; In full implementation, would use conditional reads
+
+    ; Check each alternative's queue
+_sw_loop:
+    ; Call dispatcher to yield while waiting
+    ld C, B_PDISPATCH
+    call BDOS
+
+    ; TODO: Check each queue with Q_CREAD
+    ; For now, just return first alternative
+    ld HL, 0
+
+    pop IY
+    pop IX
+    ret
+
+; _SELC_EN: End a select statement
+_SELC_EN:
+    ret
+
+; -----------------------------------------
+; Protected Object Support (using system flags)
+; -----------------------------------------
+
+; _PROT_LCK: Acquire protected object lock
+; Input: HL = protected object address (contains flag number at offset 0)
+; -----------------------------------------
+_PROT_LCK:
+    push IX
+    push HL
+    pop IX
+
+    ; Get flag number from protected object
+    ld E, (IX+0)        ; Flag number
+
+    ; Wait on flag (BDOS 132)
+    ld C, B_WAITFLAG
+    call BDOS
+
+    pop IX
+    ret
+
+; _PROT_ULK: Release protected object lock
+; Input: HL = protected object address
+; -----------------------------------------
+_PROT_ULK:
+    push IX
+    push HL
+    pop IX
+
+    ; Get flag number from protected object
+    ld E, (IX+0)        ; Flag number
+
+    ; Set flag to signal waiting processes (BDOS 133)
+    ld C, B_SETFLAG
+    call BDOS
+
+    pop IX
+    ret
+
+; =========================================
+; Internal Helper Functions
+; =========================================
+
+; -----------------------------------------
+; _get_task_desc: Get task descriptor for task ID
+; Input: HL = task ID (index)
+; Output: HL = task descriptor address (0 if invalid)
+; -----------------------------------------
+_get_task_desc:
+    ; Check bounds
+    ld A, H
+    or A
+    jr NZ, _gtd_invalid ; ID too large
+    ld A, L
+    cp MAX_TASKS
+    jr NC, _gtd_invalid
+
+    ; Calculate address: _task_array + (ID * TD_SIZE)
+    ; TD_SIZE = 32, so multiply by 32 (shift left 5 times)
+    ld H, 0
+    add HL, HL
+    add HL, HL
+    add HL, HL
+    add HL, HL
+    add HL, HL
+    ld DE, _task_array
+    add HL, DE
+    ret
+
+_gtd_invalid:
+    ld HL, 0
+    ret
+
+; -----------------------------------------
+; _get_ticks: Get current tick count
+; Output: HL = tick count
+; Uses MP/M get time of day if available
+; -----------------------------------------
+_get_ticks:
+    ld HL, (_tick_cnt)
+    ret
+
+; -----------------------------------------
+; _find_entry_queue: Find entry queue for entry
+; Input: HL = task_id, DE = entry_id
+; Output: HL = EQD address (0 if not found)
+; -----------------------------------------
+_find_entry_queue:
+    push IX
+    push BC
+    push DE             ; save entry_id
+    push HL             ; save task_id
+
+    ld IX, _entry_array
+    ld B, MAX_ENTRIES
+
+_feq_loop:
+    ; Check if this slot matches
+    ld A, (IX+EQD_TASK_ID)
+    ld C, A
+    ld A, (IX+EQD_TASK_ID+1)
+    or C
+    jr Z, _feq_next     ; Empty slot
+
+    ; Check task_id match
+    pop HL              ; task_id
+    push HL
+    ld A, (IX+EQD_TASK_ID)
+    cp L
+    jr NZ, _feq_next
+    ld A, (IX+EQD_TASK_ID+1)
+    cp H
+    jr NZ, _feq_next
+
+    ; Check entry_id match
+    pop HL              ; discard task_id
+    pop DE              ; entry_id
+    push DE
+    push HL
+    ld A, (IX+EQD_ENTRY_ID)
+    cp E
+    jr NZ, _feq_next
+    ld A, (IX+EQD_ENTRY_ID+1)
+    cp D
+    jr NZ, _feq_next
+
+    ; Found it!
+    push IX
+    pop HL
+    pop DE              ; discard task_id
+    pop DE              ; discard entry_id
+    pop BC
+    pop IX
+    ret
+
+_feq_next:
+    ld DE, EQD_SIZE
+    add IX, DE
+    djnz _feq_loop
+
+    ; Not found
+    pop HL              ; discard task_id
+    pop DE              ; discard entry_id
+    ld HL, 0
+    pop BC
+    pop IX
+    ret
+
+; -----------------------------------------
+; _create_entry_queue: Create new entry queue
+; Input: HL = task_id, DE = entry_id
+; Output: HL = EQD address (0 on failure)
+; -----------------------------------------
+_create_entry_queue:
+    push IX
+    push IY
+    push BC
+    push DE             ; save entry_id
+    push HL             ; save task_id
+
+    ; Find empty slot
+    ld IX, _entry_array
+    ld B, MAX_ENTRIES
+
+_ceq_find:
+    ld A, (IX+EQD_TASK_ID)
+    ld C, A
+    ld A, (IX+EQD_TASK_ID+1)
+    or C
+    jr Z, _ceq_found
+    ld DE, EQD_SIZE
+    add IX, DE
+    djnz _ceq_find
+
+    ; No free slot
+    pop HL
+    pop DE
+    ld HL, 0
+    pop BC
+    pop IY
+    pop IX
+    ret
+
+_ceq_found:
+    ; IX = free EQD slot
+    pop HL              ; task_id
+    ld (IX+EQD_TASK_ID), L
+    ld (IX+EQD_TASK_ID+1), H
+
+    pop DE              ; entry_id
+    ld (IX+EQD_ENTRY_ID), E
+    ld (IX+EQD_ENTRY_ID+1), D
+
+    ; Set message parameters
+    ld (IX+EQD_MSG_COUNT), 4    ; Buffer 4 messages
+    ld (IX+EQD_MSG_SIZE), EM_SIZE
+
+    ; Generate unique queue name "QnnEmm  "
+    ld (IX+EQD_QUEUE_NAME), 'Q'
+    ld A, L             ; task_id low
+    add A, '0'
+    ld (IX+EQD_QUEUE_NAME+1), A
+    ld A, H
+    add A, '0'
+    ld (IX+EQD_QUEUE_NAME+2), A
+    ld (IX+EQD_QUEUE_NAME+3), 'E'
+    ld A, E             ; entry_id low
+    add A, '0'
+    ld (IX+EQD_QUEUE_NAME+4), A
+    ld A, D
+    add A, '0'
+    ld (IX+EQD_QUEUE_NAME+5), A
+    ld (IX+EQD_QUEUE_NAME+6), ' '
+    ld (IX+EQD_QUEUE_NAME+7), ' '
+
+    ; Create MP/M queue using Q_MAKE
+    ; First, allocate buffer for queue messages
+    ld H, 0
+    ld L, EM_SIZE
+    ld A, 4             ; 4 messages
+_ceq_mul:
+    add HL, HL
+    dec A
+    jr NZ, _ceq_mul
+    ; HL = buffer size (EM_SIZE * 4)
+    push IX
+    call _heap_alloc
+    pop IX
+    ld A, H
+    or L
+    jr Z, _ceq_fail
+
+    ; HL = buffer address
+    push HL             ; save buffer
+
+    ; Set up QPB for Q_MAKE
+    ld IY, _qpb
+
+    ; Copy queue name
+    push IX
+    pop HL
+    ld DE, EQD_QUEUE_NAME
+    add HL, DE          ; HL = queue name
+    ld DE, _qpb + 2
+    ld BC, 8
+    ldir
+
+    ; Set message parameters
+    ld (IY+10), EM_SIZE ; Message length
+    ld (IY+11), 0
+    ld (IY+12), 4       ; Number of messages
+    ld (IY+13), 0
+
+    pop HL              ; buffer address
+    ld (IY+14), L
+    ld (IY+15), H
+
+    ; Call Q_MAKE
+    ld C, B_QMAKE
+    ld DE, _qpb
+    call BDOS
+
+    ; A = 0 on success
+    or A
+    jr NZ, _ceq_fail
+
+    ; Store queue ID in EQD
+    ld HL, (_qpb)       ; Queue ID
+    ld (IX+EQD_QUEUE_ID), L
+    ld (IX+EQD_QUEUE_ID+1), H
+
+    ; Return EQD address
+    push IX
+    pop HL
+
+    pop BC
+    pop IY
+    pop IX
+    ret
+
+_ceq_fail:
+    ; Clear the slot
+    xor A
+    ld (IX+EQD_TASK_ID), A
+    ld (IX+EQD_TASK_ID+1), A
+    ld HL, 0
+    pop BC
+    pop IY
+    pop IX
+    ret
+
+; =========================================
+; Additional Stubs for Protected Types and Parallel Blocks
+; =========================================
+
+; -----------------------------------------
+; _PROT_ENQ: Queue entry call for protected entry
+; Input: HL = protected object, DE = entry_id
+; For MP/M, uses message queue for entry calls
+; -----------------------------------------
+_PROT_ENQ:
+    ; For now, stub - protected entries use same queue mechanism
+    ; as task entries but with protected object as target
+    push IX
+    push IY
+    ; TODO: Implement protected entry queuing
+    pop IY
+    pop IX
+    ret
+
+; -----------------------------------------
+; _PROT_REB: Re-evaluate barrier conditions
+; Input: HL = protected object
+; Checks if any waiting entry callers can now proceed
+; -----------------------------------------
+_PROT_REB:
+    ; For now, stub - would check barrier conditions
+    ; and wake waiters whose conditions are now true
+    ret
+
+; -----------------------------------------
+; _REQUEUE: Requeue an entry call
+; Stack: [ret] entry_ptr, with_abort_flag
+; -----------------------------------------
+_REQUEUE:
+    ; Pop parameters
+    pop DE              ; return address
+    pop HL              ; entry_ptr
+    pop BC              ; with_abort_flag
+    push DE             ; restore return
+    ; TODO: Implement requeue - transfer current entry call
+    ; to the specified entry
+    ret
+
+; -----------------------------------------
+; Parallel Block Support (Ada 2022)
+; On MP/M, parallel blocks could spawn processes,
+; but for now we execute sequentially (stub)
+; -----------------------------------------
+
+; _PAR_STR: Start parallel block
+; Input: Stack = [ret] num_sequences
+_PAR_STR:
+    ; For now, do nothing - sequences executed sequentially
+    ret
+
+; _PAR_SST: Parallel sequence start
+; Input: Stack = [ret] sequence_index
+_PAR_SST:
+    ; For now, do nothing
+    ret
+
+; _PAR_SEN: Parallel sequence end
+; Input: Stack = [ret] sequence_index
+_PAR_SEN:
+    ; For now, do nothing
+    ret
+
+; _PAR_END: End parallel block (wait for all)
+_PAR_END:
+    ; For now, do nothing - all sequences already complete
+    ret
+
+    END
