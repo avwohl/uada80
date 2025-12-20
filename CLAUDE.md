@@ -1,6 +1,49 @@
 # Claude Code Notes for UADA80
 
-## Session (2025-12-20) - Protected Entry Support
+## Session (2025-12-20) - Protected Entry Barriers
+
+**Session accomplished:**
+- Implemented protected entry barrier support (`entry Get when Ready is`)
+- Fixed parser to create EntryBody nodes instead of SubprogramBody
+- Fixed entry body parameter setup for out parameters
+- Protected operations, entries with barriers, all working
+
+**Protected Entry Implementation:**
+1. **Parser changes** - Create `EntryBody` with barrier, params, family index
+2. **Barrier code generation**:
+   - `barrier_recheck:` - Acquire lock, evaluate barrier, release lock
+   - If barrier false: call `_PROT_ENQ`, loop back to recheck
+   - `barrier_ok:` - Lock, execute body, unlock, call `_PROT_REB`, return
+3. **Parameter setup** - Implemented `_setup_parameters` to call `_lower_parameter`
+   - Out parameters correctly passed by reference (pointer in ix+6)
+
+**Generated code flow:**
+```
+barrier_recheck:
+    call _PROT_LCK       ; acquire lock
+    ; evaluate barrier condition
+    call _PROT_ULK       ; release lock
+    jr nz, barrier_ok    ; if true, continue
+    call _PROT_ENQ       ; enqueue this call
+    jp barrier_recheck   ; loop back
+
+barrier_ok:
+    call _PROT_LCK       ; acquire lock
+    ; execute entry body
+    call _PROT_ULK       ; release lock
+    call _PROT_REB       ; re-evaluate all barriers
+    ret
+```
+
+**Files Modified:**
+- `uada80/parser.py` - Create EntryBody for entry bodies in protected body
+- `uada80/lowering.py` - Entry barrier checking, _setup_parameters
+
+**Tests:** 6932/6932 tests pass
+
+---
+
+## Previous Session (2025-12-20) - Protected Entry Support
 
 **Session accomplished:**
 - Fixed protected operation call handling (Buffer.Put, Counter.Increment)
@@ -12,24 +55,12 @@
 
 **Key Fixes:**
 1. **ActualParameter handling** - `_lower_expr` now unwraps ActualParameter nodes
-   - Was returning 0 for all procedure arguments wrapped in ActualParameter
 2. **Boolean initialization** - `_eval_static_expr` handles True/False literals
-   - Was generating `ld hl, None` for Boolean := False
 3. **Protected operation parameter offsets** - Added prot_obj to `ir_func.params`
-   - Parameters were at wrong stack offsets (ix+4 instead of ix+6)
 4. **SelectedName procedure calls** - Added handling for Text_IO package calls
-   - Ada.Text_IO.Put_Line etc. were silently ignored
 5. **Protected call push order** - Push args first, then protected object last
-   - Callee now correctly finds protected object at (ix+4)
 6. **Procedure renaming** - Added alias_for resolution for Text_IO renames
-7. **Local procedure renaming** - Added `local_renamings` tracking in LoweringContext
-   - SubprogramDecl with renames now tracked during declaration lowering
-   - `_lower_procedure_call` checks local_renamings before symbol table lookup
-   - Added `_get_hierarchical_name` helper for full dotted name extraction
-
-**Files Modified:**
-- `uada80/lowering.py` - Protected calls, Text_IO handling, local renamings
-- `uada80/semantic.py` - Added alias_for for subprogram renaming
+7. **Local procedure renaming** - Added `local_renamings` tracking
 
 **Tests:** 6932/6932 tests pass
 
