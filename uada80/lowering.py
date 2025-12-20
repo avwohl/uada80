@@ -11385,11 +11385,27 @@ class ASTLowering:
                 temp = self.builder.new_vreg(IRType.WORD, "_discard")
                 self.builder.pop(temp)
                 return result
+            elif prefix_type and hasattr(prefix_type, 'name') and prefix_type.name == "Boolean":
+                # Boolean'Value - parse "TRUE" or "FALSE" string
+                arg_value = self._lower_expr(expr.args[0])
+                self.builder.push(arg_value)
+                self.builder.call(Label("_s2b"), comment="Boolean'Value")
+                # Result is in HL (0 or 1)
+                result = self.builder.new_vreg(IRType.WORD, "_value")
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture Boolean'Value result from HL"
+                ))
+                # Clean up the pushed argument
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                return result
             else:
                 # Integer'Value - parse decimal string
                 arg_value = self._lower_expr(expr.args[0])
                 self.builder.push(arg_value)
-                self.builder.call(Label("_str_to_int"), comment="Integer'Value")
+                self.builder.call(Label("_s2i"), comment="Integer'Value")
                 # IMPORTANT: Capture result from HL BEFORE popping argument
                 # The pop would otherwise destroy HL which contains the result
                 result = self.builder.new_vreg(IRType.WORD, "_value")
