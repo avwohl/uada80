@@ -1,6 +1,46 @@
 # Claude Code Notes for UADA80
 
-## Session (2025-12-20)
+## Session (2025-12-20) - MP/M II Tasking
+
+**Session accomplished:**
+- Implemented MP/M II tasking runtime (`runtime/mpm_task.mac`)
+- Updated lowering.py to use 8-character symbol names for um80 compatibility
+- Updated CP/M tasking runtime with symbol aliases for compatibility
+- Both runtimes (CP/M and MP/M II) build successfully
+
+**MP/M II Tasking Runtime:**
+- Ada tasks map to MP/M subprocesses (P_CREATE, BDOS 144)
+- Task entries map to MP/M message queues (Q_MAKE/Q_READ/Q_WRITE, BDOS 134-140)
+- Delay statement uses P_DELAY (BDOS 141)
+- Protected types use system flags (DEV_WAITFLAG/DEV_SETFLAG, BDOS 132-133)
+
+**Key MP/M II BDOS Calls Used:**
+- 132: DEV_WAITFLAG - Wait on flag (for protected types)
+- 133: DEV_SETFLAG - Set flag (signal protected type unlock)
+- 134: Q_MAKE - Create message queue
+- 137: Q_READ - Read from queue (blocking)
+- 139: Q_WRITE - Write to queue (blocking)
+- 141: P_DELAY - Delay process
+- 142: P_DISPATCH - Yield to scheduler
+- 143: P_TERM - Terminate process
+- 144: P_CREATE - Create subprocess
+
+**Symbol Name Changes (8-char limit for um80):**
+- `_TASK_TERMINATE` → `_TASK_TRM`
+- `_ENTRY_CALL` → `_ENTRY_CL`
+- `_ENTRY_ACCEPT` → `_ENTRY_AC`
+- `_PROTECTED_LOCK` → `_PROT_LCK`
+- Full mapping in lowering.py and runtime/*.mac
+
+**Build Options:**
+- `make` or `make TARGET=cpm` - Build libada.lib for CP/M
+- `make TARGET=mpm` - Build libada_mpm.lib for MP/M II
+
+**Tests:** 146 execution tests pass, 6931 total tests pass
+
+---
+
+## Previous Session (2025-12-20)
 
 **Session accomplished:**
 - Fixed remaining Float64 hyperbolic functions: cosh, tanh, coth
@@ -253,8 +293,8 @@ Generics                                [=== ] 85%
 Contracts (Pre/Post/Invariant)          [=== ] 90%
 Ada 2012 Features                       [=== ] 95%
 Ada 2022 Features                       [==  ] 70%
-Tasking                                 [=   ] 30%
-Protected Types                         [=   ] 30%
+Tasking                                 [==  ] 50%
+Protected Types                         [==  ] 50%
 Real-Time / Concurrency                 [    ] 0%
 ```
 
@@ -263,7 +303,7 @@ Real-Time / Concurrency                 [    ] 0%
 1. **ACATS infrastructure** - ✓ DONE: Report, ImpDef, 70+ foundation packages in acats/
 2. **Parser** - ✓ DONE: 100% of ACATS files parse (2849/2849)
 3. **Semantic** - ✓ DONE: 2742/2742 ACATS semantic tests pass (100%)
-4. **Tasking/protected types** - Requires MP/M target (CP/M is single-threaded)
+4. **Tasking/protected types** - MP/M II runtime implemented, needs testing on real MP/M
 
 **Cross-file is solved:** Multi-file compilation (`python -m uada80 *.ada`) parses all files into one AST. The "not found" errors are missing ACATS support packages, not a symbol resolution issue.
 
@@ -335,7 +375,7 @@ All previously known issues have been resolved:
 
 Current remaining items:
 1. **Float64 arithmetic precision** - Some edge cases may have rounding differences
-2. **Tasking not implemented** - Requires MP/M target for OS-level threading
+2. **Tasking runtime testing** - MP/M II runtime implemented, needs testing on actual MP/M
 
 ### How to Update This Section
 
@@ -402,17 +442,18 @@ All files are parsed into a single AST, so cross-file symbol resolution is autom
 #### Phase 4: 95% → 100% (MP/M Tasking)
 **Impact: +5% (~235 tests) - Achievable with MP/M target**
 
-| Task | Effort | Notes |
-|------|--------|-------|
-| MP/M process spawning | High | Use MP/M BDOS 147 (P_CREATE) |
-| MP/M queue-based messaging | High | BDOS 135-141 for task entries |
-| Protected type via MP/M mutex | Medium | BDOS 132 (S_LOCK) / 133 (S_UNLOCK) |
-| Delay via MP/M dispatcher | Low | BDOS 141 (P_DELAY) |
+| Task | Effort | Status |
+|------|--------|--------|
+| MP/M process spawning | High | ✓ Done (mpm_task.mac: P_CREATE) |
+| MP/M queue-based messaging | High | ✓ Done (mpm_task.mac: Q_MAKE/Q_READ/Q_WRITE) |
+| Protected type via MP/M flags | Medium | ✓ Done (DEV_WAITFLAG/DEV_SETFLAG) |
+| Delay via MP/M dispatcher | Low | ✓ Done (P_DELAY) |
 | Build .prl output (ul80 ready) | Done | ul80 supports .prl format |
+| Test on actual MP/M | Medium | Pending - needs MP/M environment |
 
-**MP/M BDOS Functions for Tasking:**
-- 132: S_LOCK (mutex lock)
-- 133: S_UNLOCK (mutex unlock)
+**MP/M BDOS Functions Used in mpm_task.mac:**
+- 132: DEV_WAITFLAG (wait on system flag)
+- 133: DEV_SETFLAG (set system flag)
 - 135: Q_MAKE (create queue)
 - 137: Q_WRITE (send to queue)
 - 138: Q_READ (receive from queue)

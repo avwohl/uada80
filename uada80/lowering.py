@@ -1983,7 +1983,7 @@ class ASTLowering:
 
         # Call lock acquire
         self.builder.push(prot_obj)
-        self.builder.call(Label("_protected_lock"), comment=f"acquire lock for {prot_name}")
+        self.builder.call(Label("_PROT_LCK"), comment=f"acquire lock for {prot_name}")
         temp = self.builder.new_vreg(IRType.WORD, "_discard")
         self.builder.pop(temp)
 
@@ -2000,7 +2000,7 @@ class ASTLowering:
 
         # Emit lock release before return
         self.builder.push(prot_obj)
-        self.builder.call(Label("_protected_unlock"), comment=f"release lock for {prot_name}")
+        self.builder.call(Label("_PROT_ULK"), comment=f"release lock for {prot_name}")
         self.builder.pop(temp)
 
         # Return
@@ -2089,7 +2089,7 @@ class ASTLowering:
         if entry.barrier:
             # Acquire lock briefly to evaluate barrier
             self.builder.push(prot_obj)
-            self.builder.call(Label("_protected_lock"))
+            self.builder.call(Label("_PROT_LCK"))
             temp = self.builder.new_vreg(IRType.WORD, "_discard")
             self.builder.pop(temp)
 
@@ -2098,7 +2098,7 @@ class ASTLowering:
 
             # Release lock after barrier evaluation
             self.builder.push(prot_obj)
-            self.builder.call(Label("_protected_unlock"))
+            self.builder.call(Label("_PROT_ULK"))
             self.builder.pop(temp)
 
             # If barrier true, continue; else queue and wait
@@ -2132,7 +2132,7 @@ class ASTLowering:
                 self.builder.push(combined_id)
             else:
                 self.builder.push(Immediate(base_entry_id, IRType.WORD))
-            self.builder.call(Label("_protected_entry_queue"))
+            self.builder.call(Label("_PROT_ENQ"))
             self.builder.pop(temp)
             self.builder.pop(temp)
 
@@ -2145,7 +2145,7 @@ class ASTLowering:
 
         # Acquire lock for body execution
         self.builder.push(prot_obj)
-        self.builder.call(Label("_protected_lock"))
+        self.builder.call(Label("_PROT_LCK"))
         temp = self.builder.new_vreg(IRType.WORD, "_temp")
         self.builder.pop(temp)
 
@@ -2162,12 +2162,12 @@ class ASTLowering:
 
         # Release lock
         self.builder.push(prot_obj)
-        self.builder.call(Label("_protected_unlock"))
+        self.builder.call(Label("_PROT_ULK"))
         self.builder.pop(temp)
 
         # Re-evaluate all entry barriers (someone may now be able to proceed)
         self.builder.push(prot_obj)
-        self.builder.call(Label("_protected_reeval_barriers"))
+        self.builder.call(Label("_PROT_REB"))
         self.builder.pop(temp)
 
         # Return
@@ -2396,7 +2396,7 @@ class ASTLowering:
             self._lower_exception_handlers(decl.handled_exception_handlers)
 
         # At end of task body, call task termination
-        self.builder.call(Label("_TASK_TERMINATE"))
+        self.builder.call(Label("_TASK_TRM"))
 
         # Return (though task terminate doesn't return)
         self.builder.ret()
@@ -2527,7 +2527,7 @@ class ASTLowering:
         self.builder.push(entry_id_vreg)
 
         # Call runtime entry call
-        self.builder.call(Label("_ENTRY_CALL"))
+        self.builder.call(Label("_ENTRY_CL"))
 
         # Clean up stack (3 * 2 = 6 bytes)
         temp = self.builder.new_vreg(IRType.WORD, "_temp")
@@ -2635,7 +2635,7 @@ class ASTLowering:
         self.builder.push(entry_reg)
 
         # Call runtime to wait for entry call
-        self.builder.call(Label("_task_accept_start"), comment=f"accept {stmt.entry_name}")
+        self.builder.call(Label("_ENTRY_AC"), comment=f"accept {stmt.entry_name}")
 
         # Clean up stack
         temp = self.builder.new_vreg(IRType.WORD, "_discard")
@@ -2646,7 +2646,7 @@ class ASTLowering:
             self._lower_statement(s)
 
         # Signal accept completion
-        self.builder.call(Label("_task_accept_end"))
+        self.builder.call(Label("_ENTRY_AE"))
 
     def _lower_select(self, stmt: SelectStmt) -> None:
         """Lower a select statement (selective accept, timed entry, etc.).
@@ -2667,21 +2667,16 @@ class ASTLowering:
         alt_labels = []
 
         # Emit select start
-        self.builder.call(Label("_task_select_start"))
+        self.builder.call(Label("_SELC_ST"))
 
         # Process each alternative
         for i, alt in enumerate(stmt.alternatives):
             alt_label = self._new_label(f"select_alt_{i}")
             alt_labels.append(alt_label)
 
-            # Register this alternative with the runtime
-            self.builder.push(Immediate(i, IRType.WORD))
-            self.builder.call(Label("_task_select_register"))
-            temp = self.builder.new_vreg(IRType.WORD, "_discard")
-            self.builder.pop(temp)
-
         # Wait for one alternative to be ready
-        self.builder.call(Label("_task_select_wait"))
+        # For MP/M, _SELC_WT checks queues and returns selected index in HL
+        self.builder.call(Label("_SELC_WT"))
 
         # The runtime returns the index of the selected alternative in HL
         selected = self.builder.new_vreg(IRType.WORD, "_selected")
@@ -2713,7 +2708,7 @@ class ASTLowering:
                 self._lower_statement(s)
 
         self.builder.label(end_label)
-        self.builder.call(Label("_task_select_end"))
+        self.builder.call(Label("_SELC_EN"))
 
     def _lower_delay(self, stmt: DelayStmt) -> None:
         """Lower a delay statement.
@@ -2732,10 +2727,10 @@ class ASTLowering:
 
         if stmt.is_until:
             # delay until: wait until absolute time
-            self.builder.call(Label("_task_delay_until"), comment="delay until")
+            self.builder.call(Label("_TASK_DLU"), comment="delay until")
         else:
             # delay: relative delay
-            self.builder.call(Label("_task_delay"), comment="delay")
+            self.builder.call(Label("_TASK_DLY"), comment="delay")
 
         # Clean up stack
         temp = self.builder.new_vreg(IRType.WORD, "_discard")
@@ -2754,7 +2749,7 @@ class ASTLowering:
         for task_name in stmt.task_names:
             task_val = self._lower_expr(task_name)
             self.builder.push(task_val)
-            self.builder.call(Label("_task_abort"), comment="abort task")
+            self.builder.call(Label("_TASK_ABT"), comment="abort task")
             temp = self.builder.new_vreg(IRType.WORD, "_discard")
             self.builder.pop(temp)
 
@@ -2777,7 +2772,7 @@ class ASTLowering:
         abort_flag = 1 if stmt.is_with_abort else 0
         self.builder.push(Immediate(abort_flag, IRType.WORD))
 
-        self.builder.call(Label("_task_requeue"), comment="requeue")
+        self.builder.call(Label("_REQUEUE"), comment="requeue")
 
         # Clean up stack
         temp = self.builder.new_vreg(IRType.WORD, "_discard")
@@ -2798,7 +2793,7 @@ class ASTLowering:
         # Emit parallel start marker
         num_sequences = len(stmt.sequences)
         self.builder.push(Immediate(num_sequences, IRType.WORD))
-        self.builder.call(Label("_parallel_start"), comment=f"parallel ({num_sequences} sequences)")
+        self.builder.call(Label("_PAR_STR"), comment=f"parallel ({num_sequences} sequences)")
         temp = self.builder.new_vreg(IRType.WORD, "_discard")
         self.builder.pop(temp)
 
@@ -2806,7 +2801,7 @@ class ASTLowering:
         for i, seq in enumerate(stmt.sequences):
             # Notify runtime of sequence start
             self.builder.push(Immediate(i, IRType.WORD))
-            self.builder.call(Label("_parallel_seq_start"))
+            self.builder.call(Label("_PAR_SST"))
             self.builder.pop(temp)
 
             # Lower the statements in this sequence
@@ -2815,11 +2810,11 @@ class ASTLowering:
 
             # Notify runtime of sequence end
             self.builder.push(Immediate(i, IRType.WORD))
-            self.builder.call(Label("_parallel_seq_end"))
+            self.builder.call(Label("_PAR_SEN"))
             self.builder.pop(temp)
 
         # Emit parallel end marker (wait for all sequences)
-        self.builder.call(Label("_parallel_end"))
+        self.builder.call(Label("_PAR_END"))
 
     def _lower_pragma(self, stmt: PragmaStmt) -> None:
         """Lower a pragma statement.

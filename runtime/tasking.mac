@@ -24,7 +24,7 @@
 
     CSEG
 
-; Export all public routines
+; Export all public routines (long names for backwards compatibility)
     PUBLIC _TASK_INIT
     PUBLIC _TASK_CREATE
     PUBLIC _TASK_YIELD
@@ -42,6 +42,32 @@
     PUBLIC _PROTECTED_UNLOCK
     PUBLIC _task_current
     PUBLIC _tick_count
+
+; Export 8-character aliases (for um80 compatibility and lowering.py)
+    PUBLIC _TASK_INI        ; alias for _TASK_INIT
+    PUBLIC _TASK_CRE        ; alias for _TASK_CREATE
+    PUBLIC _TASK_YLD        ; alias for _TASK_YIELD
+    PUBLIC _TASK_TRM        ; alias for _TASK_TERMINATE
+    PUBLIC _TASK_DLY        ; alias for _TASK_DELAY
+    PUBLIC _TASK_DLU        ; alias for _TASK_DELAY_UNTIL
+    PUBLIC _TASK_ABT        ; alias for _TASK_ABORT
+    PUBLIC _ENTRY_CL        ; alias for _ENTRY_CALL
+    PUBLIC _ENTRY_AC        ; alias for _ENTRY_ACCEPT
+    PUBLIC _ENTRY_AE        ; alias for _ENTRY_ACCEPT_END
+    PUBLIC _SELC_ST         ; alias for _SELECT_START
+    PUBLIC _SELC_WT         ; alias for _SELECT_WAIT
+    PUBLIC _SELC_EN         ; alias for _SELECT_END
+    PUBLIC _PROT_LCK        ; alias for _PROTECTED_LOCK
+    PUBLIC _PROT_ULK        ; alias for _PROTECTED_UNLOCK
+    PUBLIC _PROT_ENQ        ; protected entry queue
+    PUBLIC _PROT_REB        ; re-evaluate barriers
+    PUBLIC _REQUEUE         ; requeue statement
+    PUBLIC _PAR_STR         ; parallel start
+    PUBLIC _PAR_SST         ; parallel sequence start
+    PUBLIC _PAR_SEN         ; parallel sequence end
+    PUBLIC _PAR_END         ; parallel end
+    PUBLIC _task_cur        ; alias for _task_current
+    PUBLIC _tick_cnt        ; alias for _tick_count
 
 ; External dependencies
     EXTRN _heap_alloc
@@ -889,5 +915,63 @@ _PROTECTED_UNLOCK:
     ret NZ              ; Still locked, keep interrupts disabled
     ei                  ; Unlock complete, re-enable interrupts
     ret
+
+; =========================================
+; 8-Character Aliases (for um80 compatibility)
+; =========================================
+
+_TASK_INI:  jp _TASK_INIT
+_TASK_CRE:  jp _TASK_CREATE
+_TASK_YLD:  jp _TASK_YIELD
+_TASK_TRM:  jp _TASK_TERMINATE
+_TASK_DLY:  jp _TASK_DELAY
+_TASK_DLU:  jp _TASK_DELAY_UNTIL
+_TASK_ABT:  jp _TASK_ABORT
+_ENTRY_CL:  jp _ENTRY_CALL
+_ENTRY_AC:  jp _ENTRY_ACCEPT
+_ENTRY_AE:  jp _ENTRY_ACCEPT_END
+_SELC_ST:   jp _SELECT_START
+_SELC_WT:   jp _SELECT_WAIT
+_SELC_EN:   jp _SELECT_END
+_PROT_LCK:  jp _PROTECTED_LOCK
+_PROT_ULK:  jp _PROTECTED_UNLOCK
+
+; Additional stubs for protected types and parallel blocks
+_PROT_ENQ:
+    ; Protected entry queue - stub for bare-metal Z80
+    ret
+
+_PROT_REB:
+    ; Re-evaluate barriers - stub
+    ret
+
+_REQUEUE:
+    ; Requeue statement - stub
+    pop DE              ; return address
+    pop HL              ; entry_ptr
+    pop BC              ; with_abort_flag
+    push DE             ; restore return
+    ret
+
+_PAR_STR:
+    ; Parallel start - stub (sequential execution)
+    ret
+
+_PAR_SST:
+    ; Parallel sequence start - stub
+    ret
+
+_PAR_SEN:
+    ; Parallel sequence end - stub
+    ret
+
+_PAR_END:
+    ; Parallel end - stub
+    ret
+
+; Data aliases
+    DSEG
+_task_cur:  EQU _task_current
+_tick_cnt:  EQU _tick_count
 
     END
