@@ -2030,7 +2030,9 @@ class ASTLowering:
                     if item.init_expr:
                         # Try to evaluate as static expression
                         try:
-                            init_val = self._eval_static_expr(item.init_expr)
+                            result = self._eval_static_expr(item.init_expr)
+                            # _eval_static_expr returns None when it can't evaluate
+                            init_val = result if result is not None else 0
                         except Exception:
                             init_val = 0
                     # Store the value using direct frame offset
@@ -2130,6 +2132,10 @@ class ASTLowering:
                           comment="load protected object pointer from arg")
         self.ctx.protected_obj_ptr = prot_obj  # Store for component access
 
+        # Add protected object to param list so explicit parameters get correct offsets
+        # (ix+4 = prot_obj, ix+6 = first explicit param, etc.)
+        ir_func.params.append(prot_obj)
+
         # Call lock acquire - _PROT_LCK consumes its argument from stack
         self.builder.push(prot_obj)
         self.builder.call(Label("_PROT_LCK"), comment=f"acquire lock for {prot_name}")
@@ -2211,6 +2217,11 @@ class ASTLowering:
         prot_obj = self.builder.new_vreg(IRType.PTR, "_protected_obj")
         self.builder.load(prot_obj, MemoryLocation(offset=4, ir_type=IRType.WORD, is_frame_offset=True),
                           comment="load protected object pointer from arg")
+        self.ctx.protected_obj_ptr = prot_obj  # Store for component access
+        self.ctx.protected_type = prot_type  # Store type info for component access
+
+        # Add protected object to param list so explicit parameters get correct offsets
+        ir_func.params.append(prot_obj)
 
         # Handle entry family index if present
         # For entry families, the index is passed as the second implicit parameter (at ix+6)
@@ -4420,27 +4431,8 @@ class ASTLowering:
                     args=stmt.args
                 )
 
-        # Check for Text_IO built-in procedures
-        if proc_name in ("put", "put_line", "new_line", "get", "get_line"):
-            # Determine if this is from Integer_Text_IO
-            is_integer_io = False
-            if isinstance(stmt.name, SelectedName):
-                prefix = self._get_selected_name_prefix(stmt.name)
-                is_integer_io = "integer_text_io" in prefix.lower()
-            self._lower_text_io_call(proc_name, stmt.args, is_integer_io)
-            return
-
-        # Check for Text_IO/Sequential_IO file operations
-        if proc_name in ("create", "open", "close", "delete", "reset", "flush"):
-            self._lower_file_operation(proc_name, stmt.args)
-            return
-
-        # Check if this is a Free (Unchecked_Deallocation instantiation)
-        if self._is_deallocation_call(proc_name):
-            self._lower_deallocation_call(stmt.args)
-            return
-
-        # Check if this is a protected type operation call (Counter.Increment)
+        # Check if this is a protected type operation call (Buffer.Put, Counter.Increment)
+        # This must come BEFORE Text_IO checks because Put/Get may match Text_IO patterns
         if isinstance(stmt.name, SelectedName):
             prefix = stmt.name.prefix
             selector = stmt.name.selector
@@ -4465,7 +4457,14 @@ class ASTLowering:
                     prot_type_name = prot_type.name if hasattr(prot_type, 'name') else prefix_name
                     op_name = f"{prot_type_name}_{selector}"
 
-                    # Get address of protected object (it's a local variable)
+                    # Push arguments first (right to left in C calling convention)
+                    # The protected object address is pushed LAST so it's at (ix+4)
+                    if stmt.args:
+                        for arg in reversed(stmt.args):
+                            val = self._lower_expr(arg)
+                            self.builder.push(val)
+
+                    # Get address of protected object and push it last (so it's at ix+4)
                     if self.ctx and prefix_name in self.ctx.locals:
                         local = self.ctx.locals[prefix_name]
                         prot_addr = self.builder.new_vreg(IRType.PTR, "_prot_obj")
@@ -4481,12 +4480,6 @@ class ASTLowering:
                         # Protected object may be global or not found - push 0 as placeholder
                         self.builder.push(Immediate(0, IRType.PTR))
 
-                    # Push any additional arguments
-                    if stmt.args:
-                        for arg in reversed(stmt.args):
-                            val = self._lower_expr(arg)
-                            self.builder.push(val)
-
                     # Call the protected operation
                     self.builder.call(Label(op_name), comment=f"call protected {selector}")
 
@@ -4497,9 +4490,66 @@ class ASTLowering:
                         self.builder.pop(temp)
                     return
 
+        # Handle SelectedName procedure calls (Ada.Text_IO.Put_Line, etc.)
+        if isinstance(stmt.name, SelectedName):
+            # Not a protected operation - check for Text_IO / Integer_Text_IO
+            prefix_str = self._get_selected_name_prefix(stmt.name)
+            prefix_lower = prefix_str.lower()
+            is_integer_io = "integer_text_io" in prefix_lower
+            is_text_io = "text_io" in prefix_lower or is_integer_io
+
+            if is_text_io:
+                self._lower_text_io_call(proc_name, stmt.args, is_integer_io)
+                return
+            else:
+                # For other SelectedName calls, just use the selector as the call target
+                call_target = stmt.name.selector
+                sym = self._resolve_overload(call_target, stmt.args)
+                if sym and sym.external_name:
+                    call_target = sym.external_name
+
+                # Push arguments in reverse order
+                if stmt.args:
+                    for arg in reversed(stmt.args):
+                        val = self._lower_expr(arg)
+                        self.builder.push(val)
+
+                # Call the procedure
+                self.builder.call(Label(call_target))
+
+                # Clean up stack
+                if stmt.args:
+                    for _ in stmt.args:
+                        temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                        self.builder.pop(temp)
+                return
+
         if isinstance(stmt.name, Identifier):
             # Resolve overloaded procedure
             sym = self._resolve_overload(stmt.name.name, stmt.args)
+
+            # Check for procedure renaming (alias_for)
+            # If the symbol is a renamed procedure, resolve to the original
+            if sym and sym.alias_for:
+                alias_name = sym.alias_for
+                # Check if this is a Text_IO procedure
+                alias_lower = alias_name.lower()
+                if "text_io" in alias_lower and "put" in alias_lower:
+                    is_integer_io = "integer_text_io" in alias_lower
+                    self._lower_text_io_call("put", stmt.args, is_integer_io)
+                    return
+                elif "text_io" in alias_lower and "get" in alias_lower:
+                    is_integer_io = "integer_text_io" in alias_lower
+                    self._lower_text_io_call("get", stmt.args, is_integer_io)
+                    return
+                elif "text_io" in alias_lower and "new_line" in alias_lower:
+                    self._lower_text_io_call("new_line", stmt.args, False)
+                    return
+                elif "text_io" in alias_lower:
+                    # Other Text_IO procedures
+                    selector = alias_name.split(".")[-1].lower()
+                    self._lower_text_io_call(selector, stmt.args, False)
+                    return
 
             # Determine the call target - use external name if imported
             # or runtime_name for built-in container operations
@@ -6682,6 +6732,12 @@ class ASTLowering:
 
         if isinstance(expr, TargetName):
             return self._lower_target_name(expr)
+
+        if isinstance(expr, ActualParameter):
+            # ActualParameter wraps the actual value - unwrap and lower
+            if expr.value is not None:
+                return self._lower_expr(expr.value)
+            return Immediate(0, IRType.WORD)
 
         # Default: return 0
         return Immediate(0, IRType.WORD)
@@ -15908,9 +15964,14 @@ class ASTLowering:
         if isinstance(expr, IntegerLiteral):
             return expr.value
         if isinstance(expr, Identifier):
+            # Handle Boolean literals
+            name_lower = expr.name.lower()
+            if name_lower == "true":
+                return 1
+            if name_lower == "false":
+                return 0
             # Try to look up named number
-            name = expr.name.lower()
-            sym = self.symbols.lookup(name) if self.symbols else None
+            sym = self.symbols.lookup(name_lower) if self.symbols else None
             if sym and hasattr(sym, 'value') and isinstance(sym.value, int):
                 return sym.value
         if isinstance(expr, UnaryExpr):
