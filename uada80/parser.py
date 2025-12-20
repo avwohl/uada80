@@ -3666,12 +3666,28 @@ class Parser:
                     items.append(item)
                 elif self.match(TokenType.ENTRY):
                     # Entry body: entry E [(Params)] [when Cond] is ... end E;
+                    entry_start = self.current
                     entry_name = self.expect_identifier()
                     entry_params = []
-                    # Parse optional parameters
+                    family_index = None
+                    # Parse optional parameters or family index
                     if self.match(TokenType.LEFT_PAREN):
-                        entry_params = self.parse_parameter_specifications()
-                        self.expect(TokenType.RIGHT_PAREN)
+                        # Check for entry family: (for I in Range)
+                        if self.check(TokenType.FOR):
+                            self.advance()  # consume FOR
+                            family_index = self.expect_identifier()
+                            self.expect(TokenType.IN)
+                            # Skip family range
+                            while not self.check(TokenType.RIGHT_PAREN):
+                                self.advance()
+                            self.expect(TokenType.RIGHT_PAREN)
+                            # Check for additional parameters
+                            if self.match(TokenType.LEFT_PAREN):
+                                entry_params = self.parse_parameter_specifications()
+                                self.expect(TokenType.RIGHT_PAREN)
+                        else:
+                            entry_params = self.parse_parameter_specifications()
+                            self.expect(TokenType.RIGHT_PAREN)
                     # Parse optional barrier
                     barrier = None
                     if self.match(TokenType.WHEN):
@@ -3684,17 +3700,15 @@ class Parser:
                     if self.check(TokenType.IDENTIFIER):
                         self.expect_identifier()
                     self.expect(TokenType.SEMICOLON)
-                    # Create a body for this entry
-                    entry_body = SubprogramBody(
-                        spec=SubprogramDecl(
-                            name=entry_name,
-                            is_function=False,
-                            parameters=entry_params,
-                            span=self.make_span(start),
-                        ),
-                        declarations=declarations,
-                        statements=statements,
-                        span=self.make_span(start),
+                    # Create EntryBody with barrier
+                    entry_body = EntryBody(
+                        name=entry_name,
+                        parameters=entry_params,
+                        barrier=barrier,
+                        family_index=family_index,
+                        decls=declarations,
+                        stmts=statements,
+                        span=self.make_span(entry_start),
                     )
                     items.append(entry_body)
                 else:
@@ -3776,8 +3790,31 @@ class Parser:
                 item = self.parse_subprogram()
                 items.append(item)
             elif self.match(TokenType.ENTRY):
-                # Entry body: entry E when Cond is ... end E;
+                # Entry body: entry E(params) when Cond is ... end E;
+                entry_start = self.current
                 entry_name = self.expect_identifier()
+                # Parse parameters if present
+                parameters = []
+                family_index = None
+                if self.match(TokenType.LPAREN):
+                    # Check for entry family: entry E(for I in Range)
+                    if self.check(TokenType.FOR):
+                        self.advance()  # consume FOR
+                        family_index = self.expect_identifier()
+                        self.expect(TokenType.IN)
+                        # Parse family range (skip for now, we just need the index name)
+                        while not self.check(TokenType.RPAREN):
+                            self.advance()
+                        self.expect(TokenType.RPAREN)
+                        # Check for additional parameters
+                        if self.match(TokenType.LPAREN):
+                            parameters = self.parse_formal_parameters()
+                            self.expect(TokenType.RPAREN)
+                    else:
+                        # Regular parameters - parse them now
+                        parameters = self.parse_formal_parameters()
+                        self.expect(TokenType.RPAREN)
+                # Parse barrier condition
                 barrier = None
                 if self.match(TokenType.WHEN):
                     barrier = self.parse_expression()
@@ -3789,17 +3826,15 @@ class Parser:
                 if self.check(TokenType.IDENTIFIER):
                     self.expect_identifier()
                 self.expect(TokenType.SEMICOLON)
-                # Create a body for this entry
-                entry_body = SubprogramBody(
-                    spec=SubprogramDecl(
-                        name=entry_name,
-                        is_function=False,
-                        parameters=[],
-                        span=self.make_span(start),
-                    ),
-                    declarations=declarations,
-                    statements=statements,
-                    span=self.make_span(start),
+                # Create EntryBody with barrier
+                entry_body = EntryBody(
+                    name=entry_name,
+                    parameters=parameters,
+                    barrier=barrier,
+                    family_index=family_index,
+                    decls=declarations,
+                    stmts=statements,
+                    span=self.make_span(entry_start),
                 )
                 items.append(entry_body)
             else:

@@ -16070,9 +16070,15 @@ class ASTLowering:
     # --- Stub methods for features not yet implemented ---
 
     def _setup_parameters(self, params: list) -> None:
-        """Set up parameter locals from parameter list (stub)."""
-        # TODO: Implement parameter setup for subprogram bodies
-        pass
+        """Set up parameter locals from parameter list.
+
+        This is used for entry bodies and other cases where we need to
+        set up parameters outside of _lower_subprogram_body.
+        """
+        if self.ctx is None:
+            return
+        for param in params:
+            self._lower_parameter(param)
 
     def _lower_exception_handlers(self, handlers: list) -> None:
         """Lower exception handlers (stub)."""
