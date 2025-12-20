@@ -11161,6 +11161,7 @@ class ASTLowering:
                     return Immediate(ada_type.size_bits, IRType.WORD)
 
                 # Handle enumeration attributes
+                from uada80.type_system import EnumerationType
                 if isinstance(ada_type, EnumerationType):
                     if attr == "first" and ada_type.literals:
                         # Return position of first literal (always 0)
@@ -11363,10 +11364,22 @@ class ASTLowering:
             # Type'Value(S) - converts string to value
             # Determine the prefix type to call the right conversion function
             prefix_type = None
+            enum_literals = None  # For locally declared enum types
             if isinstance(expr.prefix, Identifier):
+                type_name = expr.prefix.name.lower()
                 sym = self.symbols.lookup(expr.prefix.name)
                 if sym and sym.kind == SymbolKind.TYPE:
                     prefix_type = sym.ada_type
+
+                # Also check local type declarations (for locally declared enums)
+                if prefix_type is None and hasattr(self, '_current_body_declarations'):
+                    from uada80.ast_nodes import EnumerationTypeDef
+                    for d in self._current_body_declarations:
+                        if isinstance(d, TypeDecl) and d.name.lower() == type_name:
+                            if isinstance(d.type_def, EnumerationTypeDef) and d.type_def.literals:
+                                # Build EnumerationType-like info for local enum
+                                enum_literals = d.type_def.literals
+                                break
 
             # Check if it's a Float64 type (Long_Float)
             if self._is_float64_type(prefix_type):
@@ -11402,22 +11415,66 @@ class ASTLowering:
                 self.builder.pop(temp)
                 return result
             else:
-                # Integer'Value - parse decimal string
-                arg_value = self._lower_expr(expr.args[0])
-                self.builder.push(arg_value)
-                self.builder.call(Label("_s2i"), comment="Integer'Value")
-                # IMPORTANT: Capture result from HL BEFORE popping argument
-                # The pop would otherwise destroy HL which contains the result
-                result = self.builder.new_vreg(IRType.WORD, "_value")
-                self.builder.emit(IRInstr(
-                    OpCode.MOV, result,
-                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
-                    comment="capture Integer'Value result from HL"
-                ))
-                # Now clean up the pushed argument
-                temp = self.builder.new_vreg(IRType.WORD, "_discard")
-                self.builder.pop(temp)
-                return result
+                # Check if it's an enumeration type (but not Boolean which is handled above)
+                # Either from symbol table (prefix_type) or local declaration (enum_literals)
+                from uada80.type_system import EnumerationType
+                is_enum = (prefix_type and isinstance(prefix_type, EnumerationType)) or enum_literals
+                if is_enum:
+                    # Enumeration'Value - lookup string in table
+                    # Generate a unique label for this enum's lookup table
+                    table_label = self.builder.new_label("_enum_tbl")
+
+                    # Create the table entries: [(name, value), ...]
+                    entries = []
+                    if prefix_type and isinstance(prefix_type, EnumerationType):
+                        for lit_name in prefix_type.literals:
+                            value = prefix_type.positions.get(lit_name, 0)
+                            entries.append((lit_name, value))
+                    elif enum_literals:
+                        # Local enum declaration - literals are in order
+                        for i, lit_name in enumerate(enum_literals):
+                            entries.append((lit_name, i))
+
+                    # Add the table to the module
+                    if self.builder.module:
+                        self.builder.module.add_enum_table(table_label, entries)
+
+                    # Push table pointer, then string pointer
+                    arg_value = self._lower_expr(expr.args[0])
+                    self.builder.push(arg_value)  # string pointer
+                    table_ptr = self.builder.new_vreg(IRType.PTR, "_tbl_ptr")
+                    self.builder.mov(table_ptr, Label(table_label), comment="enum table pointer")
+                    self.builder.push(table_ptr)
+                    self.builder.call(Label("_e_val"), comment="Enumeration'Value")
+                    # Result is in HL
+                    result = self.builder.new_vreg(IRType.WORD, "_value")
+                    self.builder.emit(IRInstr(
+                        OpCode.MOV, result,
+                        MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                        comment="capture Enumeration'Value result from HL"
+                    ))
+                    # Clean up the pushed arguments (2 words)
+                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                    self.builder.pop(temp)
+                    self.builder.pop(temp)
+                    return result
+                else:
+                    # Integer'Value - fallback for integer types
+                    arg_value = self._lower_expr(expr.args[0])
+                    self.builder.push(arg_value)
+                    self.builder.call(Label("_s2i"), comment="Integer'Value")
+                    # IMPORTANT: Capture result from HL BEFORE popping argument
+                    # The pop would otherwise destroy HL which contains the result
+                    result = self.builder.new_vreg(IRType.WORD, "_value")
+                    self.builder.emit(IRInstr(
+                        OpCode.MOV, result,
+                        MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                        comment="capture Integer'Value result from HL"
+                    ))
+                    # Now clean up the pushed argument
+                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                    self.builder.pop(temp)
+                    return result
 
         if attr == "min" and len(expr.args) >= 2:
             # Type'Min(X, Y) - returns minimum of X and Y

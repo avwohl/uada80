@@ -4037,5 +4037,44 @@ def test_boolean_value_attribute():
     assert "4:TRUE" in stdout, f"Expected 4:TRUE (mixed case with space), got: {stdout}"
 
 
+@skip_if_no_tools
+def test_enumeration_value_attribute():
+    """Test Enumeration'Value attribute for string to enum conversion."""
+    source = """
+    with Ada.Integer_Text_IO;
+    with Ada.Text_IO;
+    procedure Test is
+        type Color is (Red, Green, Blue, Yellow);
+        C : Color;
+    begin
+        C := Color'Value("RED");
+        Ada.Integer_Text_IO.Put(Color'Pos(C));
+        Ada.Text_IO.New_Line;
+
+        C := Color'Value("Green");  -- mixed case
+        Ada.Integer_Text_IO.Put(Color'Pos(C));
+        Ada.Text_IO.New_Line;
+
+        C := Color'Value("blue");  -- lowercase
+        Ada.Integer_Text_IO.Put(Color'Pos(C));
+        Ada.Text_IO.New_Line;
+
+        C := Color'Value("YELLOW");
+        Ada.Integer_Text_IO.Put(Color'Pos(C));
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    lines = stdout.strip().split('\n')
+    assert len(lines) >= 4, f"Expected 4 lines, got: {stdout}"
+    # Red=0, Green=1, Blue=2, Yellow=3
+    assert "0" in lines[0], f"Expected 0 for RED, got: {lines[0]}"
+    assert "1" in lines[1], f"Expected 1 for Green, got: {lines[1]}"
+    assert "2" in lines[2], f"Expected 2 for blue, got: {lines[2]}"
+    assert "3" in lines[3], f"Expected 3 for YELLOW, got: {lines[3]}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
