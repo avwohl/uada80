@@ -1770,11 +1770,17 @@ class SemanticAnalyzer:
         if decl.is_function and decl.return_type:
             return_type = self._resolve_type(decl.return_type)
 
+        # Get alias name for renaming declarations
+        alias_for = None
+        if decl.renames:
+            alias_for = self._get_hierarchical_name(decl.renames)
+
         symbol = Symbol(
             name=decl.name,
             kind=kind,
             return_type=return_type,
             is_abstract=decl.is_abstract,
+            alias_for=alias_for,
         )
 
         # Process parameters to record their types
