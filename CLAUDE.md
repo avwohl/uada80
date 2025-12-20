@@ -1,6 +1,37 @@
 # Claude Code Notes for UADA80
 
-## Session (2025-12-20) - Protected Entry Barriers
+## Session (2025-12-20) - Exception Handling & File I/O Improvements
+
+**Session accomplished:**
+- Fixed exception handler lowering (was stubbed, now fully working)
+- Fixed DSEG segment ordering bug (moved globals to end of file to avoid linker issues)
+- Added 4 new exception handling execution tests
+- Implemented Text_IO.Delete and Text_IO.Reset operations in runtime
+- Added `_file_delete_handle` and `_file_reset` to fileio.mac
+
+**Exception Handling Fixes:**
+1. **Task body exception handlers** - Now uses `_lower_block_with_handlers` instead of stub
+2. **DSEG ordering** - Moved global variables to end of assembly file (after CSEG code)
+   - DSEG in the middle of code caused linker issues with um80/ul80
+   - User-defined exception declarations (`My_Exception : exception;`) now work
+3. **Exception tests** - Added tests for Constraint_Error, user-defined exceptions, and "when others"
+
+**File I/O Improvements:**
+1. `_file_delete_handle(handle)` - Close file and delete it from filesystem
+2. `_file_reset(handle)` - Reset file position to beginning for re-reading
+3. Updated lowering.py to call these instead of just `_file_close`
+
+**Files Modified:**
+- `uada80/codegen/__init__.py` - Move DSEG to end of file
+- `uada80/lowering.py` - Use `_lower_block_with_handlers` for tasks, update file ops
+- `runtime/fileio.mac` - Add `_file_delete_handle` and `_file_reset`
+- `tests/test_execution.py` - 4 new exception handling tests
+
+**Tests:** 6938/6938 tests pass (153 execution tests)
+
+---
+
+## Previous Session (2025-12-20) - Protected Entry Barriers
 
 **Session accomplished:**
 - Implemented protected entry barrier support (`entry Get when Ready is`)
@@ -353,8 +384,8 @@ pylint uada80/
 ### Current Status
 
 - **Pylint score**: 10.00/10
-- **Tests**: 6932/6932 passing
-- **Execution tests**: 147 pass (skipped in CI, run locally with cpmemu)
+- **Tests**: 6938/6938 passing
+- **Execution tests**: 153 pass (skipped in CI, run locally with cpmemu)
 
 ---
 
@@ -371,7 +402,7 @@ pylint uada80/
 | **Code Gen**       | 90%      | Full Z80 assembly output, runtime calls    |
 | **Runtime**        | 70%      | Basic ops, I/O, exceptions; no tasking     |
 | **Standard Lib**   | 95%      | 1,094 packages in adalib/                  |
-| **Execution Tests**| 100%     | 147/147 pass (incl. protected types)       |
+| **Execution Tests**| 100%     | 153/153 pass (incl. protected types)       |
 | **OVERALL**        | **75%**  | Estimated ~3,200/4,725 ACATS tests         |
 
 ### Feature Completion by Category
