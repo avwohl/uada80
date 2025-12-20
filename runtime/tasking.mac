@@ -38,8 +38,7 @@
     PUBLIC _SELECT_START
     PUBLIC _SELECT_WAIT
     PUBLIC _SELECT_END
-    PUBLIC _PROTECTED_LOCK
-    PUBLIC _PROTECTED_UNLOCK
+    ; _PROTECTED_LOCK and _PROTECTED_UNLOCK are in protlock.mac
     PUBLIC _task_current
     PUBLIC _tick_count
 
@@ -57,8 +56,7 @@
     PUBLIC _SELC_ST         ; alias for _SELECT_START
     PUBLIC _SELC_WT         ; alias for _SELECT_WAIT
     PUBLIC _SELC_EN         ; alias for _SELECT_END
-    PUBLIC _PROT_LCK        ; alias for _PROTECTED_LOCK
-    PUBLIC _PROT_ULK        ; alias for _PROTECTED_UNLOCK
+    ; _PROT_LCK and _PROT_ULK are in protlock.mac
     PUBLIC _PROT_ENQ        ; protected entry queue
     PUBLIC _PROT_REB        ; re-evaluate barriers
     PUBLIC _REQUEUE         ; requeue statement
@@ -880,41 +878,7 @@ _ftbi_found:
 
 PROT_LOCK_OFFSET EQU 0  ; Lock byte at offset 0 of protected object
 
-; -----------------------------------------
-; _PROTECTED_LOCK: Acquire protected object lock
-; Input: Protected object address on stack
-; Output: None (returns with interrupts disabled)
-; -----------------------------------------
-_PROTECTED_LOCK:
-    di                  ; Disable interrupts for mutual exclusion
-    pop DE              ; Return address
-    pop HL              ; Protected object address
-    push DE             ; Restore return address
-    ; Increment lock count
-    ld A, (HL)
-    inc A
-    ld (HL), A
-    ; Note: Interrupts remain disabled until _PROTECTED_UNLOCK
-    ret
-
-; -----------------------------------------
-; _PROTECTED_UNLOCK: Release protected object lock
-; Input: Protected object address on stack
-; Output: None
-; -----------------------------------------
-_PROTECTED_UNLOCK:
-    pop DE              ; Return address
-    pop HL              ; Protected object address
-    push DE             ; Restore return address
-    ; Decrement lock count
-    ld A, (HL)
-    dec A
-    ld (HL), A
-    ; Only re-enable interrupts when fully unlocked (count = 0)
-    or A
-    ret NZ              ; Still locked, keep interrupts disabled
-    ei                  ; Unlock complete, re-enable interrupts
-    ret
+; NOTE: _PROTECTED_LOCK and _PROTECTED_UNLOCK are now in protlock.mac
 
 ; =========================================
 ; 8-Character Aliases (for um80 compatibility)
@@ -933,8 +897,7 @@ _ENTRY_AE:  jp _ENTRY_ACCEPT_END
 _SELC_ST:   jp _SELECT_START
 _SELC_WT:   jp _SELECT_WAIT
 _SELC_EN:   jp _SELECT_END
-_PROT_LCK:  jp _PROTECTED_LOCK
-_PROT_ULK:  jp _PROTECTED_UNLOCK
+; _PROT_LCK and _PROT_ULK are in protlock.mac
 
 ; Additional stubs for protected types and parallel blocks
 _PROT_ENQ:
