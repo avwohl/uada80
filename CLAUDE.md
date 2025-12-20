@@ -27,7 +27,7 @@
 - `runtime/fileio.mac` - Add `_file_delete_handle` and `_file_reset`
 - `tests/test_execution.py` - 4 new exception handling tests
 
-**Tests:** 6938/6938 tests pass (153 execution tests)
+**Tests:** 6939/6939 tests pass (154 execution tests)
 
 ---
 
@@ -384,8 +384,8 @@ pylint uada80/
 ### Current Status
 
 - **Pylint score**: 10.00/10
-- **Tests**: 6938/6938 passing
-- **Execution tests**: 153 pass (skipped in CI, run locally with cpmemu)
+- **Tests**: 6939/6939 passing
+- **Execution tests**: 154 pass (skipped in CI, run locally with cpmemu)
 
 ---
 
@@ -402,7 +402,7 @@ pylint uada80/
 | **Code Gen**       | 90%      | Full Z80 assembly output, runtime calls    |
 | **Runtime**        | 70%      | Basic ops, I/O, exceptions; no tasking     |
 | **Standard Lib**   | 95%      | 1,094 packages in adalib/                  |
-| **Execution Tests**| 100%     | 153/153 pass (incl. protected types)       |
+| **Execution Tests**| 100%     | 154/154 pass (incl. protected types)       |
 | **OVERALL**        | **75%**  | Estimated ~3,200/4,725 ACATS tests         |
 
 ### Feature Completion by Category
