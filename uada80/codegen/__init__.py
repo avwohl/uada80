@@ -110,14 +110,10 @@ class Z80CodeGen:
             self._emit("; Exit to CP/M")
             self._emit("")
 
-        # Generate globals
-        if module.globals:
-            self._emit("; Global variables")
-            self._emit("    DSEG")
-            for name, (ir_type, size) in module.globals.items():
-                self._emit(f"{self._mangle_symbol(name)}:")
-                self._emit(f"    DS {size}")
-            self._emit("")
+        # Note: Global variables (DSEG) are emitted at the end of the file
+        # to avoid segment interleaving issues with the linker.
+        # Store globals for later emission.
+        saved_globals = module.globals
 
         # Generate string literals
         if module.string_literals:
@@ -178,6 +174,16 @@ class Z80CodeGen:
         else:
             # Library mode: emit EXTRN declarations for needed routines
             self._generate_runtime_externs()
+
+        # Emit global variables at the end (DSEG section)
+        # This keeps all CSEG together to avoid linker segment interleaving issues
+        if saved_globals:
+            self._emit("")
+            self._emit("; Global variables")
+            self._emit("    DSEG")
+            for name, (ir_type, size) in saved_globals.items():
+                self._emit(f"{self._mangle_symbol(name)}:")
+                self._emit(f"    DS {size}")
 
         self._emit("")
         self._emit("    END")

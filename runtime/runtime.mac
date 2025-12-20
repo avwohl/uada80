@@ -215,9 +215,12 @@ _div16_ret:
     RET
 
 _div16_zero:
-    ; Division by zero - return max value
-    LD HL, 7FFFH
-    RET
+    ; Division by zero - raise Constraint_Error
+    LD HL, 1                ; Constraint_Error = 1
+    LD (_exc_current), HL
+    LD HL, 0
+    LD (_exc_message), HL
+    JP _exc_do_raise
 
 ; ============================================================
 ; _mod16 - 16-bit signed modulo (remainder)
@@ -310,8 +313,12 @@ _mod16_ret:
     RET
 
 _mod16_zero:
+    ; Division by zero - raise Constraint_Error
+    LD HL, 1                ; Constraint_Error = 1
+    LD (_exc_current), HL
     LD HL, 0
-    RET
+    LD (_exc_message), HL
+    JP _exc_do_raise
 
 ; ============================================================
 ; _raise_constraint_error - Handle constraint error
@@ -580,9 +587,12 @@ _udiv16_next:
     RET
 
 _udiv16_zero:
-    LD HL, 0FFFFH
-    LD DE, 0
-    RET
+    ; Division by zero - raise Constraint_Error
+    LD HL, 1                ; Constraint_Error = 1
+    LD (_exc_current), HL
+    LD HL, 0
+    LD (_exc_message), HL
+    JP _exc_do_raise
 
 ; ============================================================
 ; _get_int - Read signed 16-bit integer from console
@@ -947,8 +957,12 @@ _divu_next:
     RET
 
 _divu_zero:
-    LD HL, 0FFFFH
-    RET
+    ; Division by zero - raise Constraint_Error
+    LD HL, 1                ; Constraint_Error = 1
+    LD (_exc_current), HL
+    LD HL, 0
+    LD (_exc_message), HL
+    JP _exc_do_raise
 
 ; ============================================================
 ; _div16_mod - Unsigned division returning both quotient and remainder
@@ -998,9 +1012,12 @@ _divm_next:
     RET
 
 _divm_zero:
-    LD HL, 0FFFFH
-    LD DE, 0
-    RET
+    ; Division by zero - raise Constraint_Error
+    LD HL, 1                ; Constraint_Error = 1
+    LD (_exc_current), HL
+    LD HL, 0
+    LD (_exc_message), HL
+    JP _exc_do_raise
 
 ; ============================================================
 ; 32-bit Multiplication
@@ -1207,6 +1224,115 @@ _i2s_done:
     EX DE, HL
 
     POP BC
+    POP IX
+    RET
+
+; ============================================================
+; _str_to_int - Convert string to signed 16-bit integer
+; Input: String pointer on stack (at SP+2)
+; Output: HL = integer value
+; Notes:
+;   - Skips leading whitespace
+;   - Handles optional leading '-' for negative numbers
+;   - Stops at first non-digit character
+;   - Returns 0 for empty/invalid strings
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _str_to_int
+_str_to_int:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+
+    ; Get string pointer from stack (at IX+4)
+    LD L, (IX+4)
+    LD H, (IX+5)
+    ; HL now points to string
+
+    ; Skip leading whitespace
+_s2i_skip:
+    LD A, (HL)
+    CP ' '
+    JR Z, _s2i_next_ws
+    CP 9                    ; tab
+    JR Z, _s2i_next_ws
+    JR _s2i_check_sign
+_s2i_next_ws:
+    INC HL
+    JR _s2i_skip
+
+_s2i_check_sign:
+    ; Check for negative sign
+    LD B, 0                 ; B = 0 means positive
+    LD A, (HL)
+    CP '-'
+    JR NZ, _s2i_check_plus
+    LD B, 1                 ; B = 1 means negative
+    INC HL
+    JR _s2i_start
+
+_s2i_check_plus:
+    CP '+'
+    JR NZ, _s2i_start
+    INC HL                  ; Skip optional '+'
+
+_s2i_start:
+    ; DE = result (accumulator), start at 0
+    LD DE, 0
+    PUSH BC                 ; Save sign flag
+
+_s2i_loop:
+    LD A, (HL)
+    ; Check if digit (0-9)
+    CP '0'
+    JR C, _s2i_done         ; < '0', not a digit
+    CP '9'+1
+    JR NC, _s2i_done        ; > '9', not a digit
+
+    ; A is a digit, convert to value
+    SUB '0'
+    LD C, A                 ; C = digit value (0-9)
+
+    ; Multiply DE by 10: DE = DE * 10
+    ; DE * 10 = DE * 8 + DE * 2 = (DE << 3) + (DE << 1)
+    PUSH HL
+    EX DE, HL               ; HL = current value
+    ADD HL, HL              ; HL = value * 2
+    LD D, H
+    LD E, L                 ; DE = value * 2
+    ADD HL, HL              ; HL = value * 4
+    ADD HL, HL              ; HL = value * 8
+    ADD HL, DE              ; HL = value * 10
+    ; Add digit
+    LD D, 0
+    LD E, C                 ; DE = digit
+    ADD HL, DE              ; HL = value * 10 + digit
+    EX DE, HL               ; DE = new value
+    POP HL
+
+    INC HL                  ; Next character
+    JR _s2i_loop
+
+_s2i_done:
+    ; DE = result value
+    POP BC                  ; Restore sign flag (B)
+
+    ; Apply sign if negative
+    LD A, B
+    OR A
+    JR Z, _s2i_positive
+
+    ; Negate DE (two's complement)
+    XOR A
+    SUB E
+    LD E, A
+    SBC A, A
+    SUB D
+    LD D, A
+
+_s2i_positive:
+    EX DE, HL               ; HL = result
+
     POP IX
     RET
 

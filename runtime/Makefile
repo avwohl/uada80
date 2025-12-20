@@ -33,9 +33,12 @@ MAC_SOURCES = $(COMMON_SOURCES) $(TASKING_SOURCE)
 MAC_OBJECTS = $(MAC_SOURCES:.mac=.rel)
 
 # Pre-compiled object files (no source available)
-PREBUILT_OBJECTS = strings.rel bounded.rel heap.rel math.rel io.rel
+# DISABLED: These contain duplicate/conflicting symbol definitions
+# PREBUILT_OBJECTS = strings.rel bounded.rel heap.rel math.rel io.rel
+PREBUILT_OBJECTS =
 
-OBJECTS = $(PREBUILT_OBJECTS) $(MAC_OBJECTS)
+# Put MAC_OBJECTS first so runtime.rel symbols take precedence over prebuilt
+OBJECTS = $(MAC_OBJECTS) $(PREBUILT_OBJECTS)
 
 .PHONY: all clean rebuild mpm cpm
 
