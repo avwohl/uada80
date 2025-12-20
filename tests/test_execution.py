@@ -3833,5 +3833,163 @@ def test_protected_type_basic():
     assert "3" in stdout
 
 
+@skip_if_no_tools
+def test_exception_handler_basic():
+    """Test basic exception handling with Constraint_Error from division by zero."""
+    source = """
+    with Ada.Integer_Text_IO;
+    with Ada.Text_IO;
+    procedure Test is
+        Result : Integer := 0;
+        X : Integer := 100;
+        Y : Integer := 0;
+    begin
+        begin
+            -- Division by zero raises Constraint_Error
+            Result := X / Y;
+            Result := 999;  -- Should not be executed
+        exception
+            when Constraint_Error =>
+                Result := 42;  -- Handler sets result
+        end;
+        Ada.Integer_Text_IO.Put(Result);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "42" in stdout
+
+
+@skip_if_no_tools
+def test_exception_handler_others():
+    """Test exception handling with 'when others' catch-all."""
+    source = """
+    with Ada.Integer_Text_IO;
+    with Ada.Text_IO;
+    procedure Test is
+        My_Exception : exception;
+        Result : Integer := 0;
+    begin
+        begin
+            raise My_Exception;
+            Result := 999;  -- Should not be executed
+        exception
+            when others =>
+                Result := 77;  -- Catch-all handler
+        end;
+        Ada.Integer_Text_IO.Put(Result);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "77" in stdout
+
+
+@skip_if_no_tools
+def test_exception_no_raise():
+    """Test that exception handlers are skipped when no exception occurs."""
+    source = """
+    with Ada.Integer_Text_IO;
+    with Ada.Text_IO;
+    procedure Test is
+        Result : Integer := 0;
+    begin
+        begin
+            Result := 100;  -- Normal execution
+        exception
+            when Constraint_Error =>
+                Result := 999;  -- Should NOT be executed
+        end;
+        Ada.Integer_Text_IO.Put(Result);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "100" in stdout
+
+
+@skip_if_no_tools
+def test_exception_user_defined():
+    """Test user-defined exception handling."""
+    source = """
+    with Ada.Integer_Text_IO;
+    with Ada.Text_IO;
+    procedure Test is
+        Invalid_Input : exception;
+        Result : Integer := 0;
+    begin
+        begin
+            raise Invalid_Input;
+        exception
+            when Invalid_Input =>
+                Result := 123;
+        end;
+        Ada.Integer_Text_IO.Put(Result);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "123" in stdout
+
+
+@skip_if_no_tools
+def test_integer_value_attribute():
+    """Test Integer'Value attribute for string to integer conversion."""
+    source = """
+    with Ada.Integer_Text_IO;
+    with Ada.Text_IO;
+    procedure Test is
+        X : Integer;
+    begin
+        X := Integer'Value("123");
+        Ada.Integer_Text_IO.Put(X);
+        Ada.Text_IO.New_Line;
+        X := Integer'Value("-456");
+        Ada.Integer_Text_IO.Put(X);
+        Ada.Text_IO.New_Line;
+        X := Integer'Value("  789");  -- with leading spaces
+        Ada.Integer_Text_IO.Put(X);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "123" in stdout
+    assert "-456" in stdout
+    assert "789" in stdout
+
+
+@skip_if_no_tools
+def test_long_float_value_attribute():
+    """Test Long_Float'Value attribute for string to float conversion."""
+    source = """
+    with Ada.Integer_Text_IO;
+    with Ada.Text_IO;
+    procedure Test is
+        X : Long_Float;
+        R : Integer;
+    begin
+        -- Test integer conversion (no decimal)
+        X := Long_Float'Value("42");
+        R := Integer(X);
+        Ada.Integer_Text_IO.Put(R);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "42" in stdout, f"Expected 42, got: {stdout}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -76,6 +76,7 @@
         PUBLIC  _f64_e2x        ; Exponential e^x (Taylor series, 8-char name to avoid collision with _f64_exp_int)
         PUBLIC  _f64_log        ; Natural logarithm ln(x)
         PUBLIC  _f64_lg10       ; Base 10 logarithm log10(x)
+        PUBLIC  _str_f64        ; String to Float64 conversion
 
         ; Constants used by inlined composite functions
         PUBLIC  _const_one_f64  ; 1.0
@@ -6123,5 +6124,286 @@ _atnh_res:      DS      8       ; Result: (1/2) * ln((1 + x) / (1 - x))
 
 ; Temporary storage for log10 function
 _lg10_ln:       DS      8       ; ln(x)
+
+        CSEG    ; Switch back to code segment for _str_f64
+
+; =============================================================================
+; _str_f64: Convert string to Float64
+; Input:  String pointer on stack (at SP+2)
+; Output: HL = pointer to result Float64 (in static storage)
+; Notes:
+;   - Skips leading whitespace
+;   - Handles optional leading '-' or '+' for sign
+;   - Parses integer part and optional fractional part
+;   - Example: "123.456" -> 123.456 as Float64
+; Destroys: A, BC, DE, HL
+; =============================================================================
+_str_f64:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Get string pointer from stack (at IX+4)
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+
+        ; Initialize parsing state
+        xor     a
+        ld      (_strf_sign), a         ; 0 = positive
+        ld      (_strf_frac), a         ; 0 = no fractional digits yet
+        ld      hl, 0
+        ld      (_strf_int), hl         ; Integer accumulator = 0
+        ld      (_strf_fdig), hl        ; Fractional digit count = 0
+        ld      (_strf_frac_val), hl    ; Fractional value = 0
+
+        ; Get string pointer again
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+
+        ; Skip leading whitespace
+_strf_skip_ws:
+        ld      a, (hl)
+        cp      ' '
+        jr      z, _strf_skip_next
+        cp      9                       ; Tab
+        jr      nz, _strf_check_sign
+_strf_skip_next:
+        inc     hl
+        jr      _strf_skip_ws
+
+_strf_check_sign:
+        ; Check for sign
+        ld      a, (hl)
+        cp      '-'
+        jr      nz, _strf_check_plus
+        ld      a, 1
+        ld      (_strf_sign), a
+        inc     hl
+        jr      _strf_parse_int
+
+_strf_check_plus:
+        cp      '+'
+        jr      nz, _strf_parse_int
+        inc     hl
+
+_strf_parse_int:
+        ; Parse integer part
+        ld      a, (hl)
+        cp      '.'
+        jr      z, _strf_start_frac
+        cp      '0'
+        jr      c, _strf_done_parse     ; Not a digit
+        cp      '9'+1
+        jr      nc, _strf_done_parse    ; Not a digit
+
+        ; Digit found - accumulate: int = int * 10 + digit
+        sub     '0'                     ; A = digit value
+        push    hl                      ; Save string pointer
+        push    af                      ; Save digit
+
+        ; Multiply current integer by 10
+        ld      hl, (_strf_int)
+        ld      d, h
+        ld      e, l                    ; DE = int
+        add     hl, hl                  ; HL = int * 2
+        add     hl, hl                  ; HL = int * 4
+        add     hl, de                  ; HL = int * 5
+        add     hl, hl                  ; HL = int * 10
+
+        ; Add digit
+        pop     af                      ; A = digit
+        ld      e, a
+        ld      d, 0
+        add     hl, de                  ; HL = int * 10 + digit
+        ld      (_strf_int), hl
+
+        pop     hl                      ; Restore string pointer
+        inc     hl
+        jr      _strf_parse_int
+
+_strf_start_frac:
+        ; Found decimal point - start parsing fractional part
+        ld      a, 1
+        ld      (_strf_frac), a
+        inc     hl                      ; Skip '.'
+
+_strf_parse_frac:
+        ld      a, (hl)
+        cp      '0'
+        jr      c, _strf_done_parse     ; Not a digit
+        cp      '9'+1
+        jr      nc, _strf_done_parse    ; Not a digit
+
+        ; Digit found - accumulate fractional part
+        sub     '0'                     ; A = digit value
+        push    hl                      ; Save string pointer
+        push    af                      ; Save digit
+
+        ; Multiply current fractional value by 10
+        ld      hl, (_strf_frac_val)
+        ld      d, h
+        ld      e, l
+        add     hl, hl                  ; * 2
+        add     hl, hl                  ; * 4
+        add     hl, de                  ; * 5
+        add     hl, hl                  ; * 10
+
+        ; Add digit
+        pop     af
+        ld      e, a
+        ld      d, 0
+        add     hl, de
+        ld      (_strf_frac_val), hl
+
+        ; Increment fractional digit count
+        ld      hl, (_strf_fdig)
+        inc     hl
+        ld      (_strf_fdig), hl
+
+        pop     hl                      ; Restore string pointer
+        inc     hl
+        jr      _strf_parse_frac
+
+_strf_done_parse:
+        ; Now convert to Float64
+        ; Step 1: Convert integer part to Float64
+        ; _f64_itof expects: dest_ptr pushed first, then integer value
+        ld      hl, _strf_res
+        push    hl                      ; Dest pointer (pushed first)
+        ld      hl, (_strf_int)
+        push    hl                      ; Value (pushed last)
+        call    _f64_itof
+        pop     hl
+        pop     hl
+
+        ; Apply sign if negative
+        ld      a, (_strf_sign)
+        or      a
+        jr      z, _strf_check_frac
+
+        ; Negate the result
+        ; _f64_neg expects: dest_ptr (IX+4), src_ptr (IX+6)
+        ld      hl, _strf_res
+        push    hl                      ; src_ptr (pushed first, at IX+6)
+        push    hl                      ; dest_ptr (pushed last, at IX+4)
+        call    _f64_neg
+        pop     hl
+        pop     hl
+
+_strf_check_frac:
+        ; Check if we have fractional part
+        ld      hl, (_strf_fdig)
+        ld      a, h
+        or      l
+        jr      z, _strf_return         ; No fractional digits
+
+        ; Step 2: Convert fractional value to Float64
+        ; _f64_itof expects: dest_ptr pushed first, then integer value
+        ld      hl, _strf_frac_f64
+        push    hl                      ; Dest (pushed first)
+        ld      hl, (_strf_frac_val)
+        push    hl                      ; Value (pushed last)
+        call    _f64_itof
+        pop     hl
+        pop     hl
+
+        ; Step 3: Compute 10^(fractional digit count) as divisor
+        ; Start with 1.0
+        ld      hl, _strf_div
+        push    hl
+        call    _f64_one
+        pop     hl
+
+        ; Multiply by 10 for each fractional digit
+        ld      hl, (_strf_fdig)
+        ld      b, l                    ; B = number of digits (assume < 256)
+        ld      a, b
+        or      a
+        jr      z, _strf_do_frac_div
+
+_strf_mul10_loop:
+        push    bc
+        ; _strf_div = _strf_div * 10.0
+        ; _f64_mul expects: result_ptr (IX+8), b_ptr (IX+6), a_ptr (IX+4)
+        ; Push order: result first, then b, then a (last)
+        ld      hl, _strf_div
+        push    hl                      ; result_ptr (pushed first, at IX+8)
+        ld      hl, _const_10
+        push    hl                      ; b_ptr: 10.0 (at IX+6)
+        ld      hl, _strf_div
+        push    hl                      ; a_ptr: current divisor (pushed last, at IX+4)
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+        pop     bc
+        djnz    _strf_mul10_loop
+
+_strf_do_frac_div:
+        ; Divide fractional value by divisor: frac_val / divisor
+        ; _f64_div expects: result_ptr (IX+8), b_ptr (IX+6), a_ptr (IX+4)
+        ; result = a / b, so a = dividend, b = divisor
+        ld      hl, _strf_frac_f64
+        push    hl                      ; result_ptr (at IX+8)
+        ld      hl, _strf_div
+        push    hl                      ; b_ptr: divisor (at IX+6)
+        ld      hl, _strf_frac_f64
+        push    hl                      ; a_ptr: dividend (at IX+4)
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Apply sign to fractional part if negative
+        ld      a, (_strf_sign)
+        or      a
+        jr      z, _strf_add_frac
+
+        ; Negate fractional part
+        ; _f64_neg expects: dest_ptr (IX+4), src_ptr (IX+6)
+        ld      hl, _strf_frac_f64
+        push    hl                      ; src_ptr (pushed first, at IX+6)
+        push    hl                      ; dest_ptr (pushed last, at IX+4)
+        call    _f64_neg
+        pop     hl
+        pop     hl
+
+_strf_add_frac:
+        ; Add fractional part to integer part: res + frac_f64
+        ; _f64_add expects: result_ptr (IX+8), b_ptr (IX+6), a_ptr (IX+4)
+        ld      hl, _strf_res
+        push    hl                      ; result_ptr (at IX+8)
+        ld      hl, _strf_frac_f64
+        push    hl                      ; b_ptr: fractional (at IX+6)
+        ld      hl, _strf_res
+        push    hl                      ; a_ptr: integer part (at IX+4)
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+_strf_return:
+        ; Return pointer to result
+        ld      hl, _strf_res
+        pop     ix
+        ret
+
+; Constant: 10.0 in Float64 format
+; 10.0 = 1.25 * 2^3, exponent = 1023 + 3 = 1026 = 0x402
+; Sign = 0, Exp = 10000000010, Mantissa = 0100000...0
+; Bytes (little-endian): 00 00 00 00 00 00 24 40
+_const_10:
+        DB      00H, 00H, 00H, 00H, 00H, 00H, 24H, 40H
+
+; Temporary storage for _str_f64
+        DSEG
+_strf_sign:     DS      1       ; Sign flag (0=pos, 1=neg)
+_strf_frac:     DS      1       ; In fractional part flag
+_strf_int:      DS      2       ; Integer accumulator
+_strf_fdig:     DS      2       ; Fractional digit count
+_strf_frac_val: DS      2       ; Fractional value accumulator
+_strf_res:      DS      8       ; Result Float64
+_strf_frac_f64: DS      8       ; Fractional part as Float64
+_strf_div:      DS      8       ; Divisor (10^n)
 
         END

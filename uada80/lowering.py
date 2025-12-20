@@ -2562,13 +2562,14 @@ class ASTLowering:
         for d in decl.declarations:
             self._lower_declaration(d)
 
-        # Lower task body statements
-        for stmt in decl.statements:
-            self._lower_statement(stmt)
-
-        # Handle exception handlers if present
+        # Lower task body statements (with exception handlers if present)
         if decl.handled_exception_handlers:
-            self._lower_exception_handlers(decl.handled_exception_handlers)
+            self._lower_block_with_handlers(
+                decl.statements, decl.handled_exception_handlers
+            )
+        else:
+            for stmt in decl.statements:
+                self._lower_statement(stmt)
 
         # At end of task body, call task termination
         self.builder.call(Label("_TASK_TRM"))
@@ -5530,26 +5531,21 @@ class ASTLowering:
             self.builder.pop(temp)
 
         elif op == "delete":
-            # Delete(File : in out File_Type) - close and delete
+            # Delete(File : in out File_Type) - close and delete file
             file_arg = args[0].value
             file_val = self._lower_expr(file_arg)
-            # First close
             self.builder.push(file_val)
-            self.builder.call(Label("_file_close"), comment="Text_IO.Delete (close)")
+            self.builder.call(Label("_file_delete_handle"), comment="Text_IO.Delete")
             temp = self.builder.new_vreg(IRType.WORD, "_discard")
             self.builder.pop(temp)
-            # Then delete (would need filename - for now just close)
-            # TODO: Implement proper file deletion
 
         elif op == "reset":
             # Reset(File : in out File_Type; Mode : File_Mode := In_File)
-            # For now, just close and reopen is too complex
-            # Simple implementation: just rewind to start
+            # Resets file position to beginning for reading
             file_arg = args[0].value
             file_val = self._lower_expr(file_arg)
-            # For now, just call close - proper reset would need to track filename
             self.builder.push(file_val)
-            self.builder.call(Label("_file_close"), comment="Text_IO.Reset (close only)")
+            self.builder.call(Label("_file_reset"), comment="Text_IO.Reset")
             temp = self.builder.new_vreg(IRType.WORD, "_discard")
             self.builder.pop(temp)
 
@@ -11365,20 +11361,47 @@ class ASTLowering:
 
         if attr == "value" and expr.args:
             # Type'Value(S) - converts string to value
-            # For integers: parse decimal string
-            arg_value = self._lower_expr(expr.args[0])
-            self.builder.push(arg_value)
-            self.builder.call(Label("_str_to_int"), comment="Integer'Value")
-            temp = self.builder.new_vreg(IRType.WORD, "_discard")
-            self.builder.pop(temp)
-            # Capture result from HL register
-            result = self.builder.new_vreg(IRType.WORD, "_value")
-            self.builder.emit(IRInstr(
-                OpCode.MOV, result,
-                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
-                comment="capture Integer'Value result from HL"
-            ))
-            return result
+            # Determine the prefix type to call the right conversion function
+            prefix_type = None
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.kind == SymbolKind.TYPE:
+                    prefix_type = sym.ada_type
+
+            # Check if it's a Float64 type (Long_Float)
+            if self._is_float64_type(prefix_type):
+                # Float64'Value - parse string to Float64
+                arg_value = self._lower_expr(expr.args[0])
+                self.builder.push(arg_value)
+                self.builder.call(Label("_str_f64"), comment="Long_Float'Value")
+                # Result is pointer to Float64 in HL
+                result = self.builder.new_vreg(IRType.PTR, "_value_ptr")
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture Long_Float'Value result ptr from HL"
+                ))
+                # Clean up the pushed argument
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                return result
+            else:
+                # Integer'Value - parse decimal string
+                arg_value = self._lower_expr(expr.args[0])
+                self.builder.push(arg_value)
+                self.builder.call(Label("_str_to_int"), comment="Integer'Value")
+                # IMPORTANT: Capture result from HL BEFORE popping argument
+                # The pop would otherwise destroy HL which contains the result
+                result = self.builder.new_vreg(IRType.WORD, "_value")
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture Integer'Value result from HL"
+                ))
+                # Now clean up the pushed argument
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                return result
 
         if attr == "min" and len(expr.args) >= 2:
             # Type'Min(X, Y) - returns minimum of X and Y
@@ -15955,6 +15978,27 @@ class ASTLowering:
                                     elem_size = 1
                                 elif comp_name == 'float':
                                     elem_size = 6
+                                elif comp_name in ('long_float', 'long_long_float'):
+                                    elem_size = 8
+                                elif comp_name and declarations:
+                                    # Look up component type in local declarations
+                                    for comp_d in declarations:
+                                        if isinstance(comp_d, TypeDecl) and comp_d.name.lower() == comp_name:
+                                            # Found the component type declaration
+                                            comp_type_def = comp_d.type_def
+                                            if hasattr(comp_type_def, 'components') or hasattr(comp_type_def, 'fields'):
+                                                # It's a record type - sum up field sizes
+                                                fields = getattr(comp_type_def, 'fields', None) or getattr(comp_type_def, 'components', [])
+                                                if isinstance(fields, dict):
+                                                    elem_size = len(fields) * 2
+                                                else:
+                                                    elem_size = 0
+                                                    for comp in fields:
+                                                        # Get field count (for "X, Y : Integer")
+                                                        num_names = len(comp.names) if hasattr(comp, 'names') and isinstance(comp.names, list) else 1
+                                                        elem_size += num_names * 2  # Each integer field is 2 bytes
+                                                    elem_size = max(elem_size, 2)
+                                            break
                             return total_elem_count * elem_size
                     break
 
@@ -15990,10 +16034,33 @@ class ASTLowering:
                             if isinstance(first, int) and isinstance(last, int):
                                 elem_count = last - first + 1
                                 elem_size = 2  # Default element size
-                                if ada_type.element_type:
-                                    et_name = getattr(ada_type.element_type, 'name', '').lower()
+                                # ArrayType uses component_type, not element_type
+                                et = getattr(ada_type, 'component_type', None) or getattr(ada_type, 'element_type', None)
+                                if et:
+                                    et_name = getattr(et, 'name', '').lower()
                                     if et_name in ('character', 'boolean'):
                                         elem_size = 1
+                                    elif et_name == 'float':
+                                        elem_size = 6
+                                    elif et_name in ('long_float', 'long_long_float'):
+                                        elem_size = 8
+                                    elif isinstance(et, RecordType):
+                                        # Element is a record - sum up field sizes
+                                        elem_size = 0
+                                        for field_name, field_type in et.fields.items():
+                                            fn = getattr(field_type, 'name', '').lower() if field_type else ''
+                                            if fn in ('character', 'boolean'):
+                                                elem_size += 1
+                                            elif fn == 'float':
+                                                elem_size += 6
+                                            elif fn in ('long_float', 'long_long_float'):
+                                                elem_size += 8
+                                            else:
+                                                elem_size += 2  # Default field size
+                                        elem_size = max(elem_size, 2)
+                                    elif hasattr(et, 'size_bits') and et.size_bits:
+                                        # Use size_bits if available (e.g., RecordType with computed size)
+                                        elem_size = et.size_bits // 8
                                 return elem_count * elem_size
 
                 elif isinstance(ada_type, EnumerationType):
@@ -16081,9 +16148,16 @@ class ASTLowering:
             self._lower_parameter(param)
 
     def _lower_exception_handlers(self, handlers: list) -> None:
-        """Lower exception handlers (stub)."""
-        # TODO: Implement exception handler lowering
-        pass
+        """Lower exception handlers as a standalone block.
+
+        Note: This is primarily used when exception handlers exist
+        without associated statements (e.g., for legacy compatibility).
+        Prefer using _lower_block_with_handlers for blocks with statements.
+        """
+        if not handlers or self.ctx is None:
+            return
+        # Lower as a block with empty statement list
+        self._lower_block_with_handlers([], handlers)
 
     def _get_constant_value(self, expr) -> Optional[int]:
         """Get compile-time constant value from expression (stub)."""
