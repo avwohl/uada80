@@ -5957,175 +5957,12 @@ _const_ln2:
 _const_zero:
         DB      00h, 00h, 00h, 00h, 00h, 00h, 00h, 00h
 
-; =============================================================================
-; Working memory (internal accumulators)
-; Placed at end of file to avoid linker segment calculation bug
-; =============================================================================
-
-        DSEG
-
-; Float accumulator A (for first operand and result)
-_acc_a:     DS      8       ; 64-bit accumulator A
-
-; Float accumulator B (for second operand)
-_acc_b:     DS      8       ; 64-bit accumulator B
-
-; Extended mantissa for multiply/divide (need extra bits for precision)
-_mantx:     DS      16      ; 128-bit extended mantissa
-
-; Temporary storage
-_ftemp:     DS      8       ; Temporary 64-bit value (used by div)
-_sub_temp:  DS      8       ; Temporary for subtraction (separate to avoid conflict with div)
-_exp_a:     DS      2       ; Exponent of A (16-bit for overflow detection)
-_exp_b:     DS      2       ; Exponent of B
-_fsign:     DS      1       ; Result sign
-_sign_a:    DS      1       ; Sign of operand A
-_sign_b:    DS      1       ; Sign of operand B
-
-; 64-bit working registers (8 bytes each, little-endian)
-_mant_a:    DS      8       ; Mantissa A with implicit 1 at bit 52
-_mant_b:    DS      8       ; Mantissa B with implicit 1 at bit 52
-_mant_r:    DS      8       ; Result mantissa
-
-; Square root scratch space
-_sqrt_s:    DS      8       ; Input value S
-_sqrt_x:    DS      8       ; Current approximation x
-_sqrt_t:    DS      8       ; Temporary for S/x
-
-; Local variables for _f64_ftoi
-_ftoi_src:  DS      2       ; Source pointer
-_ftoi_b6:   DS      1       ; Byte 6 of float
-_ftoi_b7:   DS      1       ; Byte 7 of float
-_ftoi_uexp: DS      2       ; Unbiased exponent
-
-; Temp for ceiling/floor
-_ceil_temp: DS      8       ; Temp storage for ceiling calculations
-
-; Temporary storage for exponentiation
-_exp_result:    DS      8       ; Running result
-_exp_base:      DS      8       ; Current base (squared each iteration)
-_exp_counter:   DS      2       ; Exponent counter
-_exp_neg_flag:  DS      1       ; Flag: 1 if original exponent was negative
-
-; Temporary storage for rem/mod operations
-_rem_quotient:  DS      8       ; Quotient X/Y
-_rem_product:   DS      8       ; Y * quotient
-_frac_bits:     DS      1       ; Temporary for fractional bits count
-_had_frac:      DS      1       ; Flag: 1 if any fractional bits were non-zero
-
-; Temporary storage for sin function
-_sin_x:         DS      8       ; Input value (after argument reduction)
-_sin_x2:        DS      8       ; x²
-_sin_xn:        DS      8       ; Current power (x³, x⁵, x⁷, ...)
-_sin_term:      DS      8       ; Current term
-_sin_result:    DS      8       ; Running result
-_sin_sign:      DS      1       ; Original sign
-
-; Temporary storage for cos function
-_cos_x:         DS      8       ; Input value (after argument reduction)
-_cos_x2:        DS      8       ; x²
-_cos_xn:        DS      8       ; Current power (x⁴, x⁶, x⁸, ...)
-_cos_term:      DS      8       ; Current term
-_cos_result:    DS      8       ; Running result
-
-; Temporary storage for tan function
-_tan_sin:       DS      8       ; sin(x) result
-_tan_cos:       DS      8       ; cos(x) result
-
-; Temporary storage for exp function (_f64_e2x)
-_expf_x:        DS      8       ; Input value (reduced)
-_expf_sign:     DS      1       ; Original sign
-_expf_n_tmp:    DS      8       ; n as float (for argument reduction)
-_expf_n_int:    DS      2       ; n as integer
-_expf_r:        DS      8       ; Reduced argument r
-_expf_rn:       DS      8       ; Powers of r (r², r³, ...)
-_expf_term:     DS      8       ; Current term
-_expf_res:      DS      8       ; Running result
-
-; Temporary storage for log function
-_log_x:         DS      8       ; Input value (modified to mantissa m)
-_log_y:         DS      8       ; y = m - 1
-_log_yn:        DS      8       ; Powers of y (y², y³, ...)
-_log_term:      DS      8       ; Current term
-_log_result:    DS      8       ; Running result
-_log_exp:       DS      2       ; Exponent e (signed integer)
-_log_e_float:   DS      8       ; e as float
-
-; Temporary storage for atan function
-_atan_x:        DS      8       ; Input value (after reduction)
-_atan_x2:       DS      8       ; x²
-_atan_xn:       DS      8       ; Current power (x³, x⁵, x⁷, ...)
-_atan_term:     DS      8       ; Current term
-_atan_res:      DS      8       ; Running result
-_atan_sign:     DS      1       ; Original sign
-_atan_reduce:   DS      1       ; Flag: 1 if |x| > 1 reduction applied
-
-; Temporary storage for asin function
-_asin_x:        DS      8       ; Input value
-_asin_x2:       DS      8       ; x²
-_asin_tmp:      DS      8       ; Temporary for sqrt(1-x²) and x/sqrt(1-x²)
-_asin_res:      DS      8       ; Result
-_asin_sign:     DS      1       ; Original sign
-
-; Arccosine working variables
-_acos_tmp:      DS      8       ; Temporary for asin(x)
-_acos_res:      DS      8       ; Result
-
-; Temporary storage for atan2 function
-_atan2_y:       DS      8       ; y input value
-_atan2_x:       DS      8       ; x input value
-_atan2_tmp:     DS      8       ; Temporary for y/x
-_atan2_res:     DS      8       ; Result
-
-; Temporary storage for sinh function
-_sinh_x:        DS      8       ; Input value
-_sinh_exp:      DS      8       ; e^x
-_sinh_tmp:      DS      8       ; Temporary for -x and e^(-x)
-_sinh_res:      DS      8       ; Result
-
-; Temporary storage for cosh function
-_cosh_x:        DS      8       ; Input value
-_cosh_exp:      DS      8       ; e^x
-_cosh_tmp:      DS      8       ; Temporary for -x and e^(-x)
-_cosh_res:      DS      8       ; Result
-
-; Temporary storage for tanh function
-_tanh_x:        DS      8       ; Input value
-_tanh_exp:      DS      8       ; e^x
-_tanh_tmp:      DS      8       ; Temporary for -x
-_tanh_nex:      DS      8       ; e^(-x)
-_tanh_num:      DS      8       ; Numerator: e^x - e^(-x)
-_tanh_den:      DS      8       ; Denominator: e^x + e^(-x)
-_tanh_res:      DS      8       ; Result
-
-; Temporary storage for arcsinh function
-_asnh_x:        DS      8       ; Input value
-_asnh_sq:       DS      8       ; x²
-_asnh_t1:       DS      8       ; x² + 1
-_asnh_t2:       DS      8       ; sqrt(x² + 1)
-_asnh_t3:       DS      8       ; x + sqrt(x² + 1)
-_asnh_res:      DS      8       ; Result: ln(x + sqrt(x² + 1))
-
-; Temporary storage for arccosh function
-_acsh_x:        DS      8       ; Input value
-_acsh_sq:       DS      8       ; x²
-_acsh_t1:       DS      8       ; x² - 1
-_acsh_t2:       DS      8       ; sqrt(x² - 1)
-_acsh_t3:       DS      8       ; x + sqrt(x² - 1)
-_acsh_res:      DS      8       ; Result: ln(x + sqrt(x² - 1))
-
-; Temporary storage for arctanh function
-_atnh_x:        DS      8       ; Input value
-_atnh_num:      DS      8       ; 1 + x
-_atnh_den:      DS      8       ; 1 - x
-_atnh_quo:      DS      8       ; (1 + x) / (1 - x)
-_atnh_log:      DS      8       ; ln((1 + x) / (1 - x))
-_atnh_res:      DS      8       ; Result: (1/2) * ln((1 + x) / (1 - x))
-
-; Temporary storage for log10 function
-_lg10_ln:       DS      8       ; ln(x)
-
-        CSEG    ; Switch back to code segment for _str_f64
+; Constant: 10.0 in Float64 format
+; 10.0 = 1.25 * 2^3, exponent = 1023 + 3 = 1026 = 0x402
+; Sign = 0, Exp = 10000000010, Mantissa = 0100000...0
+; Bytes (little-endian): 00 00 00 00 00 00 24 40
+_const_10:
+        DB      00H, 00H, 00H, 00H, 00H, 00H, 24H, 40H
 
 ; =============================================================================
 ; _str_f64: Convert string to Float64
@@ -6388,15 +6225,175 @@ _strf_return:
         pop     ix
         ret
 
-; Constant: 10.0 in Float64 format
-; 10.0 = 1.25 * 2^3, exponent = 1023 + 3 = 1026 = 0x402
-; Sign = 0, Exp = 10000000010, Mantissa = 0100000...0
-; Bytes (little-endian): 00 00 00 00 00 00 24 40
-_const_10:
-        DB      00H, 00H, 00H, 00H, 00H, 00H, 24H, 40H
+; =============================================================================
+; Working memory (internal accumulators)
+; Placed at end of file to avoid linker segment calculation bug
+; =============================================================================
+
+        DSEG
+
+; Float accumulator A (for first operand and result)
+_acc_a:     DS      8       ; 64-bit accumulator A
+
+; Float accumulator B (for second operand)
+_acc_b:     DS      8       ; 64-bit accumulator B
+
+; Extended mantissa for multiply/divide (need extra bits for precision)
+_mantx:     DS      16      ; 128-bit extended mantissa
+
+; Temporary storage
+_ftemp:     DS      8       ; Temporary 64-bit value (used by div)
+_sub_temp:  DS      8       ; Temporary for subtraction (separate to avoid conflict with div)
+_exp_a:     DS      2       ; Exponent of A (16-bit for overflow detection)
+_exp_b:     DS      2       ; Exponent of B
+_fsign:     DS      1       ; Result sign
+_sign_a:    DS      1       ; Sign of operand A
+_sign_b:    DS      1       ; Sign of operand B
+
+; 64-bit working registers (8 bytes each, little-endian)
+_mant_a:    DS      8       ; Mantissa A with implicit 1 at bit 52
+_mant_b:    DS      8       ; Mantissa B with implicit 1 at bit 52
+_mant_r:    DS      8       ; Result mantissa
+
+; Square root scratch space
+_sqrt_s:    DS      8       ; Input value S
+_sqrt_x:    DS      8       ; Current approximation x
+_sqrt_t:    DS      8       ; Temporary for S/x
+
+; Local variables for _f64_ftoi
+_ftoi_src:  DS      2       ; Source pointer
+_ftoi_b6:   DS      1       ; Byte 6 of float
+_ftoi_b7:   DS      1       ; Byte 7 of float
+_ftoi_uexp: DS      2       ; Unbiased exponent
+
+; Temp for ceiling/floor
+_ceil_temp: DS      8       ; Temp storage for ceiling calculations
+
+; Temporary storage for exponentiation
+_exp_result:    DS      8       ; Running result
+_exp_base:      DS      8       ; Current base (squared each iteration)
+_exp_counter:   DS      2       ; Exponent counter
+_exp_neg_flag:  DS      1       ; Flag: 1 if original exponent was negative
+
+; Temporary storage for rem/mod operations
+_rem_quotient:  DS      8       ; Quotient X/Y
+_rem_product:   DS      8       ; Y * quotient
+_frac_bits:     DS      1       ; Temporary for fractional bits count
+_had_frac:      DS      1       ; Flag: 1 if any fractional bits were non-zero
+
+; Temporary storage for sin function
+_sin_x:         DS      8       ; Input value (after argument reduction)
+_sin_x2:        DS      8       ; x²
+_sin_xn:        DS      8       ; Current power (x³, x⁵, x⁷, ...)
+_sin_term:      DS      8       ; Current term
+_sin_result:    DS      8       ; Running result
+_sin_sign:      DS      1       ; Original sign
+
+; Temporary storage for cos function
+_cos_x:         DS      8       ; Input value (after argument reduction)
+_cos_x2:        DS      8       ; x²
+_cos_xn:        DS      8       ; Current power (x⁴, x⁶, x⁸, ...)
+_cos_term:      DS      8       ; Current term
+_cos_result:    DS      8       ; Running result
+
+; Temporary storage for tan function
+_tan_sin:       DS      8       ; sin(x) result
+_tan_cos:       DS      8       ; cos(x) result
+
+; Temporary storage for exp function (_f64_e2x)
+_expf_x:        DS      8       ; Input value (reduced)
+_expf_sign:     DS      1       ; Original sign
+_expf_n_tmp:    DS      8       ; n as float (for argument reduction)
+_expf_n_int:    DS      2       ; n as integer
+_expf_r:        DS      8       ; Reduced argument r
+_expf_rn:       DS      8       ; Powers of r (r², r³, ...)
+_expf_term:     DS      8       ; Current term
+_expf_res:      DS      8       ; Running result
+
+; Temporary storage for log function
+_log_x:         DS      8       ; Input value (modified to mantissa m)
+_log_y:         DS      8       ; y = m - 1
+_log_yn:        DS      8       ; Powers of y (y², y³, ...)
+_log_term:      DS      8       ; Current term
+_log_result:    DS      8       ; Running result
+_log_exp:       DS      2       ; Exponent e (signed integer)
+_log_e_float:   DS      8       ; e as float
+
+; Temporary storage for atan function
+_atan_x:        DS      8       ; Input value (after reduction)
+_atan_x2:       DS      8       ; x²
+_atan_xn:       DS      8       ; Current power (x³, x⁵, x⁷, ...)
+_atan_term:     DS      8       ; Current term
+_atan_res:      DS      8       ; Running result
+_atan_sign:     DS      1       ; Original sign
+_atan_reduce:   DS      1       ; Flag: 1 if |x| > 1 reduction applied
+
+; Temporary storage for asin function
+_asin_x:        DS      8       ; Input value
+_asin_x2:       DS      8       ; x²
+_asin_tmp:      DS      8       ; Temporary for sqrt(1-x²) and x/sqrt(1-x²)
+_asin_res:      DS      8       ; Result
+_asin_sign:     DS      1       ; Original sign
+
+; Arccosine working variables
+_acos_tmp:      DS      8       ; Temporary for asin(x)
+_acos_res:      DS      8       ; Result
+
+; Temporary storage for atan2 function
+_atan2_y:       DS      8       ; y input value
+_atan2_x:       DS      8       ; x input value
+_atan2_tmp:     DS      8       ; Temporary for y/x
+_atan2_res:     DS      8       ; Result
+
+; Temporary storage for sinh function
+_sinh_x:        DS      8       ; Input value
+_sinh_exp:      DS      8       ; e^x
+_sinh_tmp:      DS      8       ; Temporary for -x and e^(-x)
+_sinh_res:      DS      8       ; Result
+
+; Temporary storage for cosh function
+_cosh_x:        DS      8       ; Input value
+_cosh_exp:      DS      8       ; e^x
+_cosh_tmp:      DS      8       ; Temporary for -x and e^(-x)
+_cosh_res:      DS      8       ; Result
+
+; Temporary storage for tanh function
+_tanh_x:        DS      8       ; Input value
+_tanh_exp:      DS      8       ; e^x
+_tanh_tmp:      DS      8       ; Temporary for -x
+_tanh_nex:      DS      8       ; e^(-x)
+_tanh_num:      DS      8       ; Numerator: e^x - e^(-x)
+_tanh_den:      DS      8       ; Denominator: e^x + e^(-x)
+_tanh_res:      DS      8       ; Result
+
+; Temporary storage for arcsinh function
+_asnh_x:        DS      8       ; Input value
+_asnh_sq:       DS      8       ; x²
+_asnh_t1:       DS      8       ; x² + 1
+_asnh_t2:       DS      8       ; sqrt(x² + 1)
+_asnh_t3:       DS      8       ; x + sqrt(x² + 1)
+_asnh_res:      DS      8       ; Result: ln(x + sqrt(x² + 1))
+
+; Temporary storage for arccosh function
+_acsh_x:        DS      8       ; Input value
+_acsh_sq:       DS      8       ; x²
+_acsh_t1:       DS      8       ; x² - 1
+_acsh_t2:       DS      8       ; sqrt(x² - 1)
+_acsh_t3:       DS      8       ; x + sqrt(x² - 1)
+_acsh_res:      DS      8       ; Result: ln(x + sqrt(x² - 1))
+
+; Temporary storage for arctanh function
+_atnh_x:        DS      8       ; Input value
+_atnh_num:      DS      8       ; 1 + x
+_atnh_den:      DS      8       ; 1 - x
+_atnh_quo:      DS      8       ; (1 + x) / (1 - x)
+_atnh_log:      DS      8       ; ln((1 + x) / (1 - x))
+_atnh_res:      DS      8       ; Result: (1/2) * ln((1 + x) / (1 - x))
+
+; Temporary storage for log10 function
+_lg10_ln:       DS      8       ; ln(x)
 
 ; Temporary storage for _str_f64
-        DSEG
 _strf_sign:     DS      1       ; Sign flag (0=pos, 1=neg)
 _strf_frac:     DS      1       ; In fractional part flag
 _strf_int:      DS      2       ; Integer accumulator

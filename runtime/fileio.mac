@@ -908,7 +908,7 @@ size_error:
         ret
 
 ;----------------------------------------------------------------------
-; _file_delete: Delete a file
+; _file_delete: Delete a file by filename
 ; Input:  HL = pointer to filename (null-terminated)
 ;----------------------------------------------------------------------
 _file_delete:
@@ -924,6 +924,121 @@ _file_delete:
         ld      c, BDOS_DELETE_FILE
         call    BDOS
 
+        pop     de
+        pop     bc
+        ret
+
+;----------------------------------------------------------------------
+; _file_delete_handle: Delete a file by handle (close and delete)
+; Input:  HL = file handle
+; Note: File must be open. This closes and deletes it.
+;----------------------------------------------------------------------
+        PUBLIC  _file_delete_handle
+_file_delete_handle:
+        push    bc
+        push    de
+        push    ix
+        push    hl                  ; Save handle
+
+        ; Validate handle
+        ld      a, l
+        cp      MAX_FILES
+        jr      nc, del_handle_done
+
+        ; Get EFCB pointer (handle in HL)
+        call    get_efcb_ptr        ; IX = EFCB
+
+        ; Close the file first
+        push    ix
+        pop     de
+        ld      c, BDOS_CLOSE_FILE
+        call    BDOS
+
+        ; Mark slot as not in use
+        pop     hl                  ; Restore handle
+        push    hl                  ; Save it again
+        ld      de, file_in_use
+        ld      a, l
+        ld      c, a
+        ld      b, 0
+        ex      de, hl
+        add     hl, bc
+        ld      (hl), 0             ; Mark as free
+
+        ; Delete the file using the FCB
+        pop     hl                  ; Restore handle
+        push    hl                  ; Save it again
+        call    get_efcb_ptr        ; IX = EFCB
+        push    ix
+        pop     de                  ; DE = FCB pointer
+        ld      c, BDOS_DELETE_FILE
+        call    BDOS
+
+del_handle_done:
+        pop     hl                  ; Discard saved handle
+        pop     ix
+        pop     de
+        pop     bc
+        ret
+
+;----------------------------------------------------------------------
+; _file_reset: Reset file to beginning
+; Input:  HL = file handle
+; Rewinds file position to start (for reading from beginning again)
+;----------------------------------------------------------------------
+        PUBLIC  _file_reset
+_file_reset:
+        push    bc
+        push    de
+        push    ix
+
+        ; Validate handle
+        ld      a, l
+        cp      MAX_FILES
+        jr      nc, reset_done
+
+        ; Get EFCB pointer
+        call    get_efcb_ptr        ; IX = EFCB
+
+        ; Reset random record fields to 0 (bytes 33-35 of FCB)
+        push    ix
+        pop     hl
+        ld      bc, 33              ; Offset to r0 (random record)
+        add     hl, bc
+        xor     a
+        ld      (hl), a             ; r0 = 0
+        inc     hl
+        ld      (hl), a             ; r1 = 0
+        inc     hl
+        ld      (hl), a             ; r2 = 0
+
+        ; Also reset extent (byte 12) and CR (byte 32)
+        push    ix
+        pop     hl
+        ld      bc, 12              ; Offset to extent
+        add     hl, bc
+        xor     a
+        ld      (hl), a             ; Extent = 0
+
+        push    ix
+        pop     hl
+        ld      bc, 32              ; Offset to CR (current record)
+        add     hl, bc
+        xor     a
+        ld      (hl), a             ; CR = 0
+
+        ; Reset buffer position and length in our EFCB
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUF_POS
+        add     hl, bc
+        xor     a
+        ld      (hl), a             ; Buffer position = 0
+        inc     hl                  ; Point to BUF_LEN
+        ld      (hl), a             ; Buffer length = 0 (no valid data)
+
+reset_done:
+        pop     ix
         pop     de
         pop     bc
         ret
