@@ -1442,6 +1442,73 @@ _s2b_done:
     RET
 
 ; ============================================================
+; _c_val - Convert string to Character code (Character'Value)
+; Input: String pointer on stack (at SP+2)
+; Output: HL = character code (0-255)
+; Notes:
+;   - Accepts "'X'" (Ada character literal format)
+;   - Accepts "X" (single character)
+;   - Skips leading whitespace
+;   - Returns 0 for empty/invalid strings
+; Destroys: A
+; ============================================================
+    PUBLIC _c_val
+_c_val:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+
+    ; Get string pointer from stack (IX+4)
+    LD L, (IX+4)
+    LD H, (IX+5)
+    ; HL now points to string
+
+    ; Skip leading whitespace
+_c_val_skip:
+    LD A, (HL)
+    CP ' '
+    JR Z, _c_val_next_ws
+    CP 9                    ; tab
+    JR Z, _c_val_next_ws
+    JR _c_val_check
+
+_c_val_next_ws:
+    INC HL
+    JR _c_val_skip
+
+_c_val_check:
+    ; Check if empty string
+    LD A, (HL)
+    OR A
+    JR Z, _c_val_empty
+
+    ; Check if quoted format ('X')
+    CP 27H                  ; Single quote character
+    JR NZ, _c_val_unquoted
+
+    ; Quoted format - get character after the quote
+    INC HL
+    LD A, (HL)
+    OR A
+    JR Z, _c_val_empty      ; Empty after quote
+    LD L, A
+    LD H, 0
+    JR _c_val_done
+
+_c_val_unquoted:
+    ; Unquoted format - just return the first character
+    LD L, A
+    LD H, 0
+    JR _c_val_done
+
+_c_val_empty:
+    LD HL, 0
+
+_c_val_done:
+    POP IX
+    RET
+
+; ============================================================
 ; _e_val - Enumeration'Value: lookup string in enum table
 ; Input on stack:
 ;   IX+4 = table pointer (pushed last)
