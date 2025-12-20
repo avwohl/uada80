@@ -3791,5 +3791,47 @@ def test_sequential_io_basic():
     assert success or "Sequential_IO" not in stderr, f"Failed: {stderr}"
 
 
+@skip_if_no_tools
+def test_protected_type_basic():
+    """Test basic protected type operations."""
+    source = """
+    with Ada.Integer_Text_IO;
+    with Ada.Text_IO;
+    procedure Test is
+        protected Counter is
+            procedure Increment;
+            function Value return Integer;
+        private
+            Count : Integer := 0;
+        end Counter;
+
+        protected body Counter is
+            procedure Increment is
+            begin
+                Count := Count + 1;
+            end Increment;
+
+            function Value return Integer is
+            begin
+                return Count;
+            end Value;
+        end Counter;
+
+        Result : Integer;
+    begin
+        Counter.Increment;
+        Counter.Increment;
+        Counter.Increment;
+        Result := Counter.Value;
+        Ada.Integer_Text_IO.Put(Result);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "3" in stdout
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -16,7 +16,8 @@ UM80 = PYTHONPATH=$(UM80_PATH) python3 -m um80.um80
 ULIB80 = PYTHONPATH=$(UM80_PATH) python3 -m um80.ulib80
 
 # Common source files (non-tasking)
-COMMON_SOURCES = runtime.mac containers.mac vectors.mac lists.mac fileio.mac float48.mac float64.mac timer.mac
+# NOTE: protlock.mac MUST be before tasking.mac to provide _PROT_LCK/_PROT_ULK
+COMMON_SOURCES = runtime.mac containers.mac vectors.mac lists.mac fileio.mac float48.mac float64.mac timer.mac protlock.mac
 
 # Tasking source - depends on target
 ifeq ($(TARGET),mpm)
@@ -56,7 +57,7 @@ $(LIBRARY): $(OBJECTS)
 	$(UM80) -o $@ $<
 
 clean:
-	rm -f $(MAC_OBJECTS) libada.lib libada_mpm.lib mpm_task.rel
+	rm -f $(MAC_OBJECTS) libada.lib libada_mpm.lib mpm_task.rel protlock.rel
 
 # Dependencies for .mac source files
 runtime.rel: runtime.mac
@@ -69,3 +70,4 @@ fileio.rel: fileio.mac
 float48.rel: float48.mac
 float64.rel: float64.mac
 timer.rel: timer.mac
+protlock.rel: protlock.mac

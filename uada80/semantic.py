@@ -4644,6 +4644,24 @@ class SemanticAnalyzer:
                     return None
                 return comp.component_type
 
+        # Protected type operation access (Counter.Increment, Counter.Value)
+        if isinstance(prefix_type, ProtectedType):
+            selector_lower = expr.selector.lower() if isinstance(expr.selector, str) else expr.selector.lower()
+            # Look up the operation in the protected type
+            for op in prefix_type.operations:
+                if op.name.lower() == selector_lower:
+                    # For functions, return the return type
+                    if op.kind == "function" and op.return_type:
+                        return op.return_type
+                    # For procedures and entries, return None (statement context)
+                    return None
+            # Check if it's a component access (shouldn't be allowed from outside)
+            self.error(
+                f"protected type '{prefix_type.name}' has no visible operation '{expr.selector}'",
+                expr,
+            )
+            return None
+
         self.error(f"'{prefix_type.name}' is not a record", expr.prefix)
         return None
 

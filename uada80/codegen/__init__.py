@@ -6927,10 +6927,25 @@ class Z80CodeGen:
                 self._emit_instr("ld", "de", str(mem.offset))
                 self._emit_instr("add", "hl", "de")
                 self._emit_instr("pop", "de")  # Restore value
-            # Store de to (hl)
-            self._emit_instr("ld", "(hl)", "e")
-            self._emit_instr("inc", "hl")
-            self._emit_instr("ld", "(hl)", "d")
+            # Store to (hl) - check for byte vs word
+            if mem.ir_type == IRType.BYTE or mem.ir_type == IRType.BOOL:
+                # Byte store - only store low byte
+                self._emit_instr("ld", "(hl)", "e")
+            else:
+                # Word store
+                self._emit_instr("ld", "(hl)", "e")
+                self._emit_instr("inc", "hl")
+                self._emit_instr("ld", "(hl)", "d")
+        elif mem.is_frame_offset:
+            # Store to frame-relative location (ix + offset)
+            self._load_to_hl(instr.src1)
+            if mem.ir_type == IRType.BYTE or mem.ir_type == IRType.BOOL:
+                # Byte store
+                self._emit_instr("ld", f"(ix{mem.offset:+d})", "l")
+            else:
+                # Word store
+                self._emit_instr("ld", f"(ix{mem.offset:+d})", "l")
+                self._emit_instr("ld", f"(ix{mem.offset+1:+d})", "h")
         else:
             self._load_to_hl(instr.src1)
             self._emit_instr("ld", f"(ix{mem.offset:+d})", "l")

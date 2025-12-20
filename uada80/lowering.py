@@ -173,6 +173,14 @@ class LoweringContext:
     subprogram_name: str = ""
     # Protected types declared in this scope: name -> ProtectedType
     protected_types: dict[str, "ProtectedType"] = field(default_factory=dict)
+    # For protected operation bodies: pointer to protected object (for component access)
+    protected_obj_ptr: Optional[VReg] = None
+    # For protected operation bodies: the protected type (for component offset calculation)
+    protected_type: Optional["ProtectedType"] = None
+    # For protected operation bodies: exit label to jump to (for unlock before return)
+    protected_exit_label: Optional[str] = None
+    # For protected operation bodies: vreg to store return value
+    protected_return_vreg: Optional[VReg] = None
 
 
 class ASTLowering:
@@ -1994,6 +2002,52 @@ class ASTLowering:
             ada_type=prot_type,
         )
         self.ctx.locals_size += total_size
+        # Also update func.locals_size so register allocator doesn't overlap
+        if self.ctx.function:
+            self.ctx.function.locals_size = self.ctx.locals_size
+
+        # Initialize protected object: zero the lock byte and initialize components
+        # Use direct frame offsets to avoid creating vregs during declaration
+        local = self.ctx.locals[decl.name.lower()]
+        base_offset = -(self.ctx.locals_size - local.stack_offset)
+
+        # Store 0 to lock byte (at base_offset)
+        self.builder.store(
+            MemoryLocation(offset=base_offset, ir_type=IRType.BYTE, is_frame_offset=True),
+            Immediate(0, IRType.BYTE),
+            comment="init lock byte to 0"
+        )
+
+        # Initialize each component at its offset (starting at offset 1 after lock byte)
+        comp_offset = 1
+        for item in decl.items:
+            if isinstance(item, ObjectDecl):
+                for name in item.names:
+                    # Get size of this component
+                    comp_size = self._calc_type_size(item, [])
+                    # Get default value
+                    init_val = 0
+                    if item.init_expr:
+                        # Try to evaluate as static expression
+                        try:
+                            init_val = self._eval_static_expr(item.init_expr)
+                        except Exception:
+                            init_val = 0
+                    # Store the value using direct frame offset
+                    if comp_size == 1:
+                        self.builder.store(
+                            MemoryLocation(offset=base_offset + comp_offset, ir_type=IRType.BYTE, is_frame_offset=True),
+                            Immediate(init_val, IRType.BYTE),
+                            comment=f"init {name} to {init_val}"
+                        )
+                    else:
+                        # 2-byte component
+                        self.builder.store(
+                            MemoryLocation(offset=base_offset + comp_offset, ir_type=IRType.WORD, is_frame_offset=True),
+                            Immediate(init_val, IRType.WORD),
+                            comment=f"init {name} to {init_val}"
+                        )
+                    comp_offset += comp_size
 
     def _lower_protected_body(self, decl: ProtectedBody) -> None:
         """Lower a protected body (implementation of protected operations).
@@ -2056,19 +2110,29 @@ class ASTLowering:
         self.builder.set_function(ir_func)
         self.builder.set_block(entry_block)
 
-        # Create new context
+        # Create new context for the protected operation
         self.ctx = LoweringContext(function=ir_func, subprogram_name=op_name)
+        self.ctx.protected_type = prot_type  # Store for component access
+
+        # For functions, set up exit mechanism to ensure unlock before return
+        return_vreg = None
+        if body.spec.is_function:
+            exit_label = f"L_{op_name}_exit"
+            self.ctx.protected_exit_label = exit_label
+            return_vreg = self.builder.new_vreg(IRType.WORD, "_return_val")
+            self.ctx.protected_return_vreg = return_vreg
 
         # Emit lock acquisition
         # The protected object address is passed as first implicit parameter
+        # After function prologue (push ix; ld ix,0; add ix,sp), the argument is at (ix+4)
         prot_obj = self.builder.new_vreg(IRType.PTR, "_protected_obj")
-        self.builder.pop(prot_obj)  # Get protected object address from stack
+        self.builder.load(prot_obj, MemoryLocation(offset=4, ir_type=IRType.WORD, is_frame_offset=True),
+                          comment="load protected object pointer from arg")
+        self.ctx.protected_obj_ptr = prot_obj  # Store for component access
 
-        # Call lock acquire
+        # Call lock acquire - _PROT_LCK consumes its argument from stack
         self.builder.push(prot_obj)
         self.builder.call(Label("_PROT_LCK"), comment=f"acquire lock for {prot_name}")
-        temp = self.builder.new_vreg(IRType.WORD, "_discard")
-        self.builder.pop(temp)
 
         # Lower the parameters (after the implicit protected object param)
         for param in body.spec.parameters:
@@ -2082,18 +2146,20 @@ class ASTLowering:
         for stmt in body.statements:
             self._lower_statement(stmt)
 
-        # Emit lock release before return
+        # For functions, emit the exit label that return statements jump to
+        if body.spec.is_function:
+            self.builder.label(self.ctx.protected_exit_label)
+
+        # Emit lock release before return - _PROT_ULK consumes its argument from stack
         self.builder.push(prot_obj)
         self.builder.call(Label("_PROT_ULK"), comment=f"release lock for {prot_name}")
-        self.builder.pop(temp)
 
         # Return
-        if body.spec.is_function:
-            # Function: result was set in local "_result"
-            result_local = self.ctx.locals.get("_result")
-            if result_local:
-                self.builder.push(result_local.vreg)
-        self.builder.ret()
+        if body.spec.is_function and return_vreg is not None:
+            # Return the saved return value
+            self.builder.ret(return_vreg)
+        else:
+            self.builder.ret()
 
         # Restore builder and context state
         self.builder.function = old_function
@@ -2141,16 +2207,19 @@ class ASTLowering:
         self.ctx = LoweringContext(function=ir_func)
 
         # The protected object address is passed as first implicit parameter
+        # After function prologue (push ix; ld ix,0; add ix,sp), arguments start at (ix+4)
         prot_obj = self.builder.new_vreg(IRType.PTR, "_protected_obj")
-        self.builder.pop(prot_obj)
+        self.builder.load(prot_obj, MemoryLocation(offset=4, ir_type=IRType.WORD, is_frame_offset=True),
+                          comment="load protected object pointer from arg")
 
         # Handle entry family index if present
-        # For entry families, the index is passed as the second implicit parameter
+        # For entry families, the index is passed as the second implicit parameter (at ix+6)
         family_index_vreg = None
         if entry.family_index:
-            # Pop the family index from stack
+            # Load the family index from frame offset +6
             family_index_vreg = self.builder.new_vreg(IRType.WORD, "_family_index")
-            self.builder.pop(family_index_vreg)
+            self.builder.load(family_index_vreg, MemoryLocation(offset=6, ir_type=IRType.WORD, is_frame_offset=True),
+                              comment="load entry family index from arg")
             # Make the family index available as a local variable
             # so it can be used in the barrier expression and body
             family_local = LocalVariable(
@@ -3627,6 +3696,26 @@ class ASTLowering:
             if isinstance(stmt.target, Identifier):
                 name = stmt.target.name.lower()
 
+                # Check if this is a protected type component (inside a protected operation)
+                if self.ctx.protected_obj_ptr is not None and self.ctx.protected_type is not None:
+                    prot_type = self.ctx.protected_type
+                    offset = 1  # Skip lock byte (offset 0)
+                    for comp in prot_type.components:
+                        if comp.name.lower() == name:
+                            # Found the component - store through the protected object pointer
+                            if offset != 0:
+                                comp_addr = self.builder.new_vreg(IRType.PTR, f"_{name}_addr")
+                                self.builder.add(comp_addr, self.ctx.protected_obj_ptr, Immediate(offset, IRType.WORD))
+                                self.builder.store(MemoryLocation(base=comp_addr, offset=0, ir_type=IRType.WORD),
+                                                  value, comment=f"store protected component {name}")
+                            else:
+                                self.builder.store(MemoryLocation(base=self.ctx.protected_obj_ptr, offset=0, ir_type=IRType.WORD),
+                                                  value, comment=f"store protected component {name}")
+                            return
+                        # Advance offset by component size
+                        comp_bytes = (comp.size_bits // 8) if comp.size_bits else 2
+                        offset += comp_bytes
+
                 # Check locals
                 if name in self.ctx.locals:
                     local = self.ctx.locals[name]
@@ -4285,7 +4374,20 @@ class ASTLowering:
 
     def _lower_return(self, stmt: ReturnStmt) -> None:
         """Lower a return statement."""
-        # Finalize all controlled objects before returning
+        # Check if we're in a protected operation that needs special return handling
+        if self.ctx and self.ctx.protected_exit_label is not None:
+            # In a protected function: store return value and jump to exit label
+            # (which will release the lock before returning)
+            if stmt.value:
+                value = self._lower_expr(stmt.value)
+                if self.ctx.protected_return_vreg is not None:
+                    self.builder.mov(self.ctx.protected_return_vreg, value,
+                                    comment="save return value for protected function")
+            self.builder.jmp(Label(self.ctx.protected_exit_label),
+                            comment="jump to protected function exit")
+            return
+
+        # Normal return: finalize all controlled objects before returning
         self._generate_finalizations()
 
         if stmt.value:
@@ -4367,9 +4469,11 @@ class ASTLowering:
                     if self.ctx and prefix_name in self.ctx.locals:
                         local = self.ctx.locals[prefix_name]
                         prot_addr = self.builder.new_vreg(IRType.PTR, "_prot_obj")
+                        # Compute frame offset: local is at ix - (locals_size - stack_offset)
+                        frame_offset = -(self.ctx.locals_size - local.stack_offset)
                         self.builder.emit(IRInstr(
                             OpCode.LEA, prot_addr,
-                            MemoryLocation(ir_type=IRType.PTR, addr_vreg=local.vreg),
+                            MemoryLocation(offset=frame_offset, ir_type=IRType.PTR, is_frame_offset=True),
                             comment=f"addr of protected object {prefix_name}"
                         ))
                         self.builder.push(prot_addr)
@@ -6272,9 +6376,11 @@ class ASTLowering:
                         if prefix_name in self.ctx.locals:
                             local = self.ctx.locals[prefix_name]
                             prot_addr = self.builder.new_vreg(IRType.PTR, "_prot_obj")
+                            # Compute frame offset: local is at ix - (locals_size - stack_offset)
+                            frame_offset = -(self.ctx.locals_size - local.stack_offset)
                             self.builder.emit(IRInstr(
                                 OpCode.LEA, prot_addr,
-                                MemoryLocation(ir_type=IRType.PTR, addr_vreg=local.vreg),
+                                MemoryLocation(offset=frame_offset, ir_type=IRType.PTR, is_frame_offset=True),
                                 comment=f"addr of protected object {prefix_name}"
                             ))
                             self.builder.push(prot_addr)
@@ -9402,6 +9508,28 @@ class ASTLowering:
         if hasattr(self, '_inline_params') and name in self._inline_params:
             return self._inline_params[name]
 
+        # Check if this is a protected type component (inside a protected operation)
+        if self.ctx.protected_obj_ptr is not None and self.ctx.protected_type is not None:
+            # Look up the component in the protected type
+            prot_type = self.ctx.protected_type
+            offset = 1  # Skip lock byte (offset 0)
+            for comp in prot_type.components:
+                if comp.name.lower() == name:
+                    # Found the component - access it through the protected object pointer
+                    result = self.builder.new_vreg(IRType.WORD, f"_{name}_val")
+                    if offset != 0:
+                        comp_addr = self.builder.new_vreg(IRType.PTR, f"_{name}_addr")
+                        self.builder.add(comp_addr, self.ctx.protected_obj_ptr, Immediate(offset, IRType.WORD))
+                        self.builder.load(result, MemoryLocation(base=comp_addr, offset=0, ir_type=IRType.WORD),
+                                         comment=f"load protected component {name}")
+                    else:
+                        self.builder.load(result, MemoryLocation(base=self.ctx.protected_obj_ptr, offset=0, ir_type=IRType.WORD),
+                                         comment=f"load protected component {name}")
+                    return result
+                # Advance offset by component size
+                comp_bytes = (comp.size_bits // 8) if comp.size_bits else 2
+                offset += comp_bytes
+
         # Check locals
         if name in self.ctx.locals:
             local = self.ctx.locals[name]
@@ -10618,9 +10746,11 @@ class ASTLowering:
                     if self.ctx and prefix_name in self.ctx.locals:
                         local = self.ctx.locals[prefix_name]
                         prot_addr = self.builder.new_vreg(IRType.PTR, "_prot_obj")
+                        # Compute frame offset: local is at ix - (locals_size - stack_offset)
+                        frame_offset = -(self.ctx.locals_size - local.stack_offset)
                         self.builder.emit(IRInstr(
                             OpCode.LEA, prot_addr,
-                            MemoryLocation(ir_type=IRType.PTR, addr_vreg=local.vreg),
+                            MemoryLocation(offset=frame_offset, ir_type=IRType.PTR, is_frame_offset=True),
                             comment=f"addr of protected object {prefix_name}"
                         ))
                         self.builder.push(prot_addr)
