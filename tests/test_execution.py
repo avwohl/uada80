@@ -3991,5 +3991,51 @@ def test_long_float_value_attribute():
     assert "42" in stdout, f"Expected 42, got: {stdout}"
 
 
+@skip_if_no_tools
+def test_boolean_value_attribute():
+    """Test Boolean'Value attribute for string to boolean conversion."""
+    source = """
+    with Ada.Text_IO;
+    procedure Test is
+        B : Boolean;
+    begin
+        B := Boolean'Value("TRUE");
+        if B then
+            Ada.Text_IO.Put_Line("1:TRUE");
+        else
+            Ada.Text_IO.Put_Line("1:FALSE");
+        end if;
+
+        B := Boolean'Value("FALSE");
+        if B then
+            Ada.Text_IO.Put_Line("2:TRUE");
+        else
+            Ada.Text_IO.Put_Line("2:FALSE");
+        end if;
+
+        B := Boolean'Value("true");  -- lowercase
+        if B then
+            Ada.Text_IO.Put_Line("3:TRUE");
+        else
+            Ada.Text_IO.Put_Line("3:FALSE");
+        end if;
+
+        B := Boolean'Value("  True");  -- leading space, mixed case
+        if B then
+            Ada.Text_IO.Put_Line("4:TRUE");
+        else
+            Ada.Text_IO.Put_Line("4:FALSE");
+        end if;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    assert "1:TRUE" in stdout, f"Expected 1:TRUE, got: {stdout}"
+    assert "2:FALSE" in stdout, f"Expected 2:FALSE, got: {stdout}"
+    assert "3:TRUE" in stdout, f"Expected 3:TRUE (lowercase), got: {stdout}"
+    assert "4:TRUE" in stdout, f"Expected 4:TRUE (mixed case with space), got: {stdout}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

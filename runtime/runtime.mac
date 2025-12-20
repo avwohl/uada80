@@ -1228,7 +1228,7 @@ _i2s_done:
     RET
 
 ; ============================================================
-; _str_to_int - Convert string to signed 16-bit integer
+; _s2i - Convert string to signed 16-bit integer (Integer'Value)
 ; Input: String pointer on stack (at SP+2)
 ; Output: HL = integer value
 ; Notes:
@@ -1238,8 +1238,8 @@ _i2s_done:
 ;   - Returns 0 for empty/invalid strings
 ; Destroys: A, BC, DE
 ; ============================================================
-    PUBLIC _str_to_int
-_str_to_int:
+    PUBLIC _s2i
+_s2i:
     PUSH IX
     LD IX, 0
     ADD IX, SP
@@ -1333,6 +1333,111 @@ _s2i_done:
 _s2i_positive:
     EX DE, HL               ; HL = result
 
+    POP IX
+    RET
+
+; ============================================================
+; _s2b - Convert string to Boolean (0 or 1) (Boolean'Value)
+; Input: String pointer on stack (at SP+2)
+; Output: HL = 0 (False) or 1 (True)
+; Notes:
+;   - Skips leading whitespace
+;   - Case-insensitive: "TRUE", "true", "True" all work
+;   - Returns 1 for "TRUE", 0 for "FALSE"
+;   - Returns 0 for any invalid string
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _s2b
+_s2b:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+
+    ; Get string pointer from stack (at IX+4)
+    LD L, (IX+4)
+    LD H, (IX+5)
+    ; HL now points to string
+
+    ; Skip leading whitespace
+_s2b_skip:
+    LD A, (HL)
+    CP ' '
+    JR Z, _s2b_next_ws
+    CP 9                    ; tab
+    JR Z, _s2b_next_ws
+    JR _s2b_check
+_s2b_next_ws:
+    INC HL
+    JR _s2b_skip
+
+_s2b_check:
+    ; Check first character (T/t for TRUE, F/f for FALSE)
+    LD A, (HL)
+    ; Convert to uppercase by clearing bit 5
+    AND 0DFH                ; Clear bit 5 (lowercase -> uppercase)
+
+    CP 'T'
+    JR Z, _s2b_check_true
+    CP 'F'
+    JR Z, _s2b_check_false
+    JR _s2b_return_false    ; Invalid - return false
+
+_s2b_check_true:
+    ; Check for "TRUE" (case-insensitive)
+    INC HL
+    LD A, (HL)
+    AND 0DFH
+    CP 'R'
+    JR NZ, _s2b_return_false
+
+    INC HL
+    LD A, (HL)
+    AND 0DFH
+    CP 'U'
+    JR NZ, _s2b_return_false
+
+    INC HL
+    LD A, (HL)
+    AND 0DFH
+    CP 'E'
+    JR NZ, _s2b_return_false
+
+    ; Successfully matched "TRUE"
+    LD HL, 1
+    JR _s2b_done
+
+_s2b_check_false:
+    ; Check for "FALSE" (case-insensitive)
+    INC HL
+    LD A, (HL)
+    AND 0DFH
+    CP 'A'
+    JR NZ, _s2b_return_false
+
+    INC HL
+    LD A, (HL)
+    AND 0DFH
+    CP 'L'
+    JR NZ, _s2b_return_false
+
+    INC HL
+    LD A, (HL)
+    AND 0DFH
+    CP 'S'
+    JR NZ, _s2b_return_false
+
+    INC HL
+    LD A, (HL)
+    AND 0DFH
+    CP 'E'
+    JR NZ, _s2b_return_false
+
+    ; Successfully matched "FALSE" - fall through to return false
+
+_s2b_return_false:
+    LD HL, 0
+
+_s2b_done:
     POP IX
     RET
 
