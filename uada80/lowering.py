@@ -181,6 +181,8 @@ class LoweringContext:
     protected_exit_label: Optional[str] = None
     # For protected operation bodies: vreg to store return value
     protected_return_vreg: Optional[VReg] = None
+    # Local procedure renamings: maps local name (lowercase) -> aliased name (e.g., "ada.integer_text_io.put")
+    local_renamings: dict[str, str] = field(default_factory=dict)
 
 
 class ASTLowering:
@@ -1237,6 +1239,13 @@ class ASTLowering:
         elif isinstance(decl, SubprogramBody):
             # Nested subprogram - lower separately
             self._lower_subprogram_body(decl)
+        elif isinstance(decl, SubprogramDecl):
+            # Subprogram declaration - track renamings
+            if decl.renames and self.ctx:
+                # Get the aliased name (e.g., "Ada.Integer_Text_IO.Put")
+                alias_name = self._get_hierarchical_name(decl.renames)
+                if alias_name:
+                    self.ctx.local_renamings[decl.name.lower()] = alias_name
         elif isinstance(decl, TypeDecl):
             self._lower_type_decl(decl)
         elif isinstance(decl, SubtypeDecl):
@@ -4525,6 +4534,30 @@ class ASTLowering:
                 return
 
         if isinstance(stmt.name, Identifier):
+            # Check for local procedure renaming first
+            # Local renamings are tracked in ctx.local_renamings during declaration lowering
+            call_name = stmt.name.name.lower()
+            if self.ctx and call_name in self.ctx.local_renamings:
+                alias_name = self.ctx.local_renamings[call_name]
+                alias_lower = alias_name.lower()
+                # Check if this is a Text_IO procedure
+                if "text_io" in alias_lower and "put" in alias_lower:
+                    is_integer_io = "integer_text_io" in alias_lower
+                    self._lower_text_io_call("put", stmt.args, is_integer_io)
+                    return
+                elif "text_io" in alias_lower and "get" in alias_lower:
+                    is_integer_io = "integer_text_io" in alias_lower
+                    self._lower_text_io_call("get", stmt.args, is_integer_io)
+                    return
+                elif "text_io" in alias_lower and "new_line" in alias_lower:
+                    self._lower_text_io_call("new_line", stmt.args, False)
+                    return
+                elif "text_io" in alias_lower:
+                    # Other Text_IO procedures
+                    selector = alias_name.split(".")[-1].lower()
+                    self._lower_text_io_call(selector, stmt.args, False)
+                    return
+
             # Resolve overloaded procedure
             sym = self._resolve_overload(stmt.name.name, stmt.args)
 
@@ -5036,6 +5069,15 @@ class ASTLowering:
         if isinstance(current, Identifier):
             parts.insert(0, current.name)
         return ".".join(parts)
+
+    def _get_hierarchical_name(self, expr) -> str:
+        """Get the full hierarchical name from an expression (Identifier or SelectedName)."""
+        if isinstance(expr, Identifier):
+            return expr.name
+        elif isinstance(expr, SelectedName):
+            prefix = self._get_selected_name_prefix(expr)
+            return f"{prefix}.{expr.selector}"
+        return ""
 
     def _is_file_type(self, expr) -> bool:
         """Check if expression is a File_Type (for file-based I/O)."""
