@@ -365,6 +365,21 @@ _se_msg:
     DB 'Storage_Error$'
 
 ; ============================================================
+; _raise_tasking_error - Raise Tasking_Error and terminate
+; Input: None
+; Output: Does not return
+; ============================================================
+    PUBLIC _raise_tasking_error
+_raise_tasking_error:
+    LD DE, _te_msg
+    LD C, 9
+    CALL 5
+    JP 0
+
+_te_msg:
+    DB 'Tasking_Error$'
+
+; ============================================================
 ; Text_IO Support
 ; ============================================================
 
