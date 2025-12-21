@@ -8826,6 +8826,17 @@ class ASTLowering:
 
         return result
 
+    def _lower_float64_log2(self, operand_expr):
+        """log2(x) - call runtime _f64_lg2 function."""
+        # Get the operand as a Float64 pointer
+        x_ptr = self._lower_float64_operand(operand_expr)
+
+        # Call _f64_lg2 runtime function
+        result = self._f64_alloc_temp("log2_result")
+        self._f64_call_unary("_f64_lg2", result, x_ptr)
+
+        return result
+
     def _lower_declare_expr(self, expr: DeclareExpr):
         """Lower a declare expression (Ada 2022).
 
@@ -15792,8 +15803,22 @@ class ASTLowering:
                     # Float64 exp - call _f64_e2x
                     return self._lower_float64_exp_func(arg_expr)
 
+            # Check if this is Ada.Numerics.Elementary_Functions.Log (X, Base) for Float64
+            # Must check two-argument version BEFORE single-argument version
+            if selector == "log" and expr.indices and len(expr.indices) >= 2:
+                # Two-argument log: Log(X, Base) = ln(X) / ln(Base)
+                arg_expr = expr.indices[0]   # X - the value
+                base_expr = expr.indices[1]  # Base
+                arg_type = self._get_expr_type(arg_expr)
+                if self._is_float64_type(arg_type):
+                    # Check if base is 2.0 (common case for log2)
+                    if isinstance(base_expr, RealLiteral):
+                        base_val = float(base_expr.value)
+                        if abs(base_val - 2.0) < 0.0001:
+                            return self._lower_float64_log2(arg_expr)
+
             # Check if this is Ada.Numerics.Elementary_Functions.Log for Float64
-            if selector == "log" and expr.indices and len(expr.indices) >= 1:
+            if selector == "log" and expr.indices and len(expr.indices) == 1:
                 arg_expr = expr.indices[0]
                 arg_type = self._get_expr_type(arg_expr)
                 if self._is_float64_type(arg_type):
