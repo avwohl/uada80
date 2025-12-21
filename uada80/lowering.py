@@ -8855,9 +8855,46 @@ class ASTLowering:
         if self.ctx is None:
             return Immediate(0, IRType.WORD)
 
-        # Process declarations (create local variables)
+        # Process declarations - dynamically allocate locals
         for decl in expr.declarations:
-            self._lower_decl(decl)
+            if isinstance(decl, ObjectDecl):
+                for name in decl.names:
+                    # Determine size (default to 2 bytes for Integer)
+                    size = 2
+
+                    # Create a virtual register for this local
+                    vreg = self.builder.new_vreg(IRType.WORD, f"_{name}_decl")
+
+                    # Add to locals table
+                    self.ctx.locals[name.lower()] = LocalVariable(
+                        name=name,
+                        vreg=vreg,
+                        stack_offset=self.ctx.locals_size,
+                        size=size,
+                        ada_type=None,  # Could resolve type if needed
+                    )
+                    self.ctx.locals_size += size
+
+                    # Update function's locals_size
+                    if self.ctx.function:
+                        self.ctx.function.locals_size = self.ctx.locals_size
+
+                    # Emit stack allocation
+                    self.builder.emit(IRInstr(
+                        OpCode.SUB,
+                        MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+                        MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+                        Immediate(size, IRType.WORD),
+                        comment=f"alloc {name} for declare expr"
+                    ))
+
+                    # Initialize if there's an init expression
+                    if decl.init_expr:
+                        init_val = self._lower_expr(decl.init_expr)
+                        self.builder.mov(vreg, init_val, comment=f"init {name}")
+            else:
+                # Handle other declaration types if needed
+                self._lower_decl(decl)
 
         # Evaluate and return the result expression
         return self._lower_expr(expr.result_expr)

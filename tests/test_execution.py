@@ -4590,5 +4590,77 @@ def test_generic_procedure_instantiation():
     assert "10" in lines[3], f"Expected 10 (swapped B), got: {lines[3]}"
 
 
+@skip_if_no_tools
+def test_declare_expression():
+    """Test Ada 2022 declare expression.
+
+    Syntax: (declare declarations begin expression)
+    The declare expression allows local declarations within an expression.
+    """
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        X : Integer;
+        Y : Integer;
+    begin
+        -- Simple declare expression with one variable
+        X := (declare Temp : Integer := 10; begin Temp * 2);
+        Ada.Integer_Text_IO.Put(X);
+        Ada.Text_IO.New_Line;
+
+        -- Declare expression using outer variable
+        Y := 5;
+        X := (declare Sum : Integer := Y + 3; begin Sum * Sum);
+        Ada.Integer_Text_IO.Put(X);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    lines = stdout.strip().split('\n')
+    assert len(lines) >= 2, f"Expected 2 lines, got: {stdout}"
+    assert "20" in lines[0], f"Expected 20 (10*2), got: {lines[0]}"
+    assert "64" in lines[1], f"Expected 64 ((5+3)^2), got: {lines[1]}"
+
+
+@skip_if_no_tools
+def test_delta_aggregate():
+    """Test Ada 2022 delta aggregate for records.
+
+    Syntax: (base_expression with delta component => value)
+    Creates a copy of a record with specified components modified.
+    """
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        type Point is record
+            X : Integer;
+            Y : Integer;
+        end record;
+
+        P1 : Point := (X => 10, Y => 20);
+        P2 : Point;
+    begin
+        -- Create P2 from P1 with only X modified
+        P2 := (P1 with delta X => 100);
+
+        Ada.Integer_Text_IO.Put(P2.X);
+        Ada.Text_IO.New_Line;
+        Ada.Integer_Text_IO.Put(P2.Y);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    lines = stdout.strip().split('\n')
+    assert len(lines) >= 2, f"Expected 2 lines, got: {stdout}"
+    assert "100" in lines[0], f"Expected 100 (modified X), got: {lines[0]}"
+    assert "20" in lines[1], f"Expected 20 (unchanged Y), got: {lines[1]}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
