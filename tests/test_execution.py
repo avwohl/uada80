@@ -4192,5 +4192,34 @@ def test_wide_wide_character_value_attribute():
     assert "88" in lines[3], f"Expected 88 for 'X', got: {lines[3]}"
 
 
+@skip_if_no_tools
+def test_character_image_attribute():
+    """Test Character'Image attribute for character to string conversion."""
+    source = """
+    with Ada.Text_IO;
+    procedure Test is
+        C : Character;
+    begin
+        C := 'A';
+        Ada.Text_IO.Put_Line(Character'Image(C));
+
+        C := 'z';
+        Ada.Text_IO.Put_Line(Character'Image(C));
+
+        C := '5';
+        Ada.Text_IO.Put_Line(Character'Image(C));
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    lines = stdout.strip().split('\n')
+    assert len(lines) >= 3, f"Expected 3 lines, got: {stdout}"
+    # Character'Image returns "'X'" format
+    assert "'A'" in lines[0], f"Expected 'A' in output, got: {lines[0]}"
+    assert "'z'" in lines[1], f"Expected 'z' in output, got: {lines[1]}"
+    assert "'5'" in lines[2], f"Expected '5' in output, got: {lines[2]}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

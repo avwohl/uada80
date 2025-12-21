@@ -11323,18 +11323,36 @@ class ASTLowering:
 
         if attr == "image" and expr.args:
             # Type'Image(X) - returns string representation of X
-            # For integers: convert to decimal string
             # Returns pointer to static buffer (not reentrant)
+
+            # Determine the prefix type to call the right conversion function
+            prefix_type = None
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.kind == SymbolKind.TYPE:
+                    prefix_type = sym.ada_type
+
             arg_value = self._lower_expr(expr.args[0])
             self.builder.push(arg_value)
-            self.builder.call(Label("_int_to_str"), comment="Integer'Image")
+
+            # Choose the right runtime function based on type
+            if prefix_type and hasattr(prefix_type, 'name') and prefix_type.name == "Character":
+                self.builder.call(Label("_c_img"), comment="Character'Image")
+            elif prefix_type and hasattr(prefix_type, 'name') and prefix_type.name == "Wide_Character":
+                self.builder.call(Label("_wc_img"), comment="Wide_Character'Image")
+            elif prefix_type and hasattr(prefix_type, 'name') and prefix_type.name == "Wide_Wide_Character":
+                self.builder.call(Label("_wwc_img"), comment="Wide_Wide_Character'Image")
+            else:
+                # Default: Integer'Image
+                self.builder.call(Label("_int_to_str"), comment="Integer'Image")
+
             # IMPORTANT: Capture result from HL BEFORE popping argument
             # The pop would otherwise destroy HL which contains the result
             result = self.builder.new_vreg(IRType.PTR, "_image")
             self.builder.emit(IRInstr(
                 OpCode.MOV, result,
                 MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
-                comment="capture Integer'Image result from HL"
+                comment="capture 'Image result from HL"
             ))
             # Now clean up the pushed argument
             temp = self.builder.new_vreg(IRType.WORD, "_discard")
