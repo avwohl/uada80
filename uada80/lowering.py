@@ -11562,6 +11562,22 @@ class ASTLowering:
                 temp = self.builder.new_vreg(IRType.WORD, "_discard")
                 self.builder.pop(temp)
                 return result
+            elif prefix_type and hasattr(prefix_type, 'name') and prefix_type.name == "Float":
+                # Float'Value - parse string to integer (Float truncates to integer in current impl)
+                arg_value = self._lower_expr(expr.args[0])
+                self.builder.push(arg_value)
+                self.builder.call(Label("_s2i"), comment="Float'Value")
+                # Result is in HL (integer value)
+                result = self.builder.new_vreg(IRType.WORD, "_value")
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture Float'Value result from HL"
+                ))
+                # Clean up the pushed argument
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                return result
             else:
                 # Check if it's an enumeration type (but not Boolean which is handled above)
                 # Either from symbol table (prefix_type) or local declaration (enum_literals)
