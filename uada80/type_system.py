@@ -488,8 +488,13 @@ class RecordType(AdaType):
         - This avoids expensive unaligned 16-bit access on Z80
         """
         total_bits = 0
+
+        # For derived types, start after the parent type's components
+        if self.parent_type:
+            total_bits = self.parent_type.size_bits
         # Tagged types have a hidden tag field (pointer to vtable)
-        if self.is_tagged and not self.is_class_wide:
+        # Only add if this is a root tagged type (no parent)
+        elif self.is_tagged and not self.is_class_wide:
             total_bits = 16  # Tag is 16-bit pointer on Z80
 
         # Add discriminants (always byte-aligned)

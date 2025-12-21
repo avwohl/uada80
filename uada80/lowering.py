@@ -1318,15 +1318,22 @@ class ASTLowering:
 
         # Fallback: look up locally-declared types from _current_body_declarations
         if ada_type is None and type_name and hasattr(self, '_current_body_declarations'):
-            from uada80.ast_nodes import RecordTypeDef
+            from uada80.ast_nodes import RecordTypeDef, DerivedTypeDef
             from uada80.type_system import RecordType, RecordComponent, IntegerType, ArrayType
             for d in self._current_body_declarations:
                 if isinstance(d, TypeDecl) and d.name.lower() == type_name.lower():
                     type_def = d.type_def
+                    # For derived types, use ada_type from semantic analysis
+                    # (it has parent_type and correct component offsets)
+                    if isinstance(type_def, DerivedTypeDef) and d.ada_type:
+                        ada_type = d.ada_type
+                        break
                     if isinstance(type_def, RecordTypeDef):
                         # Build a simple RecordType from the AST RecordTypeDef
                         components = []
-                        offset = 0
+                        # Tagged types have 2-byte tag at start (vtable pointer)
+                        is_tagged = getattr(d, 'is_tagged', False)
+                        offset = 2 if is_tagged else 0
                         for comp_decl in type_def.components:
                             # Resolve the actual component type
                             comp_type = self._resolve_local_type(comp_decl.type_mark)
@@ -1346,6 +1353,7 @@ class ASTLowering:
                             name=type_name,
                             components=components,
                             size_bits=offset * 8,
+                            is_tagged=is_tagged,
                         )
                     elif isinstance(type_def, ArrayTypeDef):
                         # Build a simple ArrayType from the AST ArrayTypeDef
@@ -6201,7 +6209,8 @@ class ASTLowering:
                             if isinstance(decl, TypeDecl) and decl.name.lower() == type_name:
                                 type_def = decl.type_def
                                 # Calculate field offset based on position
-                                offset = 0
+                                # Tagged types have 2-byte tag at start (vtable pointer)
+                                offset = 2 if decl.is_tagged else 0
                                 # First check discriminants (they come first in memory)
                                 if hasattr(decl, 'discriminants') and decl.discriminants:
                                     for disc in decl.discriminants:
@@ -9259,19 +9268,26 @@ class ASTLowering:
         # For record aggregates with known target type
         if isinstance(target_type, RecordType):
             # Map component names to offsets, sizes, and types
+            # Include inherited components from parent types
             field_info = {}
-            for comp in target_type.components:
-                field_info[comp.name.lower()] = {
-                    'offset': comp.offset_bits // 8,
-                    'size': (comp.size_bits + 7) // 8 if comp.size_bits else 2,
-                    'type': comp.component_type  # Store the field's type
-                }
+            ordered_fields = []
+
+            # Collect inherited components first (from parent types)
+            def collect_inherited(rec_type):
+                if rec_type.parent_type:
+                    collect_inherited(rec_type.parent_type)
+                for comp in rec_type.components:
+                    field_info[comp.name.lower()] = {
+                        'offset': comp.offset_bits // 8,
+                        'size': (comp.size_bits + 7) // 8 if comp.size_bits else 2,
+                        'type': comp.component_type
+                    }
+                    ordered_fields.append(comp.name.lower())
+
+            collect_inherited(target_type)
 
             # Track which fields have been assigned
             assigned_fields = set()
-
-            # Get ordered list of field names from record type
-            ordered_fields = [comp.name.lower() for comp in target_type.components]
             positional_index = 0  # Current field index for positional assignment
 
             # First pass: handle explicit assignments
