@@ -5579,7 +5579,7 @@ class ASTLowering:
                 self.builder.emit(IRInstr(
                     OpCode.LEA,
                     dst=addr_reg,
-                    src1=MemoryLocation(offset=neg_offset, ir_type=IRType.PTR),
+                    src1=MemoryLocation(offset=neg_offset, ir_type=IRType.PTR, is_frame_offset=True),
                 ))
                 return addr_reg
             else:
@@ -10639,6 +10639,9 @@ class ASTLowering:
                 from uada80.type_system import RecordType, RecordComponent, IntegerType
                 for d in self._current_body_declarations:
                     if isinstance(d, TypeDecl) and d.name.lower() == type_name:
+                        # Prefer ada_type set by semantic analysis (has correct bounds, etc.)
+                        if d.ada_type:
+                            return d.ada_type
                         type_def = d.type_def
                         # Handle modular type definition
                         if isinstance(type_def, ModularTypeDef):
@@ -12074,12 +12077,8 @@ class ASTLowering:
                 init_val = self._lower_expr(initial)
                 self.builder.mov(result, init_val)
 
-                # Get array info from prefix
-                ada_type = None
-                if isinstance(expr.prefix, Identifier):
-                    sym = self.symbols.lookup(expr.prefix.name)
-                    if sym and sym.ada_type:
-                        ada_type = sym.ada_type
+                # Get array info from prefix using _get_expr_type
+                ada_type = self._get_expr_type(expr.prefix)
 
                 if ada_type and isinstance(ada_type, ArrayType) and ada_type.bounds:
                     low, high = ada_type.bounds[0]
@@ -12087,8 +12086,8 @@ class ASTLowering:
                     if ada_type.component_type:
                         element_size = (ada_type.component_type.size_bits + 7) // 8
 
-                    # Get base address
-                    base_addr = self._lower_expr(expr.prefix)
+                    # Get base address - use _get_lvalue_address to compute actual address
+                    base_addr = self._get_lvalue_address(expr.prefix)
 
                     # Loop variable
                     loop_idx = self.builder.new_vreg(IRType.WORD, "_reduce_idx")
@@ -12116,20 +12115,26 @@ class ASTLowering:
                     self.builder.add(elem_addr, base_addr, offset)
 
                     elem_val = self.builder.new_vreg(IRType.WORD, "_reduce_elem")
-                    self.builder.load(elem_val, elem_addr)
+                    self.builder.load(elem_val, MemoryLocation(base=elem_addr, offset=0, ir_type=IRType.WORD))
 
                     # Apply reducer (if it's a binary operator like "+")
+                    # Handle both Identifier and StringLiteral for operator names
+                    op_name = None
                     if isinstance(reducer, Identifier):
                         op_name = reducer.name.lower()
-                        if op_name == '"+"' or op_name == '+':
+                    elif isinstance(reducer, StringLiteral):
+                        op_name = reducer.value.lower()
+
+                    if op_name:
+                        if op_name == '+':
                             self.builder.add(result, result, elem_val)
-                        elif op_name == '"-"' or op_name == '-':
+                        elif op_name == '-':
                             self.builder.sub(result, result, elem_val)
-                        elif op_name == '"*"' or op_name == '*':
+                        elif op_name == '*':
                             self.builder.mul(result, result, elem_val)
-                        elif op_name == '"and"' or op_name == 'and':
+                        elif op_name == 'and':
                             self.builder.and_(result, result, elem_val)
-                        elif op_name == '"or"' or op_name == 'or':
+                        elif op_name == 'or':
                             self.builder.or_(result, result, elem_val)
                         else:
                             # Call reducer as function
