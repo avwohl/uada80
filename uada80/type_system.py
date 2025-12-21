@@ -942,6 +942,26 @@ def create_predefined_types() -> dict[str, AdaType]:
         is_constrained=False,
     )
 
+    # Wide_Wide_Character type (32-bit full Unicode)
+    # Note: We don't enumerate all 1.1M code points - just define the type
+    types["Wide_Wide_Character"] = EnumerationType(
+        name="Wide_Wide_Character",
+        kind=TypeKind.ENUMERATION,
+        size_bits=32,
+        literals=[],  # Too many to enumerate (0..16#10FFFF#)
+        positions={},
+    )
+
+    # Wide_Wide_String type (unconstrained array of Wide_Wide_Character)
+    types["Wide_Wide_String"] = ArrayType(
+        name="Wide_Wide_String",
+        kind=TypeKind.ARRAY,
+        size_bits=0,  # Unconstrained
+        index_types=[types["Positive"]],  # type: ignore
+        component_type=types["Wide_Wide_Character"],
+        is_constrained=False,
+    )
+
     # Universal_Integer (compile-time integer, unlimited precision)
     types["Universal_Integer"] = AdaType(
         name="Universal_Integer",

@@ -11446,6 +11446,23 @@ class ASTLowering:
                 temp = self.builder.new_vreg(IRType.WORD, "_discard")
                 self.builder.pop(temp)
                 return result
+            elif prefix_type and hasattr(prefix_type, 'name') and prefix_type.name == "Wide_Wide_Character":
+                # Wide_Wide_Character'Value - parse "'X'" or "X" to 32-bit character code
+                # On Z80, returns low 16 bits in HL (sufficient for ASCII/BMP)
+                arg_value = self._lower_expr(expr.args[0])
+                self.builder.push(arg_value)
+                self.builder.call(Label("_wwc_val"), comment="Wide_Wide_Character'Value")
+                # Result is in HL (low 16 bits of 32-bit code point)
+                result = self.builder.new_vreg(IRType.WORD, "_value")
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture Wide_Wide_Character'Value result from HL"
+                ))
+                # Clean up the pushed argument
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                return result
             else:
                 # Check if it's an enumeration type (but not Boolean which is handled above)
                 # Either from symbol table (prefix_type) or local declaration (enum_literals)
