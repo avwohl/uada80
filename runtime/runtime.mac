@@ -1683,6 +1683,149 @@ _b_img_false_str:
     DB "FALSE", 0
 
 ; ============================================================
+; _fix_img - Float'Image: convert 16.16 fixed-point to string
+; Input: 32-bit fixed-point value on stack (IX+4=low, IX+6=high)
+; Output: HL = pointer to static buffer containing decimal string
+; Notes:
+;   - Format: [-]integer.fraction (3 decimal places)
+;   - Uses static buffer (not reentrant)
+;   - 16.16 format: high 16 bits = integer, low 16 bits = fraction
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _fix_img
+_fix_img:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+
+    ; Initialize buffer pointer
+    LD HL, _fix_img_buf
+    LD (_fix_img_ptr), HL
+
+    ; Get high word (integer part, signed)
+    LD L, (IX+6)
+    LD H, (IX+7)
+    LD (_fix_img_int), HL
+
+    ; Get low word (fractional part)
+    LD L, (IX+4)
+    LD H, (IX+5)
+    LD (_fix_img_frc), HL
+
+    ; Check if negative (sign bit of integer part)
+    LD HL, (_fix_img_int)
+    BIT 7, H
+    JR Z, _fix_img_pos
+
+    ; Negative - output '-' and negate
+    LD HL, (_fix_img_ptr)
+    LD (HL), '-'
+    INC HL
+    LD (_fix_img_ptr), HL
+
+    ; Negate 32-bit value: complement and add 1
+    LD HL, (_fix_img_frc)
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+    LD (_fix_img_frc), HL
+    ; Handle carry to high word
+    LD A, H
+    OR L
+    JR NZ, _fix_neg_no_carry
+    ; Low word became 0, increment high word
+    LD HL, (_fix_img_int)
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+    LD (_fix_img_int), HL
+    JR _fix_img_pos
+_fix_neg_no_carry:
+    LD HL, (_fix_img_int)
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    LD (_fix_img_int), HL
+
+_fix_img_pos:
+    ; Convert integer part to string
+    LD HL, (_fix_img_int)
+    PUSH HL
+    CALL _int_to_str
+    POP DE
+    ; HL = pointer to integer string
+
+    ; Copy integer string to buffer
+    LD DE, (_fix_img_ptr)
+_fix_img_cp:
+    LD A, (HL)
+    OR A
+    JR Z, _fix_img_dot
+    LD (DE), A
+    INC HL
+    INC DE
+    JR _fix_img_cp
+
+_fix_img_dot:
+    ; Add decimal point
+    LD A, '.'
+    LD (DE), A
+    INC DE
+    LD (_fix_img_ptr), DE
+
+    ; Convert fractional part to 3 decimal digits
+    ; frac * 1000 / 65536 gives decimal digits
+    ; Use: (frac * 1000) >> 16 = frac * 1000 / 65536
+    ; Approximate with: (frac * 125) >> 13 (125 * 8 = 1000)
+    ; Simpler: multiply by 10 three times, taking high byte each time
+
+    LD HL, (_fix_img_frc)
+    LD B, 3                     ; 3 decimal digits
+
+_fix_img_frac_loop:
+    PUSH BC
+    ; Multiply HL by 10
+    LD D, H
+    LD E, L
+    ADD HL, HL                  ; HL * 2
+    ADD HL, HL                  ; HL * 4
+    ADD HL, DE                  ; HL * 5
+    ADD HL, HL                  ; HL * 10
+    ; High byte of result is the digit
+    LD A, H
+    ADD A, '0'
+    LD DE, (_fix_img_ptr)
+    LD (DE), A
+    INC DE
+    LD (_fix_img_ptr), DE
+    ; Keep low byte * 256 for next iteration
+    LD H, L
+    LD L, 0
+    POP BC
+    DJNZ _fix_img_frac_loop
+
+    ; Null terminate
+    LD HL, (_fix_img_ptr)
+    LD (HL), 0
+
+    ; Return buffer pointer
+    LD HL, _fix_img_buf
+
+    POP IX
+    RET
+
+; ============================================================
 ; _c_img - Character'Image: convert character code to string "'X'"
 ; Input: Character code on stack (at SP+2)
 ; Output: HL = pointer to static buffer containing "'X'" (null-terminated)
@@ -2697,6 +2840,16 @@ _wc_img_buf:
     DS 5                    ; "'X'" + null = 4 bytes, +1 for safety
 _wwc_img_buf:
     DS 5                    ; "'X'" + null = 4 bytes, +1 for safety
+
+; Float'Image (fixed-point) buffers
+_fix_img_buf:
+    DS 16                   ; "-32768.999" + null
+_fix_img_ptr:
+    DS 2                    ; Buffer write pointer
+_fix_img_int:
+    DS 2                    ; Integer part
+_fix_img_frc:
+    DS 2                    ; Fractional part
 
 ; Heap start marker (must be last)
     PUBLIC _heap_start
