@@ -11419,6 +11419,10 @@ class ASTLowering:
                 self.builder.call(Label("_wc_img"), comment="Wide_Character'Image")
             elif prefix_type and hasattr(prefix_type, 'name') and prefix_type.name == "Wide_Wide_Character":
                 self.builder.call(Label("_wwc_img"), comment="Wide_Wide_Character'Image")
+            elif prefix_type and hasattr(prefix_type, 'name') and prefix_type.name == "Float":
+                # Float currently truncates to integer in the implementation
+                # TODO: Full 16.16 fixed-point support would need _fix_img
+                self.builder.call(Label("_int_to_str"), comment="Float'Image")
             else:
                 # Default: Integer'Image
                 self.builder.call(Label("_int_to_str"), comment="Integer'Image")
