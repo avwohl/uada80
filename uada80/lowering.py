@@ -16428,19 +16428,21 @@ class ASTLowering:
         self._lower_block_with_handlers([], handlers)
 
     def _get_constant_value(self, expr) -> Optional[int]:
-        """Get compile-time constant value from expression (stub)."""
-        # TODO: Implement constant evaluation
-        if hasattr(expr, 'value') and isinstance(expr.value, int):
-            return expr.value
-        return None
+        """Get compile-time constant value from expression.
+
+        Uses _eval_static_expr for full static expression evaluation.
+        """
+        return self._eval_static_expr(expr)
 
     def _get_unique_label(self, prefix: str) -> str:
         """Get a unique label with given prefix."""
         return self.builder.new_label(prefix)
 
     def _get_exception_name(self, exc_id: int) -> str:
-        """Get exception name from ID (stub)."""
-        # TODO: Implement reverse lookup of exception names
+        """Get exception name from ID.
+
+        Performs reverse lookup in the _exception_ids dictionary.
+        """
         for name, eid in self._exception_ids.items():
             if eid == exc_id:
                 return name
