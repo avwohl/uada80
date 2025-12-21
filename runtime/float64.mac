@@ -76,6 +76,7 @@
         PUBLIC  _f64_e2x        ; Exponential e^x (Taylor series, 8-char name to avoid collision with _f64_exp_int)
         PUBLIC  _f64_log        ; Natural logarithm ln(x)
         PUBLIC  _f64_lg10       ; Base 10 logarithm log10(x)
+        PUBLIC  _f64_lg2        ; Base 2 logarithm log2(x)
         PUBLIC  _str_f64        ; String to Float64 conversion
         PUBLIC  _f64_img        ; Float64 to string (Long_Float'Image)
 
@@ -83,6 +84,7 @@
         PUBLIC  _const_one_f64  ; 1.0
         PUBLIC  _const_2        ; 2.0
         PUBLIC  _const_ln10     ; ln(10) ≈ 2.302585
+        ; _const_ln2 is local-only (8-char symbol collision with _const_ln10)
         PUBLIC  _const_6        ; 6.0 (for sin Taylor series: x³/6)
         PUBLIC  _const_24       ; 24.0 (for cos Taylor series: x⁴/24)
         PUBLIC  _const_120      ; 120.0 (for sin Taylor series: x⁵/120)
@@ -5872,6 +5874,48 @@ _f64_lg10:
         ret
 
 ; =============================================================================
+; _f64_lg2: Base 2 logarithm log2(x) = ln(x) / ln(2)
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = log2(x)
+; =============================================================================
+_f64_lg2:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Compute ln(x) -> _lg2_ln
+        ld      hl, _lg2_ln
+        push    hl
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        push    hl
+        call    _f64_log
+        pop     hl
+        pop     hl
+
+        ; Compute ln(x) / ln(2) -> result
+        ld      l, (ix+6)
+        ld      h, (ix+7)       ; HL = result_ptr
+        push    hl
+        ld      hl, _const_ln2
+        push    hl
+        ld      hl, _lg2_ln
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
 ; Constants for sin/cos/exp/log (IEEE 754 double precision, little-endian)
 ; =============================================================================
 
@@ -6640,6 +6684,9 @@ _atnh_res:      DS      8       ; Result: (1/2) * ln((1 + x) / (1 - x))
 
 ; Temporary storage for log10 function
 _lg10_ln:       DS      8       ; ln(x)
+
+; Temporary storage for log2 function
+_lg2_ln:        DS      8       ; ln(x)
 
 ; Temporary storage for _str_f64
 _strf_sign:     DS      1       ; Sign flag (0=pos, 1=neg)

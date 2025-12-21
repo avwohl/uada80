@@ -3576,6 +3576,34 @@ def test_long_float_log10():
 
 
 @skip_if_no_tools
+def test_long_float_log2():
+    """Test Ada.Numerics.Elementary_Functions.Log base 2 for Long_Float."""
+    # Test log2(8.0) = 3.0 (since 2^3 = 8)
+    # log(8.0, 2.0) * 1000 = 3000
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    with Ada.Numerics.Elementary_Functions;
+    procedure Test is
+        X : Long_Float := 8.0;
+        Y : Long_Float;
+        R : Integer;
+    begin
+        Y := Ada.Numerics.Elementary_Functions.Log(X, 2.0);
+        R := Integer(Y * 1000.0);
+        Ada.Integer_Text_IO.Put(R);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    val = int(stdout.strip())
+    # log2(8.0) = 3.0, so *1000 = 3000 (allow some tolerance)
+    assert 2990 <= val <= 3010, f"Expected log2(8.0)*1000=3000, got: {val}"
+
+
+@skip_if_no_tools
 def test_integer_exponentiation():
     """Test Integer ** Natural exponentiation."""
     source = """
