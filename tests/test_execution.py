@@ -4323,7 +4323,6 @@ def test_float_image_attribute():
     """Test Float'Image attribute for float to string conversion.
 
     Note: Current Float implementation truncates to integer part only.
-    Negative values use Float64 code path, so only positive values tested here.
     """
     source = """
     with Ada.Text_IO;
@@ -4336,6 +4335,9 @@ def test_float_image_attribute():
         F := 42.0;
         Ada.Text_IO.Put_Line(Float'Image(F));
 
+        F := -7.0;
+        Ada.Text_IO.Put_Line(Float'Image(F));
+
         F := 123.0;
         Ada.Text_IO.Put_Line(Float'Image(F));
     end Test;
@@ -4344,11 +4346,12 @@ def test_float_image_attribute():
     success, stdout, stderr = compile_and_run(source)
     assert success, f"Program failed: {stderr}"
     lines = stdout.strip().split('\n')
-    assert len(lines) >= 3, f"Expected 3 lines, got: {stdout}"
+    assert len(lines) >= 4, f"Expected 4 lines, got: {stdout}"
     # Float'Image currently outputs integer part only
     assert "0" in lines[0], f"Expected 0 in output, got: {lines[0]}"
     assert "42" in lines[1], f"Expected 42 in output, got: {lines[1]}"
-    assert "123" in lines[2], f"Expected 123 in output, got: {lines[2]}"
+    assert "-7" in lines[2], f"Expected -7 in output, got: {lines[2]}"
+    assert "123" in lines[3], f"Expected 123 in output, got: {lines[3]}"
 
 
 @skip_if_no_tools
