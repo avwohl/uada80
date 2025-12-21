@@ -3706,6 +3706,12 @@ class ASTLowering:
             # This handles RealLiteral correctly (creates Float64 constant in code segment)
             if self._is_float64_type(target_type):
                 value = self._lower_float64_operand(stmt.value)
+            # For Float (fixed-point) targets with negated RealLiteral, create fixed-point directly
+            # This avoids the issue where _get_expr_type(RealLiteral) returns Long_Float
+            elif (target_type and hasattr(target_type, 'name') and target_type.name == 'Float'
+                  and isinstance(stmt.value, UnaryExpr) and stmt.value.op == UnaryOp.MINUS
+                  and isinstance(stmt.value.operand, RealLiteral)):
+                value = self._lower_fixed_point_literal(-stmt.value.operand.value)
             else:
                 value = self._lower_expr(stmt.value)
 
