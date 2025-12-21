@@ -4698,5 +4698,54 @@ def test_reduce_attribute():
     assert "120" in lines[1], f"Expected 120 (product), got: {lines[1]}"
 
 
+@skip_if_no_tools
+def test_parallel_block():
+    """Test Ada 2022 parallel block statement.
+
+    Syntax: parallel do seq1; and do seq2; end parallel;
+    For Z80 (single-threaded), sequences execute sequentially.
+    """
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        A : Integer := 0;
+        B : Integer := 0;
+        C : Integer := 0;
+    begin
+        -- Parallel block with 3 sequences
+        -- On Z80, these execute sequentially but all must complete
+        parallel do
+            A := 10;
+        and do
+            B := 20;
+        and do
+            C := 30;
+        end parallel;
+
+        -- Verify all sequences executed
+        Ada.Integer_Text_IO.Put(A);
+        Ada.Text_IO.New_Line;
+        Ada.Integer_Text_IO.Put(B);
+        Ada.Text_IO.New_Line;
+        Ada.Integer_Text_IO.Put(C);
+        Ada.Text_IO.New_Line;
+
+        -- Sum should be 60
+        Ada.Integer_Text_IO.Put(A + B + C);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    lines = stdout.strip().split('\n')
+    assert len(lines) >= 4, f"Expected 4 lines, got: {stdout}"
+    assert "10" in lines[0], f"Expected 10 (A), got: {lines[0]}"
+    assert "20" in lines[1], f"Expected 20 (B), got: {lines[1]}"
+    assert "30" in lines[2], f"Expected 30 (C), got: {lines[2]}"
+    assert "60" in lines[3], f"Expected 60 (sum), got: {lines[3]}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

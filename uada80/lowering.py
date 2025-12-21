@@ -2968,37 +2968,17 @@ class ASTLowering:
 
         parallel do seq1; and do seq2; end parallel;
 
-        For Z80 (single-threaded), we execute sequences sequentially
-        but emit markers for a potential future parallel runtime.
+        For Z80 (single-threaded), we execute sequences sequentially.
+        No runtime calls are needed - just execute each sequence in order.
         """
         if self.ctx is None:
             return
 
-        # Emit parallel start marker
-        num_sequences = len(stmt.sequences)
-        self.builder.push(Immediate(num_sequences, IRType.WORD))
-        self.builder.call(Label("_PAR_STR"), comment=f"parallel ({num_sequences} sequences)")
-        temp = self.builder.new_vreg(IRType.WORD, "_discard")
-        self.builder.pop(temp)
-
-        # Execute each sequence (sequentially for now)
-        for i, seq in enumerate(stmt.sequences):
-            # Notify runtime of sequence start
-            self.builder.push(Immediate(i, IRType.WORD))
-            self.builder.call(Label("_PAR_SST"))
-            self.builder.pop(temp)
-
-            # Lower the statements in this sequence
+        # For single-threaded Z80, execute each sequence sequentially
+        # No runtime overhead - just directly execute each sequence
+        for seq in stmt.sequences:
             for s in seq:
                 self._lower_statement(s)
-
-            # Notify runtime of sequence end
-            self.builder.push(Immediate(i, IRType.WORD))
-            self.builder.call(Label("_PAR_SEN"))
-            self.builder.pop(temp)
-
-        # Emit parallel end marker (wait for all sequences)
-        self.builder.call(Label("_PAR_END"))
 
     def _lower_pragma(self, stmt: PragmaStmt) -> None:
         """Lower a pragma statement.
