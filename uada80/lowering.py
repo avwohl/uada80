@@ -11336,7 +11336,9 @@ class ASTLowering:
             self.builder.push(arg_value)
 
             # Choose the right runtime function based on type
-            if prefix_type and hasattr(prefix_type, 'name') and prefix_type.name == "Character":
+            if prefix_type and hasattr(prefix_type, 'name') and prefix_type.name == "Boolean":
+                self.builder.call(Label("_b_img"), comment="Boolean'Image")
+            elif prefix_type and hasattr(prefix_type, 'name') and prefix_type.name == "Character":
                 self.builder.call(Label("_c_img"), comment="Character'Image")
             elif prefix_type and hasattr(prefix_type, 'name') and prefix_type.name == "Wide_Character":
                 self.builder.call(Label("_wc_img"), comment="Wide_Character'Image")
