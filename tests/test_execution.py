@@ -4534,5 +4534,61 @@ def test_tagged_type_basic():
     assert "3" in lines[2], f"Expected 3 (Dog age), got: {lines[2]}"
 
 
+@skip_if_no_tools
+def test_generic_procedure_instantiation():
+    """Test generic procedure instantiation.
+
+    Verifies that:
+    1. Generic procedure can be declared
+    2. Generic can be instantiated with a specific type
+    3. Instantiated procedure works correctly
+    """
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        -- Generic procedure that swaps two values
+        generic
+            type Item is private;
+        procedure Swap(X, Y : in out Item);
+
+        procedure Swap(X, Y : in Out Item) is
+            Temp : Item;
+        begin
+            Temp := X;
+            X := Y;
+            Y := Temp;
+        end Swap;
+
+        -- Instantiate for Integer
+        procedure Int_Swap is new Swap(Integer);
+
+        A : Integer := 10;
+        B : Integer := 20;
+    begin
+        Ada.Integer_Text_IO.Put(A);
+        Ada.Text_IO.New_Line;
+        Ada.Integer_Text_IO.Put(B);
+        Ada.Text_IO.New_Line;
+
+        Int_Swap(A, B);
+
+        Ada.Integer_Text_IO.Put(A);
+        Ada.Text_IO.New_Line;
+        Ada.Integer_Text_IO.Put(B);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    lines = stdout.strip().split('\n')
+    assert len(lines) >= 4, f"Expected 4 lines, got: {stdout}"
+    assert "10" in lines[0], f"Expected 10 (initial A), got: {lines[0]}"
+    assert "20" in lines[1], f"Expected 20 (initial B), got: {lines[1]}"
+    assert "20" in lines[2], f"Expected 20 (swapped A), got: {lines[2]}"
+    assert "10" in lines[3], f"Expected 10 (swapped B), got: {lines[3]}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
