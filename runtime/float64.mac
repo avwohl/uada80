@@ -77,6 +77,7 @@
         PUBLIC  _f64_log        ; Natural logarithm ln(x)
         PUBLIC  _f64_lg10       ; Base 10 logarithm log10(x)
         PUBLIC  _str_f64        ; String to Float64 conversion
+        PUBLIC  _f64_img        ; Float64 to string (Long_Float'Image)
 
         ; Constants used by inlined composite functions
         PUBLIC  _const_one_f64  ; 1.0
@@ -6226,6 +6227,253 @@ _strf_return:
         ret
 
 ; =============================================================================
+; _f64_img: Convert Float64 to string (Long_Float'Image)
+; Input:  Stack: src_ptr (pointer to 8-byte IEEE 754 double)
+; Output: HL = pointer to null-terminated string in static buffer
+; Notes:
+;   - Outputs value with 3 decimal places (limited by 16-bit arithmetic)
+;   - Uses static buffer (not reentrant)
+;   - Format: [-]integer.fraction
+; Destroys: A, BC, DE, HL
+; =============================================================================
+_f64_img:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Get source pointer from stack (at IX+4)
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        ld      (_fimg_src), hl
+
+        ; Initialize buffer pointer
+        ld      hl, _fimg_buf
+        ld      (_fimg_ptr), hl
+
+        ; Check for zero: bytes 0-6 = 0, byte 7 = 0 or 0x80
+        ld      hl, (_fimg_src)
+        ld      b, 6
+        xor     a
+_fimg_chk0:
+        or      (hl)
+        inc     hl
+        djnz    _fimg_chk0
+        ; Check byte 6
+        or      (hl)
+        and     0Fh             ; Mask off upper 4 bits (exponent bits)
+        jr      nz, _fimg_not0
+        inc     hl
+        ld      a, (hl)
+        and     7Fh             ; Mask off sign bit
+        jr      nz, _fimg_not0
+
+        ; Value is zero - output "0.0"
+        ld      hl, _fimg_buf
+        ld      (hl), '0'
+        inc     hl
+        ld      (hl), '.'
+        inc     hl
+        ld      (hl), '0'
+        inc     hl
+        ld      (hl), 0
+        ld      hl, _fimg_buf
+        jp      _fimg_done
+
+_fimg_not0:
+        ; Check sign bit (bit 7 of byte 7)
+        ld      hl, (_fimg_src)
+        ld      de, 7
+        add     hl, de
+        ld      a, (hl)
+        ld      (_fimg_sign), a
+        and     80h
+        jr      z, _fimg_pos
+
+        ; Negative - output '-' and clear sign bit
+        ld      hl, (_fimg_ptr)
+        ld      (hl), '-'
+        inc     hl
+        ld      (_fimg_ptr), hl
+
+        ; Clear sign bit in copy of value
+        ld      hl, (_fimg_src)
+        push    hl                      ; src_ptr
+        ld      hl, _fimg_abs
+        push    hl                      ; dest_ptr
+        call    _f64_copy
+        pop     hl
+        pop     hl
+        ; Clear sign bit
+        ld      hl, _fimg_abs+7
+        ld      a, (hl)
+        and     7Fh
+        ld      (hl), a
+        ; Use absolute value from now on
+        ld      hl, _fimg_abs
+        ld      (_fimg_src), hl
+
+_fimg_pos:
+        ; Get integer part via _f64_ftoi
+        ld      hl, (_fimg_src)
+        push    hl
+        call    _f64_ftoi
+        pop     de
+        ; HL = integer part
+        ld      (_fimg_int), hl
+
+        ; Convert integer part to string at _fimg_tmp
+        push    hl
+        call    _int_to_str
+        pop     de
+        ; HL = pointer to integer string
+
+        ; Copy integer string to buffer
+        ld      de, (_fimg_ptr)
+_fimg_cp_int:
+        ld      a, (hl)
+        or      a
+        jr      z, _fimg_cp_done
+        ld      (de), a
+        inc     hl
+        inc     de
+        jr      _fimg_cp_int
+
+_fimg_cp_done:
+        ; Add decimal point
+        ld      a, '.'
+        ld      (de), a
+        inc     de
+        ld      (_fimg_ptr), de
+
+        ; Compute fractional part: value - integer
+        ; First convert integer to Float64
+        ; _f64_itof: dest_ptr (IX+6, pushed first), integer value (IX+4, pushed last)
+        ld      hl, _fimg_intf
+        push    hl                      ; dest_ptr (pushed first)
+        ld      hl, (_fimg_int)
+        push    hl                      ; integer value (pushed last)
+        call    _f64_itof
+        pop     hl
+        pop     hl
+
+        ; frac = value - int_part
+        ; _f64_sub: result = a - b, stack: result_ptr, b_ptr, a_ptr
+        ld      hl, _fimg_frac
+        push    hl                      ; result_ptr
+        ld      hl, _fimg_intf
+        push    hl                      ; b_ptr (int_part)
+        ld      hl, (_fimg_src)
+        push    hl                      ; a_ptr (value)
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Multiply fraction by 1000 (10^3) for 3 decimal places
+        ; (6 decimal places would overflow 16-bit arithmetic)
+        ; Do this by multiplying by 10 three times
+        ld      b, 3
+_fimg_mul10:
+        push    bc
+        ld      hl, _fimg_frac
+        push    hl                      ; result_ptr
+        ld      hl, _const_10
+        push    hl                      ; b_ptr (10.0)
+        ld      hl, _fimg_frac
+        push    hl                      ; a_ptr
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+        pop     bc
+        djnz    _fimg_mul10
+
+        ; Convert fractional part to integer
+        ld      hl, _fimg_frac
+        push    hl
+        call    _f64_ftoi
+        pop     de
+        ; HL = fractional digits (0-999999)
+
+        ; Handle negative fractional values (shouldn't happen but safety)
+        bit     7, h
+        jr      z, _fimg_frac_pos
+        ; Negate if negative
+        ld      de, 0
+        ex      de, hl
+        or      a
+        sbc     hl, de
+
+_fimg_frac_pos:
+        ; Output 3 digits with leading zeros
+        ; We'll do it by repeated division by 10
+        ld      (_fimg_fdig), hl
+
+        ; Convert to 3-digit string with leading zeros
+        ; Build digits from right to left in temp buffer
+        ld      hl, _fimg_dtmp+3
+        ld      (hl), 0                 ; Null terminator
+        dec     hl
+        ld      b, 3                    ; 3 digits
+        ld      de, (_fimg_fdig)
+
+_fimg_cvt_digit:
+        push    bc
+        push    hl
+        ; Divide DE by 10, put remainder in A
+        ex      de, hl                  ; HL = value
+        ld      de, 10
+        call    _fimg_div10             ; HL = quotient, A = remainder
+        ex      de, hl                  ; DE = quotient for next iteration
+        pop     hl
+        add     a, '0'
+        ld      (hl), a
+        dec     hl
+        pop     bc
+        djnz    _fimg_cvt_digit
+
+        ; Copy fractional digits to buffer
+        ld      hl, _fimg_dtmp
+        ld      de, (_fimg_ptr)
+_fimg_cp_frac:
+        ld      a, (hl)
+        or      a
+        jr      z, _fimg_finish
+        ld      (de), a
+        inc     hl
+        inc     de
+        jr      _fimg_cp_frac
+
+_fimg_finish:
+        ld      a, 0
+        ld      (de), a                 ; Null terminator
+
+        ld      hl, _fimg_buf           ; Return buffer pointer
+
+_fimg_done:
+        pop     ix
+        ret
+
+; Helper: Divide HL by 10, return quotient in HL and remainder in A
+_fimg_div10:
+        ld      bc, 0                   ; BC = quotient
+        ld      de, 10
+_fd10_loop:
+        or      a
+        sbc     hl, de
+        jr      c, _fd10_done
+        inc     bc
+        jr      _fd10_loop
+_fd10_done:
+        add     hl, de                  ; Restore remainder
+        ld      a, l                    ; A = remainder
+        push    bc
+        pop     hl                      ; HL = quotient
+        ret
+
+        EXTRN   _int_to_str
+
+; =============================================================================
 ; Working memory (internal accumulators)
 ; Placed at end of file to avoid linker segment calculation bug
 ; =============================================================================
@@ -6402,5 +6650,17 @@ _strf_frac_val: DS      2       ; Fractional value accumulator
 _strf_res:      DS      8       ; Result Float64
 _strf_frac_f64: DS      8       ; Fractional part as Float64
 _strf_div:      DS      8       ; Divisor (10^n)
+
+; Temporary storage for _f64_img
+_fimg_src:      DS      2       ; Source pointer
+_fimg_ptr:      DS      2       ; Buffer write pointer
+_fimg_sign:     DS      1       ; Sign byte
+_fimg_int:      DS      2       ; Integer part
+_fimg_fdig:     DS      2       ; Fractional digits value
+_fimg_abs:      DS      8       ; Absolute value copy
+_fimg_intf:     DS      8       ; Integer part as Float64
+_fimg_frac:     DS      8       ; Fractional part as Float64
+_fimg_dtmp:     DS      8       ; Digit conversion temp buffer
+_fimg_buf:      DS      24      ; Output buffer: sign + integer + . + 6 digits + null
 
         END

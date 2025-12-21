@@ -4280,5 +4280,43 @@ def test_enumeration_image_attribute():
     assert "YELLOW" in lines[3], f"Expected YELLOW in output, got: {lines[3]}"
 
 
+@skip_if_no_tools
+def test_long_float_image_attribute():
+    """Test Long_Float'Image attribute for float to string conversion."""
+    source = """
+    with Ada.Text_IO;
+    procedure Test is
+        F : Long_Float;
+    begin
+        F := 0.0;
+        Ada.Text_IO.Put_Line(Long_Float'Image(F));
+
+        F := 3.14159;
+        Ada.Text_IO.Put_Line(Long_Float'Image(F));
+
+        F := -42.5;
+        Ada.Text_IO.Put_Line(Long_Float'Image(F));
+
+        F := 123.0;
+        Ada.Text_IO.Put_Line(Long_Float'Image(F));
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    lines = stdout.strip().split('\n')
+    assert len(lines) >= 4, f"Expected 4 lines, got: {stdout}"
+    # Long_Float'Image returns decimal representation
+    # Zero should be "0.0"
+    assert "0" in lines[0], f"Expected 0 in output, got: {lines[0]}"
+    # 3.14159 should have 3. and some digits
+    assert "3." in lines[1], f"Expected 3. in output, got: {lines[1]}"
+    # -42.5 should be negative
+    assert "-" in lines[2], f"Expected negative sign in output, got: {lines[2]}"
+    assert "42" in lines[2], f"Expected 42 in output, got: {lines[2]}"
+    # 123.0 should have 123
+    assert "123" in lines[3], f"Expected 123 in output, got: {lines[3]}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
