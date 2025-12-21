@@ -4246,5 +4246,39 @@ def test_boolean_image_attribute():
     assert "FALSE" in lines[1], f"Expected FALSE in output, got: {lines[1]}"
 
 
+@skip_if_no_tools
+def test_enumeration_image_attribute():
+    """Test Enumeration'Image attribute for enum to string conversion."""
+    source = """
+    with Ada.Text_IO;
+    procedure Test is
+        type Color is (Red, Green, Blue, Yellow);
+        C : Color;
+    begin
+        C := Red;
+        Ada.Text_IO.Put_Line(Color'Image(C));
+
+        C := Green;
+        Ada.Text_IO.Put_Line(Color'Image(C));
+
+        C := Blue;
+        Ada.Text_IO.Put_Line(Color'Image(C));
+
+        C := Yellow;
+        Ada.Text_IO.Put_Line(Color'Image(C));
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    lines = stdout.strip().split('\n')
+    assert len(lines) >= 4, f"Expected 4 lines, got: {stdout}"
+    # Enumeration'Image returns uppercase names
+    assert "RED" in lines[0], f"Expected RED in output, got: {lines[0]}"
+    assert "GREEN" in lines[1], f"Expected GREEN in output, got: {lines[1]}"
+    assert "BLUE" in lines[2], f"Expected BLUE in output, got: {lines[2]}"
+    assert "YELLOW" in lines[3], f"Expected YELLOW in output, got: {lines[3]}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

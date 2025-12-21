@@ -1887,6 +1887,77 @@ _ev_done:
     RET
 
 ; ============================================================
+; _e_img - Enumeration'Image: lookup value in enum table to get string
+; Input on stack:
+;   IX+4 = table pointer (pushed last)
+;   IX+6 = enum value (pushed first)
+; Output: HL = pointer to string (null-terminated, uppercase)
+; Table format:
+;   1 byte: count of entries
+;   For each entry: null-terminated UPPERCASE string, then 1-byte value
+; Notes:
+;   - Returns "?" if value not found (should raise Constraint_Error)
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _e_img
+_e_img:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+
+    ; Get table pointer (IX+4)
+    LD L, (IX+4)
+    LD H, (IX+5)
+    ; HL = table pointer
+
+    ; Get search value (IX+6, low byte only for enum positions 0-255)
+    LD A, (IX+6)
+    LD C, A                 ; C = search value
+
+    ; Read count
+    LD A, (HL)
+    INC HL
+    LD B, A                 ; B = count of entries
+    OR A
+    JR Z, _ei_not_found     ; Empty table
+
+_ei_loop:
+    PUSH HL                 ; Save string start pointer
+    ; Skip past string to find null terminator
+_ei_skip_str:
+    LD A, (HL)
+    INC HL
+    OR A
+    JR NZ, _ei_skip_str
+    ; HL now points to value byte
+    LD A, (HL)              ; Get value
+    INC HL                  ; HL now points to next entry
+    CP C                    ; Compare with search value
+    JR Z, _ei_found
+
+    ; Not a match, continue to next entry
+    POP DE                  ; Discard saved string pointer
+    DJNZ _ei_loop           ; Next entry
+
+_ei_not_found:
+    ; Not found - return "?"
+    LD HL, _ei_unknown
+    JR _ei_done
+
+_ei_found:
+    ; Match found! Return saved string pointer
+    POP HL                  ; HL = string pointer
+    ; Fall through to done
+
+_ei_done:
+    POP IX
+    RET
+
+    CSEG
+_ei_unknown:
+    DB "?", 0
+
+; ============================================================
 ; Character I/O
 ; ============================================================
 
