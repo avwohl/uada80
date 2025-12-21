@@ -4747,5 +4747,64 @@ def test_parallel_block():
     assert "60" in lines[3], f"Expected 60 (sum), got: {lines[3]}"
 
 
+@skip_if_no_tools
+def test_quantified_expression():
+    """Test Ada 2012 quantified expressions (for all/for some).
+
+    for all X in Range => Predicate - True if all values satisfy predicate
+    for some X in Range => Predicate - True if any value satisfies predicate
+    """
+    source = """
+    with Ada.Text_IO;
+    procedure Test is
+        All_Positive : Boolean;
+        Has_Five : Boolean;
+        All_Less_Than_100 : Boolean;
+        Has_Negative : Boolean;
+    begin
+        -- for all: all values 1..10 are > 0 (True)
+        All_Positive := (for all X in 1..10 => X > 0);
+        if All_Positive then
+            Ada.Text_IO.Put_Line("ALL_POS:TRUE");
+        else
+            Ada.Text_IO.Put_Line("ALL_POS:FALSE");
+        end if;
+
+        -- for some: there exists a 5 in 1..10 (True)
+        Has_Five := (for some X in 1..10 => X = 5);
+        if Has_Five then
+            Ada.Text_IO.Put_Line("HAS_FIVE:TRUE");
+        else
+            Ada.Text_IO.Put_Line("HAS_FIVE:FALSE");
+        end if;
+
+        -- for all: all values 1..10 are < 100 (True)
+        All_Less_Than_100 := (for all N in 1..10 => N < 100);
+        if All_Less_Than_100 then
+            Ada.Text_IO.Put_Line("ALL_LT100:TRUE");
+        else
+            Ada.Text_IO.Put_Line("ALL_LT100:FALSE");
+        end if;
+
+        -- for some: there exists a negative in 1..10 (False)
+        Has_Negative := (for some I in 1..10 => I < 0);
+        if Has_Negative then
+            Ada.Text_IO.Put_Line("HAS_NEG:TRUE");
+        else
+            Ada.Text_IO.Put_Line("HAS_NEG:FALSE");
+        end if;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    lines = stdout.strip().split('\n')
+    assert len(lines) >= 4, f"Expected 4 lines, got: {stdout}"
+    assert "ALL_POS:TRUE" in lines[0], f"Expected ALL_POS:TRUE, got: {lines[0]}"
+    assert "HAS_FIVE:TRUE" in lines[1], f"Expected HAS_FIVE:TRUE, got: {lines[1]}"
+    assert "ALL_LT100:TRUE" in lines[2], f"Expected ALL_LT100:TRUE, got: {lines[2]}"
+    assert "HAS_NEG:FALSE" in lines[3], f"Expected HAS_NEG:FALSE, got: {lines[3]}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
