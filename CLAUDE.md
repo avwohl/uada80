@@ -27,7 +27,7 @@
 - `runtime/fileio.mac` - Add `_file_delete_handle` and `_file_reset`
 - `tests/test_execution.py` - 4 new exception handling tests
 
-**Tests:** 6941/6941 tests pass (156 execution tests)
+**Tests:** 6942/6942 tests pass (157 execution tests)
 
 ---
 
@@ -384,8 +384,8 @@ pylint uada80/
 ### Current Status
 
 - **Pylint score**: 10.00/10
-- **Tests**: 6941/6941 passing
-- **Execution tests**: 156 pass (skipped in CI, run locally with cpmemu)
+- **Tests**: 6942/6942 passing
+- **Execution tests**: 157 pass (skipped in CI, run locally with cpmemu)
 
 ---
 
