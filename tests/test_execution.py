@@ -4351,5 +4351,41 @@ def test_float_image_attribute():
     assert "123" in lines[2], f"Expected 123 in output, got: {lines[2]}"
 
 
+@skip_if_no_tools
+def test_float_value_attribute():
+    """Test Float'Value attribute for string to float conversion.
+
+    Note: Current Float implementation truncates to integer part only.
+    """
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        F : Float;
+    begin
+        F := Float'Value("0");
+        Ada.Integer_Text_IO.Put(Integer(F));
+        Ada.Text_IO.New_Line;
+
+        F := Float'Value("42");
+        Ada.Integer_Text_IO.Put(Integer(F));
+        Ada.Text_IO.New_Line;
+
+        F := Float'Value("123");
+        Ada.Integer_Text_IO.Put(Integer(F));
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    lines = stdout.strip().split('\n')
+    assert len(lines) >= 3, f"Expected 3 lines, got: {stdout}"
+    # Float'Value currently parses integer part only
+    assert "0" in lines[0], f"Expected 0 in output, got: {lines[0]}"
+    assert "42" in lines[1], f"Expected 42 in output, got: {lines[1]}"
+    assert "123" in lines[2], f"Expected 123 in output, got: {lines[2]}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
