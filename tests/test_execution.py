@@ -4256,6 +4256,39 @@ def test_wide_character_image_attribute():
 
 
 @skip_if_no_tools
+def test_wide_wide_character_image_attribute():
+    """Test Wide_Wide_Character'Image attribute for wide wide character to string conversion."""
+    # Use Integer for the code point and call _wwc_img via Image
+    # This avoids Wide_Wide_Character'Val constraint check issues
+    source = """
+    with Ada.Text_IO;
+    procedure Test is
+        Code : Integer;
+    begin
+        -- Test by outputting the character code and using Wide_Wide_Character'Image
+        -- via type conversion workaround
+        Code := 65;  -- 'A'
+        Ada.Text_IO.Put_Line(Wide_Wide_Character'Image(Wide_Wide_Character'Val(Code)));
+
+        Code := 122;  -- 'z'
+        Ada.Text_IO.Put_Line(Wide_Wide_Character'Image(Wide_Wide_Character'Val(Code)));
+
+        Code := 53;  -- '5'
+        Ada.Text_IO.Put_Line(Wide_Wide_Character'Image(Wide_Wide_Character'Val(Code)));
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    lines = stdout.strip().split('\n')
+    assert len(lines) >= 3, f"Expected 3 lines, got: {stdout}"
+    # Wide_Wide_Character'Image returns "'X'" format
+    assert "'A'" in lines[0], f"Expected 'A' in output, got: {lines[0]}"
+    assert "'z'" in lines[1], f"Expected 'z' in output, got: {lines[1]}"
+    assert "'5'" in lines[2], f"Expected '5' in output, got: {lines[2]}"
+
+
+@skip_if_no_tools
 def test_boolean_image_attribute():
     """Test Boolean'Image attribute for boolean to string conversion."""
     source = """
