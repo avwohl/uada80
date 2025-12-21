@@ -27,7 +27,7 @@
 - `runtime/fileio.mac` - Add `_file_delete_handle` and `_file_reset`
 - `tests/test_execution.py` - 4 new exception handling tests
 
-**Tests:** 6951/6951 tests pass (164 execution tests)
+**Tests:** 6952/6952 tests pass (164 execution tests)
 
 ---
 
@@ -70,7 +70,7 @@ barrier_ok:
 - `uada80/parser.py` - Create EntryBody for entry bodies in protected body
 - `uada80/lowering.py` - Entry barrier checking, _setup_parameters
 
-**Tests:** 6951/6951 tests pass
+**Tests:** 6952/6952 tests pass
 
 ---
 
@@ -93,7 +93,7 @@ barrier_ok:
 6. **Procedure renaming** - Added alias_for resolution for Text_IO renames
 7. **Local procedure renaming** - Added `local_renamings` tracking
 
-**Tests:** 6951/6951 tests pass
+**Tests:** 6952/6952 tests pass
 
 ---
 
@@ -129,7 +129,7 @@ barrier_ok:
 - `uada80/lowering.py` - Protected object initialization and component access
 - `uada80/codegen/__init__.py` - Byte store generation fix
 
-**Tests:** 147 execution tests pass, 6951 total tests pass
+**Tests:** 147 execution tests pass, 6952 total tests pass
 
 ---
 
@@ -384,7 +384,7 @@ pylint uada80/
 ### Current Status
 
 - **Pylint score**: 10.00/10
-- **Tests**: 6951/6951 passing
+- **Tests**: 6952/6952 passing
 - **Execution tests**: 164 pass (skipped in CI, run locally with cpmemu)
 
 ---
