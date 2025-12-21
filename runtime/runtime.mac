@@ -1645,6 +1645,110 @@ _wwc_val_done:
     RET
 
 ; ============================================================
+; _c_img - Character'Image: convert character code to string "'X'"
+; Input: Character code on stack (at SP+2)
+; Output: HL = pointer to static buffer containing "'X'" (null-terminated)
+; Notes:
+;   - Returns string in format "'X'" where X is the character
+;   - Uses static buffer (not reentrant)
+; Destroys: A
+; ============================================================
+    PUBLIC _c_img
+_c_img:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+
+    ; Get character code from stack (IX+4)
+    LD A, (IX+4)
+
+    ; Build string "'X'" in static buffer
+    LD HL, _c_img_buf
+    LD (HL), 27H            ; Opening single quote
+    INC HL
+    LD (HL), A              ; The character
+    INC HL
+    LD (HL), 27H            ; Closing single quote
+    INC HL
+    LD (HL), 0              ; Null terminator
+
+    ; Return pointer to buffer
+    LD HL, _c_img_buf
+
+    POP IX
+    RET
+
+; ============================================================
+; _wc_img - Wide_Character'Image: convert wide character code to string "'X'"
+; Input: Wide character code on stack (at SP+2)
+; Output: HL = pointer to static buffer containing "'X'" (null-terminated)
+; Notes:
+;   - Returns string in format "'X'" where X is the character
+;   - Uses static buffer (not reentrant)
+;   - On Z80/CP/M, uses low byte only (ASCII)
+; Destroys: A
+; ============================================================
+    PUBLIC _wc_img
+_wc_img:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+
+    ; Get character code from stack (IX+4, low byte only)
+    LD A, (IX+4)
+
+    ; Build string "'X'" in static buffer
+    LD HL, _wc_img_buf
+    LD (HL), 27H            ; Opening single quote
+    INC HL
+    LD (HL), A              ; The character
+    INC HL
+    LD (HL), 27H            ; Closing single quote
+    INC HL
+    LD (HL), 0              ; Null terminator
+
+    ; Return pointer to buffer
+    LD HL, _wc_img_buf
+
+    POP IX
+    RET
+
+; ============================================================
+; _wwc_img - Wide_Wide_Character'Image: convert 32-bit character code to string "'X'"
+; Input: Wide wide character code on stack (at SP+2, low 16 bits)
+; Output: HL = pointer to static buffer containing "'X'" (null-terminated)
+; Notes:
+;   - Returns string in format "'X'" where X is the character
+;   - Uses static buffer (not reentrant)
+;   - On Z80/CP/M, uses low byte only (ASCII)
+; Destroys: A
+; ============================================================
+    PUBLIC _wwc_img
+_wwc_img:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+
+    ; Get character code from stack (IX+4, low byte only)
+    LD A, (IX+4)
+
+    ; Build string "'X'" in static buffer
+    LD HL, _wwc_img_buf
+    LD (HL), 27H            ; Opening single quote
+    INC HL
+    LD (HL), A              ; The character
+    INC HL
+    LD (HL), 27H            ; Closing single quote
+    INC HL
+    LD (HL), 0              ; Null terminator
+
+    ; Return pointer to buffer
+    LD HL, _wwc_img_buf
+
+    POP IX
+    RET
+
+; ============================================================
 ; _e_val - Enumeration'Value: lookup string in enum table
 ; Input on stack:
 ;   IX+4 = table pointer (pushed last)
@@ -2476,6 +2580,14 @@ _int_str_buf:
 ; String concatenation buffer (moved from middle of CSEG)
 _strcat_buf:
     DS 256                  ; 256-byte buffer for concatenation
+
+; Character'Image buffers
+_c_img_buf:
+    DS 5                    ; "'X'" + null = 4 bytes, +1 for safety
+_wc_img_buf:
+    DS 5                    ; "'X'" + null = 4 bytes, +1 for safety
+_wwc_img_buf:
+    DS 5                    ; "'X'" + null = 4 bytes, +1 for safety
 
 ; Heap start marker (must be last)
     PUBLIC _heap_start
