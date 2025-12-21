@@ -4485,5 +4485,54 @@ def test_float_value_attribute():
     assert "123" in lines[2], f"Expected 123 in output, got: {lines[2]}"
 
 
+@skip_if_no_tools
+def test_tagged_type_basic():
+    """Test basic tagged type without dispatching.
+
+    Verifies that:
+    1. Tagged type with component access works
+    2. Type extension (inheritance) works
+    3. Component access on derived types works
+    """
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        -- Base tagged type
+        type Animal is tagged record
+            Legs : Integer;
+        end record;
+
+        -- Extension with additional component
+        type Dog is new Animal with record
+            Age : Integer;
+        end record;
+
+        My_Animal : Animal := (Legs => 4);
+        My_Dog : Dog := (Legs => 4, Age => 3);
+    begin
+        -- Access base type component
+        Ada.Integer_Text_IO.Put(My_Animal.Legs);
+        Ada.Text_IO.New_Line;
+
+        -- Access inherited component
+        Ada.Integer_Text_IO.Put(My_Dog.Legs);
+        Ada.Text_IO.New_Line;
+
+        -- Access extension component
+        Ada.Integer_Text_IO.Put(My_Dog.Age);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    lines = stdout.strip().split('\n')
+    assert len(lines) >= 3, f"Expected 3 lines, got: {stdout}"
+    assert "4" in lines[0], f"Expected 4 (Animal legs), got: {lines[0]}"
+    assert "4" in lines[1], f"Expected 4 (Dog legs), got: {lines[1]}"
+    assert "3" in lines[2], f"Expected 3 (Dog age), got: {lines[2]}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
