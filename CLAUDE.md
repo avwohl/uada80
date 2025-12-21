@@ -70,7 +70,7 @@ barrier_ok:
 - `uada80/parser.py` - Create EntryBody for entry bodies in protected body
 - `uada80/lowering.py` - Entry barrier checking, _setup_parameters
 
-**Tests:** 6932/6932 tests pass
+**Tests:** 6949/6949 tests pass
 
 ---
 
@@ -93,7 +93,7 @@ barrier_ok:
 6. **Procedure renaming** - Added alias_for resolution for Text_IO renames
 7. **Local procedure renaming** - Added `local_renamings` tracking
 
-**Tests:** 6932/6932 tests pass
+**Tests:** 6949/6949 tests pass
 
 ---
 
@@ -129,7 +129,7 @@ barrier_ok:
 - `uada80/lowering.py` - Protected object initialization and component access
 - `uada80/codegen/__init__.py` - Byte store generation fix
 
-**Tests:** 147 execution tests pass, 6932 total tests pass
+**Tests:** 147 execution tests pass, 6949 total tests pass
 
 ---
 
