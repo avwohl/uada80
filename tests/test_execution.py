@@ -4662,5 +4662,41 @@ def test_delta_aggregate():
     assert "20" in lines[1], f"Expected 20 (unchanged Y), got: {lines[1]}"
 
 
+@skip_if_no_tools
+def test_reduce_attribute():
+    """Test Ada 2022 Reduce attribute for arrays.
+
+    Syntax: Array'Reduce(Reducer, Initial_Value)
+    Applies Reducer to each element, accumulating from Initial_Value.
+    """
+    source = """
+    with Ada.Text_IO;
+    with Ada.Integer_Text_IO;
+    procedure Test is
+        type Int_Array is array (1..5) of Integer;
+        A : Int_Array := (1, 2, 3, 4, 5);
+        Sum : Integer;
+        Product : Integer;
+    begin
+        -- Sum: 1+2+3+4+5 = 15
+        Sum := A'Reduce("+", 0);
+        Ada.Integer_Text_IO.Put(Sum);
+        Ada.Text_IO.New_Line;
+
+        -- Product: 1*2*3*4*5 = 120
+        Product := A'Reduce("*", 1);
+        Ada.Integer_Text_IO.Put(Product);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    lines = stdout.strip().split('\n')
+    assert len(lines) >= 2, f"Expected 2 lines, got: {stdout}"
+    assert "15" in lines[0], f"Expected 15 (sum), got: {lines[0]}"
+    assert "120" in lines[1], f"Expected 120 (product), got: {lines[1]}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
