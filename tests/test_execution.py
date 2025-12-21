@@ -4221,5 +4221,30 @@ def test_character_image_attribute():
     assert "'5'" in lines[2], f"Expected '5' in output, got: {lines[2]}"
 
 
+@skip_if_no_tools
+def test_boolean_image_attribute():
+    """Test Boolean'Image attribute for boolean to string conversion."""
+    source = """
+    with Ada.Text_IO;
+    procedure Test is
+        B : Boolean;
+    begin
+        B := True;
+        Ada.Text_IO.Put_Line(Boolean'Image(B));
+
+        B := False;
+        Ada.Text_IO.Put_Line(Boolean'Image(B));
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    lines = stdout.strip().split('\n')
+    assert len(lines) >= 2, f"Expected 2 lines, got: {stdout}"
+    # Boolean'Image returns "TRUE" or "FALSE" (uppercase)
+    assert "TRUE" in lines[0], f"Expected TRUE in output, got: {lines[0]}"
+    assert "FALSE" in lines[1], f"Expected FALSE in output, got: {lines[1]}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

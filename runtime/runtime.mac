@@ -1645,6 +1645,44 @@ _wwc_val_done:
     RET
 
 ; ============================================================
+; _b_img - Boolean'Image: convert boolean to string "TRUE" or "FALSE"
+; Input: Boolean value on stack (at SP+2), 0=False, non-zero=True
+; Output: HL = pointer to static string "TRUE" or "FALSE"
+; Notes:
+;   - Returns pointer to read-only string constant
+;   - Ada standard requires uppercase "TRUE" and "FALSE"
+; Destroys: A
+; ============================================================
+    PUBLIC _b_img
+_b_img:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+
+    ; Get boolean value from stack (IX+4)
+    LD A, (IX+4)
+    OR A
+    JR Z, _b_img_false
+
+    ; Return "TRUE"
+    LD HL, _b_img_true
+    JR _b_img_done
+
+_b_img_false:
+    ; Return "FALSE"
+    LD HL, _b_img_false_str
+
+_b_img_done:
+    POP IX
+    RET
+
+    CSEG
+_b_img_true:
+    DB "TRUE", 0
+_b_img_false_str:
+    DB "FALSE", 0
+
+; ============================================================
 ; _c_img - Character'Image: convert character code to string "'X'"
 ; Input: Character code on stack (at SP+2)
 ; Output: HL = pointer to static buffer containing "'X'" (null-terminated)
