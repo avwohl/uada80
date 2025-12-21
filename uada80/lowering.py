@@ -11389,6 +11389,24 @@ class ASTLowering:
                 self.builder.pop(temp)
                 return result
 
+            # Check for Float64 (Long_Float) - requires special handling for 8-byte values
+            if self._is_float64_type(prefix_type):
+                # Get pointer to Float64 value
+                float_ptr = self._lower_float64_operand(expr.args[0])
+                self.builder.push(float_ptr)
+                self.builder.call(Label("_f64_img"), comment="Long_Float'Image")
+                # Result is pointer to string in HL
+                result = self.builder.new_vreg(IRType.PTR, "_image")
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.PTR),
+                    comment="capture Long_Float'Image result from HL"
+                ))
+                # Clean up pushed pointer
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                return result
+
             arg_value = self._lower_expr(expr.args[0])
             self.builder.push(arg_value)
 
