@@ -4153,5 +4153,44 @@ def test_wide_character_value_attribute():
     assert "88" in lines[3], f"Expected 88 for 'X', got: {lines[3]}"
 
 
+@skip_if_no_tools
+def test_wide_wide_character_value_attribute():
+    """Test Wide_Wide_Character'Value attribute for string to wide wide character conversion."""
+    # Note: Uses Integer to hold result to avoid Wide_Wide_Character constraint check issue
+    source = """
+    with Ada.Integer_Text_IO;
+    with Ada.Text_IO;
+    procedure Test is
+        Val : Integer;
+    begin
+        Val := Wide_Wide_Character'Pos(Wide_Wide_Character'Value("'A'"));
+        Ada.Integer_Text_IO.Put(Val);
+        Ada.Text_IO.New_Line;
+
+        Val := Wide_Wide_Character'Pos(Wide_Wide_Character'Value("B"));  -- without quotes
+        Ada.Integer_Text_IO.Put(Val);
+        Ada.Text_IO.New_Line;
+
+        Val := Wide_Wide_Character'Pos(Wide_Wide_Character'Value("'z'"));  -- lowercase
+        Ada.Integer_Text_IO.Put(Val);
+        Ada.Text_IO.New_Line;
+
+        Val := Wide_Wide_Character'Pos(Wide_Wide_Character'Value("   'X'"));  -- with leading whitespace
+        Ada.Integer_Text_IO.Put(Val);
+        Ada.Text_IO.New_Line;
+    end Test;
+    """
+
+    success, stdout, stderr = compile_and_run(source)
+    assert success, f"Program failed: {stderr}"
+    lines = stdout.strip().split('\n')
+    assert len(lines) >= 4, f"Expected 4 lines, got: {stdout}"
+    # 'A'=65, 'B'=66, 'z'=122, 'X'=88
+    assert "65" in lines[0], f"Expected 65 for 'A', got: {lines[0]}"
+    assert "66" in lines[1], f"Expected 66 for B, got: {lines[1]}"
+    assert "122" in lines[2], f"Expected 122 for 'z', got: {lines[2]}"
+    assert "88" in lines[3], f"Expected 88 for 'X', got: {lines[3]}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
