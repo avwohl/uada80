@@ -1,0 +1,57 @@
+; =========================================
+; Protected Object Lock/Unlock
+; =========================================
+; Simple protected object lock implementation
+; for single-threaded CP/M environment.
+;
+; For MP/M (multitasking), use the full tasking module.
+
+    .Z80
+    CSEG
+
+    PUBLIC _PROT_LCK
+    PUBLIC _PROT_ULK
+    PUBLIC _PROTECT
+    PUBLIC _PROT_UN
+
+; =========================================
+; _PROT_LCK / _PROTECT: Acquire protected object lock
+; =========================================
+; Input: Protected object address on stack
+; Output: None (returns with interrupts disabled)
+; 
+; For CP/M, we just disable interrupts and increment
+; the lock counter. Actual mutual exclusion is handled
+; by the OS in MP/M mode.
+;
+_PROTECT:
+_PROT_LCK:
+    di                  ; Disable interrupts
+    pop de              ; Return address
+    pop hl              ; Protected object address
+    push de             ; Restore return address
+    ld a, (hl)          ; Read lock byte
+    inc a
+    ld (hl), a          ; Write incremented value
+    ret
+
+; =========================================
+; _PROT_ULK / _PROT_UN: Release protected object lock
+; =========================================
+; Input: Protected object address on stack
+; Output: None
+;
+_PROT_UN:
+_PROT_ULK:
+    pop de              ; Return address
+    pop hl              ; Protected object address
+    push de             ; Restore return address
+    ld a, (hl)          ; Read lock byte
+    dec a
+    ld (hl), a          ; Write decremented value
+    or a
+    ret nz              ; If still locked (count > 0), return
+    ei                  ; Re-enable interrupts
+    ret
+
+    END

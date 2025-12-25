@@ -1,0 +1,630 @@
+; =========================================
+; Doubly Linked List Operations for Ada.Containers.Doubly_Linked_Lists
+; =========================================
+
+    .Z80
+
+; Container type IDs
+CONT_TYPE_VECTOR      EQU 1
+CONT_TYPE_LIST        EQU 2
+
+; Container header offsets
+CONT_HDR_TYPE        EQU 0    ; container type ID
+CONT_HDR_FLAGS       EQU 1    ; flags byte
+CONT_HDR_COUNT       EQU 2    ; element count
+CONT_HDR_CAPACITY    EQU 4    ; capacity (vectors) or elem_size (lists)
+CONT_HDR_ELEM_SIZE   EQU 6    ; element size in bytes
+CONT_HDR_SIZE        EQU 8    ; header size
+
+; List header offsets
+LIST_HEAD            EQU 8    ; pointer to first node
+LIST_TAIL            EQU 10   ; pointer to last node
+LIST_TOTAL_SIZE      EQU 12   ; total list header size
+
+; List node structure
+LIST_NODE_PREV       EQU 0    ; previous node
+LIST_NODE_NEXT       EQU 2    ; next node
+LIST_NODE_DATA       EQU 4    ; element data starts here
+
+    EXTRN _heap_alloc
+    EXTRN _heap_free
+    EXTRN _mul16
+
+    CSEG
+
+; _list_create: Create a new doubly linked list
+; Input: Stack: element_size
+; Output: HL = list pointer (0 if failed)
+    PUBLIC _list_create
+LIST_CREATE_ELEM_SIZE EQU 4
+
+_list_create:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ; Allocate header
+    ld HL, LIST_TOTAL_SIZE
+    call _heap_alloc
+    ld A, H
+    or L
+    jr Z, lc_fail
+    push HL
+    pop IY            ; IY = header
+    ; Initialize header
+    ld (IY+CONT_HDR_TYPE), CONT_TYPE_LIST
+    ld (IY+CONT_HDR_FLAGS), 0
+    ld (IY+CONT_HDR_COUNT), 0
+    ld (IY+CONT_HDR_COUNT+1), 0
+    ; Set element size
+    ld L, (IX+LIST_CREATE_ELEM_SIZE)
+    ld H, (IX+LIST_CREATE_ELEM_SIZE+1)
+    ld (IY+CONT_HDR_ELEM_SIZE), L
+    ld (IY+CONT_HDR_ELEM_SIZE+1), H
+    ; Initialize head/tail to null
+    ld (IY+LIST_HEAD), 0
+    ld (IY+LIST_HEAD+1), 0
+    ld (IY+LIST_TAIL), 0
+    ld (IY+LIST_TAIL+1), 0
+    ; Return header pointer
+    push IY
+    pop HL
+    pop IX
+    ret
+lc_fail:
+    ld HL, 0
+    pop IX
+    ret
+
+; _list_alloc_node: Allocate a new list node
+; Input: IY = list header
+; Output: HL = node pointer (0 if failed)
+_list_alloc_node:
+    ; Node size = LIST_NODE_DATA + elem_size
+    ld L, (IY+CONT_HDR_ELEM_SIZE)
+    ld H, (IY+CONT_HDR_ELEM_SIZE+1)
+    ld DE, LIST_NODE_DATA
+    add HL, DE
+    jp _heap_alloc
+
+; _list_append: Append element to end of list
+; Input: Stack: list_ptr, element_ptr
+; Output: HL = 1 (success) or 0 (failed)
+    PUBLIC _list_append
+LIST_APPEND_LIST     EQU 4
+LIST_APPEND_ELEM     EQU 6
+
+_list_append:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ; Get list pointer
+    ld L, (IX+LIST_APPEND_LIST)
+    ld H, (IX+LIST_APPEND_LIST+1)
+    push HL
+    pop IY            ; IY = list
+    ; Allocate new node
+    call _list_alloc_node
+    ld A, H
+    or L
+    jp Z, la_fail
+    push HL           ; save node ptr
+    push HL
+    pop IX            ; IX = new node (temp)
+    ; Initialize node
+    ld (IX+LIST_NODE_PREV), 0
+    ld (IX+LIST_NODE_PREV+1), 0
+    ld (IX+LIST_NODE_NEXT), 0
+    ld (IX+LIST_NODE_NEXT+1), 0
+    ; Copy element data
+    push IX
+    pop DE
+    ld HL, LIST_NODE_DATA
+    add HL, DE        ; HL = &node->data
+    ex DE, HL         ; DE = destination
+    ; Get original IX back for stack access
+    ld HL, 0
+    add HL, SP
+    ld BC, 4
+    add HL, BC
+    push HL
+    pop IX            ; IX = frame pointer
+    ; Source = element_ptr
+    ld L, (IX+LIST_APPEND_ELEM)
+    ld H, (IX+LIST_APPEND_ELEM+1)
+    ; BC = elem_size
+    ld C, (IY+CONT_HDR_ELEM_SIZE)
+    ld B, (IY+CONT_HDR_ELEM_SIZE+1)
+    ldir              ; copy element
+    ; Link node to list
+    pop HL            ; node ptr
+    push HL
+    ; Check if list is empty
+    ld A, (IY+LIST_HEAD)
+    or A
+    ld A, (IY+LIST_HEAD+1)
+    jr NZ, la_notempty
+    ; First check low byte too
+    ld A, (IY+LIST_HEAD)
+    or A
+    jr NZ, la_notempty
+    ; Empty list - set head and tail to new node
+    ld (IY+LIST_HEAD), L
+    ld (IY+LIST_HEAD+1), H
+    ld (IY+LIST_TAIL), L
+    ld (IY+LIST_TAIL+1), H
+    jr la_done
+la_notempty:
+    ; Non-empty - link to tail
+    pop HL            ; new node
+    push HL
+    push HL
+    pop IX            ; IX = new node
+    ; Get old tail
+    ld L, (IY+LIST_TAIL)
+    ld H, (IY+LIST_TAIL+1)
+    ; Set new node's prev to old tail
+    ld (IX+LIST_NODE_PREV), L
+    ld (IX+LIST_NODE_PREV+1), H
+    ; Set old tail's next to new node
+    push HL
+    pop IX            ; IX = old tail
+    pop HL            ; new node
+    push HL
+    ld (IX+LIST_NODE_NEXT), L
+    ld (IX+LIST_NODE_NEXT+1), H
+    ; Update list tail
+    ld (IY+LIST_TAIL), L
+    ld (IY+LIST_TAIL+1), H
+la_done:
+    ; Increment count
+    ld L, (IY+CONT_HDR_COUNT)
+    ld H, (IY+CONT_HDR_COUNT+1)
+    inc HL
+    ld (IY+CONT_HDR_COUNT), L
+    ld (IY+CONT_HDR_COUNT+1), H
+    pop HL            ; discard saved node
+    ld HL, 1          ; success
+    ; Restore IX
+    ld IX, 0
+    add IX, SP
+    pop IX
+    ret
+la_fail:
+    ld HL, 0
+    pop IX
+    ret
+
+; _list_prepend: Prepend element to front of list
+; Input: Stack: list_ptr, element_ptr
+; Output: HL = 1 (success) or 0 (failed)
+    PUBLIC _list_prepend
+LIST_PREPEND_LIST    EQU 4
+LIST_PREPEND_ELEM    EQU 6
+
+_list_prepend:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ; Get list pointer
+    ld L, (IX+LIST_PREPEND_LIST)
+    ld H, (IX+LIST_PREPEND_LIST+1)
+    push HL
+    pop IY            ; IY = list
+    ; Allocate new node
+    call _list_alloc_node
+    ld A, H
+    or L
+    jp Z, lp_fail
+    push HL           ; save node ptr
+    push HL
+    pop IX            ; IX = new node
+    ; Initialize node (prev = null, next = old head)
+    ld (IX+LIST_NODE_PREV), 0
+    ld (IX+LIST_NODE_PREV+1), 0
+    ld L, (IY+LIST_HEAD)
+    ld H, (IY+LIST_HEAD+1)
+    ld (IX+LIST_NODE_NEXT), L
+    ld (IX+LIST_NODE_NEXT+1), H
+    ; Copy element data
+    push IX
+    pop DE
+    ld HL, LIST_NODE_DATA
+    add HL, DE        ; HL = &node->data
+    ex DE, HL         ; DE = destination
+    ; Restore stack frame IX
+    ld HL, 0
+    add HL, SP
+    ld BC, 4
+    add HL, BC
+    push HL
+    pop IX
+    ; Source = element_ptr
+    ld L, (IX+LIST_PREPEND_ELEM)
+    ld H, (IX+LIST_PREPEND_ELEM+1)
+    ; BC = elem_size
+    ld C, (IY+CONT_HDR_ELEM_SIZE)
+    ld B, (IY+CONT_HDR_ELEM_SIZE+1)
+    ldir              ; copy element
+    ; Link node to list
+    pop HL            ; node ptr
+    push HL
+    ; Check if list was empty
+    ld A, (IY+LIST_HEAD)
+    ld E, A
+    ld A, (IY+LIST_HEAD+1)
+    or E
+    jr Z, lp_wasempty
+    ; Non-empty - update old head's prev
+    ld E, (IY+LIST_HEAD)
+    ld D, (IY+LIST_HEAD+1)
+    push DE
+    pop IX            ; IX = old head
+    pop HL            ; new node
+    push HL
+    ld (IX+LIST_NODE_PREV), L
+    ld (IX+LIST_NODE_PREV+1), H
+    ; Update list head
+    ld (IY+LIST_HEAD), L
+    ld (IY+LIST_HEAD+1), H
+    jr lp_done
+lp_wasempty:
+    ; Empty list - set both head and tail
+    pop HL
+    push HL
+    ld (IY+LIST_HEAD), L
+    ld (IY+LIST_HEAD+1), H
+    ld (IY+LIST_TAIL), L
+    ld (IY+LIST_TAIL+1), H
+lp_done:
+    ; Increment count
+    ld L, (IY+CONT_HDR_COUNT)
+    ld H, (IY+CONT_HDR_COUNT+1)
+    inc HL
+    ld (IY+CONT_HDR_COUNT), L
+    ld (IY+CONT_HDR_COUNT+1), H
+    pop HL            ; discard
+    ld HL, 1
+    pop IX
+    ret
+lp_fail:
+    ld HL, 0
+    pop IX
+    ret
+
+; _list_first: Get cursor to first element
+; Input: Stack: list_ptr
+; Output: HL = cursor (node pointer, 0 if empty)
+    PUBLIC _list_first
+LIST_FIRST_LIST      EQU 4
+
+_list_first:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+LIST_FIRST_LIST)
+    ld H, (IX+LIST_FIRST_LIST+1)
+    push HL
+    pop IY
+    ld L, (IY+LIST_HEAD)
+    ld H, (IY+LIST_HEAD+1)
+    pop IX
+    ret
+
+; _list_last: Get cursor to last element
+; Input: Stack: list_ptr
+; Output: HL = cursor (node pointer, 0 if empty)
+    PUBLIC _list_last
+LIST_LAST_LIST       EQU 4
+
+_list_last:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+LIST_LAST_LIST)
+    ld H, (IX+LIST_LAST_LIST+1)
+    push HL
+    pop IY
+    ld L, (IY+LIST_TAIL)
+    ld H, (IY+LIST_TAIL+1)
+    pop IX
+    ret
+
+; _list_next: Get next cursor
+; Input: Stack: cursor (node pointer)
+; Output: HL = next cursor (0 if at end)
+    PUBLIC _list_next
+LIST_NEXT_CURSOR     EQU 4
+
+_list_next:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+LIST_NEXT_CURSOR)
+    ld H, (IX+LIST_NEXT_CURSOR+1)
+    ld A, H
+    or L
+    jr Z, ln_null
+    push HL
+    pop IY
+    ld L, (IY+LIST_NODE_NEXT)
+    ld H, (IY+LIST_NODE_NEXT+1)
+    pop IX
+    ret
+ln_null:
+    ld HL, 0
+    pop IX
+    ret
+
+; _list_prev: Get previous cursor
+; Input: Stack: cursor (node pointer)
+; Output: HL = previous cursor (0 if at start)
+    PUBLIC _list_prev
+LIST_PREV_CURSOR     EQU 4
+
+_list_prev:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+LIST_PREV_CURSOR)
+    ld H, (IX+LIST_PREV_CURSOR+1)
+    ld A, H
+    or L
+    jr Z, lpv_null
+    push HL
+    pop IY
+    ld L, (IY+LIST_NODE_PREV)
+    ld H, (IY+LIST_NODE_PREV+1)
+    pop IX
+    ret
+lpv_null:
+    ld HL, 0
+    pop IX
+    ret
+
+; _list_element: Get element pointer at cursor
+; For indexed access, see _list_element_idx below
+; Input: Stack: cursor (node pointer)
+; Output: HL = pointer to element data (0 if null cursor)
+    PUBLIC _list_element
+LIST_ELEMENT_CURSOR  EQU 4
+
+_list_element:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+LIST_ELEMENT_CURSOR)
+    ld H, (IX+LIST_ELEMENT_CURSOR+1)
+    ld A, H
+    or L
+    jr Z, le_null
+    ld DE, LIST_NODE_DATA
+    add HL, DE
+    pop IX
+    ret
+le_null:
+    ld HL, 0
+    pop IX
+    ret
+
+; _list_delete: Delete element at cursor
+; Input: Stack: list_ptr, cursor (node pointer)
+; Output: HL = next cursor (0 if deleted last)
+    PUBLIC _list_delete
+LIST_DELETE_LIST     EQU 4
+LIST_DELETE_CURSOR   EQU 6
+
+_list_delete:
+    push IX
+    push BC
+    ld IX, 0
+    add IX, SP
+    ; Get list
+    ld L, (IX+LIST_DELETE_LIST+2)
+    ld H, (IX+LIST_DELETE_LIST+3)
+    push HL
+    pop IY            ; IY = list
+    ; Get cursor (node to delete)
+    ld L, (IX+LIST_DELETE_CURSOR+2)
+    ld H, (IX+LIST_DELETE_CURSOR+3)
+    ld A, H
+    or L
+    jp Z, ld_null
+    push HL
+    pop IX            ; IX = node to delete
+    ; Save next pointer for return
+    ld L, (IX+LIST_NODE_NEXT)
+    ld H, (IX+LIST_NODE_NEXT+1)
+    push HL           ; save next for return
+    ; Get prev and next
+    ld L, (IX+LIST_NODE_PREV)
+    ld H, (IX+LIST_NODE_PREV+1)
+    ld E, (IX+LIST_NODE_NEXT)
+    ld D, (IX+LIST_NODE_NEXT+1)
+    ; Update prev->next if prev exists
+    ld A, H
+    or L
+    jr Z, ld_noprev
+    push HL
+    push DE
+    pop BC            ; BC = next
+    pop HL
+    push HL
+    pop IY            ; IY = prev
+    ld (IY+LIST_NODE_NEXT), C
+    ld (IY+LIST_NODE_NEXT+1), B
+    jr ld_checkhead
+ld_noprev:
+    ; No prev - update list head
+    ; Get list back in IY
+    push IX           ; save node
+    ld HL, 0
+    add HL, SP
+    ld BC, 8
+    add HL, BC
+    push HL
+    pop IX
+    ld L, (IX+LIST_DELETE_LIST)
+    ld H, (IX+LIST_DELETE_LIST+1)
+    push HL
+    pop IY            ; IY = list
+    pop IX            ; IX = node again
+    ; Set head to next
+    ld (IY+LIST_HEAD), E
+    ld (IY+LIST_HEAD+1), D
+ld_checkhead:
+    ; Update next->prev if next exists
+    ld L, (IX+LIST_NODE_NEXT)
+    ld H, (IX+LIST_NODE_NEXT+1)
+    ld A, H
+    or L
+    jr Z, ld_nonext
+    push HL
+    pop IY            ; IY = next
+    ld L, (IX+LIST_NODE_PREV)
+    ld H, (IX+LIST_NODE_PREV+1)
+    ld (IY+LIST_NODE_PREV), L
+    ld (IY+LIST_NODE_PREV+1), H
+    jr ld_free
+ld_nonext:
+    ; No next - update list tail
+    ; Get list in IY
+    push IX
+    ld HL, 0
+    add HL, SP
+    ld BC, 8
+    add HL, BC
+    push HL
+    pop IX
+    ld L, (IX+LIST_DELETE_LIST)
+    ld H, (IX+LIST_DELETE_LIST+1)
+    push HL
+    pop IY
+    pop IX
+    ; Set tail to prev
+    ld L, (IX+LIST_NODE_PREV)
+    ld H, (IX+LIST_NODE_PREV+1)
+    ld (IY+LIST_TAIL), L
+    ld (IY+LIST_TAIL+1), H
+ld_free:
+    ; Get list back for count decrement
+    push IX
+    ld HL, 0
+    add HL, SP
+    ld BC, 8
+    add HL, BC
+    push HL
+    pop IX
+    ld L, (IX+LIST_DELETE_LIST)
+    ld H, (IX+LIST_DELETE_LIST+1)
+    push HL
+    pop IY
+    pop HL            ; node to free
+    call _heap_free
+    ; Decrement count
+    ld L, (IY+CONT_HDR_COUNT)
+    ld H, (IY+CONT_HDR_COUNT+1)
+    dec HL
+    ld (IY+CONT_HDR_COUNT), L
+    ld (IY+CONT_HDR_COUNT+1), H
+    ; Return saved next
+    pop HL
+    pop BC
+    pop IX
+    ret
+ld_null:
+    ld HL, 0
+    pop BC
+    pop IX
+    ret
+
+; _list_length: Get list length
+; Input: Stack: list_ptr
+; Output: HL = length
+    PUBLIC _list_length
+LIST_LENGTH_LIST     EQU 4
+
+_list_length:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+LIST_LENGTH_LIST)
+    ld H, (IX+LIST_LENGTH_LIST+1)
+    push HL
+    pop IY
+    ld L, (IY+CONT_HDR_COUNT)
+    ld H, (IY+CONT_HDR_COUNT+1)
+    pop IX
+    ret
+
+; _list_is_empty: Check if list is empty
+; Input: Stack: list_ptr
+; Output: HL = 1 (empty) or 0 (not empty)
+    PUBLIC _list_is_empty
+LIST_ISEMPTY_LIST    EQU 4
+
+_list_is_empty:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+LIST_ISEMPTY_LIST)
+    ld H, (IX+LIST_ISEMPTY_LIST+1)
+    push HL
+    pop IY
+    ld L, (IY+CONT_HDR_COUNT)
+    ld H, (IY+CONT_HDR_COUNT+1)
+    ld A, H
+    or L
+    jr Z, lie_empty
+    ld HL, 0          ; not empty
+    pop IX
+    ret
+lie_empty:
+    ld HL, 1          ; empty
+    pop IX
+    ret
+
+; _list_clear: Remove all elements from list
+; Input: Stack: list_ptr
+    PUBLIC _list_clear
+LIST_CLEAR_LIST      EQU 4
+
+_list_clear:
+    push IX
+    push BC
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+LIST_CLEAR_LIST+2)
+    ld H, (IX+LIST_CLEAR_LIST+3)
+    push HL
+    pop IY            ; IY = list
+    ; Free all nodes
+    ld L, (IY+LIST_HEAD)
+    ld H, (IY+LIST_HEAD+1)
+lcl_loop:
+    ld A, H
+    or L
+    jr Z, lcl_done
+    ; Save next before freeing
+    push HL
+    pop IX            ; IX = current node
+    ld E, (IX+LIST_NODE_NEXT)
+    ld D, (IX+LIST_NODE_NEXT+1)
+    push DE           ; save next
+    push IX
+    pop HL
+    call _heap_free
+    pop HL            ; next
+    jr lcl_loop
+lcl_done:
+    ; Clear header
+    ld (IY+CONT_HDR_COUNT), 0
+    ld (IY+CONT_HDR_COUNT+1), 0
+    ld (IY+LIST_HEAD), 0
+    ld (IY+LIST_HEAD+1), 0
+    ld (IY+LIST_TAIL), 0
+    ld (IY+LIST_TAIL+1), 0
+    pop BC
+    pop IX
+    ret
+
+    END

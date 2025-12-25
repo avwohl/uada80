@@ -1,8 +1,6 @@
 -- Ada.Unchecked_Deallocation for Z80
 -- Provides explicit memory deallocation for access types
 
-with System;
-
 generic
    type Object (<>) is limited private;
    type Name is access Object;

@@ -5,7 +5,7 @@ Implements a complete parser for Ada 2012 based on the Ada Reference Manual gram
 """
 
 from typing import Optional
-from .lexer import Token, TokenType, Lexer
+from .lexer import Token, TokenType
 from .ast_nodes import *
 
 
@@ -119,6 +119,64 @@ class Parser:
             end_column=end_token.location.column,
         )
 
+    def _looks_like_entry_family_index(self) -> bool:
+        """Check if current position looks like an entry family index rather than parameters.
+
+        Entry family index forms:
+            (1 .. 10)      - starts with integer literal
+            (Index_Type)   - single identifier without colon after
+            (A'Range)      - attribute reference
+
+        Parameter forms:
+            (I : Type)     - identifier followed by colon
+            (A, B : Type)  - multiple identifiers followed by colon
+        """
+        # If it starts with a literal, it's definitely a family index
+        if self.check(TokenType.INTEGER_LITERAL, TokenType.REAL_LITERAL):
+            return True
+
+        # If it's an identifier, look ahead to see if there's a colon (parameter)
+        # or something else (family index like a type name)
+        if self.check(TokenType.IDENTIFIER):
+            # Save position for lookahead
+            saved_pos = self.pos
+            self.advance()  # skip first identifier
+
+            # Skip over dots for qualified names (Pkg.Type)
+            while self.match(TokenType.DOT):
+                if self.check(TokenType.IDENTIFIER):
+                    self.advance()
+                else:
+                    break
+
+            # Check what follows
+            is_family = False
+            if self.check(TokenType.RIGHT_PAREN):
+                # Just "(Type_Name)" - could be either, assume family index
+                is_family = True
+            elif self.check(TokenType.DOUBLE_DOT):
+                # "(Low .. High)" - definitely family index
+                is_family = True
+            elif self.check(TokenType.APOSTROPHE):
+                # "(Type'Range)" - attribute, family index
+                is_family = True
+            elif self.check(TokenType.COLON):
+                # "(Name : Type)" - parameter
+                is_family = False
+            elif self.check(TokenType.COMMA):
+                # "(A, B : Type)" - multiple parameter names
+                is_family = False
+            else:
+                # Something else, default to family index
+                is_family = True
+
+            # Restore position
+            self.pos = saved_pos
+            self.current = self.tokens[self.pos]
+            return is_family
+
+        return False
+
     # ========================================================================
     # Top-Level Parsing
     # ========================================================================
@@ -205,7 +263,7 @@ class Parser:
 
         # 'use all' must be followed by 'type'
         if is_all and not is_type:
-            self.error("Expected 'type' after 'use all'")
+            raise ParseError("Expected 'type' after 'use all'", self.current)
 
         names = [self.parse_name()]
         while self.match(TokenType.COMMA):
@@ -356,9 +414,20 @@ class Parser:
             elif self.match(TokenType.APOSTROPHE):
                 # Could be attribute reference (X'First) or qualified expression (Integer'(100))
                 if self.check(TokenType.LEFT_PAREN):
-                    # Qualified expression: Type'(Expression)
+                    # Qualified expression: Type'(Expression) or Type'(Aggregate)
                     self.advance()  # consume LEFT_PAREN
-                    expr = self.parse_expression()
+                    # Parse as aggregate components to handle both single expr and aggregates
+                    if self.check(TokenType.RIGHT_PAREN):
+                        # Empty aggregate - null record
+                        expr = Aggregate(components=[], span=self.make_span(start))
+                    else:
+                        components = self.parse_aggregate_components()
+                        if len(components) == 1 and components[0].choices is None:
+                            # Single positional component - extract as expression
+                            expr = components[0].value
+                        else:
+                            # Multiple components or named - it's an aggregate
+                            expr = Aggregate(components=components, span=self.make_span(start))
                     self.expect(TokenType.RIGHT_PAREN)
                     name = QualifiedExpr(type_mark=name, expr=expr, span=self.make_span(start))
                 else:
@@ -390,7 +459,8 @@ class Parser:
                 else:
                     # Use IndexedComponent for now; semantic analysis will resolve
                     indices = [arg.value for arg in args]
-                    name = IndexedComponent(prefix=name, indices=indices, span=self.make_span(start))
+                    name = IndexedComponent(prefix=name, indices=indices,
+                                            actual_params=args, span=self.make_span(start))
 
             else:
                 # No more suffixes
@@ -453,12 +523,29 @@ class Parser:
 
     def parse_actual_parameter(self) -> ActualParameter:
         """Parse a single actual parameter (positional or named)."""
-        # Check if this is a named association: identifier => value
-        if self.check(TokenType.IDENTIFIER) and self.peek(1).type == TokenType.ARROW:
-            name = self.advance().value
-            self.advance()  # consume =>
-            value = self.parse_expression()
-            return ActualParameter(name=name, value=value)
+        # Check if this is a named association: identifier => value or identifier | identifier => value
+        if self.check(TokenType.IDENTIFIER):
+            # Look ahead to see if this is a named association
+            # Could be: A => value, or A | B => value, or A | B | C => value
+            save_pos = self.pos
+            names = [self.advance().value]
+            while self.match(TokenType.PIPE):
+                if not self.check(TokenType.IDENTIFIER):
+                    # Not a valid choice list, restore and parse as expression
+                    self.pos = save_pos
+                    self.current = self.tokens[self.pos]
+                    break
+                names.append(self.advance().value)
+
+            if self.check(TokenType.ARROW):
+                self.advance()  # consume =>
+                value = self.parse_expression()
+                # Return with first name (semantic analysis will handle multiple choices)
+                return ActualParameter(name="|".join(names), value=value)
+            else:
+                # Not a named association, restore position and parse as expression
+                self.pos = save_pos
+                self.current = self.tokens[self.pos]
 
         # Check for 'others => expr' syntax in aggregates
         if self.check(TokenType.OTHERS) and self.peek(1).type == TokenType.ARROW:
@@ -686,6 +773,34 @@ class Parser:
         if self.check(TokenType.STRING_LITERAL):
             value = self.current.value
             self.advance()
+            # Check if this is an operator symbol used as a function call: "+"(A, B)
+            if self.check(TokenType.LEFT_PAREN):
+                # It's an operator call - parse as name with function call suffix
+                name: Expr = Identifier(name=value, span=self.make_span(start))
+                self.advance()  # consume LEFT_PAREN
+                args = self.parse_actual_parameter_list()
+                self.expect(TokenType.RIGHT_PAREN)
+                indices = [arg.value for arg in args]
+                name = IndexedComponent(prefix=name, indices=indices, span=self.make_span(start))
+                # Continue parsing additional suffixes (e.g., "(5)" for indexing result)
+                while True:
+                    if self.match(TokenType.LEFT_PAREN):
+                        args = self.parse_actual_parameter_list()
+                        self.expect(TokenType.RIGHT_PAREN)
+                        if len(args) == 1 and args[0].name is None and isinstance(args[0].value, RangeExpr):
+                            name = Slice(prefix=name, range_expr=args[0].value, span=self.make_span(start))
+                        else:
+                            name = IndexedComponent(prefix=name, indices=[arg.value for arg in args], span=self.make_span(start))
+                    elif self.match(TokenType.APOSTROPHE):
+                        attr_name = self._parse_attribute_designator()
+                        attr_args = []
+                        if self.match(TokenType.LEFT_PAREN):
+                            attr_args = self.parse_expression_list()
+                            self.expect(TokenType.RIGHT_PAREN)
+                        name = AttributeReference(prefix=name, attribute=attr_name, args=attr_args, span=self.make_span(start))
+                    else:
+                        break
+                return name
             return StringLiteral(value=value, span=self.make_span(start))
 
         if self.check(TokenType.CHARACTER_LITERAL):
@@ -767,10 +882,63 @@ class Parser:
                 )
                 return self.parse_aggregate_attribute_suffix(agg, start)
 
+            # Extension aggregate: (Base_Type with Field => Value, ...)
+            # Used for record extension types in Ada 95+
+            if self.check(TokenType.WITH) and self.peek(1).type != TokenType.DELTA:
+                self.advance()  # consume WITH
+                components = self.parse_aggregate_components()
+                self.expect(TokenType.RIGHT_PAREN)
+                agg = ExtensionAggregate(
+                    ancestor_part=first_expr,
+                    components=components,
+                    span=self.make_span(start),
+                )
+                return self.parse_aggregate_attribute_suffix(agg, start)
+
             # Check what follows to determine aggregate vs parenthesized
-            if self.match(TokenType.ARROW):
-                # Named aggregate: (field => value, ...)
-                choices = [ExprChoice(expr=first_expr)]
+            if self.match(TokenType.DOUBLE_DOT):
+                # Range choice: (low .. high => value, ...)
+                high = self.parse_expression()
+                range_expr = RangeExpr(low=first_expr, high=high, span=self.make_span(start))
+                choices: list[Choice] = [RangeChoice(range_expr=range_expr)]
+
+                # Check for additional choices with pipe
+                while self.match(TokenType.PIPE):
+                    next_expr = self.parse_expression()
+                    if self.match(TokenType.DOUBLE_DOT):
+                        next_high = self.parse_expression()
+                        next_range = RangeExpr(low=next_expr, high=next_high, span=self.make_span(start))
+                        choices.append(RangeChoice(range_expr=next_range))
+                    else:
+                        choices.append(ExprChoice(expr=next_expr))
+
+                self.expect(TokenType.ARROW)
+                value = self.parse_expression()
+                components = [ComponentAssociation(choices=choices, value=value)]
+
+                while self.match(TokenType.COMMA):
+                    comp = self.parse_aggregate_component()
+                    components.append(comp)
+
+                self.expect(TokenType.RIGHT_PAREN)
+                agg = Aggregate(components=components, span=self.make_span(start))
+                return self.parse_aggregate_attribute_suffix(agg, start)
+
+            elif self.check(TokenType.PIPE) or self.check(TokenType.ARROW):
+                # Named aggregate: (field => value, ...) or (A|B => value, ...)
+                choices: list[Choice] = [ExprChoice(expr=first_expr)]
+
+                # Check for additional choices with pipe (A|B|C => value)
+                while self.match(TokenType.PIPE):
+                    next_expr = self.parse_expression()
+                    if self.match(TokenType.DOUBLE_DOT):
+                        next_high = self.parse_expression()
+                        next_range = RangeExpr(low=next_expr, high=next_high, span=self.make_span(start))
+                        choices.append(RangeChoice(range_expr=next_range))
+                    else:
+                        choices.append(ExprChoice(expr=next_expr))
+
+                self.expect(TokenType.ARROW)
                 value = self.parse_expression()
                 components = [ComponentAssociation(choices=choices, value=value)]
 
@@ -807,7 +975,13 @@ class Parser:
         if self.match(TokenType.NEW):
             type_mark = self.parse_name()
             init_value = None
-            if self.match(TokenType.APOSTROPHE):
+            # parse_name() may have consumed a qualified expression (new Integer'(42))
+            # In that case, type_mark is QualifiedExpr and we need to extract the value
+            if isinstance(type_mark, QualifiedExpr):
+                init_value = type_mark.expr
+                type_mark = type_mark.type_mark
+            elif self.match(TokenType.APOSTROPHE):
+                # Legacy path (shouldn't be reached normally)
                 self.expect(TokenType.LEFT_PAREN)
                 init_value = self.parse_expression()
                 self.expect(TokenType.RIGHT_PAREN)
@@ -993,21 +1167,22 @@ class Parser:
         """Parse Ada integer literal (handles based literals and exponents)."""
         text = text.replace("_", "")
 
-        # Based literal: base#value#[exponent]
-        if "#" in text:
-            # Handle exponent if present - exponent comes AFTER the closing #
+        # Based literal: base#value#[exponent] or Ada 83 style base:value:
+        delimiter = "#" if "#" in text else (":" if text.count(":") >= 2 else None)
+        if delimiter:
+            # Handle exponent if present - exponent comes AFTER the closing delimiter
             exp_value = 0
-            # Find the last # (closing delimiter of based literal)
-            last_hash = text.rfind("#")
-            after_hash = text[last_hash + 1:] if last_hash < len(text) - 1 else ""
-            if "e" in after_hash.lower():
-                # Exponent is after the closing #
-                exp_pos = after_hash.lower().find("e")
-                exp_str = after_hash[exp_pos + 1:]
-                text = text[:last_hash + 1]  # Keep up to and including the closing #
+            # Find the last delimiter (closing delimiter of based literal)
+            last_delim = text.rfind(delimiter)
+            after_delim = text[last_delim + 1:] if last_delim < len(text) - 1 else ""
+            if "e" in after_delim.lower():
+                # Exponent is after the closing delimiter
+                exp_pos = after_delim.lower().find("e")
+                exp_str = after_delim[exp_pos + 1:]
+                text = text[:last_delim + 1]  # Keep up to and including the closing delimiter
                 exp_value = int(exp_str)
 
-            parts = text.split("#")
+            parts = text.split(delimiter)
             base = int(parts[0])
             value_str = parts[1]
             result = int(value_str, base)
@@ -1028,21 +1203,22 @@ class Parser:
         """Parse Ada real literal (handles based literals)."""
         text = text.replace("_", "")
 
-        # Based literal: base#value#[exponent]
-        if "#" in text:
-            # Split off exponent if present - exponent comes AFTER the closing #
+        # Based literal: base#value#[exponent] or Ada 83 style base:value:
+        delimiter = "#" if "#" in text else (":" if text.count(":") >= 2 else None)
+        if delimiter:
+            # Split off exponent if present - exponent comes AFTER the closing delimiter
             exp_value = 0
-            # Find the last # (closing delimiter of based literal)
-            last_hash = text.rfind("#")
-            after_hash = text[last_hash + 1:] if last_hash < len(text) - 1 else ""
-            if "e" in after_hash.lower():
-                # Exponent is after the closing #
-                exp_pos = after_hash.lower().find("e")
-                exp_str = after_hash[exp_pos + 1:]
-                text = text[:last_hash + 1]  # Keep up to and including the closing #
+            # Find the last delimiter (closing delimiter of based literal)
+            last_delim = text.rfind(delimiter)
+            after_delim = text[last_delim + 1:] if last_delim < len(text) - 1 else ""
+            if "e" in after_delim.lower():
+                # Exponent is after the closing delimiter
+                exp_pos = after_delim.lower().find("e")
+                exp_str = after_delim[exp_pos + 1:]
+                text = text[:last_delim + 1]  # Keep up to and including the closing delimiter
                 exp_value = int(exp_str)
 
-            parts = text.split("#")
+            parts = text.split(delimiter)
             base = int(parts[0])
             value_str = parts[1] if len(parts) > 1 else "0"
 
@@ -1107,11 +1283,39 @@ class Parser:
         choices: list[Choice] = []
         first_expr = self.parse_expression()
 
-        if self.match(TokenType.ARROW):
-            # Named association
-            choices.append(ExprChoice(expr=first_expr))
+        # Check for range choice: expr .. expr => value
+        if self.match(TokenType.DOUBLE_DOT):
+            high = self.parse_expression()
+            range_choice = RangeChoice(range_expr=RangeExpr(low=first_expr, high=high))
+            choices.append(range_choice)
+
+            # Check for additional choices with pipe
             while self.match(TokenType.PIPE):
-                choices.append(ExprChoice(expr=self.parse_expression()))
+                # Parse another choice (could be expr or range)
+                next_expr = self.parse_expression()
+                if self.match(TokenType.DOUBLE_DOT):
+                    next_high = self.parse_expression()
+                    choices.append(RangeChoice(range_expr=RangeExpr(low=next_expr, high=next_high)))
+                else:
+                    choices.append(ExprChoice(expr=next_expr))
+
+            self.expect(TokenType.ARROW)
+            value = self.parse_expression()
+            return ComponentAssociation(choices=choices, value=value)
+        elif self.check(TokenType.PIPE) or self.check(TokenType.ARROW):
+            # Named association with one or more choices: A | B | C => value
+            choices.append(ExprChoice(expr=first_expr))
+            # Handle choice list before =>
+            while self.match(TokenType.PIPE):
+                # Parse another choice (could be expr or range)
+                next_expr = self.parse_expression()
+                if self.match(TokenType.DOUBLE_DOT):
+                    next_high = self.parse_expression()
+                    choices.append(RangeChoice(range_expr=RangeExpr(low=next_expr, high=next_high)))
+                else:
+                    choices.append(ExprChoice(expr=next_expr))
+            # Now expect the arrow
+            self.expect(TokenType.ARROW)
             value = self.parse_expression()
             return ComponentAssociation(choices=choices, value=value)
         else:
@@ -1292,7 +1496,11 @@ class Parser:
             # Check if it's a function call node, convert to procedure call
             if isinstance(name, IndexedComponent):
                 # Convert indexed component to procedure call
-                args = [ActualParameter(value=idx) for idx in name.indices]
+                # Use actual_params if available (preserves named parameter info)
+                if name.actual_params:
+                    args = name.actual_params
+                else:
+                    args = [ActualParameter(value=idx) for idx in name.indices]
                 self.expect(TokenType.SEMICOLON)
                 return ProcedureCallStmt(name=name.prefix, args=args, span=self.make_span(start))
             else:
@@ -1607,16 +1815,17 @@ class Parser:
     def parse_extended_return_statement(self, start: Token) -> ExtendedReturnStmt:
         """Parse extended return statement (Ada 2005).
 
-        Syntax: return Object_Name : [aliased] Type [:= Init] [do Stmts; end return];
+        Syntax: return Object_Name : [aliased] [constant] Type [:= Init] [do Stmts; end return];
         """
         object_name = self.expect_identifier()
         self.expect(TokenType.COLON)
 
-        # Optional aliased
+        # Optional aliased and/or constant
         self.match(TokenType.ALIASED)
+        self.match(TokenType.CONSTANT)
 
-        # Type mark
-        type_mark = self.parse_name()
+        # Type mark (may include constraints like Natural range 1..10)
+        type_mark = self.parse_subtype_indication()
 
         # Optional initialization
         init_expr = None
@@ -2143,6 +2352,19 @@ class Parser:
             # Component type may be prefixed with "aliased"
             is_aliased = self.match(TokenType.ALIASED)
             component_type = self.parse_name()
+            # Check for range constraint: array (...) of Integer range Low..High
+            constraint = None
+            if self.match(TokenType.RANGE):
+                low = self.parse_additive()
+                self.expect(TokenType.DOUBLE_DOT)
+                high = self.parse_additive()
+                constraint = RangeExpr(low=low, high=high, span=None)
+                # Wrap in SubtypeIndication
+                component_type = SubtypeIndication(
+                    span=None,
+                    type_mark=component_type,
+                    constraint=constraint,
+                )
 
             return ArrayTypeDef(
                 index_subtypes=index_subtypes,
@@ -2157,7 +2379,11 @@ class Parser:
 
             while not self.check(TokenType.END, TokenType.EOF):
                 start_pos = self.pos
-                if self.match(TokenType.CASE):
+                # Handle null; for empty record (no components)
+                if self.match(TokenType.NULL):
+                    self.expect(TokenType.SEMICOLON)
+                    break  # null; means no more components
+                elif self.match(TokenType.CASE):
                     variant_part = self.parse_variant_part()
                     break
                 else:
@@ -2211,7 +2437,14 @@ class Parser:
             is_all = self.match(TokenType.ALL)
             is_constant = self.match(TokenType.CONSTANT)
             designated_type = self.parse_name()
-            return AccessTypeDef(is_access_all=is_all, is_access_constant=is_constant, designated_type=designated_type, is_not_null=is_not_null)
+            # Check for range constraint: access Type range Low .. High
+            constraint = None
+            if self.match(TokenType.RANGE):
+                low = self.parse_additive()
+                self.expect(TokenType.DOUBLE_DOT)
+                high = self.parse_additive()
+                constraint = RangeExpr(low=low, high=high, span=None)
+            return AccessTypeDef(is_access_all=is_all, is_access_constant=is_constant, designated_type=designated_type, is_not_null=is_not_null, constraint=constraint)
 
         # Derived type
         if self.match(TokenType.NEW):
@@ -2219,6 +2452,18 @@ class Parser:
             record_extension = None
             interfaces: list[Expr] = []
             constraint = None
+            digits_constraint = None
+            delta_constraint = None
+
+            # Check for DIGITS constraint (derived floating-point type)
+            # e.g., type T is new Float_Type DIGITS 4 RANGE low .. high;
+            if self.match(TokenType.DIGITS):
+                digits_constraint = self.parse_expression()
+
+            # Check for DELTA constraint (derived fixed-point type)
+            # e.g., type T is new Fixed_Type DELTA 0.01 RANGE low .. high;
+            if self.match(TokenType.DELTA):
+                delta_constraint = self.parse_expression()
 
             # Check for range constraint: range Low .. High
             if self.match(TokenType.RANGE):
@@ -2249,7 +2494,7 @@ class Parser:
                 self.expect(TokenType.RECORD)
                 record_extension = RecordTypeDef(components=components)
 
-            return DerivedTypeDef(parent_type=parent_type, record_extension=record_extension, interfaces=interfaces, constraint=constraint)
+            return DerivedTypeDef(parent_type=parent_type, record_extension=record_extension, interfaces=interfaces, constraint=constraint, digits_constraint=digits_constraint, delta_constraint=delta_constraint)
 
         # Private type
         if self.match(TokenType.PRIVATE):
@@ -2295,7 +2540,10 @@ class Parser:
             names.append(self.expect_identifier())
 
         self.expect(TokenType.COLON)
-        type_mark = self.parse_name()
+
+        # Parse subtype indication (may include range/index constraints)
+        # e.g., Natural range 1..9999 or String(1..10)
+        type_mark = self.parse_subtype_indication()
 
         default_value = None
         if self.match(TokenType.ASSIGN):
@@ -2382,19 +2630,55 @@ class Parser:
         )
 
     def parse_subtype_indication(self) -> SubtypeIndication:
-        """Parse subtype indication."""
+        """Parse subtype indication.
+
+        Handles:
+        - Simple type mark: Integer
+        - Range constraint: Natural range 1..100
+        - Digits constraint: Float_Type digits 5
+        - Delta constraint: Fixed_Type delta 0.01 range 0.0..1.0
+        - Index constraint: String(1..10) - parsed as part of name
+        - Discriminant constraint: Record_Type(Field => Value) - parsed as part of name
+        """
+        start = self.current
         type_mark = self.parse_name()
         constraint = None
 
-        # Parse constraint if present
-        if self.check(TokenType.RANGE):
-            self.advance()
+        # Parse digits constraint (floating-point subtype)
+        if self.match(TokenType.DIGITS):
+            digits_expr = self.parse_expression()
+            # Optional range after digits
+            range_constraint = None
+            if self.match(TokenType.RANGE):
+                low = self.parse_expression()
+                self.expect(TokenType.DOUBLE_DOT)
+                high = self.parse_expression()
+                range_constraint = RangeExpr(low=low, high=high, span=self.make_span(start))
+            constraint = DigitsConstraint(digits=digits_expr, range_constraint=range_constraint)
+            return SubtypeIndication(type_mark=type_mark, constraint=constraint, span=self.make_span(start))
+
+        # Parse delta constraint (fixed-point subtype)
+        if self.match(TokenType.DELTA):
+            delta_expr = self.parse_expression()
+            # Optional range after delta
+            range_constraint = None
+            if self.match(TokenType.RANGE):
+                low = self.parse_expression()
+                self.expect(TokenType.DOUBLE_DOT)
+                high = self.parse_expression()
+                range_constraint = RangeExpr(low=low, high=high, span=self.make_span(start))
+            constraint = DeltaConstraint(delta=delta_expr, range_constraint=range_constraint)
+            return SubtypeIndication(type_mark=type_mark, constraint=constraint, span=self.make_span(start))
+
+        # Parse range constraint
+        if self.match(TokenType.RANGE):
             low = self.parse_expression()
             self.expect(TokenType.DOUBLE_DOT)
             high = self.parse_expression()
-            constraint = RangeConstraint(range_expr=RangeExpr(low=low, high=high))
+            constraint = RangeConstraint(range_expr=RangeExpr(low=low, high=high, span=self.make_span(start)))
 
-        return SubtypeIndication(type_mark=type_mark, constraint=constraint)
+        # Always return SubtypeIndication for consistent interface
+        return SubtypeIndication(type_mark=type_mark, constraint=constraint, span=self.make_span(start))
 
     def parse_object_declaration(self) -> ObjectDecl | NumberDecl | ExceptionDecl:
         """Parse object (variable/constant) declaration, number declaration, or exception declaration.
@@ -2533,6 +2817,9 @@ class Parser:
                 # Check for case expression: (case ...)
                 elif self.check(TokenType.CASE):
                     expr = self.parse_case_expr(start)
+                # Ada 2022 declare expression: (declare ... begin Expr)
+                elif self.check(TokenType.DECLARE):
+                    expr = self.parse_declare_expr(start)
                 else:
                     # Regular expression
                     expr = self.parse_expression()
@@ -2597,10 +2884,15 @@ class Parser:
             self.expect(TokenType.PROCEDURE)
 
         # Function names can be identifiers or operator strings like "+"
+        # Child units use dotted names like "Ada.Unchecked_Deallocation"
         if is_function and self.check(TokenType.STRING_LITERAL):
             name = self.advance().value  # Operator name as string (e.g., "+", "=")
         else:
             name = self.expect_identifier()
+            # Handle child unit names (dotted names like Parent.Child)
+            while self.match(TokenType.DOT):
+                child = self.expect_identifier()
+                name = f"{name}.{child}"
 
         parameters = []
         if self.match(TokenType.LEFT_PAREN):
@@ -2649,7 +2941,34 @@ class Parser:
             # Optional "all"
             is_all = self.match(TokenType.ALL)
 
-            # The actual type
+            # Check for access-to-subprogram type: access function/procedure
+            if self.check(TokenType.FUNCTION) or self.check(TokenType.PROCEDURE):
+                is_function = self.match(TokenType.FUNCTION)
+                if not is_function:
+                    self.advance()  # consume PROCEDURE
+
+                # Parse parameters
+                parameters = []
+                if self.match(TokenType.LEFT_PAREN):
+                    parameters = self.parse_parameter_specifications()
+                    self.expect(TokenType.RIGHT_PAREN)
+
+                # Parse return type for functions
+                return_type = None
+                if is_function:
+                    self.expect(TokenType.RETURN)
+                    return_type = self._parse_return_type()
+
+                return AccessSubprogramTypeIndication(
+                    is_function=is_function,
+                    parameters=parameters,
+                    return_type=return_type,
+                    is_protected=is_protected,
+                    not_null=not_null,
+                    span=self.make_span(start),
+                )
+
+            # The actual type for regular access types
             subtype = self.parse_name()
 
             return AccessTypeIndication(
@@ -2806,7 +3125,7 @@ class Parser:
 
         # Parse generic unit
         if self.match(TokenType.PACKAGE):
-            name = self.expect_identifier()
+            name = self.parse_dotted_name()  # Support child packages like Ada.Direct_IO
             pkg = self.parse_package_specification(name, start)
             pkg.generic_formals = formals
             pkg.is_generic = True  # Mark as generic even if no formals
@@ -2828,9 +3147,16 @@ class Parser:
             name = self.expect_identifier()
 
             # Check for discriminant part: type T (D : Integer) is ...
+            # or unknown discriminant: type T (<>) is private
             discriminants = []
+            has_unknown_discriminant = False
             if self.match(TokenType.LEFT_PAREN):
-                discriminants = self.parse_discriminant_specifications()
+                if self.check(TokenType.BOX):
+                    # Unknown discriminant: (<>)
+                    self.advance()  # consume <>
+                    has_unknown_discriminant = True
+                else:
+                    discriminants = self.parse_discriminant_specifications()
                 self.expect(TokenType.RIGHT_PAREN)
 
             self.expect(TokenType.IS)
@@ -2916,9 +3242,12 @@ class Parser:
             self.expect(TokenType.SEMICOLON)
             return GenericTypeDecl(name=name, definition=type_def)
 
-        # Generic object formal: identifier : [mode] type [:= default]
+        # Generic object formal: identifier[, identifier]* : [mode] type [:= default]
         if self.check(TokenType.IDENTIFIER):
-            obj_name = self.expect_identifier()
+            # Parse list of names (F, L : E)
+            names = [self.expect_identifier()]
+            while self.match(TokenType.COMMA):
+                names.append(self.expect_identifier())
             self.expect(TokenType.COLON)
 
             # Parse mode (in, out, in out)
@@ -2936,8 +3265,9 @@ class Parser:
                 default_value = self.parse_expression()
 
             self.expect(TokenType.SEMICOLON)
+            # Return first name as the formal; store all names for multi-name support
             return GenericObjectDecl(
-                name=obj_name, mode=mode, type_ref=type_ref, default_value=default_value
+                name=names[0], names=names, mode=mode, type_ref=type_ref, default_value=default_value
             )
 
         # Generic subprogram formal: with procedure/function ...
@@ -3156,7 +3486,7 @@ class Parser:
             if self.check(TokenType.IDENTIFIER):
                 end_name = self.expect_identifier()
                 if end_name.lower() != name.lower():
-                    self.error(f"end name '{end_name}' does not match task name '{name}'")
+                    raise ParseError(f"end name '{end_name}' does not match task name '{name}'", self.current)
             self.expect(TokenType.SEMICOLON)
 
             return TaskBody(
@@ -3207,7 +3537,7 @@ class Parser:
             if self.check(TokenType.IDENTIFIER):
                 end_name = self.expect_identifier()
                 if end_name.lower() != name.lower():
-                    self.error(f"end name '{end_name}' does not match task name '{name}'")
+                    raise ParseError(f"end name '{end_name}' does not match task name '{name}'", self.current)
 
         self.expect(TokenType.SEMICOLON)
 
@@ -3241,7 +3571,7 @@ class Parser:
         if self.check(TokenType.IDENTIFIER):
             end_name = self.expect_identifier()
             if end_name.lower() != name.lower():
-                self.error(f"end name '{end_name}' does not match task name '{name}'")
+                raise ParseError(f"end name '{end_name}' does not match task name '{name}'", self.current)
         self.expect(TokenType.SEMICOLON)
 
         return TaskBody(
@@ -3258,7 +3588,9 @@ class Parser:
         Syntax:
             entry Name;
             entry Name(Params);
-            entry Name(Index : Range);  -- entry family
+            entry Name(Index : Range);  -- entry family with named index
+            entry Name(1 .. 10);        -- entry family with discrete range
+            entry Name(1 .. 10)(Params); -- entry family with parameters
         """
         start = self.current
         name = self.expect_identifier()
@@ -3268,15 +3600,30 @@ class Parser:
 
         if self.match(TokenType.LEFT_PAREN):
             # Could be parameters or an entry family index
+            # Entry family index forms:
+            #   (for I in 1..10)  - Ada 2012+ explicit form
+            #   (1 .. 10)         - discrete range
+            #   (Index_Type)      - discrete subtype mark
+            # Parameters form:
+            #   (Name : Type)     - identifier followed by colon
             if self.check(TokenType.FOR):
                 # Entry family: entry E(for I in 1..10)
                 self.advance()  # skip 'for'
                 self.expect_identifier()  # index name
                 self.expect(TokenType.IN)
-                family_index = self.parse_range_or_name()
+                family_index = self.parse_discrete_range_or_name()
+                self.expect(TokenType.RIGHT_PAREN)
+            elif self._looks_like_entry_family_index():
+                # Entry family with discrete range: entry F(1..3) or entry F(Index_Type)
+                family_index = self.parse_discrete_range_or_name()
+                self.expect(TokenType.RIGHT_PAREN)
+                # Check for parameters after the family index
+                if self.match(TokenType.LEFT_PAREN):
+                    parameters = self.parse_parameter_specifications()
+                    self.expect(TokenType.RIGHT_PAREN)
             else:
                 parameters = self.parse_parameter_specifications()
-            self.expect(TokenType.RIGHT_PAREN)
+                self.expect(TokenType.RIGHT_PAREN)
 
         self.expect(TokenType.SEMICOLON)
 
@@ -3319,12 +3666,28 @@ class Parser:
                     items.append(item)
                 elif self.match(TokenType.ENTRY):
                     # Entry body: entry E [(Params)] [when Cond] is ... end E;
+                    entry_start = self.current
                     entry_name = self.expect_identifier()
                     entry_params = []
-                    # Parse optional parameters
+                    family_index = None
+                    # Parse optional parameters or family index
                     if self.match(TokenType.LEFT_PAREN):
-                        entry_params = self.parse_parameter_specifications()
-                        self.expect(TokenType.RIGHT_PAREN)
+                        # Check for entry family: (for I in Range)
+                        if self.check(TokenType.FOR):
+                            self.advance()  # consume FOR
+                            family_index = self.expect_identifier()
+                            self.expect(TokenType.IN)
+                            # Skip family range
+                            while not self.check(TokenType.RIGHT_PAREN):
+                                self.advance()
+                            self.expect(TokenType.RIGHT_PAREN)
+                            # Check for additional parameters
+                            if self.match(TokenType.LEFT_PAREN):
+                                entry_params = self.parse_parameter_specifications()
+                                self.expect(TokenType.RIGHT_PAREN)
+                        else:
+                            entry_params = self.parse_parameter_specifications()
+                            self.expect(TokenType.RIGHT_PAREN)
                     # Parse optional barrier
                     barrier = None
                     if self.match(TokenType.WHEN):
@@ -3337,17 +3700,15 @@ class Parser:
                     if self.check(TokenType.IDENTIFIER):
                         self.expect_identifier()
                     self.expect(TokenType.SEMICOLON)
-                    # Create a body for this entry
-                    entry_body = SubprogramBody(
-                        spec=SubprogramDecl(
-                            name=entry_name,
-                            is_function=False,
-                            parameters=entry_params,
-                            span=self.make_span(start),
-                        ),
-                        declarations=declarations,
-                        statements=statements,
-                        span=self.make_span(start),
+                    # Create EntryBody with barrier
+                    entry_body = EntryBody(
+                        name=entry_name,
+                        parameters=entry_params,
+                        barrier=barrier,
+                        family_index=family_index,
+                        decls=declarations,
+                        stmts=statements,
+                        span=self.make_span(entry_start),
                     )
                     items.append(entry_body)
                 else:
@@ -3357,7 +3718,7 @@ class Parser:
             if self.check(TokenType.IDENTIFIER):
                 end_name = self.expect_identifier()
                 if end_name.lower() != name.lower():
-                    self.error(f"end name '{end_name}' does not match protected name '{name}'")
+                    raise ParseError(f"end name '{end_name}' does not match protected name '{name}'", self.current)
             self.expect(TokenType.SEMICOLON)
 
             return ProtectedBody(
@@ -3409,7 +3770,7 @@ class Parser:
             if self.check(TokenType.IDENTIFIER):
                 end_name = self.expect_identifier()
                 if end_name.lower() != name.lower():
-                    self.error(f"end name '{end_name}' does not match protected name '{name}'")
+                    raise ParseError(f"end name '{end_name}' does not match protected name '{name}'", self.current)
 
         self.expect(TokenType.SEMICOLON)
 
@@ -3429,8 +3790,31 @@ class Parser:
                 item = self.parse_subprogram()
                 items.append(item)
             elif self.match(TokenType.ENTRY):
-                # Entry body: entry E when Cond is ... end E;
+                # Entry body: entry E(params) when Cond is ... end E;
+                entry_start = self.current
                 entry_name = self.expect_identifier()
+                # Parse parameters if present
+                parameters = []
+                family_index = None
+                if self.match(TokenType.LPAREN):
+                    # Check for entry family: entry E(for I in Range)
+                    if self.check(TokenType.FOR):
+                        self.advance()  # consume FOR
+                        family_index = self.expect_identifier()
+                        self.expect(TokenType.IN)
+                        # Parse family range (skip for now, we just need the index name)
+                        while not self.check(TokenType.RPAREN):
+                            self.advance()
+                        self.expect(TokenType.RPAREN)
+                        # Check for additional parameters
+                        if self.match(TokenType.LPAREN):
+                            parameters = self.parse_formal_parameters()
+                            self.expect(TokenType.RPAREN)
+                    else:
+                        # Regular parameters - parse them now
+                        parameters = self.parse_formal_parameters()
+                        self.expect(TokenType.RPAREN)
+                # Parse barrier condition
                 barrier = None
                 if self.match(TokenType.WHEN):
                     barrier = self.parse_expression()
@@ -3442,17 +3826,15 @@ class Parser:
                 if self.check(TokenType.IDENTIFIER):
                     self.expect_identifier()
                 self.expect(TokenType.SEMICOLON)
-                # Create a body for this entry
-                entry_body = SubprogramBody(
-                    spec=SubprogramDecl(
-                        name=entry_name,
-                        is_function=False,
-                        parameters=[],
-                        span=self.make_span(start),
-                    ),
-                    declarations=declarations,
-                    statements=statements,
-                    span=self.make_span(start),
+                # Create EntryBody with barrier
+                entry_body = EntryBody(
+                    name=entry_name,
+                    parameters=parameters,
+                    barrier=barrier,
+                    family_index=family_index,
+                    decls=declarations,
+                    stmts=statements,
+                    span=self.make_span(entry_start),
                 )
                 items.append(entry_body)
             else:
@@ -3462,7 +3844,7 @@ class Parser:
         if self.check(TokenType.IDENTIFIER):
             end_name = self.expect_identifier()
             if end_name.lower() != name.lower():
-                self.error(f"end name '{end_name}' does not match protected name '{name}'")
+                raise ParseError(f"end name '{end_name}' does not match protected name '{name}'", self.current)
         self.expect(TokenType.SEMICOLON)
 
         return ProtectedBody(

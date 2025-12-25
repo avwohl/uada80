@@ -1,0 +1,1909 @@
+; ============================================================
+; Container Runtime Library for UADA80
+; ============================================================
+; Provides hash maps, hash sets, ordered maps, ordered sets,
+; and container iteration support.
+; ============================================================
+
+    .Z80
+
+; External dependencies
+    EXTRN _heap_alloc
+    EXTRN _heap_free
+    EXTRN _int_hash
+    EXTRN _mod16
+
+; ============================================================
+; Container Constants
+; ============================================================
+
+; Container type constants
+CONT_TYPE_VECTOR     EQU 1
+CONT_TYPE_LIST       EQU 2
+CONT_TYPE_HASHED_MAP EQU 3
+CONT_TYPE_ORDERED_MAP EQU 4
+CONT_TYPE_HASHED_SET EQU 5
+CONT_TYPE_ORDERED_SET EQU 6
+
+; Container header offsets (common to all)
+CONT_HDR_TYPE        EQU 0
+CONT_HDR_FLAGS       EQU 1
+CONT_HDR_COUNT       EQU 2
+CONT_HDR_CAPACITY    EQU 4
+CONT_HDR_ELEM_SIZE   EQU 6
+CONT_HDR_SIZE        EQU 8
+
+; List node structure
+LIST_NODE_PREV       EQU 0
+LIST_NODE_NEXT       EQU 2
+LIST_NODE_DATA       EQU 4
+
+; Hash map structure
+HMAP_BUCKET_COUNT    EQU 4
+HMAP_KEY_SIZE        EQU 6
+HMAP_VALUE_SIZE      EQU 8
+HMAP_BUCKETS         EQU 10
+HMAP_HDR_SIZE        EQU 12
+
+; Hash set structure
+HSET_BUCKET_COUNT    EQU 4
+HSET_ELEM_SIZE       EQU 6
+HSET_BUCKETS         EQU 8
+HSET_HDR_SIZE        EQU 10
+
+; BST node structure (for ordered containers)
+BST_LEFT             EQU 0
+BST_RIGHT            EQU 2
+BST_DATA             EQU 4
+
+; Ordered map structure
+OMAP_ROOT            EQU 4
+OMAP_KEY_SIZE        EQU 6
+OMAP_VALUE_SIZE      EQU 8
+OMAP_HDR_SIZE        EQU 10
+
+; Ordered set structure
+OSET_ROOT            EQU 4
+OSET_ELEM_SIZE       EQU 6
+OSET_HDR_SIZE        EQU 8
+
+    CSEG
+
+; ============================================================
+; Hash Map Operations
+; ============================================================
+
+; _hmap_create: Create a new hash map
+; Input: Stack: key_size, value_size, bucket_count
+; Output: HL = map pointer (0 if failed)
+    PUBLIC _hmap_create
+_hmap_create:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ; Allocate header
+    ld HL, HMAP_HDR_SIZE
+    call _heap_alloc
+    ld A, H
+    or L
+    jr Z, hmc_fail
+    push HL
+    pop IY
+    ; Initialize header
+    ld (IY+CONT_HDR_TYPE), CONT_TYPE_HASHED_MAP
+    ld (IY+CONT_HDR_FLAGS), 0
+    ld (IY+CONT_HDR_COUNT), 0
+    ld (IY+CONT_HDR_COUNT+1), 0
+    ; Set bucket count
+    ld L, (IX+8)
+    ld H, (IX+9)
+    ld (IY+HMAP_BUCKET_COUNT), L
+    ld (IY+HMAP_BUCKET_COUNT+1), H
+    ; Set sizes
+    ld L, (IX+4)
+    ld H, (IX+5)
+    ld (IY+HMAP_KEY_SIZE), L
+    ld (IY+HMAP_KEY_SIZE+1), H
+    ld L, (IX+6)
+    ld H, (IX+7)
+    ld (IY+HMAP_VALUE_SIZE), L
+    ld (IY+HMAP_VALUE_SIZE+1), H
+    ; Allocate bucket array
+    ld L, (IX+8)
+    ld H, (IX+9)
+    add HL, HL
+    push IY
+    call _heap_alloc
+    pop IY
+    ld A, H
+    or L
+    jr Z, hmc_fail_free
+    ld (IY+HMAP_BUCKETS), L
+    ld (IY+HMAP_BUCKETS+1), H
+    ; Zero bucket array
+    push HL
+    ld E, (IY+HMAP_BUCKET_COUNT)
+    ld D, (IY+HMAP_BUCKET_COUNT+1)
+    add HL, DE
+    add HL, DE
+    pop DE
+    push DE
+hmc_zero:
+    ld A, D
+    cp H
+    jr NZ, hmc_zero_cont
+    ld A, E
+    cp L
+    jr Z, hmc_zero_done
+hmc_zero_cont:
+    xor A
+    ld (DE), A
+    inc DE
+    jr hmc_zero
+hmc_zero_done:
+    pop HL
+    push IY
+    pop HL
+    pop IX
+    ret
+hmc_fail_free:
+    push IY
+    pop HL
+    call _heap_free
+hmc_fail:
+    ld HL, 0
+    pop IX
+    ret
+
+; _hmap_find: Find value by key
+; Input: Stack: map_ptr, key_ptr
+; Output: HL = pointer to value (0 if not found)
+    PUBLIC _hmap_find
+_hmap_find:
+    push IX
+    push BC
+    ld IX, 0
+    add IX, SP
+    ; Get map
+    ld L, (IX+6)
+    ld H, (IX+7)
+    push HL
+    pop IY
+    ; Hash the key
+    ld L, (IX+8)
+    ld H, (IX+9)
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ex DE, HL
+    call _int_hash
+    ; Compute bucket index
+    push HL
+    ld L, (IY+HMAP_BUCKET_COUNT)
+    ld H, (IY+HMAP_BUCKET_COUNT+1)
+    push HL
+    call _mod16
+    pop DE
+    pop DE
+    ; Get bucket head
+    add HL, HL
+    ld E, (IY+HMAP_BUCKETS)
+    ld D, (IY+HMAP_BUCKETS+1)
+    add HL, DE
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+hmf_search:
+    ld A, D
+    or E
+    jr Z, hmf_notfound
+    push DE
+    ld HL, LIST_NODE_DATA
+    add HL, DE
+    ; Compare key
+    ld E, (IX+8)
+    ld D, (IX+9)
+    ld A, (DE)
+    cp (HL)
+    jr NZ, hmf_next
+    inc DE
+    inc HL
+    ld A, (DE)
+    cp (HL)
+    jr NZ, hmf_next
+    ; Found - return value ptr
+    pop DE
+    ld HL, LIST_NODE_DATA
+    add HL, DE
+    ld E, (IY+HMAP_KEY_SIZE)
+    ld D, (IY+HMAP_KEY_SIZE+1)
+    add HL, DE
+    pop BC
+    pop IX
+    ret
+hmf_next:
+    pop HL
+    inc HL
+    inc HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    jr hmf_search
+hmf_notfound:
+    ld HL, 0
+    pop BC
+    pop IX
+    ret
+
+; _hmap_insert: Insert key-value pair
+; Input: Stack: map_ptr, key_ptr, value_ptr
+; Output: HL = 1 (success) or 0 (failed/duplicate)
+    PUBLIC _hmap_insert
+_hmap_insert:
+    push IX
+    push BC
+    ld IX, 0
+    add IX, SP
+    ; Get map
+    ld L, (IX+6)
+    ld H, (IX+7)
+    push HL
+    pop IY
+    ; Check if key exists
+    ld L, (IX+8)
+    ld H, (IX+9)
+    push HL
+    push IY
+    call _hmap_find
+    pop IY
+    pop DE
+    ld A, H
+    or L
+    jp NZ, hmi_exists
+    ; Allocate node
+    ld HL, LIST_NODE_DATA
+    ld E, (IY+HMAP_KEY_SIZE)
+    ld D, (IY+HMAP_KEY_SIZE+1)
+    add HL, DE
+    ld E, (IY+HMAP_VALUE_SIZE)
+    ld D, (IY+HMAP_VALUE_SIZE+1)
+    add HL, DE
+    call _heap_alloc
+    ld A, H
+    or L
+    jr Z, hmi_fail
+    push HL
+    ; Copy key
+    ld DE, LIST_NODE_DATA
+    add HL, DE
+    ex DE, HL
+    ld L, (IX+8)
+    ld H, (IX+9)
+    ld C, (IY+HMAP_KEY_SIZE)
+    ld B, (IY+HMAP_KEY_SIZE+1)
+    ldir
+    ; Copy value
+    ld L, (IX+10)
+    ld H, (IX+11)
+    ld C, (IY+HMAP_VALUE_SIZE)
+    ld B, (IY+HMAP_VALUE_SIZE+1)
+    ldir
+    ; Hash key for bucket
+    ld L, (IX+8)
+    ld H, (IX+9)
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ex DE, HL
+    call _int_hash
+    push HL
+    ld L, (IY+HMAP_BUCKET_COUNT)
+    ld H, (IY+HMAP_BUCKET_COUNT+1)
+    push HL
+    call _mod16
+    pop DE
+    pop DE
+    add HL, HL
+    ld E, (IY+HMAP_BUCKETS)
+    ld D, (IY+HMAP_BUCKETS+1)
+    add HL, DE
+    ; Insert at head
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    dec HL
+    pop BC
+    push HL
+    ld H, B
+    ld L, C
+    inc HL
+    inc HL
+    ld (HL), E
+    inc HL
+    ld (HL), D
+    dec HL
+    dec HL
+    dec HL
+    xor A
+    ld (HL), A
+    inc HL
+    ld (HL), A
+    pop HL
+    ld (HL), C
+    inc HL
+    ld (HL), B
+    ; Increment count
+    ld L, (IY+CONT_HDR_COUNT)
+    ld H, (IY+CONT_HDR_COUNT+1)
+    inc HL
+    ld (IY+CONT_HDR_COUNT), L
+    ld (IY+CONT_HDR_COUNT+1), H
+    ld HL, 1
+    pop BC
+    pop IX
+    ret
+hmi_exists:
+hmi_fail:
+    ld HL, 0
+    pop BC
+    pop IX
+    ret
+
+; _hmap_delete: Delete key from hash map
+; Input: Stack: map_ptr, key_ptr
+; Output: HL = 1 (deleted) or 0 (not found)
+    PUBLIC _hmap_delete
+_hmap_delete:
+    push IX
+    push BC
+    ld IX, 0
+    add IX, SP
+    ; Get map
+    ld L, (IX+6)
+    ld H, (IX+7)
+    push HL
+    pop IY
+    ; Hash key
+    ld L, (IX+8)
+    ld H, (IX+9)
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ex DE, HL
+    call _int_hash
+    push HL
+    ld L, (IY+HMAP_BUCKET_COUNT)
+    ld H, (IY+HMAP_BUCKET_COUNT+1)
+    push HL
+    call _mod16
+    pop DE
+    pop DE
+    add HL, HL
+    ld E, (IY+HMAP_BUCKETS)
+    ld D, (IY+HMAP_BUCKETS+1)
+    add HL, DE
+    push HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ld BC, 0
+hmd_search:
+    ld A, D
+    or E
+    jr Z, hmd_notfound
+    push DE
+    push BC
+    ld HL, LIST_NODE_DATA
+    add HL, DE
+    ld E, (IX+8)
+    ld D, (IX+9)
+    ld A, (DE)
+    cp (HL)
+    jr NZ, hmd_next
+    inc DE
+    inc HL
+    ld A, (DE)
+    cp (HL)
+    jr NZ, hmd_next
+    ; Found - unlink
+    pop BC
+    pop HL
+    push HL
+    inc HL
+    inc HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ld A, B
+    or C
+    jr Z, hmd_update_bucket
+    push BC
+    pop HL
+    inc HL
+    inc HL
+    ld (HL), E
+    inc HL
+    ld (HL), D
+    jr hmd_free
+hmd_update_bucket:
+    pop HL
+    push HL
+    pop HL
+    push DE
+    ld HL, 0
+    add HL, SP
+    ld DE, 6
+    add HL, DE
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    pop HL
+    ex DE, HL
+    ld (HL), E
+    inc HL
+    ld (HL), D
+    push IY
+    pop HL
+    push HL
+    pop IY
+hmd_free:
+    pop HL
+    call _heap_free
+    ld L, (IY+CONT_HDR_COUNT)
+    ld H, (IY+CONT_HDR_COUNT+1)
+    dec HL
+    ld (IY+CONT_HDR_COUNT), L
+    ld (IY+CONT_HDR_COUNT+1), H
+    pop HL
+    ld HL, 1
+    pop BC
+    pop IX
+    ret
+hmd_next:
+    pop BC
+    pop HL
+    push HL
+    pop BC
+    inc HL
+    inc HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    jr hmd_search
+hmd_notfound:
+    pop HL
+    ld HL, 0
+    pop BC
+    pop IX
+    ret
+
+; ============================================================
+; Hash Set Operations
+; ============================================================
+
+; _hset_create: Create a new hash set
+; Input: Stack: elem_size, bucket_count
+; Output: HL = set pointer (0 if failed)
+    PUBLIC _hset_create
+_hset_create:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ld HL, HSET_HDR_SIZE
+    call _heap_alloc
+    ld A, H
+    or L
+    jr Z, hsc_fail
+    push HL
+    pop IY
+    ld (IY+CONT_HDR_TYPE), CONT_TYPE_HASHED_SET
+    ld (IY+CONT_HDR_FLAGS), 0
+    ld (IY+CONT_HDR_COUNT), 0
+    ld (IY+CONT_HDR_COUNT+1), 0
+    ld L, (IX+6)
+    ld H, (IX+7)
+    ld (IY+HSET_BUCKET_COUNT), L
+    ld (IY+HSET_BUCKET_COUNT+1), H
+    ld L, (IX+4)
+    ld H, (IX+5)
+    ld (IY+HSET_ELEM_SIZE), L
+    ld (IY+HSET_ELEM_SIZE+1), H
+    ld L, (IX+6)
+    ld H, (IX+7)
+    add HL, HL
+    push IY
+    call _heap_alloc
+    pop IY
+    ld A, H
+    or L
+    jr Z, hsc_fail_free
+    ld (IY+HSET_BUCKETS), L
+    ld (IY+HSET_BUCKETS+1), H
+    ; Zero buckets
+    push HL
+    ld E, (IY+HSET_BUCKET_COUNT)
+    ld D, (IY+HSET_BUCKET_COUNT+1)
+    add HL, DE
+    add HL, DE
+    pop DE
+    push DE
+hsc_zero:
+    ld A, D
+    cp H
+    jr NZ, hsc_zero_cont
+    ld A, E
+    cp L
+    jr Z, hsc_zero_done
+hsc_zero_cont:
+    xor A
+    ld (DE), A
+    inc DE
+    jr hsc_zero
+hsc_zero_done:
+    pop HL
+    push IY
+    pop HL
+    pop IX
+    ret
+hsc_fail_free:
+    push IY
+    pop HL
+    call _heap_free
+hsc_fail:
+    ld HL, 0
+    pop IX
+    ret
+
+; _hset_contains: Check if element exists
+; Input: Stack: set_ptr, elem_ptr
+; Output: HL = 1 (found) or 0 (not found)
+    PUBLIC _hset_contains
+_hset_contains:
+    push IX
+    push BC
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+6)
+    ld H, (IX+7)
+    push HL
+    pop IY
+    ld L, (IX+8)
+    ld H, (IX+9)
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ex DE, HL
+    call _int_hash
+    push HL
+    ld L, (IY+HSET_BUCKET_COUNT)
+    ld H, (IY+HSET_BUCKET_COUNT+1)
+    push HL
+    call _mod16
+    pop DE
+    pop DE
+    add HL, HL
+    ld E, (IY+HSET_BUCKETS)
+    ld D, (IY+HSET_BUCKETS+1)
+    add HL, DE
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+hsct_search:
+    ld A, D
+    or E
+    jr Z, hsct_notfound
+    push DE
+    ld HL, LIST_NODE_DATA
+    add HL, DE
+    ld E, (IX+8)
+    ld D, (IX+9)
+    ld A, (DE)
+    cp (HL)
+    jr NZ, hsct_next
+    inc DE
+    inc HL
+    ld A, (DE)
+    cp (HL)
+    jr NZ, hsct_next
+    pop DE
+    ld HL, 1
+    pop BC
+    pop IX
+    ret
+hsct_next:
+    pop HL
+    inc HL
+    inc HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    jr hsct_search
+hsct_notfound:
+    ld HL, 0
+    pop BC
+    pop IX
+    ret
+
+; _hset_insert: Insert element into hash set
+; Input: Stack: set_ptr, elem_ptr
+; Output: HL = 1 (inserted) or 0 (exists/failed)
+    PUBLIC _hset_insert
+_hset_insert:
+    push IX
+    push BC
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+6)
+    ld H, (IX+7)
+    push HL
+    pop IY
+    ; Check exists
+    ld L, (IX+8)
+    ld H, (IX+9)
+    push HL
+    push IY
+    call _hset_contains
+    pop IY
+    pop DE
+    ld A, H
+    or L
+    jr NZ, hsi_exists
+    ; Allocate node
+    ld HL, LIST_NODE_DATA
+    ld E, (IY+HSET_ELEM_SIZE)
+    ld D, (IY+HSET_ELEM_SIZE+1)
+    add HL, DE
+    call _heap_alloc
+    ld A, H
+    or L
+    jr Z, hsi_fail
+    push HL
+    ; Copy element
+    ld DE, LIST_NODE_DATA
+    add HL, DE
+    ex DE, HL
+    ld L, (IX+8)
+    ld H, (IX+9)
+    ld C, (IY+HSET_ELEM_SIZE)
+    ld B, (IY+HSET_ELEM_SIZE+1)
+    ldir
+    ; Hash for bucket
+    ld L, (IX+8)
+    ld H, (IX+9)
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ex DE, HL
+    call _int_hash
+    push HL
+    ld L, (IY+HSET_BUCKET_COUNT)
+    ld H, (IY+HSET_BUCKET_COUNT+1)
+    push HL
+    call _mod16
+    pop DE
+    pop DE
+    add HL, HL
+    ld E, (IY+HSET_BUCKETS)
+    ld D, (IY+HSET_BUCKETS+1)
+    add HL, DE
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    dec HL
+    pop BC
+    push HL
+    ld H, B
+    ld L, C
+    inc HL
+    inc HL
+    ld (HL), E
+    inc HL
+    ld (HL), D
+    dec HL
+    dec HL
+    dec HL
+    xor A
+    ld (HL), A
+    inc HL
+    ld (HL), A
+    pop HL
+    ld (HL), C
+    inc HL
+    ld (HL), B
+    ld L, (IY+CONT_HDR_COUNT)
+    ld H, (IY+CONT_HDR_COUNT+1)
+    inc HL
+    ld (IY+CONT_HDR_COUNT), L
+    ld (IY+CONT_HDR_COUNT+1), H
+    ld HL, 1
+    pop BC
+    pop IX
+    ret
+hsi_exists:
+hsi_fail:
+    ld HL, 0
+    pop BC
+    pop IX
+    ret
+
+; _hset_delete: Delete element from hash set
+; Input: Stack: set_ptr, elem_ptr
+; Output: HL = 1 (deleted) or 0 (not found)
+    PUBLIC _hset_delete
+_hset_delete:
+    push IX
+    push BC
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+6)
+    ld H, (IX+7)
+    push HL
+    pop IY
+    ld L, (IX+8)
+    ld H, (IX+9)
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ex DE, HL
+    call _int_hash
+    push HL
+    ld L, (IY+HSET_BUCKET_COUNT)
+    ld H, (IY+HSET_BUCKET_COUNT+1)
+    push HL
+    call _mod16
+    pop DE
+    pop DE
+    add HL, HL
+    ld E, (IY+HSET_BUCKETS)
+    ld D, (IY+HSET_BUCKETS+1)
+    add HL, DE
+    push HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ld BC, 0
+hsd_search:
+    ld A, D
+    or E
+    jr Z, hsd_notfound
+    push DE
+    push BC
+    ld HL, LIST_NODE_DATA
+    add HL, DE
+    ld E, (IX+8)
+    ld D, (IX+9)
+    ld A, (DE)
+    cp (HL)
+    jr NZ, hsd_next
+    inc DE
+    inc HL
+    ld A, (DE)
+    cp (HL)
+    jr NZ, hsd_next
+    pop BC
+    pop HL
+    push HL
+    inc HL
+    inc HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ld A, B
+    or C
+    jr Z, hsd_update_bucket
+    push BC
+    pop HL
+    inc HL
+    inc HL
+    ld (HL), E
+    inc HL
+    ld (HL), D
+    jr hsd_free
+hsd_update_bucket:
+    pop HL
+    push DE
+    ld HL, 0
+    add HL, SP
+    ld DE, 6
+    add HL, DE
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    pop HL
+    ex DE, HL
+    ld (HL), E
+    inc HL
+    ld (HL), D
+hsd_free:
+    pop HL
+    call _heap_free
+    ld L, (IY+CONT_HDR_COUNT)
+    ld H, (IY+CONT_HDR_COUNT+1)
+    dec HL
+    ld (IY+CONT_HDR_COUNT), L
+    ld (IY+CONT_HDR_COUNT+1), H
+    pop HL
+    ld HL, 1
+    pop BC
+    pop IX
+    ret
+hsd_next:
+    pop BC
+    pop HL
+    push HL
+    pop BC
+    inc HL
+    inc HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    jr hsd_search
+hsd_notfound:
+    pop HL
+    ld HL, 0
+    pop BC
+    pop IX
+    ret
+
+; ============================================================
+; Ordered Map Operations (BST)
+; ============================================================
+
+; _omap_create: Create an ordered map
+; Input: Stack: key_size, value_size
+; Output: HL = map pointer (0 if failed)
+    PUBLIC _omap_create
+_omap_create:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ld HL, OMAP_HDR_SIZE
+    call _heap_alloc
+    ld A, H
+    or L
+    jr Z, omc_fail
+    push HL
+    pop IY
+    ld (IY+CONT_HDR_TYPE), CONT_TYPE_ORDERED_MAP
+    ld (IY+CONT_HDR_FLAGS), 0
+    ld (IY+CONT_HDR_COUNT), 0
+    ld (IY+CONT_HDR_COUNT+1), 0
+    ld (IY+OMAP_ROOT), 0
+    ld (IY+OMAP_ROOT+1), 0
+    ld L, (IX+4)
+    ld H, (IX+5)
+    ld (IY+OMAP_KEY_SIZE), L
+    ld (IY+OMAP_KEY_SIZE+1), H
+    ld L, (IX+6)
+    ld H, (IX+7)
+    ld (IY+OMAP_VALUE_SIZE), L
+    ld (IY+OMAP_VALUE_SIZE+1), H
+    push IY
+    pop HL
+    pop IX
+    ret
+omc_fail:
+    ld HL, 0
+    pop IX
+    ret
+
+; _omap_find: Find value by key
+; Input: Stack: map_ptr, key_ptr
+; Output: HL = pointer to value (0 if not found)
+    PUBLIC _omap_find
+_omap_find:
+    push IX
+    push BC
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+6)
+    ld H, (IX+7)
+    push HL
+    pop IY
+    ld L, (IY+OMAP_ROOT)
+    ld H, (IY+OMAP_ROOT+1)
+omf_search:
+    ld A, H
+    or L
+    jr Z, omf_notfound
+    push HL
+    ld DE, BST_DATA
+    add HL, DE
+    ld C, (HL)
+    inc HL
+    ld B, (HL)
+    ld L, (IX+8)
+    ld H, (IX+9)
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ex DE, HL
+    or A
+    sbc HL, BC
+    jr Z, omf_found
+    jr C, omf_go_left
+    pop HL
+    inc HL
+    inc HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ex DE, HL
+    jr omf_search
+omf_go_left:
+    pop HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ex DE, HL
+    jr omf_search
+omf_found:
+    pop HL
+    ld DE, BST_DATA
+    add HL, DE
+    ld E, (IY+OMAP_KEY_SIZE)
+    ld D, (IY+OMAP_KEY_SIZE+1)
+    add HL, DE
+    pop BC
+    pop IX
+    ret
+omf_notfound:
+    ld HL, 0
+    pop BC
+    pop IX
+    ret
+
+; _omap_insert: Insert key-value pair
+; Input: Stack: map_ptr, key_ptr, value_ptr
+; Output: HL = 1 (inserted) or 0 (duplicate/failed)
+    PUBLIC _omap_insert
+_omap_insert:
+    push IX
+    push BC
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+6)
+    ld H, (IX+7)
+    push HL
+    pop IY
+    ; Allocate node
+    ld HL, BST_DATA
+    ld E, (IY+OMAP_KEY_SIZE)
+    ld D, (IY+OMAP_KEY_SIZE+1)
+    add HL, DE
+    ld E, (IY+OMAP_VALUE_SIZE)
+    ld D, (IY+OMAP_VALUE_SIZE+1)
+    add HL, DE
+    call _heap_alloc
+    ld A, H
+    or L
+    jp Z, omi_fail
+    push HL
+    ; Zero left/right
+    push HL
+    pop DE
+    xor A
+    ld (DE), A
+    inc DE
+    ld (DE), A
+    inc DE
+    ld (DE), A
+    inc DE
+    ld (DE), A
+    ; Copy key
+    pop HL
+    push HL
+    ld DE, BST_DATA
+    add HL, DE
+    ex DE, HL
+    ld L, (IX+8)
+    ld H, (IX+9)
+    ld C, (IY+OMAP_KEY_SIZE)
+    ld B, (IY+OMAP_KEY_SIZE+1)
+    ldir
+    ; Copy value
+    ld L, (IX+10)
+    ld H, (IX+11)
+    ld C, (IY+OMAP_VALUE_SIZE)
+    ld B, (IY+OMAP_VALUE_SIZE+1)
+    ldir
+    ; Insert
+    pop DE
+    ld L, (IY+OMAP_ROOT)
+    ld H, (IY+OMAP_ROOT+1)
+    ld A, H
+    or L
+    jr NZ, omi_insert_tree
+    ld (IY+OMAP_ROOT), E
+    ld (IY+OMAP_ROOT+1), D
+    jr omi_done
+omi_insert_tree:
+    push DE
+    ld L, (IX+8)
+    ld H, (IX+9)
+    ld C, (HL)
+    inc HL
+    ld B, (HL)
+    ld L, (IY+OMAP_ROOT)
+    ld H, (IY+OMAP_ROOT+1)
+omi_traverse:
+    push HL
+    ld DE, BST_DATA
+    add HL, DE
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    push BC
+    ld H, B
+    ld L, C
+    or A
+    sbc HL, DE
+    pop BC
+    jr Z, omi_duplicate
+    jr C, omi_try_left
+    pop HL
+    inc HL
+    inc HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ld A, D
+    or E
+    jr Z, omi_insert_right
+    ex DE, HL
+    jr omi_traverse
+omi_try_left:
+    pop HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ld A, D
+    or E
+    jr Z, omi_insert_left
+    ex DE, HL
+    jr omi_traverse
+omi_insert_left:
+    dec HL
+    pop DE
+    ld (HL), E
+    inc HL
+    ld (HL), D
+    jr omi_done
+omi_insert_right:
+    dec HL
+    pop DE
+    ld (HL), E
+    inc HL
+    ld (HL), D
+omi_done:
+    ld L, (IY+CONT_HDR_COUNT)
+    ld H, (IY+CONT_HDR_COUNT+1)
+    inc HL
+    ld (IY+CONT_HDR_COUNT), L
+    ld (IY+CONT_HDR_COUNT+1), H
+    ld HL, 1
+    pop BC
+    pop IX
+    ret
+omi_duplicate:
+    pop HL
+    pop HL
+    call _heap_free
+    ld HL, 0
+    pop BC
+    pop IX
+    ret
+omi_fail:
+    ld HL, 0
+    pop BC
+    pop IX
+    ret
+
+; ============================================================
+; Ordered Set Operations (BST)
+; ============================================================
+
+; _oset_create: Create an ordered set
+; Input: Stack: elem_size
+; Output: HL = set pointer (0 if failed)
+    PUBLIC _oset_create
+_oset_create:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ld HL, OSET_HDR_SIZE
+    call _heap_alloc
+    ld A, H
+    or L
+    jr Z, osc_fail
+    push HL
+    pop IY
+    ld (IY+CONT_HDR_TYPE), CONT_TYPE_ORDERED_SET
+    ld (IY+CONT_HDR_FLAGS), 0
+    ld (IY+CONT_HDR_COUNT), 0
+    ld (IY+CONT_HDR_COUNT+1), 0
+    ld (IY+OSET_ROOT), 0
+    ld (IY+OSET_ROOT+1), 0
+    ld L, (IX+4)
+    ld H, (IX+5)
+    ld (IY+OSET_ELEM_SIZE), L
+    ld (IY+OSET_ELEM_SIZE+1), H
+    push IY
+    pop HL
+    pop IX
+    ret
+osc_fail:
+    ld HL, 0
+    pop IX
+    ret
+
+; _oset_contains: Check if element exists
+; Input: Stack: set_ptr, elem_ptr
+; Output: HL = 1 (found) or 0 (not found)
+    PUBLIC _oset_contains
+_oset_contains:
+    push IX
+    push BC
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+6)
+    ld H, (IX+7)
+    push HL
+    pop IY
+    ld L, (IY+OSET_ROOT)
+    ld H, (IY+OSET_ROOT+1)
+osct_search:
+    ld A, H
+    or L
+    jr Z, osct_notfound
+    push HL
+    ld DE, BST_DATA
+    add HL, DE
+    ld C, (HL)
+    inc HL
+    ld B, (HL)
+    ld L, (IX+8)
+    ld H, (IX+9)
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ex DE, HL
+    or A
+    sbc HL, BC
+    jr Z, osct_found
+    jr C, osct_go_left
+    pop HL
+    inc HL
+    inc HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ex DE, HL
+    jr osct_search
+osct_go_left:
+    pop HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ex DE, HL
+    jr osct_search
+osct_found:
+    pop HL
+    ld HL, 1
+    pop BC
+    pop IX
+    ret
+osct_notfound:
+    ld HL, 0
+    pop BC
+    pop IX
+    ret
+
+; _oset_insert: Insert element
+; Input: Stack: set_ptr, elem_ptr
+; Output: HL = 1 (inserted) or 0 (duplicate/failed)
+    PUBLIC _oset_insert
+_oset_insert:
+    push IX
+    push BC
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+6)
+    ld H, (IX+7)
+    push HL
+    pop IY
+    ; Allocate node
+    ld HL, BST_DATA
+    ld E, (IY+OSET_ELEM_SIZE)
+    ld D, (IY+OSET_ELEM_SIZE+1)
+    add HL, DE
+    call _heap_alloc
+    ld A, H
+    or L
+    jp Z, osi_fail
+    push HL
+    ; Zero left/right
+    push HL
+    pop DE
+    xor A
+    ld (DE), A
+    inc DE
+    ld (DE), A
+    inc DE
+    ld (DE), A
+    inc DE
+    ld (DE), A
+    ; Copy element
+    pop HL
+    push HL
+    ld DE, BST_DATA
+    add HL, DE
+    ex DE, HL
+    ld L, (IX+8)
+    ld H, (IX+9)
+    ld C, (IY+OSET_ELEM_SIZE)
+    ld B, (IY+OSET_ELEM_SIZE+1)
+    ldir
+    ; Insert
+    pop DE
+    ld L, (IY+OSET_ROOT)
+    ld H, (IY+OSET_ROOT+1)
+    ld A, H
+    or L
+    jr NZ, osi_insert_tree
+    ld (IY+OSET_ROOT), E
+    ld (IY+OSET_ROOT+1), D
+    jr osi_done
+osi_insert_tree:
+    push DE
+    ld L, (IX+8)
+    ld H, (IX+9)
+    ld C, (HL)
+    inc HL
+    ld B, (HL)
+    ld L, (IY+OSET_ROOT)
+    ld H, (IY+OSET_ROOT+1)
+osi_traverse:
+    push HL
+    ld DE, BST_DATA
+    add HL, DE
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    push BC
+    ld H, B
+    ld L, C
+    or A
+    sbc HL, DE
+    pop BC
+    jr Z, osi_duplicate
+    jr C, osi_try_left
+    pop HL
+    inc HL
+    inc HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ld A, D
+    or E
+    jr Z, osi_insert_right
+    ex DE, HL
+    jr osi_traverse
+osi_try_left:
+    pop HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ld A, D
+    or E
+    jr Z, osi_insert_left
+    ex DE, HL
+    jr osi_traverse
+osi_insert_left:
+    dec HL
+    pop DE
+    ld (HL), E
+    inc HL
+    ld (HL), D
+    jr osi_done
+osi_insert_right:
+    dec HL
+    pop DE
+    ld (HL), E
+    inc HL
+    ld (HL), D
+osi_done:
+    ld L, (IY+CONT_HDR_COUNT)
+    ld H, (IY+CONT_HDR_COUNT+1)
+    inc HL
+    ld (IY+CONT_HDR_COUNT), L
+    ld (IY+CONT_HDR_COUNT+1), H
+    ld HL, 1
+    pop BC
+    pop IX
+    ret
+osi_duplicate:
+    pop HL
+    pop HL
+    call _heap_free
+    ld HL, 0
+    pop BC
+    pop IX
+    ret
+osi_fail:
+    ld HL, 0
+    pop BC
+    pop IX
+    ret
+
+; ============================================================
+; Container Utilities
+; ============================================================
+
+; _cont_length: Get number of elements in container
+; Input: Stack: container_ptr
+; Output: HL = count
+    PUBLIC _cont_length
+_cont_length:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+4)
+    ld H, (IX+5)
+    push HL
+    pop IY
+    ld L, (IY+CONT_HDR_COUNT)
+    ld H, (IY+CONT_HDR_COUNT+1)
+    pop IX
+    ret
+
+; _cont_is_empty: Check if container is empty
+; Input: Stack: container_ptr
+; Output: HL = 1 (empty) or 0 (not empty)
+    PUBLIC _cont_is_empty
+_cont_is_empty:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+4)
+    ld H, (IX+5)
+    push HL
+    pop IY
+    ld L, (IY+CONT_HDR_COUNT)
+    ld H, (IY+CONT_HDR_COUNT+1)
+    ld A, H
+    or L
+    jr Z, cie_empty
+    ld HL, 0
+    pop IX
+    ret
+cie_empty:
+    ld HL, 1
+    pop IX
+    ret
+
+; _cont_clear: Remove all elements from container
+; Input: Stack: container_ptr
+; Output: none
+    PUBLIC _cont_clear
+_cont_clear:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+4)
+    ld H, (IX+5)
+    push HL
+    pop IY
+    ld A, (IY+CONT_HDR_TYPE)
+    cp CONT_TYPE_VECTOR
+    jr Z, cc_vector
+    cp CONT_TYPE_LIST
+    jr Z, cc_list
+    cp CONT_TYPE_HASHED_MAP
+    jp Z, cc_hmap
+    cp CONT_TYPE_HASHED_SET
+    jp Z, cc_hmap
+    cp CONT_TYPE_ORDERED_MAP
+    jp Z, cc_omap
+    cp CONT_TYPE_ORDERED_SET
+    jp Z, cc_oset
+    pop IX
+    ret
+
+cc_vector:
+    xor A
+    ld (IY+CONT_HDR_COUNT), A
+    ld (IY+CONT_HDR_COUNT+1), A
+    pop IX
+    ret
+
+cc_list:
+    ld L, (IY+8)      ; LIST_HEAD
+    ld H, (IY+9)
+cc_list_loop:
+    ld A, H
+    or L
+    jr Z, cc_list_done
+    push HL
+    inc HL
+    inc HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    push DE
+    pop BC
+    pop HL
+    push BC
+    call _heap_free
+    pop HL
+    jr cc_list_loop
+cc_list_done:
+    xor A
+    ld (IY+CONT_HDR_COUNT), A
+    ld (IY+CONT_HDR_COUNT+1), A
+    ld (IY+8), A      ; LIST_HEAD
+    ld (IY+9), A
+    ld (IY+10), A     ; LIST_TAIL
+    ld (IY+11), A
+    pop IX
+    ret
+
+cc_hmap:
+    push BC
+    ld A, (IY+CONT_HDR_TYPE)
+    cp CONT_TYPE_HASHED_MAP
+    jr NZ, cc_h_set
+    ld L, (IY+HMAP_BUCKET_COUNT)
+    ld H, (IY+HMAP_BUCKET_COUNT+1)
+    ld C, (IY+HMAP_BUCKETS)
+    ld B, (IY+HMAP_BUCKETS+1)
+    jr cc_h_start
+cc_h_set:
+    ld L, (IY+HSET_BUCKET_COUNT)
+    ld H, (IY+HSET_BUCKET_COUNT+1)
+    ld C, (IY+HSET_BUCKETS)
+    ld B, (IY+HSET_BUCKETS+1)
+cc_h_start:
+    push HL
+    push BC
+cc_h_bucket:
+    pop HL
+    pop DE
+    ld A, D
+    or E
+    jr Z, cc_h_done
+    dec DE
+    push DE
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    inc HL
+    push HL
+    ex DE, HL
+cc_h_chain:
+    ld A, H
+    or L
+    jr Z, cc_h_bucket
+    push HL
+    inc HL
+    inc HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    pop HL
+    push DE
+    call _heap_free
+    pop HL
+    jr cc_h_chain
+cc_h_done:
+    ld A, (IY+CONT_HDR_TYPE)
+    cp CONT_TYPE_HASHED_MAP
+    jr NZ, cc_hz_set
+    ld L, (IY+HMAP_BUCKET_COUNT)
+    ld H, (IY+HMAP_BUCKET_COUNT+1)
+    ld C, (IY+HMAP_BUCKETS)
+    ld B, (IY+HMAP_BUCKETS+1)
+    jr cc_hz
+cc_hz_set:
+    ld L, (IY+HSET_BUCKET_COUNT)
+    ld H, (IY+HSET_BUCKET_COUNT+1)
+    ld C, (IY+HSET_BUCKETS)
+    ld B, (IY+HSET_BUCKETS+1)
+cc_hz:
+    push BC
+    pop DE
+    add HL, HL
+    ld B, H
+    ld C, L
+    ld A, B
+    or C
+    jr Z, cc_hz_done
+    xor A
+    ld H, D
+    ld L, E
+    ld (HL), A
+    inc DE
+    dec BC
+    ld A, B
+    or C
+    jr Z, cc_hz_done
+    ldir
+cc_hz_done:
+    xor A
+    ld (IY+CONT_HDR_COUNT), A
+    ld (IY+CONT_HDR_COUNT+1), A
+    pop BC
+    pop IX
+    ret
+
+cc_omap:
+    push BC
+    ld L, (IY+OMAP_ROOT)
+    ld H, (IY+OMAP_ROOT+1)
+    call cc_bst_free
+    xor A
+    ld (IY+CONT_HDR_COUNT), A
+    ld (IY+CONT_HDR_COUNT+1), A
+    ld (IY+OMAP_ROOT), A
+    ld (IY+OMAP_ROOT+1), A
+    pop BC
+    pop IX
+    ret
+
+cc_oset:
+    push BC
+    ld L, (IY+OSET_ROOT)
+    ld H, (IY+OSET_ROOT+1)
+    call cc_bst_free
+    xor A
+    ld (IY+CONT_HDR_COUNT), A
+    ld (IY+CONT_HDR_COUNT+1), A
+    ld (IY+OSET_ROOT), A
+    ld (IY+OSET_ROOT+1), A
+    pop BC
+    pop IX
+    ret
+
+cc_bst_free:
+    ld A, H
+    or L
+    ret Z
+    push HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ex DE, HL
+    call cc_bst_free
+    pop HL
+    push HL
+    inc HL
+    inc HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ex DE, HL
+    call cc_bst_free
+    pop HL
+    jp _heap_free
+
+; ============================================================
+; Container Iteration
+; ============================================================
+
+    DSEG
+iter_container:
+    DW 0
+iter_index:
+    DW 0
+iter_node:
+    DW 0
+iter_stack:
+    DS 32
+iter_sp:
+    DW 0
+
+    CSEG
+
+; _cont_first: Get first element cursor
+; Input: Stack: container_ptr
+; Output: HL = cursor (0 if empty)
+    PUBLIC _cont_first
+_cont_first:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ld L, (IX+4)
+    ld H, (IX+5)
+    ld (iter_container), HL
+    push HL
+    pop IY
+    ld L, (IY+CONT_HDR_COUNT)
+    ld H, (IY+CONT_HDR_COUNT+1)
+    ld A, H
+    or L
+    jr Z, cf_empty
+    ld A, (IY+CONT_HDR_TYPE)
+    cp CONT_TYPE_VECTOR
+    jr Z, cf_vector
+    cp CONT_TYPE_LIST
+    jr Z, cf_list
+    cp CONT_TYPE_ORDERED_MAP
+    jr Z, cf_bst
+    cp CONT_TYPE_ORDERED_SET
+    jr Z, cf_bst
+cf_vector:
+    ld HL, 0
+    ld (iter_index), HL
+    ld HL, 1
+    pop IX
+    ret
+cf_list:
+    ld L, (IY+8)      ; LIST_HEAD
+    ld H, (IY+9)
+    ld (iter_node), HL
+    pop IX
+    ret
+cf_bst:
+    ld HL, iter_stack
+    ld (iter_sp), HL
+    ld L, (IY+OMAP_ROOT)
+    ld H, (IY+OMAP_ROOT+1)
+cf_bst_left:
+    ld A, H
+    or L
+    jr Z, cf_bst_pop
+    push HL
+    ld HL, (iter_sp)
+    pop DE
+    ld (HL), E
+    inc HL
+    ld (HL), D
+    inc HL
+    ld (iter_sp), HL
+    ex DE, HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ex DE, HL
+    jr cf_bst_left
+cf_bst_pop:
+    ld HL, (iter_sp)
+    ld DE, iter_stack
+    or A
+    sbc HL, DE
+    jr Z, cf_empty
+    ld HL, (iter_sp)
+    dec HL
+    ld D, (HL)
+    dec HL
+    ld E, (HL)
+    ld (iter_sp), HL
+    ex DE, HL
+    ld (iter_node), HL
+    pop IX
+    ret
+cf_empty:
+    ld HL, 0
+    ld (iter_node), HL
+    pop IX
+    ret
+
+; _cont_next: Get next element cursor
+; Input: none (uses iter_* state)
+; Output: HL = next cursor (0 if done)
+    PUBLIC _cont_next
+_cont_next:
+    push IX
+    ld HL, (iter_container)
+    push HL
+    pop IY
+    ld A, (IY+CONT_HDR_TYPE)
+    cp CONT_TYPE_VECTOR
+    jr Z, cn_vector
+    cp CONT_TYPE_LIST
+    jr Z, cn_list
+    cp CONT_TYPE_ORDERED_MAP
+    jr Z, cn_bst
+    cp CONT_TYPE_ORDERED_SET
+    jr Z, cn_bst
+cn_vector:
+    ld HL, (iter_index)
+    inc HL
+    ld (iter_index), HL
+    ld E, (IY+CONT_HDR_COUNT)
+    ld D, (IY+CONT_HDR_COUNT+1)
+    or A
+    sbc HL, DE
+    jr NC, cn_done
+    ld HL, (iter_index)
+    inc HL
+    pop IX
+    ret
+cn_list:
+    ld HL, (iter_node)
+    ld A, H
+    or L
+    jr Z, cn_done
+    inc HL
+    inc HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ex DE, HL
+    ld (iter_node), HL
+    pop IX
+    ret
+cn_bst:
+    ld HL, (iter_node)
+    ld A, H
+    or L
+    jr Z, cn_done
+    inc HL
+    inc HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ld A, D
+    or E
+    jr Z, cn_bst_pop
+    ex DE, HL
+cn_bst_left:
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ld A, D
+    or E
+    jr Z, cn_bst_found
+    dec HL
+    push HL
+    ld HL, (iter_sp)
+    pop DE
+    ld (HL), E
+    inc HL
+    ld (HL), D
+    inc HL
+    ld (iter_sp), HL
+    ex DE, HL
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ex DE, HL
+    jr cn_bst_left
+cn_bst_found:
+    dec HL
+    ld (iter_node), HL
+    pop IX
+    ret
+cn_bst_pop:
+    ld HL, (iter_sp)
+    ld DE, iter_stack
+    or A
+    sbc HL, DE
+    jr Z, cn_done
+    ld HL, (iter_sp)
+    dec HL
+    ld D, (HL)
+    dec HL
+    ld E, (HL)
+    ld (iter_sp), HL
+    ex DE, HL
+    ld (iter_node), HL
+    pop IX
+    ret
+cn_done:
+    ld HL, 0
+    ld (iter_node), HL
+    pop IX
+    ret
+
+; _cont_has_element: Check if cursor is valid
+; Input: HL = cursor
+; Output: HL = 1 (valid) or 0 (done)
+    PUBLIC _cont_has_element
+_cont_has_element:
+    ld A, H
+    or L
+    jr Z, che_no
+    ld HL, 1
+    ret
+che_no:
+    ld HL, 0
+    ret
+
+; _cont_cursor_element: Get element pointer at cursor
+; Input: none (uses iter_* state)
+; Output: HL = pointer to element data
+    PUBLIC _cont_cursor_element
+_cont_cursor_element:
+    push IX
+    ld HL, (iter_container)
+    push HL
+    pop IY
+    ld A, (IY+CONT_HDR_TYPE)
+    cp CONT_TYPE_VECTOR
+    jr Z, cce_vector
+    cp CONT_TYPE_LIST
+    jr Z, cce_list
+    ld HL, (iter_node)
+    ld DE, BST_DATA
+    add HL, DE
+    pop IX
+    ret
+cce_vector:
+    ld HL, (iter_index)
+    push HL
+    push IY
+    call _vec_element
+    pop IY
+    pop DE
+    pop IX
+    ret
+cce_list:
+    ld HL, (iter_node)
+    ld DE, LIST_NODE_DATA
+    add HL, DE
+    pop IX
+    ret
+
+; ============================================================
+; BST Delete Operations
+; ============================================================
+
+; _omap_delete: Delete key from ordered map (stub - returns not found)
+; Input: Stack: omap_ptr, key_ptr
+; Output: HL = 1 (deleted) or 0 (not found)
+; Note: BST delete is complex. For now, return 0 (not implemented).
+    PUBLIC _omap_delete
+_omap_delete:
+    ld HL, 0
+    ret
+
+; _oset_delete: Delete element from ordered set (stub - returns not found)
+; Input: Stack: oset_ptr, elem_ptr
+; Output: HL = 1 (deleted) or 0 (not found)
+    PUBLIC _oset_delete
+_oset_delete:
+    ld HL, 0
+    ret
+
+; ============================================================
+; Container Element Dispatcher
+; ============================================================
+
+; _cont_element: Get element by index - dispatches by container type
+; Input: Stack: container_ptr, index
+; Output: HL = pointer to element (0 if out of bounds)
+    PUBLIC _cont_element
+_cont_element:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ; Get container pointer
+    ld L, (IX+4)
+    ld H, (IX+5)
+    push HL
+    pop IY
+    ; Check container type
+    ld A, (IY+CONT_HDR_TYPE)
+    cp CONT_TYPE_VECTOR
+    jr Z, ce_vector
+    cp CONT_TYPE_LIST
+    jr Z, ce_list
+    ; Unknown type - return null
+    ld HL, 0
+    pop IX
+    ret
+ce_vector:
+    ; Call _vec_element (args already on stack)
+    pop IX
+    jp _vec_element
+ce_list:
+    ; Call _list_element (args already on stack)
+    pop IX
+    jp _list_element
+
+    EXTRN _vec_element
+    EXTRN _list_element
+    EXTRN _heap_free
+
+    END

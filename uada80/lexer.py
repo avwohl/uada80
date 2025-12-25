@@ -260,6 +260,7 @@ class Lexer:
         self.pos = 0
         self.line = 1
         self.column = 1
+        self.prev_token_type: TokenType | None = None  # Track previous token for tick vs char literal
 
     def current_location(self) -> SourceLocation:
         """Get current source location."""
@@ -351,17 +352,18 @@ class Lexer:
         has_exp = False
         base = 10
 
-        # Check for based literal (e.g., 16#FF#)
+        # Check for based literal (e.g., 16#FF# or Ada 83 style 16:FF:)
         if self.peek() and self.peek().isdigit():
             # Read digits
             while self.peek() and (self.peek().isdigit() or self.peek() == "_"):
                 self.advance()
 
-            # Check for # (based literal)
-            if self.peek() == "#":
+            # Check for # or : (based literal delimiter)
+            if self.peek() == "#" or self.peek() == ":":
+                delimiter = self.peek()
                 base_str = self.source[start : self.pos]
                 base = int(base_str.replace("_", ""))
-                self.advance()  # Skip #
+                self.advance()  # Skip delimiter
 
                 # Read based digits
                 while self.peek() and (
@@ -371,11 +373,11 @@ class Lexer:
                         has_dot = True
                     self.advance()
 
-                # Expect closing #
-                if self.peek() == "#":
+                # Expect closing delimiter (same as opening)
+                if self.peek() == delimiter:
                     self.advance()
                 else:
-                    raise LexerError("Expected '#' to close based literal", self.current_location())
+                    raise LexerError(f"Expected '{delimiter}' to close based literal", self.current_location())
 
                 # Check for exponent
                 if self.peek() and self.peek().upper() == "E":
@@ -491,9 +493,31 @@ class Lexer:
 
         # Character literals (tricky: apostrophe is also attribute marker)
         # Character literal: 'x'  Attribute: Variable'First
-        # We need to look ahead to distinguish
+        # Per Ada RM 2.2, apostrophe after these tokens is a tick (attribute marker):
+        # - identifier, keyword ALL, RIGHT_PAREN, RIGHT_BRACKET
+        # Otherwise, if pattern matches 'x', it's a character literal
         if ch == "'":
-            # If preceded by identifier/close-paren and not followed by letter, it's attribute
+            # Check if previous token makes this a tick (attribute/qualified expression)
+            tick_predecessors = {
+                TokenType.IDENTIFIER,
+                TokenType.RIGHT_PAREN,
+                TokenType.RIGHT_BRACKET,
+                TokenType.ALL,
+                # Also keywords that can be type names followed by 'Range etc.
+                TokenType.ACCESS,
+                TokenType.DELTA,
+                TokenType.DIGITS,
+                TokenType.MOD,
+                # Note: RANGE is NOT included here because after "Type RANGE 'A'"
+                # we need 'A' to be a character literal, not an apostrophe.
+                # When used as attribute ('Range), the lexer produces IDENTIFIER
+                # for "Range", not the RANGE keyword.
+            }
+            if self.prev_token_type in tick_predecessors:
+                # It's an apostrophe for attributes/qualified expressions
+                self.advance()
+                return Token(TokenType.APOSTROPHE, "'", location)
+
             # Otherwise, check if it looks like a character literal
             next_ch = self.peek(1)
             next_next = self.peek(2)
@@ -593,6 +617,7 @@ class Lexer:
         while True:
             token = self.next_token()
             yield token
+            self.prev_token_type = token.type
             if token.type == TokenType.EOF:
                 break
 

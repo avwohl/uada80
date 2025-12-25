@@ -789,3 +789,49 @@ def test_type_redefinition_after_completion_error():
     result = analyze_source(source)
     assert result.has_errors
     assert any("already defined" in e.message for e in result.errors)
+
+# ============================================================================
+# Float Type Tests
+# ============================================================================
+
+
+def test_float_type():
+    """Test Float type declaration and usage."""
+    source = """
+    procedure Test is
+        X : Float := 3.14;
+        Y : Float;
+    begin
+        Y := X + 1.0;
+    end Test;
+    """
+    result = analyze_source(source)
+    assert not result.has_errors
+
+
+def test_long_float_type():
+    """Test Long_Float type (64-bit double precision)."""
+    source = """
+    procedure Test is
+        X : Long_Float := 3.14159265358979;
+        Y : Long_Float;
+    begin
+        Y := X * 2.0;
+    end Test;
+    """
+    result = analyze_source(source)
+    assert not result.has_errors
+
+
+def test_long_long_float_type():
+    """Test Long_Long_Float type (extended precision)."""
+    source = """
+    procedure Test is
+        X : Long_Long_Float := 2.718281828459045;
+        Y : Long_Long_Float;
+    begin
+        Y := X / 2.0;
+    end Test;
+    """
+    result = analyze_source(source)
+    assert not result.has_errors

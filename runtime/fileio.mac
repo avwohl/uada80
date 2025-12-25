@@ -1,0 +1,1357 @@
+; File I/O Runtime for Ada on Z80/CP/M
+; Provides file operations using CP/M BDOS calls
+;
+; Functions exported:
+;   _file_open    - Open existing file
+;   _file_create  - Create new file
+;   _file_close   - Close file
+;   _file_read    - Sequential read
+;   _file_write   - Sequential write
+;   _file_read_at - Random access read
+;   _file_write_at- Random access write
+;   _file_eof     - Check end of file
+;   _file_size    - Get file size
+;   _file_delete  - Delete file
+;
+
+        .Z80    ; Enable Z80 instruction set
+
+        CSEG
+
+; CP/M BDOS function codes
+BDOS_CONSOLE_OUT    EQU     2
+BDOS_DIRECT_IO      EQU     6
+BDOS_OPEN_FILE      EQU     15
+BDOS_CLOSE_FILE     EQU     16
+BDOS_SEARCH_FIRST   EQU     17
+BDOS_DELETE_FILE    EQU     19
+BDOS_READ_SEQ       EQU     20
+BDOS_WRITE_SEQ      EQU     21
+BDOS_MAKE_FILE      EQU     22
+BDOS_SET_DMA        EQU     26
+BDOS_GET_RANDOM     EQU     33
+BDOS_SET_RANDOM     EQU     34
+BDOS_COMPUTE_SIZE   EQU     35
+BDOS_SET_RAN_REC    EQU     36
+BDOS_READ_RANDOM    EQU     33
+BDOS_WRITE_RANDOM   EQU     34
+
+BDOS                EQU     0x0005
+
+; FCB structure offsets
+FCB_DR              EQU     0       ; Drive code (0=default, 1=A, etc)
+FCB_NAME            EQU     1       ; Filename (8 bytes)
+FCB_TYPE            EQU     9       ; File type (3 bytes)
+FCB_EX              EQU     12      ; Extent
+FCB_S1              EQU     13      ; Reserved
+FCB_S2              EQU     14      ; Reserved
+FCB_RC              EQU     15      ; Record count
+FCB_AL              EQU     16      ; Allocation map (16 bytes)
+FCB_CR              EQU     32      ; Current record
+FCB_R0              EQU     33      ; Random record (low byte)
+FCB_R1              EQU     34      ; Random record (mid byte)
+FCB_R2              EQU     35      ; Random record (high byte)
+FCB_SIZE            EQU     36
+
+; Our extended FCB with additional state
+EFCB_FCB            EQU     0       ; Standard FCB (36 bytes)
+EFCB_MODE           EQU     36      ; File mode (0=in, 1=out, 2=inout)
+EFCB_EOF            EQU     37      ; EOF flag
+EFCB_BUFFER         EQU     38      ; 128-byte sector buffer
+EFCB_BUF_POS        EQU     166     ; Buffer position
+EFCB_BUF_LEN        EQU     167     ; Valid bytes in buffer
+EFCB_SIZE           EQU     168     ; Total EFCB size
+
+; Maximum number of open files
+MAX_FILES           EQU     4
+
+; Export symbols
+        PUBLIC  _file_open
+        PUBLIC  _file_create
+        PUBLIC  _file_close
+        PUBLIC  _file_read
+        PUBLIC  _file_write
+        PUBLIC  _file_read_at
+        PUBLIC  _file_write_at
+        PUBLIC  _file_eof
+        PUBLIC  _file_size
+        PUBLIC  _file_delete
+
+;----------------------------------------------------------------------
+; _file_open: Open existing file
+; Input:  HL = pointer to filename (null-terminated)
+;         DE = mode (0=read, 1=write, 2=read/write)
+; Output: HL = file handle (0-3), or -1 on error
+;----------------------------------------------------------------------
+_file_open:
+        push    bc
+        push    de
+        push    ix
+
+        ; Save mode
+        ld      a, e
+        push    af
+
+        ; Find free FCB slot
+        call    find_free_fcb
+        jp      c, open_error       ; No free slot
+
+        ; IX = pointer to our EFCB
+        push    hl                  ; Save filename pointer
+        ld      bc, EFCB_SIZE
+        call    bc_mult_ix          ; IX = file_fcbs + (slot * EFCB_SIZE)
+
+        ; Initialize FCB to zeros
+        push    ix
+        pop     hl
+        ld      bc, FCB_SIZE
+        xor     a
+init_fcb_loop:
+        ld      (hl), a
+        inc     hl
+        dec     bc
+        ld      a, b
+        or      c
+        jr      nz, init_fcb_loop
+
+        ; Parse filename into FCB
+        pop     hl                  ; Restore filename pointer
+        push    ix
+        pop     de                  ; DE = FCB pointer
+        call    parse_filename
+
+        ; Set DMA to our buffer
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUFFER
+        add     hl, bc
+        ex      de, hl
+        ld      c, BDOS_SET_DMA
+        call    BDOS
+
+        ; Open file
+        push    ix
+        pop     de                  ; DE = FCB pointer
+        ld      c, BDOS_OPEN_FILE
+        call    BDOS
+
+        cp      0xFF
+        jr      z, open_error
+
+        ; Store mode
+        pop     af                  ; Restore mode
+        push    ix
+        pop     hl
+        ld      bc, EFCB_MODE
+        add     hl, bc
+        ld      (hl), a
+
+        ; Clear EOF flag
+        inc     hl
+        xor     a
+        ld      (hl), a
+
+        ; Clear buffer position/length
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUF_POS
+        add     hl, bc
+        ld      (hl), 0
+        inc     hl
+        ld      (hl), 0
+
+        ; Return slot number
+        ld      a, (current_slot)
+        ld      l, a
+        ld      h, 0
+
+        pop     ix
+        pop     de
+        pop     bc
+        ret
+
+open_error:
+        pop     af                  ; Clean up stack
+        ld      hl, -1
+        pop     ix
+        pop     de
+        pop     bc
+        ret
+
+;----------------------------------------------------------------------
+; _file_create: Create new file
+; Input:  HL = pointer to filename (null-terminated)
+; Output: HL = file handle (0-3), or -1 on error
+;----------------------------------------------------------------------
+_file_create:
+        push    bc
+        push    de
+        push    ix
+
+        ; Find free FCB slot
+        call    find_free_fcb
+        jp      c, create_error
+
+        ; IX = pointer to our EFCB
+        push    hl                  ; Save filename pointer
+        ld      bc, EFCB_SIZE
+        call    bc_mult_ix
+
+        ; Initialize FCB to zeros
+        push    ix
+        pop     hl
+        ld      bc, FCB_SIZE
+        xor     a
+create_init_loop:
+        ld      (hl), a
+        inc     hl
+        dec     bc
+        ld      a, b
+        or      c
+        jr      nz, create_init_loop
+
+        ; Parse filename into FCB
+        pop     hl                  ; Restore filename
+        push    ix
+        pop     de
+        call    parse_filename
+
+        ; Delete existing file first (ignore errors)
+        push    ix
+        pop     de
+        ld      c, BDOS_DELETE_FILE
+        call    BDOS
+
+        ; Create file
+        push    ix
+        pop     de
+        ld      c, BDOS_MAKE_FILE
+        call    BDOS
+
+        cp      0xFF
+        jr      z, create_error
+
+        ; Set mode to write (1)
+        push    ix
+        pop     hl
+        ld      bc, EFCB_MODE
+        add     hl, bc
+        ld      (hl), 1
+
+        ; Clear EOF and buffer state
+        inc     hl
+        ld      (hl), 0             ; EOF
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUF_POS
+        add     hl, bc
+        ld      (hl), 0             ; BUF_POS
+        inc     hl
+        ld      (hl), 0             ; BUF_LEN
+
+        ; Return slot number
+        ld      a, (current_slot)
+        ld      l, a
+        ld      h, 0
+
+        pop     ix
+        pop     de
+        pop     bc
+        ret
+
+create_error:
+        ld      hl, -1
+        pop     ix
+        pop     de
+        pop     bc
+        ret
+
+;----------------------------------------------------------------------
+; _file_close: Close file
+; Input:  HL = file handle
+;----------------------------------------------------------------------
+_file_close:
+        push    bc
+        push    de
+        push    ix
+
+        ; Validate handle
+        ld      a, l
+        cp      MAX_FILES
+        jr      nc, close_done
+
+        ; Get EFCB pointer
+        call    get_efcb_ptr        ; IX = EFCB
+
+        ; Flush any pending writes if output mode
+        push    ix
+        pop     hl
+        ld      bc, EFCB_MODE
+        add     hl, bc
+        ld      a, (hl)
+        or      a
+        jr      z, close_no_flush   ; Read mode, no flush needed
+
+        ; Check if buffer has data
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUF_POS
+        add     hl, bc
+        ld      a, (hl)
+        or      a
+        jr      z, close_no_flush
+
+        ; Flush partial sector
+        call    flush_buffer
+
+close_no_flush:
+        ; Close file
+        push    ix
+        pop     de
+        ld      c, BDOS_CLOSE_FILE
+        call    BDOS
+
+        ; Mark slot as free
+        ld      a, (current_slot)
+        ld      hl, file_in_use
+        ld      b, 0
+        ld      c, a
+        add     hl, bc
+        ld      (hl), 0
+
+close_done:
+        pop     ix
+        pop     de
+        pop     bc
+        ret
+
+;----------------------------------------------------------------------
+; _file_read: Sequential read
+; Input:  HL = handle
+;         DE = buffer pointer
+;         BC = size to read
+; Output: HL = bytes read, or -1 on error
+;----------------------------------------------------------------------
+_file_read:
+        push    ix
+        push    iy
+
+        ; Save parameters
+        ld      (read_buffer), de
+        ld      (read_size), bc
+
+        ; Get EFCB pointer
+        ld      a, l
+        cp      MAX_FILES
+        jp      nc, read_error
+        call    get_efcb_ptr        ; IX = EFCB
+
+        ; Initialize bytes read counter
+        ld      hl, 0
+        ld      (bytes_read), hl
+
+read_loop:
+        ; Check if done
+        ld      hl, (read_size)
+        ld      a, h
+        or      l
+        jp      z, read_done
+
+        ; Check buffer for data
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUF_LEN
+        add     hl, bc
+        ld      a, (hl)             ; A = bytes in buffer
+        or      a
+        jr      nz, read_from_buffer
+
+        ; Need to read a sector
+        call    read_sector
+        jp      c, read_done        ; EOF or error
+
+        ; Update buffer length
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUF_LEN
+        add     hl, bc
+        ld      (hl), 128           ; Full sector
+
+        ; Reset buffer position
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUF_POS
+        add     hl, bc
+        ld      (hl), 0
+
+        jr      read_loop
+
+read_from_buffer:
+        ; Get buffer position
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUF_POS
+        add     hl, bc
+        ld      e, (hl)             ; E = current position
+
+        ; Calculate available bytes
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUF_LEN
+        add     hl, bc
+        ld      a, (hl)
+        sub     e                   ; A = available bytes
+
+        ; Calculate bytes to copy (min of available, requested)
+        ld      hl, (read_size)
+        ld      b, a                ; B = available
+        ld      a, l
+        cp      b
+        jr      c, read_use_requested
+        ld      a, b                ; Use available
+read_use_requested:
+        ; A = bytes to copy
+        or      a
+        jr      z, read_loop
+
+        ; Copy from buffer to user buffer
+        push    af                  ; Save count
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUFFER
+        add     hl, bc
+        ld      b, 0
+        ld      c, e                ; BC = buffer offset
+        add     hl, bc              ; HL = source
+        ld      de, (read_buffer)   ; DE = destination
+        pop     af
+        push    af
+        ld      c, a
+        ld      b, 0
+        ldir                        ; Copy
+
+        ; Update buffer position
+        pop     af
+        push    af
+        ld      b, a
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUF_POS
+        add     hl, bc
+        ld      a, (hl)
+        add     a, b
+        ld      (hl), a
+
+        ; Check if buffer exhausted
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUF_LEN
+        add     hl, bc
+        ld      c, (hl)
+        cp      c
+        jr      nz, read_buf_not_empty
+
+        ; Buffer exhausted
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUF_LEN
+        add     hl, bc
+        ld      (hl), 0
+
+read_buf_not_empty:
+        ; Update counters
+        pop     af                  ; A = bytes copied
+        ld      b, 0
+        ld      c, a
+        ld      hl, (read_buffer)
+        add     hl, bc
+        ld      (read_buffer), hl   ; Update dest pointer
+        ld      hl, (read_size)
+        or      a
+        sbc     hl, bc
+        ld      (read_size), hl     ; Update remaining
+        ld      hl, (bytes_read)
+        add     hl, bc
+        ld      (bytes_read), hl    ; Update bytes read
+
+        jp      read_loop
+
+read_done:
+        ld      hl, (bytes_read)
+        pop     iy
+        pop     ix
+        ret
+
+read_error:
+        ld      hl, -1
+        pop     iy
+        pop     ix
+        ret
+
+;----------------------------------------------------------------------
+; _file_write: Sequential write
+; Input:  HL = handle
+;         DE = buffer pointer
+;         BC = size to write
+; Output: HL = bytes written, or -1 on error
+;----------------------------------------------------------------------
+_file_write:
+        push    ix
+        push    iy
+
+        ; Save parameters
+        ld      (write_buffer), de
+        ld      (write_size), bc
+
+        ; Get EFCB pointer
+        ld      a, l
+        cp      MAX_FILES
+        jp      nc, write_error
+        call    get_efcb_ptr
+
+        ; Initialize bytes written counter
+        ld      hl, 0
+        ld      (bytes_written), hl
+
+write_loop:
+        ; Check if done
+        ld      hl, (write_size)
+        ld      a, h
+        or      l
+        jr      z, write_done
+
+        ; Get buffer position
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUF_POS
+        add     hl, bc
+        ld      a, (hl)             ; A = current position
+
+        ; Calculate space in buffer
+        ld      b, a
+        ld      a, 128
+        sub     b                   ; A = space available
+
+        ; Calculate bytes to copy
+        ld      hl, (write_size)
+        ld      c, a                ; C = space
+        ld      a, l
+        cp      c
+        jr      c, write_use_requested
+        ld      a, c
+write_use_requested:
+        ; A = bytes to copy
+        or      a
+        jr      z, write_flush
+
+        ; Copy from user buffer to our buffer
+        push    af                  ; Save count
+        ld      hl, (write_buffer)  ; HL = source
+        push    ix
+        pop     de
+        ld      bc, EFCB_BUFFER
+        ex      de, hl
+        add     hl, bc
+        ex      de, hl              ; DE = EFCB_BUFFER
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUF_POS
+        add     hl, bc
+        ld      c, (hl)
+        ld      b, 0
+        ex      de, hl
+        add     hl, bc              ; HL = buffer + position
+        ex      de, hl              ; DE = dest
+        ld      hl, (write_buffer)  ; HL = source
+        pop     af
+        push    af
+        ld      c, a
+        ld      b, 0
+        ldir
+
+        ; Update buffer position
+        pop     af
+        push    af
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUF_POS
+        add     hl, bc
+        ld      b, (hl)
+        add     a, b
+        ld      (hl), a
+
+        ; Update counters
+        pop     af
+        ld      b, 0
+        ld      c, a
+        ld      hl, (write_buffer)
+        add     hl, bc
+        ld      (write_buffer), hl
+        ld      hl, (write_size)
+        or      a
+        sbc     hl, bc
+        ld      (write_size), hl
+        ld      hl, (bytes_written)
+        add     hl, bc
+        ld      (bytes_written), hl
+
+        ; Check if buffer full
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUF_POS
+        add     hl, bc
+        ld      a, (hl)
+        cp      128
+        jr      nz, write_loop
+
+write_flush:
+        ; Flush full buffer
+        call    flush_buffer
+        jp      write_loop
+
+write_done:
+        ld      hl, (bytes_written)
+        pop     iy
+        pop     ix
+        ret
+
+write_error:
+        ld      hl, -1
+        pop     iy
+        pop     ix
+        ret
+
+;----------------------------------------------------------------------
+; _file_read_at: Random access read
+; Input:  HL = handle
+;         DE = buffer pointer
+;         BC = size to read
+;         [SP+4] = position (32-bit, but we use 16-bit)
+; Output: HL = bytes read, or -1 on error
+;----------------------------------------------------------------------
+_file_read_at:
+        push    ix
+        push    iy
+
+        ; Get position from stack
+        ld      iy, 0
+        add     iy, sp
+        ld      e, (iy+10)          ; Position low
+        ld      d, (iy+11)          ; Position high (16-bit position)
+
+        ; Save parameters
+        ld      (read_buffer), de
+        push    bc
+        pop     hl
+        ld      (read_size), hl
+
+        ; Get handle from IY+8
+        ld      a, (iy+8)
+        cp      MAX_FILES
+        jp      nc, read_at_error
+
+        call    get_efcb_ptr
+
+        ; Calculate sector number and offset
+        ; Position / 128 = sector, Position % 128 = offset
+        ld      l, (iy+10)
+        ld      h, (iy+11)
+        ld      a, l
+        and     0x7F                ; A = offset within sector
+        push    af                  ; Save offset
+
+        ; Calculate sector number
+        srl     h
+        rr      l
+        srl     h
+        rr      l
+        srl     h
+        rr      l
+        srl     h
+        rr      l
+        srl     h
+        rr      l
+        srl     h
+        rr      l
+        srl     h
+        rr      l                   ; HL = sector number
+
+        ; Set random record in FCB
+        push    ix
+        pop     de
+        ld      bc, FCB_R0
+        ex      de, hl
+        add     hl, bc
+        ld      (hl), e             ; R0
+        inc     hl
+        ld      (hl), d             ; R1
+        inc     hl
+        ld      (hl), 0             ; R2
+
+        ; Set DMA
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUFFER
+        add     hl, bc
+        ex      de, hl
+        ld      c, BDOS_SET_DMA
+        call    BDOS
+
+        ; Read random record
+        push    ix
+        pop     de
+        ld      c, BDOS_READ_RANDOM
+        call    BDOS
+
+        pop     bc                  ; B = offset
+        or      a
+        jr      nz, read_at_error
+
+        ; Copy from buffer to user buffer
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUFFER
+        add     hl, bc
+        ld      de, (read_buffer)
+        ld      bc, (read_size)
+        ldir
+
+        ld      hl, (read_size)
+        pop     iy
+        pop     ix
+        ret
+
+read_at_error:
+        ld      hl, -1
+        pop     iy
+        pop     ix
+        ret
+
+;----------------------------------------------------------------------
+; _file_write_at: Random access write
+; Similar to read_at but writes
+;----------------------------------------------------------------------
+_file_write_at:
+        push    ix
+        push    iy
+
+        ; Get position from stack (simplified - assume position in registers)
+        ld      iy, 0
+        add     iy, sp
+        ld      e, (iy+10)
+        ld      d, (iy+11)
+
+        ld      (write_buffer), de
+        push    bc
+        pop     hl
+        ld      (write_size), hl
+
+        ld      a, (iy+8)
+        cp      MAX_FILES
+        jp      nc, write_at_error
+
+        call    get_efcb_ptr
+
+        ; Calculate sector
+        ld      l, (iy+10)
+        ld      h, (iy+11)
+        srl     h
+        rr      l
+        srl     h
+        rr      l
+        srl     h
+        rr      l
+        srl     h
+        rr      l
+        srl     h
+        rr      l
+        srl     h
+        rr      l
+        srl     h
+        rr      l
+
+        ; Set random record
+        push    ix
+        pop     de
+        ld      bc, FCB_R0
+        ex      de, hl
+        add     hl, bc
+        ld      (hl), e
+        inc     hl
+        ld      (hl), d
+        inc     hl
+        ld      (hl), 0
+
+        ; Copy user data to buffer
+        ld      hl, (write_buffer)
+        push    ix
+        pop     de
+        ld      bc, EFCB_BUFFER
+        ex      de, hl
+        add     hl, bc
+        ex      de, hl
+        ld      bc, (write_size)
+        ldir
+
+        ; Set DMA
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUFFER
+        add     hl, bc
+        ex      de, hl
+        ld      c, BDOS_SET_DMA
+        call    BDOS
+
+        ; Write random record
+        push    ix
+        pop     de
+        ld      c, BDOS_WRITE_RANDOM
+        call    BDOS
+
+        or      a
+        jr      nz, write_at_error
+
+        ld      hl, (write_size)
+        pop     iy
+        pop     ix
+        ret
+
+write_at_error:
+        ld      hl, -1
+        pop     iy
+        pop     ix
+        ret
+
+;----------------------------------------------------------------------
+; _file_eof: Check for end of file
+; Input:  HL = handle
+; Output: HL = 1 if EOF, 0 otherwise
+;----------------------------------------------------------------------
+_file_eof:
+        push    ix
+
+        ld      a, l
+        cp      MAX_FILES
+        jr      nc, eof_true
+
+        call    get_efcb_ptr
+
+        ; Check EOF flag
+        push    ix
+        pop     hl
+        ld      bc, EFCB_EOF
+        add     hl, bc
+        ld      a, (hl)
+        or      a
+        jr      nz, eof_true
+
+        ld      hl, 0
+        pop     ix
+        ret
+
+eof_true:
+        ld      hl, 1
+        pop     ix
+        ret
+
+;----------------------------------------------------------------------
+; _file_size: Get file size in bytes
+; Input:  HL = handle
+; Output: HL = size (limited to 16-bit)
+;----------------------------------------------------------------------
+_file_size:
+        push    bc
+        push    de
+        push    ix
+
+        ld      a, l
+        cp      MAX_FILES
+        jr      nc, size_error
+
+        call    get_efcb_ptr
+
+        ; Compute file size
+        push    ix
+        pop     de
+        ld      c, BDOS_COMPUTE_SIZE
+        call    BDOS
+
+        ; Size is in R0-R2 as record count (128 bytes each)
+        push    ix
+        pop     hl
+        ld      bc, FCB_R0
+        add     hl, bc
+        ld      e, (hl)
+        inc     hl
+        ld      d, (hl)             ; DE = record count
+
+        ; Multiply by 128 (shift left 7)
+        ex      de, hl
+        add     hl, hl              ; *2
+        add     hl, hl              ; *4
+        add     hl, hl              ; *8
+        add     hl, hl              ; *16
+        add     hl, hl              ; *32
+        add     hl, hl              ; *64
+        add     hl, hl              ; *128
+
+        pop     ix
+        pop     de
+        pop     bc
+        ret
+
+size_error:
+        ld      hl, 0
+        pop     ix
+        pop     de
+        pop     bc
+        ret
+
+;----------------------------------------------------------------------
+; _file_delete: Delete a file by filename
+; Input:  HL = pointer to filename (null-terminated)
+;----------------------------------------------------------------------
+_file_delete:
+        push    bc
+        push    de
+
+        ; Use temporary FCB
+        ld      de, temp_fcb
+        call    parse_filename
+
+        ; Delete file
+        ld      de, temp_fcb
+        ld      c, BDOS_DELETE_FILE
+        call    BDOS
+
+        pop     de
+        pop     bc
+        ret
+
+;----------------------------------------------------------------------
+; _file_delete_handle: Delete a file by handle (close and delete)
+; Input:  HL = file handle
+; Note: File must be open. This closes and deletes it.
+;----------------------------------------------------------------------
+        PUBLIC  _file_delete_handle
+_file_delete_handle:
+        push    bc
+        push    de
+        push    ix
+        push    hl                  ; Save handle
+
+        ; Validate handle
+        ld      a, l
+        cp      MAX_FILES
+        jr      nc, del_handle_done
+
+        ; Get EFCB pointer (handle in HL)
+        call    get_efcb_ptr        ; IX = EFCB
+
+        ; Close the file first
+        push    ix
+        pop     de
+        ld      c, BDOS_CLOSE_FILE
+        call    BDOS
+
+        ; Mark slot as not in use
+        pop     hl                  ; Restore handle
+        push    hl                  ; Save it again
+        ld      de, file_in_use
+        ld      a, l
+        ld      c, a
+        ld      b, 0
+        ex      de, hl
+        add     hl, bc
+        ld      (hl), 0             ; Mark as free
+
+        ; Delete the file using the FCB
+        pop     hl                  ; Restore handle
+        push    hl                  ; Save it again
+        call    get_efcb_ptr        ; IX = EFCB
+        push    ix
+        pop     de                  ; DE = FCB pointer
+        ld      c, BDOS_DELETE_FILE
+        call    BDOS
+
+del_handle_done:
+        pop     hl                  ; Discard saved handle
+        pop     ix
+        pop     de
+        pop     bc
+        ret
+
+;----------------------------------------------------------------------
+; _file_reset: Reset file to beginning
+; Input:  HL = file handle
+; Rewinds file position to start (for reading from beginning again)
+;----------------------------------------------------------------------
+        PUBLIC  _file_reset
+_file_reset:
+        push    bc
+        push    de
+        push    ix
+
+        ; Validate handle
+        ld      a, l
+        cp      MAX_FILES
+        jr      nc, reset_done
+
+        ; Get EFCB pointer
+        call    get_efcb_ptr        ; IX = EFCB
+
+        ; Reset random record fields to 0 (bytes 33-35 of FCB)
+        push    ix
+        pop     hl
+        ld      bc, 33              ; Offset to r0 (random record)
+        add     hl, bc
+        xor     a
+        ld      (hl), a             ; r0 = 0
+        inc     hl
+        ld      (hl), a             ; r1 = 0
+        inc     hl
+        ld      (hl), a             ; r2 = 0
+
+        ; Also reset extent (byte 12) and CR (byte 32)
+        push    ix
+        pop     hl
+        ld      bc, 12              ; Offset to extent
+        add     hl, bc
+        xor     a
+        ld      (hl), a             ; Extent = 0
+
+        push    ix
+        pop     hl
+        ld      bc, 32              ; Offset to CR (current record)
+        add     hl, bc
+        xor     a
+        ld      (hl), a             ; CR = 0
+
+        ; Reset buffer position and length in our EFCB
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUF_POS
+        add     hl, bc
+        xor     a
+        ld      (hl), a             ; Buffer position = 0
+        inc     hl                  ; Point to BUF_LEN
+        ld      (hl), a             ; Buffer length = 0 (no valid data)
+
+reset_done:
+        pop     ix
+        pop     de
+        pop     bc
+        ret
+
+;----------------------------------------------------------------------
+; Helper: Find free FCB slot
+; Output: Carry clear if found, current_slot set
+;         Carry set if no free slot
+;----------------------------------------------------------------------
+find_free_fcb:
+        ld      hl, file_in_use
+        ld      b, MAX_FILES
+        xor     a
+        ld      c, a
+find_loop:
+        ld      a, (hl)
+        or      a
+        jr      z, found_slot
+        inc     hl
+        inc     c
+        djnz    find_loop
+        scf                         ; No free slot
+        ret
+found_slot:
+        ld      (hl), 1             ; Mark as in use
+        ld      a, c
+        ld      (current_slot), a
+        or      a                   ; Clear carry
+        ret
+
+;----------------------------------------------------------------------
+; Helper: Get EFCB pointer from handle in A
+; Output: IX = EFCB pointer
+;----------------------------------------------------------------------
+get_efcb_ptr:
+        ld      (current_slot), a
+        ld      ix, file_fcbs
+        or      a
+        ret     z                   ; Slot 0, IX already correct
+
+        ; Calculate offset
+        ld      b, a
+        ld      de, EFCB_SIZE
+get_ptr_loop:
+        add     ix, de
+        djnz    get_ptr_loop
+        ret
+
+;----------------------------------------------------------------------
+; Helper: Multiply BC by current_slot, add to file_fcbs base
+; Input:  BC = EFCB_SIZE
+; Output: IX = file_fcbs + (current_slot * BC)
+;----------------------------------------------------------------------
+bc_mult_ix:
+        ld      a, (current_slot)
+        ld      ix, file_fcbs
+        or      a
+        ret     z
+
+        ld      b, a
+bc_mult_loop:
+        push    bc
+        ld      bc, EFCB_SIZE
+        add     ix, bc
+        pop     bc
+        djnz    bc_mult_loop
+        ret
+
+;----------------------------------------------------------------------
+; Helper: Parse filename into FCB
+; Input:  HL = null-terminated filename
+;         DE = FCB pointer
+;----------------------------------------------------------------------
+parse_filename:
+        push    bc
+        push    de
+        push    hl
+
+        ; Clear FCB name and type
+        push    de
+        inc     de                  ; Skip drive byte
+        ld      b, 11
+        ld      a, ' '
+clear_name:
+        ld      (de), a
+        inc     de
+        djnz    clear_name
+        pop     de
+
+        ; Check for drive letter
+        pop     hl
+        push    hl
+        inc     hl
+        ld      a, (hl)
+        cp      ':'
+        dec     hl
+        jr      nz, no_drive
+
+        ; Extract drive
+        ld      a, (hl)
+        and     0xDF                ; Uppercase
+        sub     'A' - 1             ; A=1, B=2, etc
+        ld      (de), a
+        inc     hl
+        inc     hl                  ; Skip "X:"
+        jr      parse_name
+
+no_drive:
+        xor     a
+        ld      (de), a             ; Default drive
+
+parse_name:
+        ; Copy filename (up to 8 chars)
+        inc     de                  ; Point to name field
+        ld      b, 8
+copy_name:
+        ld      a, (hl)
+        or      a
+        jr      z, name_done
+        cp      '.'
+        jr      z, parse_ext
+        and     0xDF                ; Uppercase
+        ld      (de), a
+        inc     hl
+        inc     de
+        djnz    copy_name
+
+        ; Skip to extension
+skip_to_ext:
+        ld      a, (hl)
+        or      a
+        jr      z, name_done
+        cp      '.'
+        jr      z, parse_ext
+        inc     hl
+        jr      skip_to_ext
+
+parse_ext:
+        ; Position DE at type field
+        pop     hl
+        pop     de
+        push    de
+        push    hl
+        push    de
+        pop     hl
+        ld      bc, FCB_TYPE
+        add     hl, bc
+        ex      de, hl
+
+        ; Find '.' in source
+        pop     hl
+        push    hl
+find_dot:
+        ld      a, (hl)
+        or      a
+        jr      z, name_done
+        cp      '.'
+        jr      z, found_dot
+        inc     hl
+        jr      find_dot
+
+found_dot:
+        inc     hl                  ; Skip '.'
+        ld      b, 3
+copy_ext:
+        ld      a, (hl)
+        or      a
+        jr      z, name_done
+        and     0xDF                ; Uppercase
+        ld      (de), a
+        inc     hl
+        inc     de
+        djnz    copy_ext
+
+name_done:
+        pop     hl
+        pop     de
+        pop     bc
+        ret
+
+;----------------------------------------------------------------------
+; Helper: Read next sector into buffer
+; Input:  IX = EFCB pointer
+; Output: Carry set if EOF/error
+;----------------------------------------------------------------------
+read_sector:
+        push    bc
+        push    de
+        push    hl
+
+        ; Set DMA to our buffer
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUFFER
+        add     hl, bc
+        ex      de, hl
+        ld      c, BDOS_SET_DMA
+        call    BDOS
+
+        ; Read sequential
+        push    ix
+        pop     de
+        ld      c, BDOS_READ_SEQ
+        call    BDOS
+
+        or      a
+        jr      z, read_sect_ok
+
+        ; EOF or error
+        push    ix
+        pop     hl
+        ld      bc, EFCB_EOF
+        add     hl, bc
+        ld      (hl), 1
+        scf
+
+        pop     hl
+        pop     de
+        pop     bc
+        ret
+
+read_sect_ok:
+        or      a                   ; Clear carry
+        pop     hl
+        pop     de
+        pop     bc
+        ret
+
+;----------------------------------------------------------------------
+; Helper: Flush buffer to disk
+; Input:  IX = EFCB pointer
+;----------------------------------------------------------------------
+flush_buffer:
+        push    bc
+        push    de
+        push    hl
+
+        ; Pad remainder with 0x1A (CP/M EOF)
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUF_POS
+        add     hl, bc
+        ld      a, (hl)             ; A = bytes in buffer
+        cp      128
+        jr      nc, flush_no_pad
+
+        ; Pad with EOF marker
+        ld      b, a                ; B = position
+        ld      a, 128
+        sub     b                   ; A = bytes to pad
+        ld      c, a
+        push    ix
+        pop     hl
+        ld      de, EFCB_BUFFER
+        add     hl, de
+        ld      e, b
+        ld      d, 0
+        add     hl, de              ; HL = buffer + position
+        ld      a, 0x1A
+pad_loop:
+        ld      (hl), a
+        inc     hl
+        dec     c
+        jr      nz, pad_loop
+
+flush_no_pad:
+        ; Set DMA
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUFFER
+        add     hl, bc
+        ex      de, hl
+        ld      c, BDOS_SET_DMA
+        call    BDOS
+
+        ; Write sequential
+        push    ix
+        pop     de
+        ld      c, BDOS_WRITE_SEQ
+        call    BDOS
+
+        ; Reset buffer position
+        push    ix
+        pop     hl
+        ld      bc, EFCB_BUF_POS
+        add     hl, bc
+        ld      (hl), 0
+
+        pop     hl
+        pop     de
+        pop     bc
+        ret
+
+;----------------------------------------------------------------------
+; Data section
+;----------------------------------------------------------------------
+        DSEG
+
+file_in_use:    DS      MAX_FILES       ; Flags for file slots in use
+current_slot:   DS      1               ; Current slot being processed
+
+; Extended FCBs for each file handle
+file_fcbs:      DS      EFCB_SIZE * MAX_FILES
+
+; Temporary FCB for delete operations
+temp_fcb:       DS      FCB_SIZE
+
+; I/O state variables
+read_buffer:    DS      2
+read_size:      DS      2
+bytes_read:     DS      2
+write_buffer:   DS      2
+write_size:     DS      2
+bytes_written:  DS      2
+
+        END

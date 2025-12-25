@@ -181,6 +181,7 @@ class EnumerationType(AdaType):
     literals: list[str] = field(default_factory=list)
     # Position values (usually 0, 1, 2, ... but can be customized via rep clause)
     positions: dict[str, int] = field(default_factory=dict)
+    base_type: Optional["EnumerationType"] = None  # For derived enumeration types
 
     def __post_init__(self) -> None:
         self.kind = TypeKind.ENUMERATION
@@ -295,6 +296,7 @@ class ArrayType(AdaType):
     is_constrained: bool = True
     # For constrained arrays, the bounds
     bounds: list[tuple[int, int]] = field(default_factory=list)
+    base_type: Optional["ArrayType"] = None  # For derived array types
 
     def __post_init__(self) -> None:
         self.kind = TypeKind.ARRAY
@@ -344,6 +346,9 @@ class RecordComponent:
     # For discriminants: constraint information
     is_discriminant: bool = False
     discriminant_constraint: Optional[DiscriminantConstraint] = None
+    # Atomic/volatile component attributes (pragma Atomic_Components, etc.)
+    is_atomic: bool = False
+    is_volatile: bool = False
 
 
 @dataclass
@@ -443,18 +448,56 @@ class RecordType(AdaType):
         if self.size_bits == 0:
             self.size_bits = self._compute_size()
 
+    def _packed_size(self, comp_type: AdaType) -> int:
+        """Get the minimum number of bits needed to store a component when packed.
+
+        For packed records:
+        - Boolean needs only 1 bit
+        - Small enumerations need log2(count) bits
+        - Other types keep their natural size
+        """
+        if isinstance(comp_type, EnumerationType):
+            count = len(comp_type.literals)
+            if count == 2:  # Boolean or two-literal enum
+                return 1
+            elif count <= 4:
+                return 2
+            elif count <= 8:
+                return 3
+            elif count <= 16:
+                return 4
+            elif count <= 32:
+                return 5
+            elif count <= 64:
+                return 6
+            elif count <= 128:
+                return 7
+            # Larger enums stay at their natural size
+        return comp_type.size_bits
+
     def _compute_size(self) -> int:
         """Compute record size based on components.
 
         For variant records, size is computed as discriminants + common components +
         maximum variant size (all variants occupy the same space).
+
+        When is_packed is True:
+        - Boolean fields are packed to 1 bit
+        - Small enumerations are packed to minimum bits
+        - Larger fields (8+ bits) are aligned to byte boundaries for efficiency
+        - This avoids expensive unaligned 16-bit access on Z80
         """
         total_bits = 0
+
+        # For derived types, start after the parent type's components
+        if self.parent_type:
+            total_bits = self.parent_type.size_bits
         # Tagged types have a hidden tag field (pointer to vtable)
-        if self.is_tagged and not self.is_class_wide:
+        # Only add if this is a root tagged type (no parent)
+        elif self.is_tagged and not self.is_class_wide:
             total_bits = 16  # Tag is 16-bit pointer on Z80
 
-        # Add discriminants
+        # Add discriminants (always byte-aligned)
         for disc in self.discriminants:
             if total_bits % 8 != 0:
                 total_bits = ((total_bits + 7) // 8) * 8
@@ -463,22 +506,53 @@ class RecordType(AdaType):
 
         # Add common components
         for comp in self.components:
-            if total_bits % 8 != 0:
-                total_bits = ((total_bits + 7) // 8) * 8
-            comp.offset_bits = total_bits
-            total_bits += comp.component_type.size_bits
+            if self.is_packed:
+                packed_size = self._packed_size(comp.component_type)
+                if packed_size < 8:
+                    # Pack small fields at bit level
+                    comp.offset_bits = total_bits
+                    # Override component size for packed access
+                    comp.size_bits = packed_size
+                    total_bits += packed_size
+                else:
+                    # Align to byte boundary for larger fields
+                    if total_bits % 8 != 0:
+                        total_bits = ((total_bits + 7) // 8) * 8
+                    comp.offset_bits = total_bits
+                    total_bits += comp.component_type.size_bits
+            else:
+                # Non-packed: align to byte boundary
+                if total_bits % 8 != 0:
+                    total_bits = ((total_bits + 7) // 8) * 8
+                comp.offset_bits = total_bits
+                total_bits += comp.component_type.size_bits
 
         # Add variant part (size = max of all variants)
         if self.variant_part:
+            # Align variant start to byte boundary
+            if total_bits % 8 != 0:
+                total_bits = ((total_bits + 7) // 8) * 8
             variant_start = total_bits
             max_variant_size = 0
             for variant in self.variant_part.variants:
                 variant_size = 0
                 for comp in variant.components:
-                    if variant_size % 8 != 0:
-                        variant_size = ((variant_size + 7) // 8) * 8
-                    comp.offset_bits = variant_start + variant_size
-                    variant_size += comp.component_type.size_bits
+                    if self.is_packed:
+                        packed_size = self._packed_size(comp.component_type)
+                        if packed_size < 8:
+                            comp.offset_bits = variant_start + variant_size
+                            comp.size_bits = packed_size
+                            variant_size += packed_size
+                        else:
+                            if variant_size % 8 != 0:
+                                variant_size = ((variant_size + 7) // 8) * 8
+                            comp.offset_bits = variant_start + variant_size
+                            variant_size += comp.component_type.size_bits
+                    else:
+                        if variant_size % 8 != 0:
+                            variant_size = ((variant_size + 7) // 8) * 8
+                        comp.offset_bits = variant_start + variant_size
+                        variant_size += comp.component_type.size_bits
                 if variant_size > max_variant_size:
                     max_variant_size = variant_size
             total_bits += max_variant_size
@@ -873,6 +947,26 @@ def create_predefined_types() -> dict[str, AdaType]:
         is_constrained=False,
     )
 
+    # Wide_Wide_Character type (32-bit full Unicode)
+    # Note: We don't enumerate all 1.1M code points - just define the type
+    types["Wide_Wide_Character"] = EnumerationType(
+        name="Wide_Wide_Character",
+        kind=TypeKind.ENUMERATION,
+        size_bits=32,
+        literals=[],  # Too many to enumerate (0..16#10FFFF#)
+        positions={},
+    )
+
+    # Wide_Wide_String type (unconstrained array of Wide_Wide_Character)
+    types["Wide_Wide_String"] = ArrayType(
+        name="Wide_Wide_String",
+        kind=TypeKind.ARRAY,
+        size_bits=0,  # Unconstrained
+        index_types=[types["Positive"]],  # type: ignore
+        component_type=types["Wide_Wide_Character"],
+        is_constrained=False,
+    )
+
     # Universal_Integer (compile-time integer, unlimited precision)
     types["Universal_Integer"] = AdaType(
         name="Universal_Integer",
@@ -893,6 +987,22 @@ def create_predefined_types() -> dict[str, AdaType]:
         kind=TypeKind.FLOAT,
         size_bits=32,
         digits=6,  # Standard single precision
+    )
+
+    # Long_Float type (double precision floating point - 64-bit IEEE 754)
+    types["Long_Float"] = FloatType(
+        name="Long_Float",
+        kind=TypeKind.FLOAT,
+        size_bits=64,
+        digits=15,  # Standard double precision
+    )
+
+    # Long_Long_Float type (extended precision - same as Long_Float on Z80)
+    types["Long_Long_Float"] = FloatType(
+        name="Long_Long_Float",
+        kind=TypeKind.FLOAT,
+        size_bits=64,
+        digits=15,  # Same as Long_Float on Z80
     )
 
     # Duration type (fixed point for time intervals)
@@ -932,6 +1042,10 @@ def get_root_type(t: AdaType) -> AdaType:
     """Get the root (base) type of a subtype chain."""
     if isinstance(t, IntegerType) and t.base_type:
         return get_root_type(t.base_type)
+    if isinstance(t, EnumerationType) and t.base_type:
+        return get_root_type(t.base_type)
+    if isinstance(t, ArrayType) and t.base_type:
+        return get_root_type(t.base_type)
     return t
 
 
@@ -942,6 +1056,14 @@ def is_subtype_of(subtype: AdaType, parent: AdaType) -> bool:
 
     # Check base type chain for integer subtypes
     if isinstance(subtype, IntegerType) and subtype.base_type:
+        return is_subtype_of(subtype.base_type, parent)
+
+    # Check base type chain for enumeration subtypes
+    if isinstance(subtype, EnumerationType) and subtype.base_type:
+        return is_subtype_of(subtype.base_type, parent)
+
+    # Check base type chain for array subtypes
+    if isinstance(subtype, ArrayType) and subtype.base_type:
         return is_subtype_of(subtype.base_type, parent)
 
     return False
@@ -978,12 +1100,15 @@ def types_compatible(t1: AdaType, t2: AdaType) -> bool:
     if same_base_type(t1, t2):
         return True
 
-    # Universal_Integer is compatible with integer/modular types only
+    # Universal_Integer is compatible with numeric types
+    # In Ada, integer literals can initialize/assign to any numeric type (including Float)
     if t1.kind == TypeKind.UNIVERSAL_INTEGER:
-        if t2.kind in (TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.UNIVERSAL_INTEGER):
+        if t2.kind in (TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.UNIVERSAL_INTEGER,
+                       TypeKind.FLOAT, TypeKind.FIXED, TypeKind.UNIVERSAL_REAL):
             return True
     if t2.kind == TypeKind.UNIVERSAL_INTEGER:
-        if t1.kind in (TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.UNIVERSAL_INTEGER):
+        if t1.kind in (TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.UNIVERSAL_INTEGER,
+                       TypeKind.FLOAT, TypeKind.FIXED, TypeKind.UNIVERSAL_REAL):
             return True
 
     # Universal_Real is compatible with float/fixed types
@@ -1020,6 +1145,24 @@ def types_compatible(t1: AdaType, t2: AdaType) -> bool:
     if is_subtype_of(t1, t2) or is_subtype_of(t2, t1):
         return True
 
+    # String literal compatibility: String is compatible with array-of-character types
+    # In Ada, a string literal can be assigned to any array whose component type
+    # is Character or a type derived from Character.
+    if isinstance(t1, ArrayType) and isinstance(t2, ArrayType):
+        if t1.name == "String" or t2.name == "String":
+            # Check if the other type's component is Character or derived from Character
+            other = t2 if t1.name == "String" else t1
+            comp = other.component_type
+            if comp:
+                # Direct Character type
+                if getattr(comp, 'name', None) == 'Character':
+                    return True
+                # Derived from Character (check base_type chain)
+                while hasattr(comp, 'base_type') and comp.base_type:
+                    if getattr(comp.base_type, 'name', None) == 'Character':
+                        return True
+                    comp = comp.base_type
+
     return False
 
 
@@ -1052,9 +1195,53 @@ def can_convert(from_type: AdaType, to_type: AdaType) -> bool:
     if from_type.kind == TypeKind.UNIVERSAL_REAL and to_type.is_numeric():
         return True
 
-    # Enumeration types are not convertible to each other (except via Pos/Val)
+    # Derived types: conversion between a type and its parent/ancestor is allowed
+    # Check if from_type is derived from to_type or vice versa
+    if hasattr(from_type, 'base_type') and from_type.base_type:
+        if same_type(from_type.base_type, to_type):
+            return True
+        # Check ancestor chain
+        ancestor = from_type.base_type
+        while hasattr(ancestor, 'base_type') and ancestor.base_type:
+            if same_type(ancestor, to_type) or same_type(ancestor.base_type, to_type):
+                return True
+            ancestor = ancestor.base_type
+
+    if hasattr(to_type, 'base_type') and to_type.base_type:
+        if same_type(to_type.base_type, from_type):
+            return True
+        # Check ancestor chain
+        ancestor = to_type.base_type
+        while hasattr(ancestor, 'base_type') and ancestor.base_type:
+            if same_type(ancestor, from_type) or same_type(ancestor.base_type, from_type):
+                return True
+            ancestor = ancestor.base_type
+
+    # Enumeration types that aren't related via derivation are not convertible
     if from_type.kind == TypeKind.ENUMERATION and to_type.kind == TypeKind.ENUMERATION:
         return False
+
+    # Array types: conversion is allowed if they have same component type
+    # and convertible index types (Ada RM 4.6)
+    if from_type.kind == TypeKind.ARRAY and to_type.kind == TypeKind.ARRAY:
+        if isinstance(from_type, ArrayType) and isinstance(to_type, ArrayType):
+            # Check component types are the same
+            if from_type.component_type and to_type.component_type:
+                if same_type(from_type.component_type, to_type.component_type):
+                    # Check index types are convertible (same number of dimensions)
+                    if len(from_type.index_types) == len(to_type.index_types):
+                        return True
+
+    # Access types: conversion between related access types is allowed
+    if from_type.kind == TypeKind.ACCESS and to_type.kind == TypeKind.ACCESS:
+        if isinstance(from_type, AccessType) and isinstance(to_type, AccessType):
+            # Same designated type allows conversion
+            if from_type.designated_type and to_type.designated_type:
+                if same_type(from_type.designated_type, to_type.designated_type):
+                    return True
+                # Also check if designated types are convertible
+                if can_convert(from_type.designated_type, to_type.designated_type):
+                    return True
 
     return False
 
@@ -1068,11 +1255,18 @@ def common_type(t1: AdaType, t2: AdaType) -> Optional[AdaType]:
     if same_type(t1, t2):
         return t1
 
-    # Universal_Integer with discrete -> the discrete type
-    if t1.kind == TypeKind.UNIVERSAL_INTEGER and t2.is_discrete():
-        return t2
-    if t2.kind == TypeKind.UNIVERSAL_INTEGER and t1.is_discrete():
-        return t1
+    # Universal_Integer with numeric types -> the numeric type
+    # Integer literals can be used with any numeric type in Ada
+    if t1.kind == TypeKind.UNIVERSAL_INTEGER:
+        if t2.is_discrete():
+            return t2
+        if t2.kind in (TypeKind.FLOAT, TypeKind.FIXED):
+            return t2
+    if t2.kind == TypeKind.UNIVERSAL_INTEGER:
+        if t1.is_discrete():
+            return t1
+        if t1.kind in (TypeKind.FLOAT, TypeKind.FIXED):
+            return t1
 
     # Universal_Real with float/fixed -> the float/fixed type
     if t1.kind == TypeKind.UNIVERSAL_REAL:
@@ -1082,13 +1276,20 @@ def common_type(t1: AdaType, t2: AdaType) -> Optional[AdaType]:
         if t1.kind in (TypeKind.FLOAT, TypeKind.FIXED):
             return t1
 
-    # Universal_Integer with integer/modular -> the integer/modular type
-    if t1.kind == TypeKind.UNIVERSAL_INTEGER:
-        if t2.kind in (TypeKind.INTEGER, TypeKind.MODULAR):
-            return t2
-    if t2.kind == TypeKind.UNIVERSAL_INTEGER:
-        if t1.kind in (TypeKind.INTEGER, TypeKind.MODULAR):
-            return t1
+    # Integer * Universal_Real -> Universal_Real (for fixed-point context)
+    # This allows expressions like N * 0.0078125 where N is Integer
+    # Ada RM allows this when the result is used in a fixed-point context
+    if t1.kind == TypeKind.UNIVERSAL_REAL and t2.kind == TypeKind.INTEGER:
+        return t1  # Universal_Real
+    if t2.kind == TypeKind.UNIVERSAL_REAL and t1.kind == TypeKind.INTEGER:
+        return t2  # Universal_Real
+
+    # Universal_Integer * Universal_Real -> Universal_Real
+    # This allows expressions like 8 * 0.0078125 (both literals)
+    if t1.kind == TypeKind.UNIVERSAL_REAL and t2.kind == TypeKind.UNIVERSAL_INTEGER:
+        return t1  # Universal_Real
+    if t2.kind == TypeKind.UNIVERSAL_REAL and t1.kind == TypeKind.UNIVERSAL_INTEGER:
+        return t2  # Universal_Real
 
     # Subtype and base type -> base type
     if is_subtype_of(t1, t2):

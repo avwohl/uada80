@@ -302,12 +302,17 @@ class TestAlgebraicSimplifications:
         assert stmt.value.name == "X"
 
     def test_power_zero(self):
-        """Test x ** 0 = 1."""
+        """Test constant ** 0 = 1.
+
+        Note: x ** 0 where x is a variable is NOT folded because the optimizer
+        doesn't have type information. Folding it to IntegerLiteral(1) would be
+        wrong for Float64 types like Long_Float. Only fold when base is also constant.
+        """
         code = """
         procedure Test is
-            X, Y : Integer;
+            Y : Integer;
         begin
-            Y := X ** 0;
+            Y := 5 ** 0;  -- Constant base: will be folded to 1
         end Test;
         """
         stmt, stats = get_optimized_stmt(code)

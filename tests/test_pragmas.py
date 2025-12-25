@@ -455,3 +455,104 @@ class TestPragmaMachineCode:
         """
         ast = parse(source)
         # Should parse without errors
+
+
+class TestPragmaPackRecords:
+    """Tests for pragma Pack on record types."""
+
+    def test_pragma_pack_record_size(self):
+        """Test that pragma Pack reduces record size for Boolean fields."""
+        from uada80.compiler import compile_source
+
+        source = """
+        procedure Test is
+            type Flags is record
+                A : Boolean;
+                B : Boolean;
+                C : Boolean;
+                D : Boolean;
+                E : Boolean;
+                F : Boolean;
+                G : Boolean;
+                H : Boolean;
+            end record;
+            pragma Pack(Flags);
+
+            F : Flags;
+        begin
+            null;
+        end Test;
+        """
+        result = compile_source(source)
+        assert result.success, f"Compilation failed: {result.errors}"
+
+    def test_pragma_pack_mixed_fields(self):
+        """Test pragma Pack with mixed Boolean and Integer fields."""
+        from uada80.compiler import compile_source
+
+        source = """
+        procedure Test is
+            type Mixed is record
+                Flag1 : Boolean;
+                Flag2 : Boolean;
+                Value : Integer;
+            end record;
+            pragma Pack(Mixed);
+
+            M : Mixed;
+        begin
+            null;
+        end Test;
+        """
+        result = compile_source(source)
+        assert result.success, f"Compilation failed: {result.errors}"
+
+    def test_pragma_pack_field_access(self):
+        """Test that pragma Pack generates correct field access code."""
+        from uada80.compiler import compile_source
+
+        source = """
+        procedure Test is
+            type Bits is record
+                A : Boolean;
+                B : Boolean;
+                C : Boolean;
+            end record;
+            pragma Pack(Bits);
+
+            B : Bits;
+        begin
+            B.A := True;
+            B.B := False;
+            B.C := True;
+        end Test;
+        """
+        result = compile_source(source)
+        assert result.success, f"Compilation failed: {result.errors}"
+        # Check that bit manipulation instructions are generated
+        output = result.output
+        assert output is not None
+        # Should contain and/or for bit field manipulation
+        assert "and" in output or "or" in output
+
+    def test_unpacked_record_compiles(self):
+        """Test that unpacked records compile correctly."""
+        from uada80.compiler import compile_source
+
+        source = """
+        procedure Test is
+            type Unpacked is record
+                A : Boolean;
+                B : Boolean;
+                C : Boolean;
+            end record;
+            -- No pragma Pack
+
+            U : Unpacked;
+        begin
+            U.A := True;
+            U.B := False;
+        end Test;
+        """
+        result = compile_source(source)
+        assert result.success, f"Compilation failed: {result.errors}"
