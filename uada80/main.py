@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from uada80 import __version__
-from uada80.compiler import Compiler, OutputFormat, compile_file
+from uada80.compiler import Compiler, OutputFormat
 
 
 def main():
@@ -19,8 +19,8 @@ def main():
 
     parser.add_argument(
         "source",
-        nargs="?",
-        help="Ada source file to compile",
+        nargs="*",
+        help="Ada source file(s) to compile (multiple files compiled together)",
     )
 
     parser.add_argument(
@@ -76,9 +76,12 @@ def main():
     optimize = not args.no_optimize
     compiler = Compiler(output_format=output_format, debug=args.debug, optimize=optimize)
 
-    # Compile
-    source_path = Path(args.source)
-    result = compiler.compile_file(source_path)
+    # Compile (single or multiple files)
+    source_paths = [Path(s) for s in args.source]
+    if len(source_paths) == 1:
+        result = compiler.compile_file(source_paths[0])
+    else:
+        result = compiler.compile_files(source_paths)
 
     # Handle errors
     if result.has_errors:

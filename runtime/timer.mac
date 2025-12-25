@@ -1,0 +1,212 @@
+; Ada.Calendar timer runtime for Z80
+; Provides tick counter and day counter for time operations
+;
+; This module provides:
+; - _get_ticks: Get current tick count (within current day)
+; - _get_days: Get days since epoch
+; - _timer_init: Initialize timer system
+; - _timer_isr: Interrupt service routine for tick counting
+;
+; The timer increments at 50Hz (typical Z80 interrupt rate)
+; Each day = 4,320,000 ticks (86400 * 50)
+
+        .Z80
+
+        CSEG
+
+        PUBLIC  _get_ticks
+        PUBLIC  _get_days
+        PUBLIC  _timer_init
+        PUBLIC  _timer_isr
+        PUBLIC  _delay_ms
+
+; Constants
+TICKS_PER_SECOND    EQU     50
+TICKS_PER_DAY_LOW   EQU     00H         ; 4,320,000 = 0x41EB00 (low byte)
+TICKS_PER_DAY_MID   EQU     0EBH        ; (mid byte)
+TICKS_PER_DAY_HIGH  EQU     41H         ; (high byte)
+
+; ============================================================
+; _timer_init - Initialize timer system
+; Input: None
+; Output: None
+; Destroys: A
+; ============================================================
+_timer_init:
+        ; Clear tick counter (24-bit)
+        XOR     A
+        LD      (tick_count),A
+        LD      (tick_count+1),A
+        LD      (tick_count+2),A
+
+        ; Clear day counter (16-bit)
+        LD      (day_count),A
+        LD      (day_count+1),A
+
+        RET
+
+; ============================================================
+; _timer_isr - Timer interrupt service routine
+; Call this from your system's timer/vsync interrupt at 50Hz
+; Input: None
+; Output: None
+; Destroys: None (all registers preserved)
+; ============================================================
+_timer_isr:
+        PUSH    AF
+        PUSH    HL
+        PUSH    DE
+
+        ; Increment 24-bit tick counter
+        LD      HL,(tick_count)
+        LD      A,(tick_count+2)
+        LD      D,A
+
+        INC     HL
+        LD      A,H
+        OR      L
+        JR      NZ,isr_no_overflow
+        INC     D
+
+isr_no_overflow:
+        ; Store updated counter
+        LD      (tick_count),HL
+        LD      A,D
+        LD      (tick_count+2),A
+
+        ; Check if we've reached a full day
+        ; Compare tick_count with TICKS_PER_DAY (4,320,000)
+        LD      A,L
+        CP      TICKS_PER_DAY_LOW
+        JR      NZ,isr_no_day
+        LD      A,H
+        CP      TICKS_PER_DAY_MID
+        JR      NZ,isr_no_day
+        LD      A,D
+        CP      TICKS_PER_DAY_HIGH
+        JR      NZ,isr_no_day
+
+        ; Day rollover - reset ticks, increment day
+        XOR     A
+        LD      (tick_count),A
+        LD      (tick_count+1),A
+        LD      (tick_count+2),A
+
+        ; Increment day counter
+        LD      HL,(day_count)
+        INC     HL
+        LD      (day_count),HL
+
+isr_no_day:
+        POP     DE
+        POP     HL
+        POP     AF
+        RET
+
+; ============================================================
+; _get_ticks - Get current tick count as seconds since midnight
+; Input: None
+; Output: HL = seconds since midnight (0-86399)
+; Note: Returns ticks / TICKS_PER_SECOND
+; ============================================================
+_get_ticks:
+        ; Load 24-bit tick count
+        LD      HL,(tick_count)
+        LD      A,(tick_count+2)
+        LD      D,A
+
+        ; Divide by 50 to get seconds
+        ; Use repeated subtraction for simplicity on Z80
+        ; Result in BC
+        LD      BC,0            ; Quotient
+
+gt_div_loop:
+        ; Check if tick_count >= 50
+        LD      A,L
+        SUB     50
+        JR      NC,gt_can_sub
+
+        ; Check high bytes
+        LD      A,H
+        OR      D
+        JR      Z,gt_div_done   ; tick_count < 50, done
+
+        ; tick_count >= 256, can subtract
+        LD      A,L
+        SUB     50
+
+gt_can_sub:
+        ; Subtract 50 from tick count (DHL)
+        LD      L,A
+        JR      NC,gt_no_borrow
+        DEC     H
+        LD      A,H
+        CP      0FFH
+        JR      NZ,gt_no_borrow
+        DEC     D
+
+gt_no_borrow:
+        ; Increment quotient
+        INC     BC
+        JR      gt_div_loop
+
+gt_div_done:
+        ; Return seconds in HL
+        LD      H,B
+        LD      L,C
+        RET
+
+; ============================================================
+; _get_days - Get days since epoch
+; Input: None
+; Output: HL = day count
+; ============================================================
+_get_days:
+        LD      HL,(day_count)
+        RET
+
+; ============================================================
+; _delay_ms - Delay for specified milliseconds
+; Input: HL = milliseconds to delay
+; Output: None
+; Note: Busy-wait implementation
+; ============================================================
+_delay_ms:
+        ; Each ms at 4MHz is ~4000 cycles
+        ; Inner loop takes ~17 cycles
+        ; So we need ~235 iterations per ms
+
+        LD      A,H
+        OR      L
+        RET     Z               ; Return if HL=0
+
+dm_ms_loop:
+        PUSH    HL
+        LD      B,235           ; Iterations per ms
+
+dm_inner_loop:
+        ; ~17 cycles per iteration
+        NOP                     ; 4 cycles
+        NOP                     ; 4 cycles
+        DJNZ    dm_inner_loop   ; 13 cycles (8 if not taken)
+
+        POP     HL
+        DEC     HL
+        LD      A,H
+        OR      L
+        JR      NZ,dm_ms_loop
+
+        RET
+
+; ============================================================
+; Data section
+; ============================================================
+        DSEG
+
+tick_count:
+        DS      3               ; 24-bit tick counter (ticks within day)
+
+day_count:
+        DS      2               ; 16-bit day counter (days since epoch)
+
+        END

@@ -1,0 +1,2859 @@
+; Minimal Ada Runtime Library for UADA80
+; Assembled with um80 (.Z80 mode)
+;
+; This provides the minimal runtime routines needed for basic Ada programs.
+; More complex programs may need additional runtime support.
+
+    .Z80
+
+    CSEG
+
+; ============================================================
+; _fin_pop_scope - Pop finalization scope
+; For simple programs without controlled types, this is a no-op.
+; Input: None
+; Output: None
+; Destroys: None
+; ============================================================
+    PUBLIC _fin_pop_scope
+_fin_pop_scope:
+    RET
+
+; ============================================================
+; _fin_push_scope - Push finalization scope
+; For simple programs without controlled types, this is a no-op.
+; Input: None
+; Output: None
+; Destroys: None
+; ============================================================
+    PUBLIC _fin_push_scope
+_fin_push_scope:
+    RET
+
+; ============================================================
+; _mul16 - 16-bit signed multiplication
+; Input: HL = multiplicand, DE = multiplier
+; Output: HL = product (low 16 bits)
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _mul16
+_mul16:
+    ; Simple shift-and-add multiplication
+    ; HL = HL * DE
+
+    PUSH BC
+
+    ; Handle sign
+    LD A, H
+    XOR D
+    PUSH AF             ; Save result sign
+
+    ; Make HL positive
+    BIT 7, H
+    JR Z, _mul16_hl_pos
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+_mul16_hl_pos:
+
+    ; Make DE positive
+    BIT 7, D
+    JR Z, _mul16_de_pos
+    LD A, E
+    CPL
+    LD E, A
+    LD A, D
+    CPL
+    LD D, A
+    INC DE
+_mul16_de_pos:
+
+    ; Now multiply unsigned: BC = HL * DE
+    LD B, H
+    LD C, L             ; BC = multiplicand
+    LD HL, 0            ; HL = result
+
+_mul16_loop:
+    ; Check if DE is zero
+    LD A, D
+    OR E
+    JR Z, _mul16_done
+
+    ; Check low bit of DE
+    BIT 0, E
+    JR Z, _mul16_skip
+    ADD HL, BC          ; Add multiplicand to result
+_mul16_skip:
+
+    ; Shift DE right
+    SRL D
+    RR E
+
+    ; Shift BC left
+    SLA C
+    RL B
+
+    JR _mul16_loop
+
+_mul16_done:
+    ; Apply sign
+    POP AF
+    BIT 7, A
+    JR Z, _mul16_ret
+
+    ; Negate result
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+
+_mul16_ret:
+    POP BC
+    RET
+
+; ============================================================
+; _div16 - 16-bit signed division
+; Input: HL = dividend, DE = divisor
+; Output: HL = quotient
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _div16
+_div16:
+    ; Check for division by zero
+    LD A, D
+    OR E
+    JR Z, _div16_zero
+
+    PUSH BC
+
+    ; Handle signs
+    LD A, H
+    XOR D
+    PUSH AF             ; Save result sign
+
+    ; Make HL positive
+    BIT 7, H
+    JR Z, _div16_hl_pos
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+_div16_hl_pos:
+
+    ; Make DE positive
+    BIT 7, D
+    JR Z, _div16_de_pos
+    LD A, E
+    CPL
+    LD E, A
+    LD A, D
+    CPL
+    LD D, A
+    INC DE
+_div16_de_pos:
+
+    ; Unsigned division
+    LD B, H
+    LD C, L             ; BC = dividend
+    LD HL, 0            ; HL = quotient
+
+    ; Count bits
+    LD A, 16
+_div16_loop:
+    ; Shift BC left into HL
+    SLA C
+    RL B
+    ADC HL, HL
+
+    ; Try to subtract DE from HL
+    OR A                ; Clear carry
+    SBC HL, DE
+    JR NC, _div16_sub_ok
+
+    ; Add back and set bit 0 of C to 0 (already 0 from shift)
+    ADD HL, DE
+    JR _div16_next
+
+_div16_sub_ok:
+    ; Set bit 0 of C to 1
+    SET 0, C
+
+_div16_next:
+    DEC A
+    JR NZ, _div16_loop
+
+    ; Result is in BC
+    LD H, B
+    LD L, C
+
+    ; Apply sign
+    POP AF
+    BIT 7, A
+    JR Z, _div16_ret
+
+    ; Negate result
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+
+_div16_ret:
+    POP BC
+    RET
+
+_div16_zero:
+    ; Division by zero - raise Constraint_Error
+    LD HL, 1                ; Constraint_Error = 1
+    LD (_exc_current), HL
+    LD HL, 0
+    LD (_exc_message), HL
+    JP _exc_do_raise
+
+; ============================================================
+; _mod16 - 16-bit signed modulo (remainder)
+; Input: HL = dividend, DE = divisor
+; Output: HL = remainder
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _mod16
+_mod16:
+    ; Check for division by zero
+    LD A, D
+    OR E
+    JR Z, _mod16_zero
+
+    PUSH BC
+
+    ; Save dividend sign for remainder
+    LD A, H
+    PUSH AF
+
+    ; Make HL positive
+    BIT 7, H
+    JR Z, _mod16_hl_pos
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+_mod16_hl_pos:
+
+    ; Make DE positive
+    BIT 7, D
+    JR Z, _mod16_de_pos
+    LD A, E
+    CPL
+    LD E, A
+    LD A, D
+    CPL
+    LD D, A
+    INC DE
+_mod16_de_pos:
+
+    ; Unsigned division - we want remainder
+    LD B, H
+    LD C, L             ; BC = dividend
+    LD HL, 0            ; HL = remainder
+
+    LD A, 16
+_mod16_loop:
+    ; Shift BC left into HL
+    SLA C
+    RL B
+    ADC HL, HL
+
+    ; Try to subtract DE from HL
+    OR A
+    SBC HL, DE
+    JR NC, _mod16_sub_ok
+
+    ; Add back
+    ADD HL, DE
+    JR _mod16_next
+
+_mod16_sub_ok:
+    SET 0, C
+
+_mod16_next:
+    DEC A
+    JR NZ, _mod16_loop
+
+    ; HL now contains remainder
+    ; Apply dividend's sign to remainder
+    POP AF
+    BIT 7, A
+    JR Z, _mod16_ret
+
+    ; Negate result
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+
+_mod16_ret:
+    POP BC
+    RET
+
+_mod16_zero:
+    ; Division by zero - raise Constraint_Error
+    LD HL, 1                ; Constraint_Error = 1
+    LD (_exc_current), HL
+    LD HL, 0
+    LD (_exc_message), HL
+    JP _exc_do_raise
+
+; ============================================================
+; _raise_constraint_error - Handle constraint error
+; Called when array bounds check fails or other constraint violation.
+; For CP/M, this halts the program with an error.
+; Input: None
+; Output: Does not return
+; Destroys: All
+; ============================================================
+    PUBLIC _raise_constraint_error
+_raise_constraint_error:
+    ; Print error message using BDOS
+    LD DE, _ce_msg
+    LD C, 9             ; BDOS print string
+    CALL 5
+
+    ; Exit to CP/M
+    JP 0                ; Warm boot
+
+_ce_msg:
+    DB 'Constraint_Error$'
+
+; ============================================================
+; _raise_program_error - Handle program error
+; Input: None
+; Output: Does not return
+; ============================================================
+    PUBLIC _raise_program_error
+_raise_program_error:
+    LD DE, _pe_msg
+    LD C, 9
+    CALL 5
+    JP 0
+
+_pe_msg:
+    DB 'Program_Error$'
+
+; ============================================================
+; _raise_storage_error - Handle storage error
+; Input: None
+; Output: Does not return
+; ============================================================
+    PUBLIC _raise_storage_error
+_raise_storage_error:
+    LD DE, _se_msg
+    LD C, 9
+    CALL 5
+    JP 0
+
+_se_msg:
+    DB 'Storage_Error$'
+
+; ============================================================
+; _raise_tasking_error - Raise Tasking_Error and terminate
+; Input: None
+; Output: Does not return
+; ============================================================
+    PUBLIC _raise_tasking_error
+_raise_tasking_error:
+    LD DE, _te_msg
+    LD C, 9
+    CALL 5
+    JP 0
+
+_te_msg:
+    DB 'Tasking_Error$'
+
+; ============================================================
+; Text_IO Support
+; ============================================================
+
+; ============================================================
+; _put_line / _put_int_line - Print string and newline
+; Input: String address on stack (at SP+2)
+; Output: None
+; Destroys: A, DE, HL
+; ============================================================
+    PUBLIC _put_line
+    PUBLIC _put_int_line
+_put_line:
+_put_int_line:
+    ; Get string address from stack
+    LD HL, 2
+    ADD HL, SP
+    LD E, (HL)
+    INC HL
+    LD D, (HL)
+    EX DE, HL           ; HL = string address
+
+    ; Print the string
+    CALL _put_str_hl
+
+    ; Print newline (CR LF)
+    LD E, 13            ; CR
+    LD C, 2
+    CALL 5
+    LD E, 10            ; LF
+    LD C, 2
+    CALL 5
+    RET
+
+; ============================================================
+; _put_string - Print string (no newline)
+; Input: HL = pointer to null-terminated string
+; Output: None
+; Destroys: A, DE, HL
+; ============================================================
+    PUBLIC _put_string
+_put_string:
+    ; HL already contains string address
+    CALL _put_str_hl
+    RET
+
+; ============================================================
+; _put_str_hl - Internal: print null-terminated string
+; Input: HL = pointer to null-terminated string
+; Output: None
+; Destroys: A, DE, HL
+; ============================================================
+_put_str_hl:
+    LD A, (HL)
+    OR A                ; Check for null terminator
+    RET Z
+    LD E, A
+    LD C, 2             ; BDOS: console output
+    PUSH HL
+    CALL 5
+    POP HL
+    INC HL
+    JR _put_str_hl
+
+; ============================================================
+; _new_line - Print newline (CR LF)
+; Input: None
+; Output: None
+; Destroys: A, DE
+; ============================================================
+    PUBLIC _new_line
+_new_line:
+    LD E, 13            ; CR
+    LD C, 2
+    CALL 5
+    LD E, 10            ; LF
+    LD C, 2
+    CALL 5
+    RET
+
+; ============================================================
+; _put_int - Print signed 16-bit integer
+; Input: Integer value on stack (at SP+2)
+; Output: None
+; Destroys: A, BC, DE, HL
+; ============================================================
+    PUBLIC _put_int
+_put_int:
+    ; Get integer from stack
+    LD HL, 2
+    ADD HL, SP
+    LD E, (HL)
+    INC HL
+    LD D, (HL)
+    EX DE, HL           ; HL = integer value
+
+    ; Check for negative
+    BIT 7, H
+    JR Z, _put_int_pos
+
+    ; Print minus sign
+    PUSH HL
+    LD E, '-'
+    LD C, 2
+    CALL 5
+    POP HL
+
+    ; Negate HL
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+
+_put_int_pos:
+    ; HL = positive value to print
+    ; Use stack to store digits (pushed in reverse order)
+    LD B, 0             ; digit count
+
+_put_int_loop:
+    ; Divide HL by 10, remainder is next digit
+    LD DE, 10
+    CALL _udiv16        ; HL = quotient, DE = remainder
+
+    ; Push digit (remainder + '0')
+    LD A, E
+    ADD A, '0'
+    PUSH AF
+    INC B
+
+    ; Check if quotient is zero
+    LD A, H
+    OR L
+    JR NZ, _put_int_loop
+
+    ; Print digits (pop and print B times)
+_put_int_print:
+    POP AF
+    LD E, A
+    LD C, 2
+    PUSH BC
+    CALL 5
+    POP BC
+    DJNZ _put_int_print
+
+    RET
+
+; ============================================================
+; _udiv16 - Unsigned 16-bit division
+; Input: HL = dividend, DE = divisor
+; Output: HL = quotient, DE = remainder
+; Destroys: A, BC
+; ============================================================
+_udiv16:
+    ; Check for division by zero
+    LD A, D
+    OR E
+    JR Z, _udiv16_zero
+
+    PUSH BC
+    LD BC, 0            ; BC = remainder
+    LD A, 16            ; 16 bits
+
+_udiv16_loop:
+    ; Shift HL left, MSB into carry
+    ADD HL, HL
+    ; Shift carry into BC
+    RL C
+    RL B
+
+    ; Try to subtract DE from BC
+    PUSH HL
+    LD H, B
+    LD L, C
+    OR A                ; clear carry
+    SBC HL, DE
+    JR C, _udiv16_no_sub
+
+    ; Subtraction succeeded
+    LD B, H
+    LD C, L
+    POP HL
+    SET 0, L            ; Set quotient bit
+    JR _udiv16_next
+
+_udiv16_no_sub:
+    POP HL
+
+_udiv16_next:
+    DEC A
+    JR NZ, _udiv16_loop
+
+    ; HL = quotient, BC = remainder
+    LD D, B
+    LD E, C
+    POP BC
+    RET
+
+_udiv16_zero:
+    ; Division by zero - raise Constraint_Error
+    LD HL, 1                ; Constraint_Error = 1
+    LD (_exc_current), HL
+    LD HL, 0
+    LD (_exc_message), HL
+    JP _exc_do_raise
+
+; ============================================================
+; _get_int - Read signed 16-bit integer from console
+; Input: None
+; Output: HL = integer value
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _get_int
+_get_int:
+    LD HL, 0            ; accumulator
+    LD B, 0             ; negative flag (0=positive, 1=negative)
+
+    ; Skip leading whitespace
+_get_int_skip:
+    CALL _get_char_raw
+    CP ' '
+    JR Z, _get_int_skip
+    CP 9                ; TAB
+    JR Z, _get_int_skip
+    CP 13               ; CR
+    JR Z, _get_int_skip
+    CP 10               ; LF
+    JR Z, _get_int_skip
+
+    ; Check for minus sign
+    CP '-'
+    JR NZ, _get_int_not_neg
+    LD B, 1             ; set negative flag
+    CALL _get_char_raw  ; get next char
+    JR _get_int_digit
+
+_get_int_not_neg:
+    ; Check for plus sign
+    CP '+'
+    JR NZ, _get_int_digit
+    CALL _get_char_raw  ; skip plus, get next char
+
+_get_int_digit:
+    ; A contains current char, check if digit
+    CP '0'
+    JR C, _get_int_done
+    CP '9'+1
+    JR NC, _get_int_done
+
+    ; It's a digit, multiply accumulator by 10 and add digit
+    SUB '0'             ; A = digit value
+    PUSH AF             ; save digit
+    PUSH BC             ; save negative flag
+
+    ; HL = HL * 10
+    LD D, H
+    LD E, L
+    ADD HL, HL          ; HL * 2
+    ADD HL, HL          ; HL * 4
+    ADD HL, DE          ; HL * 5
+    ADD HL, HL          ; HL * 10
+
+    POP BC              ; restore negative flag
+    POP AF              ; restore digit
+    LD E, A
+    LD D, 0
+    ADD HL, DE          ; HL = HL * 10 + digit
+
+    ; Get next character
+    CALL _get_char_raw
+    JR _get_int_digit
+
+_get_int_done:
+    ; Apply negative flag
+    LD A, B
+    OR A
+    RET Z               ; positive, return HL as-is
+
+    ; Negate HL
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+    RET
+
+; ============================================================
+; _get_char - Read single character from console
+; Input: None
+; Output: HL = character (low byte, high byte = 0)
+; Destroys: A
+; ============================================================
+    PUBLIC _get_char
+_get_char:
+    CALL _get_char_raw
+    LD L, A
+    LD H, 0
+    RET
+
+; ============================================================
+; _get_char_raw - Read raw character using BDOS
+; Input: None
+; Output: A = character
+; Destroys: None (except A)
+; ============================================================
+_get_char_raw:
+    PUSH BC
+    PUSH DE
+    PUSH HL
+    LD C, 1             ; BDOS: Console input
+    CALL 5
+    POP HL
+    POP DE
+    POP BC
+    RET
+
+; ============================================================
+; _get_line - Read line from console into buffer
+; Input: Stack: buffer_addr (SP+4), max_len (SP+2)
+; Output: HL = number of characters read
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _get_line
+_get_line:
+    ; Get parameters from stack
+    LD HL, 4
+    ADD HL, SP
+    LD E, (HL)
+    INC HL
+    LD D, (HL)          ; DE = buffer address
+
+    LD HL, 2
+    ADD HL, SP
+    LD C, (HL)
+    INC HL
+    LD B, (HL)          ; BC = max length
+
+    ; DE = buffer, BC = max length
+    PUSH DE             ; save buffer start for length calc
+
+_get_line_loop:
+    ; Check if buffer is full
+    LD A, B
+    OR C
+    JR Z, _get_line_done
+
+    ; Read a character
+    PUSH BC
+    PUSH DE
+    CALL _get_char_raw
+    POP DE
+    POP BC
+
+    ; Check for CR (end of line)
+    CP 13
+    JR Z, _get_line_cr
+
+    ; Check for LF (also end of line)
+    CP 10
+    JR Z, _get_line_done
+
+    ; Check for backspace
+    CP 8
+    JR Z, _get_line_bs
+    CP 127              ; DEL also treated as backspace
+    JR Z, _get_line_bs
+
+    ; Store character in buffer
+    LD (DE), A
+    INC DE
+    DEC BC
+
+    ; Echo character
+    PUSH BC
+    PUSH DE
+    LD E, A
+    LD C, 2
+    CALL 5
+    POP DE
+    POP BC
+
+    JR _get_line_loop
+
+_get_line_bs:
+    ; Backspace - move back if not at start
+    POP HL              ; HL = buffer start
+    PUSH HL
+    OR A
+    SBC HL, DE
+    JR Z, _get_line_loop  ; at start, ignore backspace
+    ; Move back
+    DEC DE
+    INC BC
+    ; Echo backspace, space, backspace to erase char
+    PUSH BC
+    PUSH DE
+    LD E, 8
+    LD C, 2
+    CALL 5
+    LD E, ' '
+    LD C, 2
+    CALL 5
+    LD E, 8
+    LD C, 2
+    CALL 5
+    POP DE
+    POP BC
+    JR _get_line_loop
+
+_get_line_cr:
+    ; CR received - consume LF if present and finish
+    ; Echo CR LF
+    PUSH BC
+    PUSH DE
+    LD E, 13
+    LD C, 2
+    CALL 5
+    LD E, 10
+    LD C, 2
+    CALL 5
+    POP DE
+    POP BC
+    ; Fall through to done
+
+_get_line_done:
+    ; Calculate length: DE - buffer_start
+    POP HL              ; HL = buffer start
+    EX DE, HL           ; HL = current pos, DE = start
+    OR A
+    SBC HL, DE          ; HL = length
+    RET
+
+; ============================================================
+; Heap Management
+; Simple bump allocator for CP/M - grows from end of program
+; ============================================================
+
+; Heap pointer - declared in DSEG at end of file
+
+; ============================================================
+; _heap_init - Initialize heap (called automatically)
+; Sets heap to start after BSS and end at BDOS
+; ============================================================
+_heap_init:
+    ; Get BDOS entry point (top of TPA)
+    LD HL, (6)              ; BDOS address from page 0
+    LD DE, -256             ; Leave 256 bytes safety margin
+    ADD HL, DE
+    LD (_heap_end), HL
+
+    ; Heap starts at _heap_start (defined at end of BSS)
+    LD HL, _heap_start
+    LD (_heap_ptr), HL
+    RET
+
+; ============================================================
+; _heap_alloc - Allocate memory from heap
+; Input: HL = size in bytes
+; Output: HL = pointer to allocated memory (or 0 on failure)
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _heap_alloc
+_heap_alloc:
+    PUSH BC
+    LD B, H
+    LD C, L                 ; BC = size
+
+    ; Check/init heap
+    LD HL, (_heap_ptr)
+    LD A, H
+    OR L
+    JR NZ, _ha_ready
+    CALL _heap_init
+    LD HL, (_heap_ptr)
+
+_ha_ready:
+    ; HL = current pointer (this will be returned)
+    PUSH HL                 ; save allocation address
+
+    ; Calculate new pointer
+    ADD HL, BC              ; HL = old_ptr + size
+
+    ; Check bounds
+    LD DE, (_heap_end)
+    OR A
+    SBC HL, DE
+    JR NC, _ha_fail         ; overflow
+
+    ; Update heap pointer
+    POP DE                  ; DE = old pointer (allocation address)
+    PUSH DE                 ; save for return
+    LD HL, (_heap_ptr)
+    ADD HL, BC              ; HL = new pointer
+    LD (_heap_ptr), HL
+
+    POP HL                  ; HL = allocated address
+    POP BC
+    RET
+
+_ha_fail:
+    POP HL                  ; clean stack
+    LD HL, 0
+    POP BC
+    RET
+
+; ============================================================
+; _heap_free - Free memory (no-op for bump allocator)
+; Input: HL = pointer to free
+; Output: None
+; Note: Bump allocator doesn't support individual frees
+; ============================================================
+    PUBLIC _heap_free
+_heap_free:
+    ; No-op for simple bump allocator
+    RET
+
+; ============================================================
+; Unsigned Division
+; ============================================================
+
+; ============================================================
+; _div16_unsigned - Unsigned 16-bit division
+; Input: HL = dividend, DE = divisor
+; Output: HL = quotient
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _div16_unsigned
+_div16_unsigned:
+    LD A, D
+    OR E
+    JR Z, _divu_zero
+
+    PUSH BC
+    LD BC, 0                ; BC = remainder
+    LD A, 16
+
+_divu_loop:
+    ADD HL, HL              ; shift dividend left
+    RL C
+    RL B                    ; shift into remainder
+
+    ; Try subtract
+    PUSH HL
+    LD H, B
+    LD L, C
+    OR A
+    SBC HL, DE
+    JR C, _divu_no_sub
+
+    ; Subtract succeeded
+    LD B, H
+    LD C, L
+    POP HL
+    SET 0, L
+    JR _divu_next
+
+_divu_no_sub:
+    POP HL
+
+_divu_next:
+    DEC A
+    JR NZ, _divu_loop
+
+    POP BC
+    RET
+
+_divu_zero:
+    ; Division by zero - raise Constraint_Error
+    LD HL, 1                ; Constraint_Error = 1
+    LD (_exc_current), HL
+    LD HL, 0
+    LD (_exc_message), HL
+    JP _exc_do_raise
+
+; ============================================================
+; _div16_mod - Unsigned division returning both quotient and remainder
+; Input: HL = dividend, DE = divisor
+; Output: HL = quotient, DE = remainder
+; Destroys: A, BC
+; ============================================================
+    PUBLIC _div16_mod
+_div16_mod:
+    LD A, D
+    OR E
+    JR Z, _divm_zero
+
+    PUSH BC
+    LD BC, 0                ; BC = remainder
+    LD A, 16
+
+_divm_loop:
+    ADD HL, HL
+    RL C
+    RL B
+
+    PUSH HL
+    LD H, B
+    LD L, C
+    OR A
+    SBC HL, DE
+    JR C, _divm_no_sub
+
+    LD B, H
+    LD C, L
+    POP HL
+    SET 0, L
+    JR _divm_next
+
+_divm_no_sub:
+    POP HL
+
+_divm_next:
+    DEC A
+    JR NZ, _divm_loop
+
+    ; HL = quotient, BC = remainder
+    LD D, B
+    LD E, C
+    POP BC
+    RET
+
+_divm_zero:
+    ; Division by zero - raise Constraint_Error
+    LD HL, 1                ; Constraint_Error = 1
+    LD (_exc_current), HL
+    LD HL, 0
+    LD (_exc_message), HL
+    JP _exc_do_raise
+
+; ============================================================
+; 32-bit Multiplication
+; ============================================================
+
+; ============================================================
+; _mul16_32 - 16-bit multiply with 32-bit result
+; Input: HL = multiplicand, DE = multiplier
+; Output: HL:DE = 32-bit product (HL=high, DE=low)
+; Destroys: A, BC
+; ============================================================
+    PUBLIC _mul16_32
+_mul16_32:
+    PUSH BC
+
+    ; Use unsigned multiplication, handle signs separately
+    LD A, H
+    XOR D
+    PUSH AF                 ; save result sign
+
+    ; Make both positive
+    BIT 7, H
+    JR Z, _m32_hl_pos
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+_m32_hl_pos:
+
+    BIT 7, D
+    JR Z, _m32_de_pos
+    LD A, E
+    CPL
+    LD E, A
+    LD A, D
+    CPL
+    LD D, A
+    INC DE
+_m32_de_pos:
+
+    ; BC = multiplicand, HL:DE = result (starts at 0)
+    LD B, H
+    LD C, L
+    LD HL, 0                ; high word
+    PUSH HL                 ; save high word on stack
+    LD HL, 0                ; low word
+
+    ; DE = multiplier, BC = multiplicand
+    LD A, 16
+
+_m32_loop:
+    ; Check low bit of DE
+    BIT 0, E
+    JR Z, _m32_skip
+
+    ; Add BC to result low word (in HL)
+    ADD HL, BC
+    JR NC, _m32_skip
+    ; Carry into high word
+    EX (SP), HL
+    INC HL
+    EX (SP), HL
+
+_m32_skip:
+    ; Shift DE right
+    SRL D
+    RR E
+
+    ; Shift BC left (into high bits)
+    SLA C
+    RL B
+
+    ; Check if BC overflowed into high word
+    ; (For full 32-bit we'd need to track this)
+
+    DEC A
+    JR NZ, _m32_loop
+
+    ; Result: (SP) = high word, HL = low word
+    EX DE, HL               ; DE = low word
+    POP HL                  ; HL = high word
+
+    ; Apply sign
+    POP AF
+    BIT 7, A
+    JR Z, _m32_ret
+
+    ; Negate 32-bit result
+    ; NOT and add 1
+    LD A, E
+    CPL
+    LD E, A
+    LD A, D
+    CPL
+    LD D, A
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC DE
+    LD A, D
+    OR E
+    JR NZ, _m32_ret
+    INC HL                  ; carry from low word
+
+_m32_ret:
+    POP BC
+    RET
+
+; ============================================================
+; String Functions
+; ============================================================
+
+; ============================================================
+; _str_len - Get length of null-terminated string
+; Input: HL = string pointer
+; Output: HL = length
+; Destroys: A, DE
+; ============================================================
+    PUBLIC _str_len
+_str_len:
+    LD DE, 0                ; DE = counter
+
+_strlen_loop:
+    LD A, (HL)
+    OR A
+    JR Z, _strlen_done
+    INC HL
+    INC DE
+    JR _strlen_loop
+
+_strlen_done:
+    EX DE, HL               ; HL = length
+    RET
+
+; ============================================================
+; _int_to_str - Convert integer to string
+; Input: Stack: value (16-bit signed at IX+4)
+; Output: HL = pointer to null-terminated string in static buffer
+; Destroys: A, BC, DE
+; Note: Uses static buffer - not reentrant!
+; ============================================================
+    PUBLIC _int_to_str
+_int_to_str:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+    PUSH BC
+
+    ; Get value from stack (at IX+4)
+    LD L, (IX+4)
+    LD H, (IX+5)
+
+    ; Point DE to end of buffer (work backwards)
+    LD DE, _int_str_buf + 7
+    XOR A
+    LD (DE), A              ; null terminator
+    DEC DE
+
+    ; Check for negative
+    BIT 7, H
+    PUSH AF                 ; save sign flag
+    JR Z, _i2s_loop
+
+    ; Negate HL (two's complement)
+    XOR A
+    SUB L
+    LD L, A
+    SBC A, A
+    SUB H
+    LD H, A
+
+_i2s_loop:
+    ; Divide HL by 10, get remainder
+    PUSH DE
+    LD DE, 10
+    CALL _udiv16            ; HL = quotient, DE = remainder
+    LD A, E                 ; A = digit (remainder)
+    POP DE
+    ADD A, '0'
+    LD (DE), A
+    DEC DE
+
+    ; Check if HL is zero
+    LD A, H
+    OR L
+    JR NZ, _i2s_loop
+
+    ; Add minus sign if needed
+    POP AF                  ; restore sign flag
+    JR Z, _i2s_done
+    LD A, '-'
+    LD (DE), A
+    DEC DE
+
+_i2s_done:
+    ; Return pointer to start of string
+    INC DE
+    EX DE, HL
+
+    POP BC
+    POP IX
+    RET
+
+; ============================================================
+; _s2i - Convert string to signed 16-bit integer (Integer'Value)
+; Input: String pointer on stack (at SP+2)
+; Output: HL = integer value
+; Notes:
+;   - Skips leading whitespace
+;   - Handles optional leading '-' for negative numbers
+;   - Stops at first non-digit character
+;   - Returns 0 for empty/invalid strings
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _s2i
+_s2i:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+
+    ; Get string pointer from stack (at IX+4)
+    LD L, (IX+4)
+    LD H, (IX+5)
+    ; HL now points to string
+
+    ; Skip leading whitespace
+_s2i_skip:
+    LD A, (HL)
+    CP ' '
+    JR Z, _s2i_next_ws
+    CP 9                    ; tab
+    JR Z, _s2i_next_ws
+    JR _s2i_check_sign
+_s2i_next_ws:
+    INC HL
+    JR _s2i_skip
+
+_s2i_check_sign:
+    ; Check for negative sign
+    LD B, 0                 ; B = 0 means positive
+    LD A, (HL)
+    CP '-'
+    JR NZ, _s2i_check_plus
+    LD B, 1                 ; B = 1 means negative
+    INC HL
+    JR _s2i_start
+
+_s2i_check_plus:
+    CP '+'
+    JR NZ, _s2i_start
+    INC HL                  ; Skip optional '+'
+
+_s2i_start:
+    ; DE = result (accumulator), start at 0
+    LD DE, 0
+    PUSH BC                 ; Save sign flag
+
+_s2i_loop:
+    LD A, (HL)
+    ; Check if digit (0-9)
+    CP '0'
+    JR C, _s2i_done         ; < '0', not a digit
+    CP '9'+1
+    JR NC, _s2i_done        ; > '9', not a digit
+
+    ; A is a digit, convert to value
+    SUB '0'
+    LD C, A                 ; C = digit value (0-9)
+
+    ; Multiply DE by 10: DE = DE * 10
+    ; DE * 10 = DE * 8 + DE * 2 = (DE << 3) + (DE << 1)
+    PUSH HL
+    EX DE, HL               ; HL = current value
+    ADD HL, HL              ; HL = value * 2
+    LD D, H
+    LD E, L                 ; DE = value * 2
+    ADD HL, HL              ; HL = value * 4
+    ADD HL, HL              ; HL = value * 8
+    ADD HL, DE              ; HL = value * 10
+    ; Add digit
+    LD D, 0
+    LD E, C                 ; DE = digit
+    ADD HL, DE              ; HL = value * 10 + digit
+    EX DE, HL               ; DE = new value
+    POP HL
+
+    INC HL                  ; Next character
+    JR _s2i_loop
+
+_s2i_done:
+    ; DE = result value
+    POP BC                  ; Restore sign flag (B)
+
+    ; Apply sign if negative
+    LD A, B
+    OR A
+    JR Z, _s2i_positive
+
+    ; Negate DE (two's complement)
+    XOR A
+    SUB E
+    LD E, A
+    SBC A, A
+    SUB D
+    LD D, A
+
+_s2i_positive:
+    EX DE, HL               ; HL = result
+
+    POP IX
+    RET
+
+; ============================================================
+; _s2b - Convert string to Boolean (0 or 1) (Boolean'Value)
+; Input: String pointer on stack (at SP+2)
+; Output: HL = 0 (False) or 1 (True)
+; Notes:
+;   - Skips leading whitespace
+;   - Case-insensitive: "TRUE", "true", "True" all work
+;   - Returns 1 for "TRUE", 0 for "FALSE"
+;   - Returns 0 for any invalid string
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _s2b
+_s2b:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+
+    ; Get string pointer from stack (at IX+4)
+    LD L, (IX+4)
+    LD H, (IX+5)
+    ; HL now points to string
+
+    ; Skip leading whitespace
+_s2b_skip:
+    LD A, (HL)
+    CP ' '
+    JR Z, _s2b_next_ws
+    CP 9                    ; tab
+    JR Z, _s2b_next_ws
+    JR _s2b_check
+_s2b_next_ws:
+    INC HL
+    JR _s2b_skip
+
+_s2b_check:
+    ; Check first character (T/t for TRUE, F/f for FALSE)
+    LD A, (HL)
+    ; Convert to uppercase by clearing bit 5
+    AND 0DFH                ; Clear bit 5 (lowercase -> uppercase)
+
+    CP 'T'
+    JR Z, _s2b_check_true
+    CP 'F'
+    JR Z, _s2b_check_false
+    JR _s2b_return_false    ; Invalid - return false
+
+_s2b_check_true:
+    ; Check for "TRUE" (case-insensitive)
+    INC HL
+    LD A, (HL)
+    AND 0DFH
+    CP 'R'
+    JR NZ, _s2b_return_false
+
+    INC HL
+    LD A, (HL)
+    AND 0DFH
+    CP 'U'
+    JR NZ, _s2b_return_false
+
+    INC HL
+    LD A, (HL)
+    AND 0DFH
+    CP 'E'
+    JR NZ, _s2b_return_false
+
+    ; Successfully matched "TRUE"
+    LD HL, 1
+    JR _s2b_done
+
+_s2b_check_false:
+    ; Check for "FALSE" (case-insensitive)
+    INC HL
+    LD A, (HL)
+    AND 0DFH
+    CP 'A'
+    JR NZ, _s2b_return_false
+
+    INC HL
+    LD A, (HL)
+    AND 0DFH
+    CP 'L'
+    JR NZ, _s2b_return_false
+
+    INC HL
+    LD A, (HL)
+    AND 0DFH
+    CP 'S'
+    JR NZ, _s2b_return_false
+
+    INC HL
+    LD A, (HL)
+    AND 0DFH
+    CP 'E'
+    JR NZ, _s2b_return_false
+
+    ; Successfully matched "FALSE" - fall through to return false
+
+_s2b_return_false:
+    LD HL, 0
+
+_s2b_done:
+    POP IX
+    RET
+
+; ============================================================
+; _c_val - Convert string to Character code (Character'Value)
+; Input: String pointer on stack (at SP+2)
+; Output: HL = character code (0-255)
+; Notes:
+;   - Accepts "'X'" (Ada character literal format)
+;   - Accepts "X" (single character)
+;   - Skips leading whitespace
+;   - Returns 0 for empty/invalid strings
+; Destroys: A
+; ============================================================
+    PUBLIC _c_val
+_c_val:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+
+    ; Get string pointer from stack (IX+4)
+    LD L, (IX+4)
+    LD H, (IX+5)
+    ; HL now points to string
+
+    ; Skip leading whitespace
+_c_val_skip:
+    LD A, (HL)
+    CP ' '
+    JR Z, _c_val_next_ws
+    CP 9                    ; tab
+    JR Z, _c_val_next_ws
+    JR _c_val_check
+
+_c_val_next_ws:
+    INC HL
+    JR _c_val_skip
+
+_c_val_check:
+    ; Check if empty string
+    LD A, (HL)
+    OR A
+    JR Z, _c_val_empty
+
+    ; Check if quoted format ('X')
+    CP 27H                  ; Single quote character
+    JR NZ, _c_val_unquoted
+
+    ; Quoted format - get character after the quote
+    INC HL
+    LD A, (HL)
+    OR A
+    JR Z, _c_val_empty      ; Empty after quote
+    LD L, A
+    LD H, 0
+    JR _c_val_done
+
+_c_val_unquoted:
+    ; Unquoted format - just return the first character
+    LD L, A
+    LD H, 0
+    JR _c_val_done
+
+_c_val_empty:
+    LD HL, 0
+
+_c_val_done:
+    POP IX
+    RET
+
+; ============================================================
+; _wc_val - Convert string to Wide_Character code (Wide_Character'Value)
+; Input: String pointer on stack (at SP+2)
+; Output: HL = wide character code (0-65535)
+; Notes:
+;   - Accepts "'X'" (Ada character literal format)
+;   - Accepts "X" (single character)
+;   - Skips leading whitespace
+;   - Returns 0 for empty/invalid strings
+;   - On Z80/CP/M, effectively same as Character but returns 16-bit value
+; Destroys: A
+; ============================================================
+    PUBLIC _wc_val
+_wc_val:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+
+    ; Get string pointer from stack (IX+4)
+    LD L, (IX+4)
+    LD H, (IX+5)
+    ; HL now points to string
+
+    ; Skip leading whitespace
+_wc_val_skip:
+    LD A, (HL)
+    CP ' '
+    JR Z, _wc_val_next_ws
+    CP 9                    ; tab
+    JR Z, _wc_val_next_ws
+    JR _wc_val_check
+
+_wc_val_next_ws:
+    INC HL
+    JR _wc_val_skip
+
+_wc_val_check:
+    ; Check if empty string
+    LD A, (HL)
+    OR A
+    JR Z, _wc_val_empty
+
+    ; Check if quoted format ('X')
+    CP 27H                  ; Single quote character
+    JR NZ, _wc_val_unquoted
+
+    ; Quoted format - get character after the quote
+    INC HL
+    LD A, (HL)
+    OR A
+    JR Z, _wc_val_empty     ; Empty after quote
+    LD L, A
+    LD H, 0
+    JR _wc_val_done
+
+_wc_val_unquoted:
+    ; Unquoted format - just return the first character
+    LD L, A
+    LD H, 0
+    JR _wc_val_done
+
+_wc_val_empty:
+    LD HL, 0
+
+_wc_val_done:
+    POP IX
+    RET
+
+; ============================================================
+; _wwc_val - Convert string to Wide_Wide_Character code (Wide_Wide_Character'Value)
+; Input: String pointer on stack (at SP+2)
+; Output: HL = character code (low 16 bits of 32-bit code point)
+; Notes:
+;   - Accepts "'X'" (Ada character literal format)
+;   - Accepts "X" (single character)
+;   - Skips leading whitespace
+;   - Returns 0 for empty/invalid strings
+;   - On Z80/CP/M, returns low 16 bits (sufficient for ASCII/BMP characters)
+; Destroys: A
+; ============================================================
+    PUBLIC _wwc_val
+_wwc_val:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+
+    ; Get string pointer from stack (IX+4)
+    LD L, (IX+4)
+    LD H, (IX+5)
+    ; HL now points to string
+
+    ; Skip leading whitespace
+_wwc_val_skip:
+    LD A, (HL)
+    CP ' '
+    JR Z, _wwc_val_next_ws
+    CP 9                    ; tab
+    JR Z, _wwc_val_next_ws
+    JR _wwc_val_check
+
+_wwc_val_next_ws:
+    INC HL
+    JR _wwc_val_skip
+
+_wwc_val_check:
+    ; Check if empty string
+    LD A, (HL)
+    OR A
+    JR Z, _wwc_val_empty
+
+    ; Check if quoted format ('X')
+    CP 27H                  ; Single quote character
+    JR NZ, _wwc_val_unquoted
+
+    ; Quoted format - get character after the quote
+    INC HL
+    LD A, (HL)
+    OR A
+    JR Z, _wwc_val_empty    ; Empty after quote
+    LD L, A
+    LD H, 0
+    JR _wwc_val_done
+
+_wwc_val_unquoted:
+    ; Unquoted format - just return the first character
+    LD L, A
+    LD H, 0
+    JR _wwc_val_done
+
+_wwc_val_empty:
+    LD HL, 0
+
+_wwc_val_done:
+    POP IX
+    RET
+
+; ============================================================
+; _b_img - Boolean'Image: convert boolean to string "TRUE" or "FALSE"
+; Input: Boolean value on stack (at SP+2), 0=False, non-zero=True
+; Output: HL = pointer to static string "TRUE" or "FALSE"
+; Notes:
+;   - Returns pointer to read-only string constant
+;   - Ada standard requires uppercase "TRUE" and "FALSE"
+; Destroys: A
+; ============================================================
+    PUBLIC _b_img
+_b_img:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+
+    ; Get boolean value from stack (IX+4)
+    LD A, (IX+4)
+    OR A
+    JR Z, _b_img_false
+
+    ; Return "TRUE"
+    LD HL, _b_img_true
+    JR _b_img_done
+
+_b_img_false:
+    ; Return "FALSE"
+    LD HL, _b_img_false_str
+
+_b_img_done:
+    POP IX
+    RET
+
+    CSEG
+_b_img_true:
+    DB "TRUE", 0
+_b_img_false_str:
+    DB "FALSE", 0
+
+; ============================================================
+; _fix_img - Float'Image: convert 16.16 fixed-point to string
+; Input: 32-bit fixed-point value on stack (IX+4=low, IX+6=high)
+; Output: HL = pointer to static buffer containing decimal string
+; Notes:
+;   - Format: [-]integer.fraction (3 decimal places)
+;   - Uses static buffer (not reentrant)
+;   - 16.16 format: high 16 bits = integer, low 16 bits = fraction
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _fix_img
+_fix_img:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+
+    ; Initialize buffer pointer
+    LD HL, _fix_img_buf
+    LD (_fix_img_ptr), HL
+
+    ; Get high word (integer part, signed)
+    LD L, (IX+6)
+    LD H, (IX+7)
+    LD (_fix_img_int), HL
+
+    ; Get low word (fractional part)
+    LD L, (IX+4)
+    LD H, (IX+5)
+    LD (_fix_img_frc), HL
+
+    ; Check if negative (sign bit of integer part)
+    LD HL, (_fix_img_int)
+    BIT 7, H
+    JR Z, _fix_img_pos
+
+    ; Negative - output '-' and negate
+    LD HL, (_fix_img_ptr)
+    LD (HL), '-'
+    INC HL
+    LD (_fix_img_ptr), HL
+
+    ; Negate 32-bit value: complement and add 1
+    LD HL, (_fix_img_frc)
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+    LD (_fix_img_frc), HL
+    ; Handle carry to high word
+    LD A, H
+    OR L
+    JR NZ, _fix_neg_no_carry
+    ; Low word became 0, increment high word
+    LD HL, (_fix_img_int)
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+    LD (_fix_img_int), HL
+    JR _fix_img_pos
+_fix_neg_no_carry:
+    LD HL, (_fix_img_int)
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    LD (_fix_img_int), HL
+
+_fix_img_pos:
+    ; Convert integer part to string
+    LD HL, (_fix_img_int)
+    PUSH HL
+    CALL _int_to_str
+    POP DE
+    ; HL = pointer to integer string
+
+    ; Copy integer string to buffer
+    LD DE, (_fix_img_ptr)
+_fix_img_cp:
+    LD A, (HL)
+    OR A
+    JR Z, _fix_img_dot
+    LD (DE), A
+    INC HL
+    INC DE
+    JR _fix_img_cp
+
+_fix_img_dot:
+    ; Add decimal point
+    LD A, '.'
+    LD (DE), A
+    INC DE
+    LD (_fix_img_ptr), DE
+
+    ; Convert fractional part to 3 decimal digits
+    ; frac * 1000 / 65536 gives decimal digits
+    ; Use: (frac * 1000) >> 16 = frac * 1000 / 65536
+    ; Approximate with: (frac * 125) >> 13 (125 * 8 = 1000)
+    ; Simpler: multiply by 10 three times, taking high byte each time
+
+    LD HL, (_fix_img_frc)
+    LD B, 3                     ; 3 decimal digits
+
+_fix_img_frac_loop:
+    PUSH BC
+    ; Multiply HL by 10
+    LD D, H
+    LD E, L
+    ADD HL, HL                  ; HL * 2
+    ADD HL, HL                  ; HL * 4
+    ADD HL, DE                  ; HL * 5
+    ADD HL, HL                  ; HL * 10
+    ; High byte of result is the digit
+    LD A, H
+    ADD A, '0'
+    LD DE, (_fix_img_ptr)
+    LD (DE), A
+    INC DE
+    LD (_fix_img_ptr), DE
+    ; Keep low byte * 256 for next iteration
+    LD H, L
+    LD L, 0
+    POP BC
+    DJNZ _fix_img_frac_loop
+
+    ; Null terminate
+    LD HL, (_fix_img_ptr)
+    LD (HL), 0
+
+    ; Return buffer pointer
+    LD HL, _fix_img_buf
+
+    POP IX
+    RET
+
+; ============================================================
+; _c_img - Character'Image: convert character code to string "'X'"
+; Input: Character code on stack (at SP+2)
+; Output: HL = pointer to static buffer containing "'X'" (null-terminated)
+; Notes:
+;   - Returns string in format "'X'" where X is the character
+;   - Uses static buffer (not reentrant)
+; Destroys: A
+; ============================================================
+    PUBLIC _c_img
+_c_img:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+
+    ; Get character code from stack (IX+4)
+    LD A, (IX+4)
+
+    ; Build string "'X'" in static buffer
+    LD HL, _c_img_buf
+    LD (HL), 27H            ; Opening single quote
+    INC HL
+    LD (HL), A              ; The character
+    INC HL
+    LD (HL), 27H            ; Closing single quote
+    INC HL
+    LD (HL), 0              ; Null terminator
+
+    ; Return pointer to buffer
+    LD HL, _c_img_buf
+
+    POP IX
+    RET
+
+; ============================================================
+; _wc_img - Wide_Character'Image: convert wide character code to string "'X'"
+; Input: Wide character code on stack (at SP+2)
+; Output: HL = pointer to static buffer containing "'X'" (null-terminated)
+; Notes:
+;   - Returns string in format "'X'" where X is the character
+;   - Uses static buffer (not reentrant)
+;   - On Z80/CP/M, uses low byte only (ASCII)
+; Destroys: A
+; ============================================================
+    PUBLIC _wc_img
+_wc_img:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+
+    ; Get character code from stack (IX+4, low byte only)
+    LD A, (IX+4)
+
+    ; Build string "'X'" in static buffer
+    LD HL, _wc_img_buf
+    LD (HL), 27H            ; Opening single quote
+    INC HL
+    LD (HL), A              ; The character
+    INC HL
+    LD (HL), 27H            ; Closing single quote
+    INC HL
+    LD (HL), 0              ; Null terminator
+
+    ; Return pointer to buffer
+    LD HL, _wc_img_buf
+
+    POP IX
+    RET
+
+; ============================================================
+; _wwc_img - Wide_Wide_Character'Image: convert 32-bit character code to string "'X'"
+; Input: Wide wide character code on stack (at SP+2, low 16 bits)
+; Output: HL = pointer to static buffer containing "'X'" (null-terminated)
+; Notes:
+;   - Returns string in format "'X'" where X is the character
+;   - Uses static buffer (not reentrant)
+;   - On Z80/CP/M, uses low byte only (ASCII)
+; Destroys: A
+; ============================================================
+    PUBLIC _wwc_img
+_wwc_img:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+
+    ; Get character code from stack (IX+4, low byte only)
+    LD A, (IX+4)
+
+    ; Build string "'X'" in static buffer
+    LD HL, _wwc_img_buf
+    LD (HL), 27H            ; Opening single quote
+    INC HL
+    LD (HL), A              ; The character
+    INC HL
+    LD (HL), 27H            ; Closing single quote
+    INC HL
+    LD (HL), 0              ; Null terminator
+
+    ; Return pointer to buffer
+    LD HL, _wwc_img_buf
+
+    POP IX
+    RET
+
+; ============================================================
+; _e_val - Enumeration'Value: lookup string in enum table
+; Input on stack:
+;   IX+4 = table pointer (pushed last)
+;   IX+6 = string pointer (pushed first)
+; Output: HL = enumeration value (position)
+; Table format:
+;   1 byte: count of entries
+;   For each entry: null-terminated UPPERCASE string, then 1-byte value
+; Notes:
+;   - Case-insensitive comparison
+;   - Returns 0 if not found (should raise Constraint_Error)
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _e_val
+_e_val:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+
+    ; Get table pointer (IX+4)
+    LD L, (IX+4)
+    LD H, (IX+5)
+    ; HL = table pointer
+
+    ; Read count
+    LD A, (HL)
+    INC HL
+    LD B, A                 ; B = count of entries
+    OR A
+    JR Z, _ev_not_found     ; Empty table
+
+_ev_loop:
+    PUSH BC                 ; Save count
+    PUSH HL                 ; Save current table position
+
+    ; Get search string pointer (IX+6)
+    LD E, (IX+6)
+    LD D, (IX+7)
+    ; DE = search string pointer
+    ; HL = table entry string pointer
+
+    ; Compare strings (case-insensitive)
+_ev_cmp:
+    LD A, (DE)              ; Get search char
+    ; Convert to uppercase
+    CP 'a'
+    JR C, _ev_no_upper1
+    CP 'z'+1
+    JR NC, _ev_no_upper1
+    AND 0DFH                ; Convert to uppercase
+_ev_no_upper1:
+    LD C, A                 ; C = uppercase search char
+
+    LD A, (HL)              ; Get table char (already uppercase)
+    CP C
+    JR NZ, _ev_next_entry   ; Mismatch
+
+    ; Characters match - check if end of both strings
+    OR A                    ; Was it null terminator?
+    JR Z, _ev_found         ; Yes, both strings ended - match!
+
+    INC HL
+    INC DE
+    JR _ev_cmp
+
+_ev_next_entry:
+    ; Strings don't match - skip to end of this entry
+    POP HL                  ; Restore table position
+    ; Skip past string to find null
+_ev_skip_str:
+    LD A, (HL)
+    INC HL
+    OR A
+    JR NZ, _ev_skip_str
+    ; HL now points to value byte
+    INC HL                  ; Skip value byte, point to next entry
+
+    POP BC                  ; Restore count
+    DJNZ _ev_loop           ; Next entry
+
+_ev_not_found:
+    ; Not found - return 0
+    LD HL, 0
+    JR _ev_done
+
+_ev_found:
+    ; Match found!
+    ; HL points to the null terminator
+    POP DE                  ; Discard saved table position
+    POP BC                  ; Discard saved count
+    INC HL                  ; Skip null to get value byte
+    LD L, (HL)              ; Get value
+    LD H, 0
+    ; Fall through to done
+
+_ev_done:
+    POP IX
+    RET
+
+; ============================================================
+; _e_img - Enumeration'Image: lookup value in enum table to get string
+; Input on stack:
+;   IX+4 = table pointer (pushed last)
+;   IX+6 = enum value (pushed first)
+; Output: HL = pointer to string (null-terminated, uppercase)
+; Table format:
+;   1 byte: count of entries
+;   For each entry: null-terminated UPPERCASE string, then 1-byte value
+; Notes:
+;   - Returns "?" if value not found (should raise Constraint_Error)
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _e_img
+_e_img:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+
+    ; Get table pointer (IX+4)
+    LD L, (IX+4)
+    LD H, (IX+5)
+    ; HL = table pointer
+
+    ; Get search value (IX+6, low byte only for enum positions 0-255)
+    LD A, (IX+6)
+    LD C, A                 ; C = search value
+
+    ; Read count
+    LD A, (HL)
+    INC HL
+    LD B, A                 ; B = count of entries
+    OR A
+    JR Z, _ei_not_found     ; Empty table
+
+_ei_loop:
+    PUSH HL                 ; Save string start pointer
+    ; Skip past string to find null terminator
+_ei_skip_str:
+    LD A, (HL)
+    INC HL
+    OR A
+    JR NZ, _ei_skip_str
+    ; HL now points to value byte
+    LD A, (HL)              ; Get value
+    INC HL                  ; HL now points to next entry
+    CP C                    ; Compare with search value
+    JR Z, _ei_found
+
+    ; Not a match, continue to next entry
+    POP DE                  ; Discard saved string pointer
+    DJNZ _ei_loop           ; Next entry
+
+_ei_not_found:
+    ; Not found - return "?"
+    LD HL, _ei_unknown
+    JR _ei_done
+
+_ei_found:
+    ; Match found! Return saved string pointer
+    POP HL                  ; HL = string pointer
+    ; Fall through to done
+
+_ei_done:
+    POP IX
+    RET
+
+    CSEG
+_ei_unknown:
+    DB "?", 0
+
+; ============================================================
+; Character I/O
+; ============================================================
+
+; ============================================================
+; _put_char - Output single character
+; Input: HL = character (in L)
+; Output: None
+; Destroys: A, DE
+; ============================================================
+    PUBLIC _put_char
+_put_char:
+    ; Get character from stack (SP+2, after return address)
+    LD HL, 2
+    ADD HL, SP
+    LD E, (HL)              ; E = character value (low byte only)
+    LD C, 2                 ; BDOS console output
+    JP 5
+
+; ============================================================
+; Exception Support
+; ============================================================
+
+; Exception handler frame layout (8 bytes):
+;   Offset 0-1: Previous handler pointer
+;   Offset 2-3: Stack pointer to restore
+;   Offset 4-5: Handler code address
+;   Offset 6-7: Exception ID to catch (0 = catch all)
+
+; Exception variables declared in DSEG at end of file
+
+; ============================================================
+; _exc_do_raise - Raise an exception
+; Input: _exc_current and _exc_message should be set before calling
+; Output: Does not return (jumps to handler or terminates)
+; ============================================================
+    PUBLIC _exc_do_raise
+_exc_do_raise:
+    ; Get current exception ID
+    LD HL, (_exc_current)
+    LD DE, (_exc_handler)
+
+    ; Check if there's a handler
+    LD A, D
+    OR E
+    JR Z, _exc_unhandled    ; No handler - terminate
+
+    ; DE = handler frame pointer
+    ; HL = exception ID to match
+_exc_search:
+    ; Get exception ID from handler frame (offset 6)
+    PUSH HL                 ; save exception ID
+    LD HL, 6
+    ADD HL, DE              ; HL = &handler_frame[6]
+    LD C, (HL)
+    INC HL
+    LD B, (HL)              ; BC = handler's exception ID
+    POP HL                  ; HL = exception ID
+
+    ; Check if handler matches (BC == HL or BC == 0 for catch-all)
+    LD A, B
+    OR C
+    JR Z, _exc_found        ; BC == 0 means catch all
+
+    ; Check if BC == HL
+    LD A, C
+    CP L
+    JR NZ, _exc_next
+    LD A, B
+    CP H
+    JR Z, _exc_found        ; Match found
+
+_exc_next:
+    ; Get previous handler from frame (offset 0)
+    ; Save exception ID (HL) on stack
+    PUSH HL                 ; save exception ID
+    EX DE, HL               ; HL = handler frame
+    LD E, (HL)
+    INC HL
+    LD D, (HL)              ; DE = previous handler
+    POP HL                  ; HL = exception ID
+
+    ; Check if previous handler exists
+    LD A, D
+    OR E
+    JR Z, _exc_unhandled
+
+    ; Continue search (DE = handler, HL = exc_id)
+    JR _exc_search
+
+_exc_found:
+    ; Found a matching handler at DE
+    ; Get stack pointer from frame (offset 2)
+    LD HL, 2
+    ADD HL, DE
+    LD E, (HL)
+    INC HL
+    LD D, (HL)              ; DE = saved SP
+
+    ; Get handler address from frame (offset 4)
+    INC HL
+    LD C, (HL)
+    INC HL
+    LD B, (HL)              ; BC = handler address
+
+    ; Restore stack pointer
+    EX DE, HL               ; HL = saved SP
+    LD SP, HL
+
+    ; Jump to handler (BC)
+    PUSH BC
+    RET                     ; Pop BC into PC, jump to handler
+
+_exc_unhandled:
+    ; No handler found - print error and terminate
+    PUSH HL
+    LD DE, _exc_msg
+    LD C, 9
+    CALL 5
+
+    ; Print exception ID
+    POP HL
+    CALL _put_int_direct
+
+    ; Newline and exit
+    CALL _new_line
+    JP 0                    ; Warm boot
+
+_exc_msg:
+    DB 'Unhandled exception: $'
+
+; Helper to print integer directly (not via stack)
+_put_int_direct:
+    BIT 7, H
+    JR Z, _pid_pos
+    PUSH HL
+    LD E, '-'
+    LD C, 2
+    CALL 5
+    POP HL
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+_pid_pos:
+    LD B, 0
+_pid_loop:
+    LD DE, 10
+    CALL _udiv16
+    LD A, E
+    ADD A, '0'
+    PUSH AF
+    INC B
+    LD A, H
+    OR L
+    JR NZ, _pid_loop
+_pid_print:
+    POP AF
+    LD E, A
+    LD C, 2
+    PUSH BC
+    CALL 5
+    POP BC
+    DJNZ _pid_print
+    RET
+
+; ============================================================
+; _exc_get_name - Get exception name string
+; Input: HL = exception ID
+; Output: HL = pointer to name string
+; ============================================================
+    PUBLIC _exc_get_name
+_exc_get_name:
+    ; Simple implementation - return generic name
+    LD HL, _exc_generic
+    RET
+
+_exc_generic:
+    DB 'Exception', 0
+
+; ============================================================
+; Tagged Type Dispatch
+; ============================================================
+
+; ============================================================
+; _dispatch_call - Call method through dispatch table
+; Input: IY = object pointer (has tag at offset 0)
+;        HL = slot number in dispatch table
+; Output: Depends on called method
+; Destroys: Depends on method
+; ============================================================
+    PUBLIC _dispatch_call
+_dispatch_call:
+    ; Get tag (VMT pointer) from object
+    PUSH HL                 ; save slot number
+    LD L, (IY+0)
+    LD H, (IY+1)            ; HL = VMT pointer
+
+    ; Get slot offset (slot * 2 for 16-bit addresses)
+    POP DE                  ; DE = slot number
+    SLA E
+    RL D                    ; DE = slot * 2
+    ADD HL, DE              ; HL = VMT + offset
+
+    ; Load method address
+    LD A, (HL)
+    INC HL
+    LD H, (HL)
+    LD L, A                 ; HL = method address
+
+    ; Call the method (object pointer still in IY)
+    JP (HL)
+
+; ============================================================
+; Fixed-Point Support (Q16.16 format)
+; 32-bit fixed point: 16 bits integer, 16 bits fraction
+; Value = stored_value / 65536
+; Stack convention: arguments pushed right-to-left
+;   SP+2: right_hi, SP+4: right_lo, SP+6: left_hi, SP+8: left_lo
+; Result returned in DE:HL (DE=high, HL=low)
+; ============================================================
+
+; ============================================================
+; _fix_neg - Negate 16-bit fixed-point value (legacy)
+; Input: HL = fixed-point value
+; Output: HL = negated value
+; Destroys: A
+; ============================================================
+    PUBLIC _fix_neg
+_fix_neg:
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+    RET
+
+; ============================================================
+; _fixed_add - Add two 32-bit fixed-point values
+; Stack: SP+2: right_hi, SP+4: right_lo, SP+6: left_hi, SP+8: left_lo
+; Returns: DE:HL = left + right
+; ============================================================
+    PUBLIC _fixed_add
+_fixed_add:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+    ; Get left value (low word at IX+10, high at IX+8)
+    LD L, (IX+10)
+    LD H, (IX+11)       ; HL = left_lo
+    LD E, (IX+6)
+    LD D, (IX+7)        ; DE = right_lo
+    ADD HL, DE          ; HL = low result
+    PUSH HL             ; Save low result
+    ; Add high words with carry
+    LD L, (IX+8)
+    LD H, (IX+9)        ; HL = left_hi
+    LD E, (IX+4)
+    LD D, (IX+5)        ; DE = right_hi
+    ADC HL, DE          ; HL = high result (with carry from low)
+    EX DE, HL           ; DE = high result
+    POP HL              ; HL = low result
+    POP IX
+    RET
+
+; ============================================================
+; _fixed_sub - Subtract two 32-bit fixed-point values
+; Stack: SP+2: right_hi, SP+4: right_lo, SP+6: left_hi, SP+8: left_lo
+; Returns: DE:HL = left - right
+; ============================================================
+    PUBLIC _fixed_sub
+_fixed_sub:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+    ; Get left value low word
+    LD L, (IX+10)
+    LD H, (IX+11)       ; HL = left_lo
+    LD E, (IX+6)
+    LD D, (IX+7)        ; DE = right_lo
+    AND A               ; Clear carry
+    SBC HL, DE          ; HL = low result
+    PUSH HL             ; Save low result
+    ; Subtract high words with borrow
+    LD L, (IX+8)
+    LD H, (IX+9)        ; HL = left_hi
+    LD E, (IX+4)
+    LD D, (IX+5)        ; DE = right_hi
+    SBC HL, DE          ; HL = high result (with borrow)
+    EX DE, HL           ; DE = high result
+    POP HL              ; HL = low result
+    POP IX
+    RET
+
+; ============================================================
+; _fixed_mul - Multiply two Q16.16 fixed-point values
+; Stack: SP+2: right_hi, SP+4: right_lo, SP+6: left_hi, SP+8: left_lo
+; Returns: DE:HL = (left * right) >> 16
+; Note: Result scaled back to Q16.16 by shifting right 16 bits
+; For Q16.16 multiply: result = (a * b) >> 16
+; Full product is 64-bit, we take bits 16-47 for 32-bit result
+; ============================================================
+    PUBLIC _fixed_mul
+_fixed_mul:
+    PUSH IX
+    PUSH BC
+    LD IX, 0
+    ADD IX, SP
+    ; Stack layout after PUSH IX, PUSH BC:
+    ; IX+6: right_hi, IX+8: right_lo, IX+10: left_hi, IX+12: left_lo
+
+    ; Compute left_lo * right_lo (32-bit result, we need high word = bits 16-31)
+    LD L, (IX+12)
+    LD H, (IX+13)       ; HL = left_lo
+    LD E, (IX+8)
+    LD D, (IX+9)        ; DE = right_lo
+    CALL _mul16_32      ; Returns HL:DE = result (HL=high, DE=low)
+    ; We need the high word (HL) for the low word of our result
+    PUSH HL             ; Save left_lo * right_lo >> 16
+
+    ; Compute left_lo * right_hi (16x16->32, take low 16 bits = middle term part 1)
+    LD L, (IX+12)
+    LD H, (IX+13)       ; HL = left_lo
+    LD E, (IX+6)
+    LD D, (IX+7)        ; DE = right_hi
+    CALL _mul16         ; HL = low 16 bits of result
+    PUSH HL             ; Save temp
+
+    ; Compute left_hi * right_lo (16x16->32, take low 16 bits = middle term part 2)
+    LD L, (IX+10)
+    LD H, (IX+11)       ; HL = left_hi
+    LD E, (IX+8)
+    LD D, (IX+9)        ; DE = right_lo
+    CALL _mul16         ; HL = result
+    POP DE              ; DE = left_lo * right_hi
+    ADD HL, DE          ; HL = middle term (left_lo*right_hi + left_hi*right_lo)
+    EX DE, HL           ; DE = middle term
+
+    POP HL              ; HL = left_lo * right_lo >> 16
+    ADD HL, DE          ; HL = low word of final result (with carry to high word)
+    PUSH HL             ; Save low result
+    LD HL, 0
+    ADC HL, HL          ; HL = carry from low word addition
+    PUSH HL             ; Save carry
+
+    ; Compute left_hi * right_hi (contributes to high word of result)
+    LD L, (IX+10)
+    LD H, (IX+11)       ; HL = left_hi
+    LD E, (IX+6)
+    LD D, (IX+7)        ; DE = right_hi
+    CALL _mul16         ; HL = result
+    POP DE              ; DE = carry
+    ADD HL, DE          ; HL += carry
+    EX DE, HL           ; DE = high word of result
+    POP HL              ; HL = low word of result
+
+    POP BC
+    POP IX
+    RET
+
+; ============================================================
+; _fixed_div - Divide two Q16.16 fixed-point values
+; Stack: SP+2: right_hi, SP+4: right_lo, SP+6: left_hi, SP+8: left_lo
+; Returns: DE:HL = (left << 16) / right
+; Note: Left shifted left 16 bits before division to maintain precision
+; ============================================================
+    PUBLIC _fixed_div
+_fixed_div:
+    PUSH IX
+    PUSH BC
+    LD IX, 0
+    ADD IX, SP
+    ; For Q16.16 division: (left << 16) / right
+    ; This is complex on Z80, use simplified version for small values
+
+    ; Get left value shifted left 16 bits
+    ; Original left_lo becomes high word, original left_hi discarded
+    ; (This limits precision but keeps it simple)
+    LD L, (IX+12)
+    LD H, (IX+13)       ; HL = left_lo (becomes high word after << 16)
+    LD E, (IX+8)
+    LD D, (IX+9)        ; DE = right_lo (divisor low)
+
+    ; Simple 16-bit division for now
+    ; TODO: Implement full 32/32 division
+    CALL _div16         ; HL = HL / DE
+
+    ; Result in HL is the quotient
+    EX DE, HL           ; Move quotient to DE
+    LD HL, 0            ; Low word = 0 (precision lost)
+
+    POP BC
+    POP IX
+    RET
+
+; ============================================================
+; C Interface Support
+; ============================================================
+
+; ============================================================
+; _c_call_hl - Call function pointer in HL
+; Input: HL = function address
+; Output: Depends on called function
+; ============================================================
+    PUBLIC _c_call_hl
+_c_call_hl:
+    JP (HL)
+
+; ============================================================
+; Hash Functions
+; ============================================================
+    CSEG
+    PUBLIC _str_hash
+    PUBLIC _int_hash
+
+; _str_hash: DJB2 hash function for strings
+; Input: HL = pointer to null-terminated string
+; Output: HL = 16-bit hash value
+; Uses DJB2 algorithm: hash = hash * 33 + c
+_str_hash:
+    push BC
+    push DE
+    ld DE, 5381         ; initial hash value
+_sh_loop:
+    ld A, (HL)
+    or A
+    jr Z, _sh_done      ; null terminator
+    ; hash = hash * 33 = hash * 32 + hash
+    push HL             ; save string pointer
+    ; DE * 32: shift left 5 times
+    ld H, D
+    ld L, E
+    add HL, HL          ; *2
+    add HL, HL          ; *4
+    add HL, HL          ; *8
+    add HL, HL          ; *16
+    add HL, HL          ; *32
+    add HL, DE          ; *32 + original = *33
+    ; Add character
+    ld D, 0
+    ld E, A
+    add HL, DE
+    ex DE, HL           ; DE = new hash
+    pop HL              ; restore string pointer
+    inc HL
+    jr _sh_loop
+_sh_done:
+    ex DE, HL           ; HL = hash
+    pop DE
+    pop BC
+    ret
+
+; _int_hash: Hash function for 16-bit integers
+; Input: HL = integer value
+; Output: HL = 16-bit hash value
+; Simple multiplicative hash using golden ratio approximation
+_int_hash:
+    push DE
+    push BC
+    ; hash = value * 40503 (approximates golden ratio * 2^16)
+    ; 40503 = 0x9E37
+    ld D, H
+    ld E, L             ; DE = value
+    ; Multiply by 0x9E37
+    ld BC, 9E37h
+    call _mul16         ; HL = low word of DE * BC
+    ; XOR with shifted value for better distribution
+    ld A, H
+    xor L
+    ld L, A
+    pop BC
+    pop DE
+    ret
+
+; ============================================================
+; _MEMCPY - Copy memory block
+; Stack: SP+2: count (word), SP+4: src ptr, SP+6: dest ptr
+; Returns: nothing
+; ============================================================
+    PUBLIC _MEMCPY
+_MEMCPY:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+    ; IX+4: count, IX+6: src, IX+8: dest
+    LD C, (IX+4)
+    LD B, (IX+5)        ; BC = count
+    LD A, B
+    OR C
+    JR Z, _memcpy_done  ; if count == 0, done
+    LD L, (IX+6)
+    LD H, (IX+7)        ; HL = src
+    LD E, (IX+8)
+    LD D, (IX+9)        ; DE = dest
+    LDIR                ; copy BC bytes from HL to DE
+_memcpy_done:
+    POP IX
+    RET
+
+; ============================================================
+; _strcat - Concatenate two null-terminated strings
+; Stack: SP+2: s2 ptr, SP+4: s1 ptr
+; Returns: HL = pointer to concatenated string (static buffer)
+; ============================================================
+    PUBLIC _strcat
+_strcat:
+    PUSH IX
+    PUSH BC
+    LD IX, 0
+    ADD IX, SP
+    ; IX+6: s2_ptr, IX+8: s1_ptr
+
+    LD DE, _strcat_buf  ; destination
+
+    ; Copy s1
+    LD L, (IX+8)
+    LD H, (IX+9)        ; HL = s1
+_strcat_copy1:
+    LD A, (HL)
+    OR A
+    JR Z, _strcat_s2
+    LD (DE), A
+    INC HL
+    INC DE
+    JR _strcat_copy1
+
+_strcat_s2:
+    ; Copy s2
+    LD L, (IX+6)
+    LD H, (IX+7)        ; HL = s2
+_strcat_copy2:
+    LD A, (HL)
+    LD (DE), A
+    OR A
+    JR Z, _strcat_done
+    INC HL
+    INC DE
+    JR _strcat_copy2
+
+_strcat_done:
+    LD HL, _strcat_buf  ; return buffer address
+    POP BC
+    POP IX
+    RET
+
+; ============================================================
+; _STR_CON - Concatenate two strings (alternate interface)
+; Stack: SP+2: s2 ptr, SP+4: s2 len, SP+6: s1 ptr, SP+8: s1 len, SP+10: dest ptr
+; Copies s1 then s2 to dest, returns total length in HL
+; ============================================================
+    PUBLIC _STR_CON
+_STR_CON:
+    PUSH IX
+    PUSH BC
+    LD IX, 0
+    ADD IX, SP
+    ; Stack after pushes: IX+6: s2_ptr, IX+8: s2_len, IX+10: s1_ptr, IX+12: s1_len, IX+14: dest_ptr
+
+    LD E, (IX+14)
+    LD D, (IX+15)       ; DE = dest
+
+    ; Copy s1 to dest
+    LD C, (IX+12)
+    LD B, (IX+13)       ; BC = s1_len
+    LD A, B
+    OR C
+    JR Z, _str_con_s2   ; skip if s1_len == 0
+    LD L, (IX+10)
+    LD H, (IX+11)       ; HL = s1_ptr
+    LDIR                ; copy s1 to dest, DE advances
+
+_str_con_s2:
+    ; Copy s2 to dest (DE already points to end of s1)
+    LD C, (IX+8)
+    LD B, (IX+9)        ; BC = s2_len
+    LD A, B
+    OR C
+    JR Z, _str_con_done ; skip if s2_len == 0
+    LD L, (IX+6)
+    LD H, (IX+7)        ; HL = s2_ptr
+    LDIR                ; copy s2 to dest
+
+_str_con_done:
+    ; Return total length = s1_len + s2_len
+    LD L, (IX+12)
+    LD H, (IX+13)       ; HL = s1_len
+    LD C, (IX+8)
+    LD B, (IX+9)        ; BC = s2_len
+    ADD HL, BC          ; HL = total length
+
+    POP BC
+    POP IX
+    RET
+
+; ============================================================
+; _exp16 - Integer exponentiation (base ** exponent)
+; Caller pushes: base first, then exponent
+; After CALL and frame setup: IX+8=exponent, IX+10=base
+; Returns: HL = base ** exponent
+; Algorithm: Binary exponentiation (repeated squaring)
+; Note: For Ada Integer ** Natural, exponent is always >= 0
+; ============================================================
+    PUBLIC _exp16
+_exp16:
+    PUSH IX
+    PUSH BC
+    PUSH DE
+    LD IX, 0
+    ADD IX, SP
+    ; Caller pushed base first (now at IX+10), then exponent (now at IX+8)
+    LD E, (IX+10)
+    LD D, (IX+11)       ; DE = base
+    LD C, (IX+8)
+    LD B, (IX+9)        ; BC = exponent
+
+    ; Handle special case: exp == 0 -> return 1
+    LD A, B
+    OR C
+    JR NZ, _exp16_loop
+    LD HL, 1
+    JR _exp16_done
+
+_exp16_loop:
+    ; Initialize result = 1
+    LD HL, 1
+
+_exp16_next:
+    ; Check if exp == 0
+    LD A, B
+    OR C
+    JR Z, _exp16_done
+
+    ; Check if exp is odd (low bit set)
+    LD A, C
+    AND 1
+    JR Z, _exp16_square
+
+    ; exp is odd: result = result * base
+    ; Save base and exp
+    PUSH BC             ; save exp
+    PUSH DE             ; save base
+    ; HL = result, DE = base, need HL = HL * DE
+    CALL _mul16_hlde
+    POP DE              ; restore base
+    POP BC              ; restore exp
+
+_exp16_square:
+    ; base = base * base
+    PUSH HL             ; save result
+    EX DE, HL           ; HL = base
+    PUSH HL             ; save base for mul
+    CALL _mul16_hlhl    ; HL = HL * HL
+    EX DE, HL           ; DE = new base
+    POP HL              ; discard saved base
+    POP HL              ; restore result
+
+    ; exp = exp >> 1
+    SRL B
+    RR C
+
+    JR _exp16_next
+
+_exp16_done:
+    POP DE
+    POP BC
+    POP IX
+    RET
+
+; Helper: HL = HL * DE (destroys A, flags)
+; Standard shift-and-add multiplication
+    PUBLIC _mul16_hlde
+_mul16_hlde:
+    PUSH BC
+    ; HL = multiplicand, DE = multiplier
+    ; Result in HL (low 16 bits of product)
+    LD B, H
+    LD C, L             ; BC = multiplicand
+    LD HL, 0            ; HL = result accumulator
+    LD A, 16            ; 16 bits to process
+_mul16_hlde_loop:
+    ADD HL, HL          ; shift result left
+    SLA E               ; shift multiplier (DE) left, high bit to carry
+    RL D
+    JR NC, _mul16_hlde_skip
+    ADD HL, BC          ; if carry (high bit was 1), add multiplicand
+_mul16_hlde_skip:
+    DEC A
+    JR NZ, _mul16_hlde_loop
+    POP BC
+    RET
+
+; Helper: HL = HL * HL (square)
+    PUBLIC _mul16_hlhl
+_mul16_hlhl:
+    LD D, H
+    LD E, L             ; DE = HL
+    JR _mul16_hlde      ; Use same routine
+
+; ============================================================
+; Data Segment (all DSEG declarations consolidated here)
+; ============================================================
+    DSEG
+
+; Heap management variables
+_heap_ptr:
+    DW 0                    ; Current heap pointer (0 = uninitialized)
+_heap_end:
+    DW 0                    ; End of available memory
+
+; Exception handling variables
+    PUBLIC _exc_handler
+    PUBLIC _exc_current
+    PUBLIC _exc_message
+_exc_handler:
+    DW 0                    ; Pointer to current exception handler frame
+_exc_current:
+    DW 0                    ; Current exception ID (1=Constraint_Error, etc)
+_exc_message:
+    DW 0                    ; Pointer to exception message string
+
+; Integer to string conversion buffer
+_int_str_buf:
+    DS 8                    ; -32768 is 6 chars + sign + null
+
+; String concatenation buffer (moved from middle of CSEG)
+_strcat_buf:
+    DS 256                  ; 256-byte buffer for concatenation
+
+; Character'Image buffers
+_c_img_buf:
+    DS 5                    ; "'X'" + null = 4 bytes, +1 for safety
+_wc_img_buf:
+    DS 5                    ; "'X'" + null = 4 bytes, +1 for safety
+_wwc_img_buf:
+    DS 5                    ; "'X'" + null = 4 bytes, +1 for safety
+
+; Float'Image (fixed-point) buffers
+_fix_img_buf:
+    DS 16                   ; "-32768.999" + null
+_fix_img_ptr:
+    DS 2                    ; Buffer write pointer
+_fix_img_int:
+    DS 2                    ; Integer part
+_fix_img_frc:
+    DS 2                    ; Fractional part
+
+; Heap start marker (must be last)
+    PUBLIC _heap_start
+_heap_start:
+    ; This should be at the end of all static data
+
+    END

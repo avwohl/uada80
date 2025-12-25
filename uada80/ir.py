@@ -24,6 +24,7 @@ class IRType(Enum):
     PTR = auto()  # 16-bit pointer
     FIXED = auto()  # 16.16 fixed-point (32-bit)
     FLOAT48 = auto()  # 48-bit floating point (z88dk math48 format)
+    FLOAT64 = auto()  # 64-bit IEEE 754 double precision
 
 
 @dataclass
@@ -39,6 +40,8 @@ class VReg(IRValue):
 
     id: int
     name: str = ""  # Optional name for debugging
+    is_atomic: bool = False  # For pragma Atomic - wrap accesses in DI/EI
+    is_volatile: bool = False  # For pragma Volatile - no caching
 
     def __hash__(self) -> int:
         return hash(self.id)
@@ -92,8 +95,15 @@ class MemoryLocation(IRValue):
     symbol_name: str = ""  # Name of symbol for globals
     is_atomic: bool = False  # pragma Atomic - wrap in DI/EI
     is_volatile: bool = False  # pragma Volatile - no caching
+    is_frame_offset: bool = False  # True if offset is already a frame offset (negative)
+    addr_vreg: Optional[VReg] = None  # If set, compute address of this vreg's storage
+    # Bit-field support for pragma Pack
+    bit_offset: int = 0  # Bit offset within byte (0-7)
+    bit_size: int = 0  # Size in bits (0 = full byte/word)
 
     def __repr__(self) -> str:
+        if self.addr_vreg:
+            return f"&{self.addr_vreg}"
         if self.is_global:
             return f"[{self.symbol_name}]"
         if self.base:
@@ -133,6 +143,9 @@ class OpCode(Enum):
     NOT = auto()  # dst = ~src
     SHL = auto()  # dst = src1 << src2
     SHR = auto()  # dst = src1 >> src2
+    SAR = auto()  # dst = src1 >> src2 (arithmetic, sign-extend)
+    ROL = auto()  # dst = rotate left src1 by src2
+    ROR = auto()  # dst = rotate right src1 by src2
 
     # Comparison (sets flags only)
     CMP = auto()  # compare src1 with src2, set flags
@@ -153,6 +166,12 @@ class OpCode(Enum):
     JMP = auto()  # unconditional jump
     JZ = auto()  # jump if zero
     JNZ = auto()  # jump if not zero
+    JL = auto()  # jump if less (signed), after CMP
+    JLE = auto()  # jump if less or equal (signed), after CMP
+    JG = auto()  # jump if greater (signed), after CMP
+    JGE = auto()  # jump if greater or equal (signed), after CMP
+    JC = auto()  # jump if carry (unsigned less), after CMP
+    JNC = auto()  # jump if no carry (unsigned greater or equal), after CMP
     CALL = auto()  # call subroutine
     CALL_INDIRECT = auto()  # indirect call through function pointer (src1=ptr)
     DISPATCH = auto()  # dispatching call through vtable (src1=object, src2=slot)
@@ -292,8 +311,10 @@ class IRModule:
     functions: list[IRFunction] = field(default_factory=list)
     globals: dict[str, tuple[IRType, int]] = field(default_factory=dict)  # name -> (type, size)
     string_literals: dict[str, str] = field(default_factory=dict)  # label -> value
+    float64_constants: dict[str, bytes] = field(default_factory=dict)  # label -> 8 bytes IEEE 754
     vtables: dict[str, list[str]] = field(default_factory=dict)  # vtable_name -> [proc_names]
     runtime_deps: set[str] = field(default_factory=set)  # Runtime routines needed from libada.lib
+    enum_tables: dict[str, list[tuple[str, int]]] = field(default_factory=dict)  # label -> [(name, value)]
 
     def add_function(self, func: IRFunction) -> None:
         """Add a function to the module."""
@@ -306,6 +327,14 @@ class IRModule:
     def add_string(self, label: str, value: str) -> None:
         """Add a string literal."""
         self.string_literals[label] = value
+
+    def add_float64(self, label: str, value: bytes) -> None:
+        """Add a Float64 constant (8 bytes IEEE 754 little-endian)."""
+        self.float64_constants[label] = value
+
+    def add_enum_table(self, label: str, entries: list[tuple[str, int]]) -> None:
+        """Add an enumeration lookup table for 'Value attribute."""
+        self.enum_tables[label] = entries
 
     def need_runtime(self, routine_name: str) -> None:
         """Mark a runtime library routine as needed."""
@@ -374,9 +403,9 @@ class IRBuilder:
         """Set the current block for insertion."""
         self.block = block
 
-    def new_vreg(self, ir_type: IRType, name: str = "") -> VReg:
+    def new_vreg(self, ir_type: IRType, name: str = "", is_atomic: bool = False, is_volatile: bool = False) -> VReg:
         """Create a new virtual register."""
-        vreg = VReg(id=self._vreg_counter, name=name, ir_type=ir_type)
+        vreg = VReg(id=self._vreg_counter, name=name, ir_type=ir_type, is_atomic=is_atomic, is_volatile=is_volatile)
         self._vreg_counter += 1
         return vreg
 
@@ -454,6 +483,14 @@ class IRBuilder:
         """Emit a bitwise NOT instruction."""
         self.emit(IRInstr(OpCode.NOT, dst, src, comment=comment))
 
+    def shl(self, dst: VReg, src1: IRValue, src2: IRValue, comment: str = "") -> None:
+        """Emit a shift left instruction."""
+        self.emit(IRInstr(OpCode.SHL, dst, src1, src2, comment=comment))
+
+    def shr(self, dst: VReg, src1: IRValue, src2: IRValue, comment: str = "") -> None:
+        """Emit a shift right instruction."""
+        self.emit(IRInstr(OpCode.SHR, dst, src1, src2, comment=comment))
+
     def cmp(self, src1: IRValue, src2: IRValue, comment: str = "") -> None:
         """Emit a comparison instruction (sets flags)."""
         self.emit(IRInstr(OpCode.CMP, None, src1, src2, comment=comment))
@@ -482,17 +519,45 @@ class IRBuilder:
         """Emit a greater-or-equal comparison (signed)."""
         self.emit(IRInstr(OpCode.CMP_GE, dst, src1, src2, comment=comment))
 
-    def jmp(self, target: Label, comment: str = "") -> None:
+    def _ensure_label(self, target: Label | str) -> Label:
+        """Convert string to Label if needed."""
+        return Label(target) if isinstance(target, str) else target
+
+    def jmp(self, target: Label | str, comment: str = "") -> None:
         """Emit an unconditional jump."""
-        self.emit(IRInstr(OpCode.JMP, target, comment=comment))
+        self.emit(IRInstr(OpCode.JMP, self._ensure_label(target), comment=comment))
 
-    def jz(self, cond: IRValue, target: Label, comment: str = "") -> None:
+    def jz(self, cond: IRValue, target: Label | str, comment: str = "") -> None:
         """Emit a jump-if-zero."""
-        self.emit(IRInstr(OpCode.JZ, target, cond, comment=comment))
+        self.emit(IRInstr(OpCode.JZ, self._ensure_label(target), cond, comment=comment))
 
-    def jnz(self, cond: IRValue, target: Label, comment: str = "") -> None:
+    def jnz(self, cond: IRValue, target: Label | str, comment: str = "") -> None:
         """Emit a jump-if-not-zero."""
-        self.emit(IRInstr(OpCode.JNZ, target, cond, comment=comment))
+        self.emit(IRInstr(OpCode.JNZ, self._ensure_label(target), cond, comment=comment))
+
+    def jl(self, target: Label | str, comment: str = "") -> None:
+        """Emit a jump-if-less (signed), used after CMP."""
+        self.emit(IRInstr(OpCode.JL, self._ensure_label(target), comment=comment))
+
+    def jle(self, target: Label | str, comment: str = "") -> None:
+        """Emit a jump-if-less-or-equal (signed), used after CMP."""
+        self.emit(IRInstr(OpCode.JLE, self._ensure_label(target), comment=comment))
+
+    def jg(self, target: Label | str, comment: str = "") -> None:
+        """Emit a jump-if-greater (signed), used after CMP."""
+        self.emit(IRInstr(OpCode.JG, self._ensure_label(target), comment=comment))
+
+    def jge(self, target: Label | str, comment: str = "") -> None:
+        """Emit a jump-if-greater-or-equal (signed), used after CMP."""
+        self.emit(IRInstr(OpCode.JGE, self._ensure_label(target), comment=comment))
+
+    def jc(self, target: Label | str, comment: str = "") -> None:
+        """Emit a jump-if-carry (unsigned less), used after CMP."""
+        self.emit(IRInstr(OpCode.JC, self._ensure_label(target), comment=comment))
+
+    def jnc(self, target: Label | str, comment: str = "") -> None:
+        """Emit a jump-if-no-carry (unsigned >=), used after CMP."""
+        self.emit(IRInstr(OpCode.JNC, self._ensure_label(target), comment=comment))
 
     def call(self, target: Label, comment: str = "") -> None:
         """Emit a call instruction."""
@@ -580,6 +645,38 @@ class IRBuilder:
         """Emit an entry accept instruction."""
         self.emit(IRInstr(OpCode.ENTRY_ACCEPT, src1=entry_id, comment=comment))
 
+    # Additional operations for protected types and tasking
+
+    def set_function(self, func: IRFunction) -> None:
+        """Set the current function for building."""
+        self.function = func
+        if func.blocks:
+            self.block = func.blocks[-1]
+
+    def lea(self, dst: VReg, addr: MemoryLocation, comment: str = "") -> None:
+        """Emit a load effective address instruction."""
+        self.emit(IRInstr(OpCode.LEA, dst, addr, comment=comment))
+
+    def load_mem(self, dst: VReg, addr: MemoryLocation, comment: str = "") -> None:
+        """Emit a load from memory instruction (alias for load)."""
+        self.load(dst, addr, comment=comment)
+
+    def rem(self, dst: VReg, src1: IRValue, src2: IRValue, comment: str = "") -> None:
+        """Emit a remainder (modulo) instruction."""
+        self.emit(IRInstr(OpCode.MOD, dst, src1, src2, comment=comment))
+
+    def rol(self, dst: VReg, src1: IRValue, src2: IRValue, comment: str = "") -> None:
+        """Emit a rotate left instruction."""
+        self.emit(IRInstr(OpCode.ROL, dst, src1, src2, comment=comment))
+
+    def ror(self, dst: VReg, src1: IRValue, src2: IRValue, comment: str = "") -> None:
+        """Emit a rotate right instruction."""
+        self.emit(IRInstr(OpCode.ROR, dst, src1, src2, comment=comment))
+
+    def sar(self, dst: VReg, src1: IRValue, src2: IRValue, comment: str = "") -> None:
+        """Emit a shift arithmetic right instruction."""
+        self.emit(IRInstr(OpCode.SAR, dst, src1, src2, comment=comment))
+
 
 # ============================================================================
 # Utility Functions
@@ -602,6 +699,8 @@ def ir_type_size(ir_type: IRType) -> int:
         return 4  # 16.16 fixed point
     if ir_type == IRType.FLOAT48:
         return 6  # 48-bit z88dk format
+    if ir_type == IRType.FLOAT64:
+        return 8  # 64-bit IEEE 754 double
     return 0
 
 
@@ -615,4 +714,6 @@ def ir_type_from_bits(bits: int, signed: bool = True) -> IRType:
         return IRType.DWORD
     if bits <= 48:
         return IRType.FLOAT48
+    if bits <= 64:
+        return IRType.FLOAT64
     return IRType.WORD  # Default fallback

@@ -1,0 +1,6713 @@
+; 64-bit IEEE 754 Double Precision Floating Point Runtime for Ada on Z80
+;
+; IEEE 754 Double Format (8 bytes, stored little-endian):
+;   Bits 0-51:  52-bit mantissa (with implied leading 1 for normalized)
+;   Bits 52-62: 11-bit exponent (biased by 1023)
+;   Bit 63:     Sign (0 = positive, 1 = negative)
+;
+; Memory layout (little-endian):
+;   Byte 0: Mantissa bits 0-7 (LSB)
+;   Byte 1: Mantissa bits 8-15
+;   Byte 2: Mantissa bits 16-23
+;   Byte 3: Mantissa bits 24-31
+;   Byte 4: Mantissa bits 32-39
+;   Byte 5: Mantissa bits 40-47
+;   Byte 6: Mantissa bits 48-51, Exponent bits 0-3
+;   Byte 7: Exponent bits 4-10, Sign bit (MSB)
+;
+; Calling convention:
+;   - Operands passed via memory (pointers on stack)
+;   - Result returned in memory (pointer passed)
+;   - IX used as frame pointer, preserved across calls
+;
+; Stack layout for binary operations:
+;   IX+8: Pointer to second operand
+;   IX+6: Pointer to first operand
+;   IX+4: Pointer to result
+;   IX+2: Return address
+;   IX+0: Saved IX
+
+        .Z80    ; Enable Z80 instruction set
+
+        CSEG
+
+; =============================================================================
+; Public Symbols
+; =============================================================================
+
+        PUBLIC  _f64_add        ; Add two floats
+        PUBLIC  _f64_sub        ; Subtract (a - b)
+        PUBLIC  _f64_mul        ; Multiply
+        PUBLIC  _f64_div        ; Divide (a / b)
+        PUBLIC  _f64_neg        ; Negate
+        PUBLIC  _f64_abs        ; Absolute value
+        PUBLIC  _f64_cmp        ; Compare (returns -1, 0, 1)
+        PUBLIC  _f64_eq         ; Equal
+        PUBLIC  _f64_lt         ; Less than
+        PUBLIC  _f64_le         ; Less or equal
+        PUBLIC  _f64_gt         ; Greater than
+        PUBLIC  _f64_ge         ; Greater or equal
+        PUBLIC  _f64_itof       ; Integer to float
+        PUBLIC  _f64_ftoi       ; Float to integer
+        PUBLIC  _f64_zero       ; Load 0.0
+        PUBLIC  _f64_one        ; Load 1.0
+        PUBLIC  _f64_copy       ; Copy float
+        PUBLIC  _f64_sqrt       ; Square root
+        PUBLIC  _f64_floor      ; Floor (round toward -inf)
+        PUBLIC  _f64_ceil       ; Ceiling (round toward +inf)
+        PUBLIC  _f64_trunc      ; Truncate (round toward 0)
+        PUBLIC  _f64_round      ; Round to nearest (half away from zero)
+        PUBLIC  _f64_exp_int    ; Float64 ** Integer exponentiation
+        PUBLIC  _f64_rem        ; Remainder (sign follows dividend)
+        PUBLIC  _f64_mod        ; Modulo (sign follows divisor)
+        PUBLIC  _f64_sin        ; Sine (Taylor series)
+        PUBLIC  _f64_cos        ; Cosine (Taylor series)
+        PUBLIC  _f64_tan        ; Tangent (sin/cos)
+        PUBLIC  _f64_atan       ; Arctangent (Taylor series)
+        PUBLIC  _f64_asin       ; Arcsine (via atan identity)
+        PUBLIC  _f64_acos       ; Arccosine (π/2 - asin)
+        PUBLIC  _f64_at2        ; Two-argument arctangent (8-char name to avoid collision with _f64_atan)
+        PUBLIC  _f64_sinh       ; Hyperbolic sine
+        PUBLIC  _f64_cosh       ; Hyperbolic cosine
+        PUBLIC  _f64_tanh       ; Hyperbolic tangent
+        PUBLIC  _f64_asnh       ; Inverse hyperbolic sine (arcsinh)
+        PUBLIC  _f64_acsh       ; Inverse hyperbolic cosine (arccosh)
+        PUBLIC  _f64_atnh       ; Inverse hyperbolic tangent (arctanh)
+        PUBLIC  _f64_e2x        ; Exponential e^x (Taylor series, 8-char name to avoid collision with _f64_exp_int)
+        PUBLIC  _f64_log        ; Natural logarithm ln(x)
+        PUBLIC  _f64_lg10       ; Base 10 logarithm log10(x)
+        PUBLIC  _f64_lg2        ; Base 2 logarithm log2(x)
+        PUBLIC  _str_f64        ; String to Float64 conversion
+        PUBLIC  _f64_img        ; Float64 to string (Long_Float'Image)
+
+        ; Constants used by inlined composite functions
+        PUBLIC  _const_one_f64  ; 1.0
+        PUBLIC  _const_2        ; 2.0
+        PUBLIC  _const_ln10     ; ln(10) ≈ 2.302585
+        ; _const_ln2 is local-only (8-char symbol collision with _const_ln10)
+        PUBLIC  _const_6        ; 6.0 (for sin Taylor series: x³/6)
+        PUBLIC  _const_24       ; 24.0 (for cos Taylor series: x⁴/24)
+        PUBLIC  _const_120      ; 120.0 (for sin Taylor series: x⁵/120)
+        PUBLIC  _const_720      ; 720.0 (for cos Taylor series: x⁶/720)
+        PUBLIC  _const_5040     ; 5040.0 (for sin Taylor series: x⁷/5040)
+
+; =============================================================================
+; Constants
+; =============================================================================
+
+; Exponent bias for IEEE 754 double
+EXP_BIAS        EQU     1023
+
+; Special exponent values
+EXP_ZERO        EQU     0       ; Zero or denormal
+EXP_INF         EQU     2047    ; Infinity or NaN
+
+; Working memory declarations moved to end of file to avoid linker segment bug
+
+        CSEG
+
+; =============================================================================
+; Internal helper: Shift 64-bit value right by 1
+; Input:  HL = pointer to 8-byte value (little-endian)
+; Output: Value shifted right by 1, MSB = 0
+; =============================================================================
+_shift_right_64:
+        push    bc
+        push    de
+        push    hl
+
+        ; Start from MSB (byte 7)
+        ld      de, 7
+        add     hl, de
+
+        ; Clear carry for first byte
+        or      a               ; Clear carry
+
+        ; Shift 8 bytes
+        ld      b, 8
+_sr64_loop:
+        ld      a, (hl)
+        rra                     ; Rotate right through carry
+        ld      (hl), a
+        dec     hl
+        djnz    _sr64_loop
+
+        pop     hl
+        pop     de
+        pop     bc
+        ret
+
+; =============================================================================
+; Internal helper: Shift 64-bit value right by N bits
+; Input:  HL = pointer to 8-byte value, C = shift count
+; Output: Value shifted right by C bits
+; =============================================================================
+_shift_right_64_n:
+        push    bc
+        push    de
+
+        ld      a, c
+        or      a
+        jr      z, _sr64n_done
+
+        ; If shift >= 64, just zero the value
+        cp      64
+        jr      c, _sr64n_loop
+
+        ; Zero the entire value
+        push    hl
+        xor     a
+        ld      b, 8
+_sr64n_zero:
+        ld      (hl), a
+        inc     hl
+        djnz    _sr64n_zero
+        pop     hl
+        jr      _sr64n_done
+
+_sr64n_loop:
+        push    af
+        call    _shift_right_64
+        pop     af
+        dec     a
+        jr      nz, _sr64n_loop
+
+_sr64n_done:
+        pop     de
+        pop     bc
+        ret
+
+; =============================================================================
+; Internal helper: Shift 64-bit value left by 1
+; Input:  HL = pointer to 8-byte value (little-endian)
+; Output: Value shifted left by 1, LSB = 0
+; =============================================================================
+_shift_left_64:
+        push    bc
+        push    de
+        push    hl
+
+        ; Start from LSB (byte 0)
+        or      a               ; Clear carry
+
+        ld      b, 8
+_sl64_loop:
+        ld      a, (hl)
+        rla                     ; Rotate left through carry
+        ld      (hl), a
+        inc     hl
+        djnz    _sl64_loop
+
+        pop     hl
+        pop     de
+        pop     bc
+        ret
+
+; =============================================================================
+; Internal helper: Add two 64-bit values
+; Input:  HL = pointer to first operand (also destination)
+;         DE = pointer to second operand
+; Output: (HL) = (HL) + (DE), carry flag if overflow
+; =============================================================================
+_add_64:
+        push    bc
+        push    hl
+        push    de
+
+        or      a               ; Clear carry
+        ld      b, 8
+_add64_loop:
+        ld      a, (de)
+        adc     a, (hl)
+        ld      (hl), a
+        inc     hl
+        inc     de
+        djnz    _add64_loop
+
+        pop     de
+        pop     hl
+        pop     bc
+        ret
+
+; =============================================================================
+; Internal helper: Subtract two 64-bit values
+; Input:  HL = pointer to first operand (also destination)
+;         DE = pointer to second operand
+; Output: (HL) = (HL) - (DE), carry flag if borrow
+; =============================================================================
+_sub_64:
+        push    bc
+        push    hl
+        push    de
+
+        or      a               ; Clear carry
+        ld      b, 8
+_sub64_loop:
+        ld      a, (de)         ; A = subtrahend byte
+        ld      c, a            ; Save in C
+        ld      a, (hl)         ; A = minuend byte
+        sbc     a, c            ; A = minuend - subtrahend
+        ld      (hl), a         ; Store result
+        inc     hl
+        inc     de
+        djnz    _sub64_loop
+
+        pop     de
+        pop     hl
+        pop     bc
+        ret
+
+; =============================================================================
+; Internal helper: Compare two 64-bit values (unsigned)
+; Input:  HL = pointer to first operand
+;         DE = pointer to second operand
+; Output: A = -1 if HL < DE, 0 if equal, 1 if HL > DE
+; =============================================================================
+_cmp_64:
+        push    bc
+        push    hl
+        push    de
+
+        ; Start from MSB
+        ld      bc, 7
+        add     hl, bc
+        ex      de, hl
+        add     hl, bc
+        ex      de, hl
+
+        ld      b, 8
+_cmp64_loop:
+        ld      a, (de)
+        cp      (hl)
+        jr      nz, _cmp64_diff
+        dec     hl
+        dec     de
+        djnz    _cmp64_loop
+
+        ; Equal
+        xor     a
+        jr      _cmp64_done
+
+_cmp64_diff:
+        jr      c, _cmp64_greater
+        ld      a, -1           ; HL < DE
+        jr      _cmp64_done
+_cmp64_greater:
+        ld      a, 1            ; HL > DE
+
+_cmp64_done:
+        pop     de
+        pop     hl
+        pop     bc
+        ret
+
+; =============================================================================
+; Internal helper: Copy 8 bytes
+; Input:  HL = source, DE = destination
+; =============================================================================
+_copy_64:
+        push    bc
+        ld      bc, 8
+        ldir
+        pop     bc
+        ret
+
+; =============================================================================
+; Internal helper: Zero 8 bytes
+; Input:  HL = destination
+; =============================================================================
+_zero_64:
+        push    bc
+        push    hl
+        xor     a
+        ld      b, 8
+_zero64_loop:
+        ld      (hl), a
+        inc     hl
+        djnz    _zero64_loop
+        pop     hl
+        pop     bc
+        ret
+
+; =============================================================================
+; Internal helper: Check if 64-bit value is zero
+; Input:  HL = pointer to value
+; Output: Z flag set if zero
+; =============================================================================
+_is_zero_64:
+        push    bc
+        push    hl
+
+        ld      b, 8
+_isz64_loop:
+        ld      a, (hl)
+        or      a
+        jr      nz, _isz64_done
+        inc     hl
+        djnz    _isz64_loop
+
+        ; If we get here, all bytes were zero - Z flag is set
+_isz64_done:
+        pop     hl
+        pop     bc
+        ret
+
+; =============================================================================
+; Internal helper: Extract mantissa from IEEE 754 double
+; Input:  HL = pointer to 8-byte IEEE 754 double
+;         DE = pointer to 8-byte destination for mantissa
+; Output: Mantissa with implicit 1 at bit 52, or 0 if denormal/zero
+;         Returns exponent in BC (0-2047), sign in A (0 or 80h)
+; =============================================================================
+_extract_float:
+        push    ix
+        push    iy
+
+        push    hl
+        pop     ix              ; IX = source
+        push    de
+        pop     iy              ; IY = dest for mantissa
+
+        ; Clear destination mantissa
+        push    de
+        ex      de, hl
+        call    _zero_64
+        pop     de
+
+        ; Copy low 6 bytes of mantissa (bits 0-47)
+        ld      a, (ix+0)
+        ld      (iy+0), a
+        ld      a, (ix+1)
+        ld      (iy+1), a
+        ld      a, (ix+2)
+        ld      (iy+2), a
+        ld      a, (ix+3)
+        ld      (iy+3), a
+        ld      a, (ix+4)
+        ld      (iy+4), a
+        ld      a, (ix+5)
+        ld      (iy+5), a
+
+        ; Byte 6 has mantissa bits 48-51 (low nibble) and exp bits 0-3 (high nibble)
+        ld      a, (ix+6)
+        and     0Fh             ; Get mantissa bits 48-51
+        ld      (iy+6), a
+
+        ; Byte 7 has exp bits 4-10 and sign
+        ; Extract sign
+        ld      a, (ix+7)
+        and     80h
+        push    af              ; Save sign
+
+        ; Extract exponent
+        ld      a, (ix+6)
+        srl     a
+        srl     a
+        srl     a
+        srl     a               ; A = exp bits 0-3
+        ld      c, a
+
+        ld      a, (ix+7)
+        and     7Fh             ; Mask off sign
+        ld      b, a            ; B = exp bits 4-10
+        sla     a
+        sla     a
+        sla     a
+        sla     a               ; Shift to bits 4-7
+        or      c               ; A = exp bits 0-7
+        ld      c, a
+
+        ld      a, b
+        srl     a
+        srl     a
+        srl     a
+        srl     a               ; A = exp bits 8-10
+        ld      b, a            ; BC = full exponent (0-2047)
+
+        ; Check if exponent is non-zero (normalized number)
+        ld      a, b
+        or      c
+        jr      z, _extract_denormal
+
+        ; Add implicit 1 at bit 52 (which is bit 4 of byte 6)
+        ld      a, (iy+6)
+        or      10h             ; Set bit 52 (implicit 1)
+        ld      (iy+6), a
+
+_extract_denormal:
+        ; Return sign in A, exponent in BC
+        pop     af              ; Restore sign
+
+        pop     iy
+        pop     ix
+        ret
+
+; =============================================================================
+; Internal helper: 64x64 bit multiplication -> 128 bit result
+; Input:  HL = pointer to multiplicand (8 bytes)
+;         DE = pointer to multiplier (8 bytes)
+; Output: _mantx = 128-bit result (16 bytes, little-endian)
+;
+; Uses shift-and-add algorithm:
+;   result = 0
+;   for each bit in multiplier:
+;     if bit set: result += multiplicand << shift
+;     shift += 1
+; =============================================================================
+_mul_64x64:
+        push    ix
+        push    iy
+        push    bc
+
+        push    hl
+        pop     ix              ; IX = multiplicand
+        push    de
+        pop     iy              ; IY = multiplier
+
+        ; Clear result (16 bytes)
+        ld      hl, _mantx
+        ld      b, 16
+        xor     a
+_mul64_clear:
+        ld      (hl), a
+        inc     hl
+        djnz    _mul64_clear
+
+        ; Copy multiplicand to temp area (we'll shift this)
+        ; Use _acc_a as shifted multiplicand (extended to 16 bytes)
+        ld      hl, _acc_a
+        ld      b, 16
+        xor     a
+_mul64_clear_acc:
+        ld      (hl), a
+        inc     hl
+        djnz    _mul64_clear_acc
+
+        ; Copy original multiplicand to low 8 bytes of acc_a
+        push    ix
+        pop     hl              ; HL = multiplicand
+        ld      de, _acc_a
+        ld      bc, 8
+        ldir
+
+        ; Process 64 bits of multiplier (8 bytes * 8 bits)
+        ld      b, 64           ; Bit counter
+
+_mul64_loop:
+        ; Get current bit of multiplier
+        ; Bit position = (64 - B)
+        ; Byte = (64 - B) / 8 = (64 - B) >> 3
+        ; Bit within byte = (64 - B) & 7
+
+        push    bc
+
+        ; Calculate byte index: (64 - B) / 8
+        ld      a, 64
+        sub     b               ; A = bit position (0-63)
+        ld      c, a            ; Save bit position
+        srl     a
+        srl     a
+        srl     a               ; A = byte index
+
+        ; Get byte from multiplier
+        push    iy
+        pop     hl
+        ld      d, 0
+        ld      e, a
+        add     hl, de
+        ld      a, (hl)         ; A = multiplier byte
+
+        ; Calculate bit within byte: bit_pos & 7
+        ld      d, a            ; Save byte value
+        ld      a, c            ; Restore bit position
+        and     07h             ; A = bit within byte
+
+        ; Create mask (1 << bit_within_byte)
+        ld      e, a
+        ld      a, 1
+        or      a
+        jr      z, _mul64_no_shift_mask
+_mul64_mask_loop:
+        dec     e
+        jp      m, _mul64_mask_done
+        sla     a
+        jr      _mul64_mask_loop
+_mul64_no_shift_mask:
+_mul64_mask_done:
+
+        ; Test bit
+        and     d               ; A & byte
+        jr      z, _mul64_skip_add
+
+        ; Bit is set: add shifted multiplicand to result
+        ; result += acc_a (16 bytes)
+        ld      hl, _mantx
+        ld      de, _acc_a
+        or      a               ; Clear carry
+        ld      c, 16
+_mul64_add_loop:
+        ld      a, (de)
+        adc     a, (hl)
+        ld      (hl), a
+        inc     hl
+        inc     de
+        dec     c
+        jr      nz, _mul64_add_loop
+
+_mul64_skip_add:
+        ; Shift acc_a left by 1 (16 bytes)
+        ld      hl, _acc_a
+        or      a               ; Clear carry
+        ld      c, 16
+_mul64_shift_loop:
+        ld      a, (hl)
+        rla
+        ld      (hl), a
+        inc     hl
+        dec     c
+        jr      nz, _mul64_shift_loop
+
+        pop     bc
+        dec     b
+        jp      nz, _mul64_loop
+
+        pop     bc
+        pop     iy
+        pop     ix
+        ret
+
+; =============================================================================
+; Internal helper: Pack mantissa into IEEE 754 double
+; Input:  HL = pointer to 8-byte mantissa (with bit 52 as MSB)
+;         DE = pointer to 8-byte destination
+;         BC = exponent (biased)
+;         A = sign (0 or 80h)
+; =============================================================================
+_pack_float:
+        push    ix
+        push    iy
+
+        push    hl
+        pop     ix              ; IX = mantissa source
+        push    de
+        pop     iy              ; IY = destination
+
+        push    af              ; Save sign
+        push    bc              ; Save exponent
+
+        ; Copy mantissa bytes 0-5 directly
+        ld      a, (ix+0)
+        ld      (iy+0), a
+        ld      a, (ix+1)
+        ld      (iy+1), a
+        ld      a, (ix+2)
+        ld      (iy+2), a
+        ld      a, (ix+3)
+        ld      (iy+3), a
+        ld      a, (ix+4)
+        ld      (iy+4), a
+        ld      a, (ix+5)
+        ld      (iy+5), a
+
+        ; Byte 6: mantissa bits 48-51 (low nibble) + exp bits 0-3 (high nibble)
+        ld      a, (ix+6)
+        and     0Fh             ; Get mantissa bits 48-51 (strip implicit 1)
+        ld      d, a
+
+        pop     bc              ; Restore exponent
+        push    bc
+        ld      a, c
+        and     0Fh             ; Exp bits 0-3
+        sla     a
+        sla     a
+        sla     a
+        sla     a               ; Shift to high nibble
+        or      d               ; Combine with mantissa
+        ld      (iy+6), a
+
+        ; Byte 7: exp bits 4-10 + sign
+        pop     bc              ; Restore exponent
+        ld      a, c
+        srl     a
+        srl     a
+        srl     a
+        srl     a               ; A = exp bits 4-7
+        ld      d, a
+        ld      a, b            ; Exp bits 8-10
+        sla     a
+        sla     a
+        sla     a
+        sla     a               ; Shift to bits 4-6
+        or      d               ; Combine
+
+        ld      d, a            ; Save exp portion
+        pop     af              ; Restore sign
+        or      d               ; Combine sign with exp
+        ld      (iy+7), a
+
+        pop     iy
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_copy: Copy 8-byte float from source to destination
+; Input:  Stack: dest_ptr, src_ptr
+; Output: Destination contains copy of source
+; =============================================================================
+_f64_copy:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Get source pointer
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl              ; Save source
+
+        ; Get dest pointer
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        ex      de, hl          ; DE = dest
+
+        pop     hl              ; HL = source
+
+        ; Copy 8 bytes
+        ld      bc, 8
+        ldir
+
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_zero: Store 0.0 at destination
+; Input:  Stack: dest_ptr
+; Output: Destination contains 0.0
+; =============================================================================
+_f64_zero:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Get dest pointer
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+
+        ; Store 8 zero bytes
+        xor     a
+        ld      b, 8
+_fz_loop:
+        ld      (hl), a
+        inc     hl
+        djnz    _fz_loop
+
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_one: Store 1.0 at destination
+; Input:  Stack: dest_ptr
+; Output: Destination contains 1.0
+; =============================================================================
+_f64_one:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Get dest pointer
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+
+        ; 1.0 in IEEE 754 double = 0x3FF0_0000_0000_0000
+        ; Little-endian: 00 00 00 00 00 00 F0 3F
+        xor     a
+        ld      (hl), a         ; Byte 0
+        inc     hl
+        ld      (hl), a         ; Byte 1
+        inc     hl
+        ld      (hl), a         ; Byte 2
+        inc     hl
+        ld      (hl), a         ; Byte 3
+        inc     hl
+        ld      (hl), a         ; Byte 4
+        inc     hl
+        ld      (hl), a         ; Byte 5
+        inc     hl
+        ld      (hl), 0F0h      ; Byte 6: mantissa bits 48-51 = 0, exp bits 0-3 = 0
+        inc     hl
+        ld      (hl), 03Fh      ; Byte 7: exp bits 4-10 = 0x3FF >> 4 = 0x3F, sign = 0
+
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_neg: Negate a float (flip sign bit)
+; Input:  Stack: dest_ptr, src_ptr
+; Output: Destination contains -source
+; =============================================================================
+_f64_neg:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; First copy source to dest
+        ld      l, (ix+6)
+        ld      h, (ix+7)       ; HL = source
+        push    hl
+
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = dest
+        ex      de, hl          ; DE = dest
+
+        pop     hl              ; HL = source
+
+        ; Copy 7 bytes
+        ld      bc, 7
+        ldir
+
+        ; For byte 8, flip the sign bit
+        ld      a, (hl)
+        xor     80h             ; Flip sign bit
+        ld      (de), a
+
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_abs: Absolute value (clear sign bit)
+; Input:  Stack: dest_ptr, src_ptr
+; Output: Destination contains |source|
+; =============================================================================
+_f64_abs:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; First copy source to dest
+        ld      l, (ix+6)
+        ld      h, (ix+7)       ; HL = source
+        push    hl
+
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = dest
+        ex      de, hl          ; DE = dest
+
+        pop     hl              ; HL = source
+
+        ; Copy 7 bytes
+        ld      bc, 7
+        ldir
+
+        ; For byte 8, clear the sign bit
+        ld      a, (hl)
+        and     7Fh             ; Clear sign bit
+        ld      (de), a
+
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_itof: Convert 16-bit signed integer to 64-bit float
+; Input:  Stack: dest_ptr, integer value (16-bit)
+; Output: Destination contains float representation
+; =============================================================================
+_f64_itof:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Get integer value (at IX+4,5 - pushed last)
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+
+        ; Get dest pointer (at IX+6,7 - pushed first)
+        ld      e, (ix+6)
+        ld      d, (ix+7)
+        push    de              ; Save dest
+
+        ; Check for zero
+        ld      a, h
+        or      l
+        jr      nz, _itof_nonzero
+
+        ; Return 0.0
+        pop     hl              ; HL = dest
+        xor     a
+        ld      b, 8
+_itof_zero_loop:
+        ld      (hl), a
+        inc     hl
+        djnz    _itof_zero_loop
+        pop     ix
+        ret
+
+_itof_nonzero:
+        ; Determine sign and get absolute value
+        xor     a
+        ld      (_fsign), a  ; Assume positive
+
+        bit     7, h            ; Check sign
+        jr      z, _itof_positive
+
+        ; Negative - negate and set sign
+        ld      a, 1
+        ld      (_fsign), a
+
+        ; Negate HL (two's complement)
+        xor     a
+        sub     l
+        ld      l, a
+        sbc     a, a
+        sub     h
+        ld      h, a
+
+_itof_positive:
+        ; Now HL contains the absolute value (0 to 32767)
+        ; We need to normalize: find the position of the MSB
+
+        ; Start with exponent = 1023 + 15 (for a 16-bit number at position 15)
+        ld      de, 1023 + 15
+        ld      (_exp_a), de
+
+        ; Shift left until MSB is in bit 15 (or HL = 0)
+        ld      a, h
+        or      a
+        jr      nz, _itof_find_msb
+
+        ; High byte is 0, shift left 8 bits
+        ld      h, l
+        ld      l, 0
+        ld      de, 1023 + 7    ; Adjust exponent
+        ld      (_exp_a), de
+
+_itof_find_msb:
+        ; Normalize: shift until bit 15 is set
+_itof_norm_loop:
+        bit     7, h
+        jr      nz, _itof_normalized
+
+        add     hl, hl          ; Shift left
+        ld      de, (_exp_a)
+        dec     de
+        ld      (_exp_a), de
+        jr      _itof_norm_loop
+
+_itof_normalized:
+        ; HL now has the MSB in bit 15 (implied 1)
+        ; The mantissa bits are in HL shifted appropriately
+
+        ; Clear the implied 1 bit - it's not stored
+        res     7, h
+
+        ; Now build the IEEE 754 double
+        ; Mantissa is in bits 51-0, we have 15 bits in HL
+        ; These go into the top 15 bits of the 52-bit mantissa field
+
+        pop     de              ; DE = dest pointer
+
+        ; Byte 0-4: zeros (lower 40 bits of mantissa are 0)
+        xor     a
+        ld      (de), a
+        inc     de
+        ld      (de), a
+        inc     de
+        ld      (de), a
+        inc     de
+        ld      (de), a
+        inc     de
+        ld      (de), a
+        inc     de
+
+        ; Byte 5: mantissa bits 40-47 (from L bits 0-7, shifted)
+        ; Actually for 16-bit int, we have bits 0-14
+        ; Mantissa bits 52-37 come from our value
+        ; We need to position HL into the mantissa field
+
+        ; Let me recalculate:
+        ; HL has 15 significant bits (bit 15 was the implied 1, now cleared)
+        ; Mantissa field is bits 51-0 (52 bits)
+        ; Our 15 bits should go in bits 51-37
+
+        ; Shift HL left by 5 to align (52 - 15 - 32 = 5... no wait)
+        ; Let's think again:
+        ; We have HL = 15 bit value (implied 1 removed)
+        ; These bits need to be the TOP of the 52-bit mantissa
+
+        ; Byte 6 contains: mantissa bits 48-51 (low nibble), exp bits 0-3 (high nibble)
+        ; Byte 7 contains: exp bits 4-10 (bits 0-6), sign (bit 7)
+
+        ; Our L contains bits 0-7 of the post-normalized value
+        ; Our H contains bits 8-14 (bit 15 was cleared)
+
+        ; The 52-bit mantissa: our 14 bits go in positions 51 down to 38
+        ; Positions 37-0 are zero (we only had 15 bits of precision)
+
+        ; Byte 5 (bits 40-47): zeros
+        ld      (de), a
+        inc     de
+
+        ; Byte 6: mantissa bits 51-48 (low nibble), exp bits 0-3 (high nibble)
+        ; H bits 6-3 contain mantissa bits 51-48
+        ; Shift H right by 3 to get these bits in positions 3-0
+
+        ld      a, h
+        srl     a               ; Shift right
+        srl     a
+        srl     a               ; Now A bits 3-0 = H bits 6-3 (mantissa 51-48)
+        and     0Fh             ; Mask to low nibble
+        ld      c, a            ; Save mantissa nibble in C
+
+        ; Get exponent bits 0-3 and put in high nibble
+        push    hl
+        ld      hl, (_exp_a)
+        ld      a, l            ; A = low byte of exponent
+        pop     hl
+
+        sla     a               ; Shift exp left by 4 to high nibble
+        sla     a
+        sla     a
+        sla     a
+        or      c               ; Combine: exp high nibble | mantissa low nibble
+        ld      (de), a
+        inc     de
+
+        ; Byte 7: exp bits 4-10 (bits 6-0), sign (bit 7)
+        ; Exponent is 11 bits. Low 4 bits were in byte 6 high nibble.
+        ; Now we need bits 4-10 (7 bits) in byte 7 bits 6-0.
+
+        push    hl
+        ld      hl, (_exp_a)
+        ; Exp bits 4-7 = (exp_low >> 4)
+        ld      a, l
+        srl     a
+        srl     a
+        srl     a
+        srl     a               ; A = exp bits 4-7 in bits 3-0
+        ld      c, a            ; Save in C
+
+        ; Exp bits 8-10 = exp_high bits 2-0
+        ; Need to put exp_high bits 2-0 into A bits 6-4
+        ld      a, h
+        sla     a
+        sla     a
+        sla     a
+        sla     a               ; Shift left by 4 to position bits 6-4
+        and     70h             ; Mask to bits 6-4 only (3 bits of exp_high)
+        or      c               ; Combine with bits 3-0
+        pop     hl
+
+        ; Add sign bit
+        ld      c, a
+        ld      a, (_fsign)
+        sla     a
+        sla     a
+        sla     a
+        sla     a
+        sla     a
+        sla     a
+        sla     a               ; Sign in bit 7
+        or      c
+        ld      (de), a
+
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_ftoi: Convert 64-bit float to 16-bit signed integer (truncate)
+; Input:  Stack: src_ptr (pointer to 8-byte IEEE 754 double)
+; Output: HL = integer value
+;
+; Simplified implementation that directly accesses the float bytes
+; without using the complex _extract_float helper.
+; =============================================================================
+_f64_ftoi:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Get source pointer from stack
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      (_ftoi_src), hl
+
+        ; Get byte 6 and 7 which contain exponent and sign
+        ld      de, 6
+        add     hl, de
+        ld      a, (hl)         ; A = byte 6
+        ld      (_ftoi_b6), a
+        inc     hl
+        ld      a, (hl)         ; A = byte 7
+        ld      (_ftoi_b7), a
+
+        ; Extract 11-bit exponent from byte6 and byte7
+        ; byte6 >> 4 gives exp bits 0-3
+        ; byte7 & 0x7F gives exp bits 4-10
+        ; Full exponent = ((byte7 & 0x7F) << 4) | (byte6 >> 4)
+        ld      a, (_ftoi_b6)
+        srl     a
+        srl     a
+        srl     a
+        srl     a               ; A = byte6 >> 4 = exp bits 0-3
+        ld      c, a
+
+        ld      a, (_ftoi_b7)
+        and     7Fh             ; A = byte7 & 0x7F = exp bits 4-10
+        ld      b, a            ; Save for later
+        sla     a
+        sla     a
+        sla     a
+        sla     a               ; A = (byte7 & 0x7F) << 4
+        or      c               ; A = low 8 bits of exponent
+        ld      c, a
+
+        ld      a, b
+        srl     a
+        srl     a
+        srl     a
+        srl     a               ; A = high 3 bits of exponent
+        ld      b, a            ; BC = 11-bit exponent (0-2047)
+
+        ; Check if exponent < 1023 (value < 1)
+        ld      hl, 1023
+        push    bc              ; Save exponent
+        or      a               ; Clear carry
+        sbc     hl, bc          ; HL = 1023 - exp
+        pop     bc              ; Restore exponent
+        jr      c, _ftoi_ge1    ; If carry, exp > 1023
+        jr      z, _ftoi_ge1    ; If zero, exp = 1023
+
+        ; exp < 1023, value < 1, return 0
+        ld      hl, 0
+        jr      _ftoi_done
+
+_ftoi_ge1:
+        ; exp >= 1023, calculate unbiased exp
+        push    bc
+        pop     hl              ; HL = exponent
+        ld      bc, 1023
+        or      a
+        sbc     hl, bc          ; HL = unbiased exponent
+        ld      a, l
+        ld      (_ftoi_uexp), a
+
+        ; Check for overflow (exp > 15 means integer part > 32767)
+        ld      a, h
+        or      a
+        jr      nz, _ftoi_overflow
+        ld      a, l
+        cp      16
+        jr      nc, _ftoi_overflow
+
+        ; Build mantissa: (byte6 & 0x0F | 0x10) << 8 | byte5
+        ld      hl, (_ftoi_src)
+        ld      de, 5
+        add     hl, de
+        ld      a, (hl)         ; A = byte5
+        ld      l, a
+
+        ld      a, (_ftoi_b6)
+        and     0Fh             ; mantissa bits 48-51
+        or      10h             ; add implied 1 at bit 4
+        ld      h, a            ; HL = 16-bit value with implied 1 at bit 12
+
+        ; Shift right by (12 - exp) or left by (exp - 12)
+        ld      a, 12
+        ld      c, a
+        ld      a, (_ftoi_uexp)
+        ld      b, a            ; B = unbiased exp
+        ld      a, c
+        sub     b               ; A = 12 - exp
+        jr      z, _ftoi_apply_sign
+        jp      m, _ftoi_left   ; If negative, shift left
+
+        ; Shift right A times
+        ld      b, a
+_ftoi_right:
+        srl     h
+        rr      l
+        djnz    _ftoi_right
+        jr      _ftoi_apply_sign
+
+_ftoi_left:
+        neg                     ; A = exp - 12
+        ld      b, a
+_ftoi_left_loop:
+        sla     l
+        rl      h
+        djnz    _ftoi_left_loop
+
+_ftoi_apply_sign:
+        ; Apply sign from byte7 bit 7
+        ld      a, (_ftoi_b7)
+        bit     7, a
+        jr      z, _ftoi_done
+
+        ; Negate HL
+        xor     a
+        sub     l
+        ld      l, a
+        sbc     a, a
+        sub     h
+        ld      h, a
+        jr      _ftoi_done
+
+_ftoi_overflow:
+        ; Return max or min based on sign
+        ld      a, (_ftoi_b7)
+        bit     7, a
+        jr      z, _ftoi_maxpos
+        ld      hl, 8000h       ; -32768
+        jr      _ftoi_done
+_ftoi_maxpos:
+        ld      hl, 7FFFh       ; 32767
+
+_ftoi_done:
+        pop     ix
+        ret
+
+        ; Local variables for _f64_ftoi (declared in DSEG at end of file)
+
+; =============================================================================
+; _f64_cmp: Compare two floats
+; Input:  Stack: b_ptr, a_ptr
+; Output: A = -1 if a < b, 0 if a == b, 1 if a > b
+;         Flags: Z if equal, C if less
+; =============================================================================
+_f64_cmp:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Get pointer to a
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        push    hl
+
+        ; Get pointer to b
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        ex      de, hl          ; DE = b_ptr
+
+        pop     hl              ; HL = a_ptr
+
+        ; First compare signs
+        push    hl
+        push    de
+
+        ; Get sign of a
+        ld      bc, 7
+        add     hl, bc
+        ld      a, (hl)
+        and     80h
+        ld      b, a            ; B = sign of a
+
+        ; Get sign of b
+        pop     hl              ; HL = b_ptr (was DE)
+        push    hl
+        add     hl, bc
+        ld      a, (hl)
+        and     80h
+        ld      c, a            ; C = sign of b
+
+        pop     de              ; DE = b_ptr
+        pop     hl              ; HL = a_ptr
+
+        ; Compare signs
+        ld      a, b
+        cp      c
+        jr      z, _cmp_same_sign
+
+        ; Different signs
+        ld      a, b
+        or      a
+        jr      nz, _cmp_a_neg
+        ; a positive, b negative: a > b
+        ld      a, 1
+        pop     ix
+        ret
+
+_cmp_a_neg:
+        ; a negative, b positive: a < b
+        ld      a, -1
+        scf                     ; Set carry
+        pop     ix
+        ret
+
+_cmp_same_sign:
+        ; Same sign - compare magnitude
+        ; Start from MSB (byte 7) and work down
+        push    hl
+        ld      bc, 7
+        add     hl, bc
+        ex      de, hl          ; DE = a+7
+        pop     hl
+        push    hl
+        add     hl, bc          ; HL = b+7
+        ex      de, hl          ; DE = b+7, HL = a+7
+
+        ; Compare 8 bytes from high to low
+        ld      b, 8
+_cmp_loop:
+        ld      a, (de)         ; Get byte from b
+        cp      (hl)            ; Compare with byte from a
+        jr      nz, _cmp_diff
+
+        ; Equal, move to next lower byte
+        dec     hl
+        dec     de
+        djnz    _cmp_loop
+
+        ; All bytes equal
+        pop     hl
+        xor     a               ; A = 0, Z flag set
+        pop     ix
+        ret
+
+_cmp_diff:
+        pop     hl
+        ; A has b[i], compared with a[i]
+        ; If b > a, carry is set (a < b)
+        ; But we need to consider sign for negative numbers
+
+        jr      c, _cmp_a_greater
+
+        ; a < b (for positive numbers)
+        ; For negative, a > b
+        ld      a, b            ; Check sign (still in B register? No, B is counter)
+        ; Need to get sign again
+        push    hl
+        ld      bc, 7
+        add     hl, bc
+        ld      a, (hl)
+        pop     hl
+        and     80h
+        jr      nz, _cmp_neg_a_less
+        ; Positive: a < b
+        ld      a, -1
+        scf
+        pop     ix
+        ret
+
+_cmp_neg_a_less:
+        ; Negative: a > b
+        ld      a, 1
+        pop     ix
+        ret
+
+_cmp_a_greater:
+        ; a > b (for positive numbers)
+        push    hl
+        ld      bc, 7
+        add     hl, bc
+        ld      a, (hl)
+        pop     hl
+        and     80h
+        jr      nz, _cmp_neg_a_greater
+        ; Positive: a > b
+        ld      a, 1
+        pop     ix
+        ret
+
+_cmp_neg_a_greater:
+        ; Negative: a < b
+        ld      a, -1
+        scf
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_eq: Test if two floats are equal
+; Input:  Stack: b_ptr, a_ptr
+; Output: A = 1 if equal, 0 if not equal
+; =============================================================================
+_f64_eq:
+        call    _f64_cmp
+        or      a
+        jr      z, _eq_true
+        xor     a
+        ret
+_eq_true:
+        ld      a, 1
+        ret
+
+; =============================================================================
+; _f64_lt: Test if a < b
+; Input:  Stack: b_ptr, a_ptr
+; Output: A = 1 if a < b, 0 otherwise
+; =============================================================================
+_f64_lt:
+        call    _f64_cmp
+        cp      -1
+        jr      z, _lt_true
+        xor     a
+        ret
+_lt_true:
+        ld      a, 1
+        ret
+
+; =============================================================================
+; _f64_le: Test if a <= b
+; Input:  Stack: b_ptr, a_ptr
+; Output: A = 1 if a <= b, 0 otherwise
+; =============================================================================
+_f64_le:
+        call    _f64_cmp
+        cp      1
+        jr      z, _le_false
+        ld      a, 1
+        ret
+_le_false:
+        xor     a
+        ret
+
+; =============================================================================
+; _f64_gt: Test if a > b
+; Input:  Stack: b_ptr, a_ptr
+; Output: A = 1 if a > b, 0 otherwise
+; =============================================================================
+_f64_gt:
+        call    _f64_cmp
+        cp      1
+        jr      z, _gt_true
+        xor     a
+        ret
+_gt_true:
+        ld      a, 1
+        ret
+
+; =============================================================================
+; _f64_ge: Test if a >= b
+; Input:  Stack: b_ptr, a_ptr
+; Output: A = 1 if a >= b, 0 otherwise
+; =============================================================================
+_f64_ge:
+        call    _f64_cmp
+        cp      -1
+        jr      z, _ge_false
+        ld      a, 1
+        ret
+_ge_false:
+        xor     a
+        ret
+
+; =============================================================================
+; _f64_add: Add two 64-bit floats
+; Input:  Stack: result_ptr, b_ptr, a_ptr
+; Output: result = a + b
+;
+; Algorithm:
+;   1. Handle special cases (zero, infinity, NaN)
+;   2. Align mantissas (shift smaller exponent's mantissa right)
+;   3. Add or subtract mantissas based on signs
+;   4. Normalize result
+;   5. Round and store
+; =============================================================================
+_f64_add:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Extract operand A
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = a_ptr
+        ld      de, _mant_a
+        call    _extract_float  ; Returns sign in A, exp in BC
+        ld      (_sign_a), a
+        ld      (_exp_a), bc
+
+        ; Extract operand B
+        ld      l, (ix+6)
+        ld      h, (ix+7)       ; HL = b_ptr
+        ld      de, _mant_b
+        call    _extract_float  ; Returns sign in A, exp in BC
+        ld      (_sign_b), a
+        ld      (_exp_b), bc
+
+        ; Check if A is zero
+        ld      hl, _mant_a
+        call    _is_zero_64
+        jr      nz, _add_check_b_zero
+
+        ; A is zero, return B
+        ld      l, (ix+6)
+        ld      h, (ix+7)       ; HL = b_ptr
+        ld      e, (ix+8)
+        ld      d, (ix+9)       ; DE = result_ptr
+        call    _copy_64
+        jp      _add_done
+
+_add_check_b_zero:
+        ; Check if B is zero
+        ld      hl, _mant_b
+        call    _is_zero_64
+        jr      nz, _add_align
+
+        ; B is zero, return A
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = a_ptr
+        ld      e, (ix+8)
+        ld      d, (ix+9)       ; DE = result_ptr
+        call    _copy_64
+        jp      _add_done
+
+_add_align:
+        ; Align mantissas by shifting the smaller exponent's mantissa
+        ld      hl, (_exp_a)
+        ld      de, (_exp_b)
+
+        ; Calculate exp_diff = exp_a - exp_b
+        or      a               ; Clear carry
+        sbc     hl, de          ; HL = exp_a - exp_b
+
+        ; If exp_a > exp_b, shift mant_b right
+        ; If exp_a < exp_b, shift mant_a right and use exp_b
+
+        bit     7, h            ; Check if result is negative
+        jr      nz, _add_shift_a
+
+        ; exp_a >= exp_b, shift mant_b right by HL bits
+        ; Result exponent = exp_a
+        ld      a, l            ; Use low byte of diff (0-63 range)
+        cp      64
+        jr      c, _add_do_shift_b
+
+        ; Difference too large, B is insignificant, return A
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        ld      e, (ix+8)
+        ld      d, (ix+9)
+        call    _copy_64
+        jp      _add_done
+
+_add_do_shift_b:
+        ; Shift mant_b right by A bits
+        ld      c, a
+        ld      hl, _mant_b
+        call    _shift_right_64_n
+
+        ; Result exponent = exp_a
+        ld      hl, (_exp_a)
+        ld      (_exp_a), hl        ; Result exp in _exp_a
+        jr      _add_do_op
+
+_add_shift_a:
+        ; exp_a < exp_b, shift mant_a right
+        ; Negate HL to get positive difference
+        xor     a
+        sub     l
+        ld      l, a
+        sbc     a, a
+        sub     h
+        ld      h, a
+
+        ld      a, l            ; Use low byte of diff
+        cp      64
+        jr      c, _add_do_shift_a
+
+        ; Difference too large, A is insignificant, return B
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        ld      e, (ix+8)
+        ld      d, (ix+9)
+        call    _copy_64
+        jp      _add_done
+
+_add_do_shift_a:
+        ; Shift mant_a right by A bits
+        ld      c, a
+        ld      hl, _mant_a
+        call    _shift_right_64_n
+
+        ; Result exponent = exp_b
+        ld      hl, (_exp_b)
+        ld      (_exp_a), hl        ; Result exp in _exp_a
+
+_add_do_op:
+        ; Now mantissas are aligned, perform add or subtract
+        ; Check if signs are the same
+        ld      a, (_sign_a)
+        ld      b, a
+        ld      a, (_sign_b)
+        xor     b               ; If zero, same sign (add); if 80h, different (subtract)
+        jr      nz, _add_subtract
+
+        ; Same sign: add mantissas, keep sign
+        ld      hl, _mant_a
+        ld      de, _mant_b
+        call    _add_64
+
+        ; Check for overflow (carry into bit 53)
+        ld      a, (_mant_a + 6)
+        and     20h             ; Check bit 53 (bit 5 of byte 6)
+        jr      z, _add_normalize
+
+        ; Overflow: shift right and increment exponent
+        ld      hl, _mant_a
+        call    _shift_right_64
+        ld      hl, (_exp_a)
+        inc     hl
+        ld      (_exp_a), hl
+        jr      _add_normalize
+
+_add_subtract:
+        ; Different signs: subtract smaller from larger
+        ; First compare magnitudes
+        ld      hl, _mant_a
+        ld      de, _mant_b
+        call    _cmp_64
+        or      a
+        jr      z, _add_return_zero     ; Equal magnitudes, result is zero
+        jp      p, _add_sub_a_minus_b
+
+        ; mant_a < mant_b: result = mant_b - mant_a, sign = sign_b
+        ld      hl, _mant_b
+        ld      de, _mant_a
+        call    _sub_64         ; mant_b = mant_b - mant_a
+
+        ; Copy result to mant_a
+        ld      hl, _mant_b
+        ld      de, _mant_a
+        call    _copy_64
+
+        ; Result sign = sign_b
+        ld      a, (_sign_b)
+        ld      (_sign_a), a
+        jr      _add_normalize
+
+_add_sub_a_minus_b:
+        ; mant_a > mant_b: result = mant_a - mant_b, sign = sign_a
+        ld      hl, _mant_a
+        ld      de, _mant_b
+        call    _sub_64         ; mant_a = mant_a - mant_b
+        ; Sign stays as sign_a
+        jr      _add_normalize
+
+_add_return_zero:
+        ; Return 0.0
+        ld      l, (ix+8)
+        ld      h, (ix+9)       ; result_ptr
+        call    _zero_64
+        jp      _add_done
+
+_add_normalize:
+        ; Normalize: shift left until bit 52 is set (or mantissa is zero)
+        ld      hl, _mant_a
+        call    _is_zero_64
+        jr      z, _add_return_zero
+
+_add_norm_loop:
+        ld      a, (_mant_a + 6)
+        and     10h             ; Check bit 52 (bit 4 of byte 6)
+        jr      nz, _add_pack   ; Already normalized
+
+        ; Shift mantissa left
+        ld      hl, _mant_a
+        call    _shift_left_64
+
+        ; Decrement exponent
+        ld      hl, (_exp_a)
+        dec     hl
+        ld      (_exp_a), hl
+
+        ; Check for underflow (exp <= 0)
+        ld      a, h
+        or      l
+        jr      z, _add_return_zero     ; Underflow to zero
+        bit     7, h
+        jr      nz, _add_return_zero    ; Negative exponent
+
+        jr      _add_norm_loop
+
+_add_pack:
+        ; Pack result into IEEE 754 format
+        ld      hl, _mant_a         ; Mantissa
+        ld      e, (ix+8)
+        ld      d, (ix+9)               ; DE = result_ptr
+        ld      bc, (_exp_a)        ; Exponent
+        ld      a, (_sign_a)        ; Sign
+        call    _pack_float
+
+_add_done:
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_sub: Subtract two 64-bit floats (a - b)
+; Input:  Stack: result_ptr, b_ptr, a_ptr
+; Output: result = a - b
+; Note: Uses _sub_temp (not _ftemp) to avoid conflict with _f64_div
+; =============================================================================
+_f64_sub:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Negate b and add
+        ; First, copy b to _sub_temp and negate
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl              ; Save b_ptr
+
+        ; Copy b to _sub_temp
+        ld      de, _sub_temp
+        ld      bc, 8
+        ldir
+
+        ; Negate temp (flip sign bit)
+        ld      a, (_sub_temp + 7)
+        xor     80h
+        ld      (_sub_temp + 7), a
+
+        ; Now call add with a and negated b
+        ; Push args for _f64_add: result_ptr, temp_ptr, a_ptr
+        ld      l, (ix+8)
+        ld      h, (ix+9)
+        push    hl              ; result_ptr
+
+        ld      hl, _sub_temp
+        push    hl              ; negated b_ptr
+
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        push    hl              ; a_ptr
+
+        call    _f64_add
+
+        ; Clean up stack
+        pop     hl
+        pop     hl
+        pop     hl
+
+        pop     hl              ; Original b_ptr
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_mul: Multiply two 64-bit floats
+; Input:  Stack: result_ptr, b_ptr, a_ptr
+; Output: result = a * b
+;
+; Algorithm:
+;   1. Handle special cases (zero, infinity, NaN)
+;   2. Determine result sign (XOR of input signs)
+;   3. Add exponents (subtract bias)
+;   4. Multiply mantissas (128-bit intermediate)
+;   5. Normalize and round result
+; =============================================================================
+_f64_mul:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Extract operand A
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = a_ptr
+        ld      de, _mant_a
+        call    _extract_float  ; Returns sign in A, exp in BC
+        ld      (_sign_a), a
+        ld      (_exp_a), bc
+
+        ; Check if A is zero
+        ld      hl, _mant_a
+        call    _is_zero_64
+        jr      nz, _mul_check_b
+
+        ; A is zero, return zero
+        jp      _mul_return_zero
+
+_mul_check_b:
+        ; Extract operand B
+        ld      l, (ix+6)
+        ld      h, (ix+7)       ; HL = b_ptr
+        ld      de, _mant_b
+        call    _extract_float  ; Returns sign in A, exp in BC
+        ld      (_sign_b), a
+        ld      (_exp_b), bc
+
+        ; Check if B is zero
+        ld      hl, _mant_b
+        call    _is_zero_64
+        jr      nz, _mul_calc
+
+        ; B is zero, return zero
+        jp      _mul_return_zero
+
+_mul_calc:
+        ; Calculate result sign (XOR of signs)
+        ld      a, (_sign_a)
+        ld      b, a
+        ld      a, (_sign_b)
+        xor     b
+        ld      (_fsign), a  ; Result sign
+
+        ; Calculate result exponent: exp_a + exp_b - bias
+        ld      hl, (_exp_a)
+        ld      de, (_exp_b)
+        add     hl, de          ; exp_a + exp_b
+
+        ; Subtract bias (1023)
+        ld      de, EXP_BIAS
+        or      a               ; Clear carry
+        sbc     hl, de          ; exp_a + exp_b - 1023
+
+        ; Check for overflow/underflow
+        bit     7, h            ; Check if negative
+        jr      nz, _mul_underflow
+
+        ; Check for overflow (exp > 2046)
+        ld      a, h
+        cp      8               ; If H >= 8, exp > 2047
+        jr      nc, _mul_overflow
+        or      a
+        jr      nz, _mul_exp_ok
+        ; H = 0, check L
+        ld      a, l
+        cp      7               ; HIGH(EXP_INF) = 2047 >> 8 = 7
+        jr      c, _mul_exp_ok
+
+_mul_overflow:
+        ; Return infinity (for now, return max value)
+        ; Just copy A to result as approximation
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        ld      e, (ix+8)
+        ld      d, (ix+9)
+        call    _copy_64
+        jp      _mul_done
+
+_mul_underflow:
+        ; Exponent underflow, return zero
+        jp      _mul_return_zero
+
+_mul_exp_ok:
+        ld      (_exp_a), hl        ; Save result exponent
+
+        ; Multiply mantissas
+        ; mant_a has implicit 1 at bit 52, mant_b has implicit 1 at bit 52
+        ; Product will have implicit 1 at bit 104 or 105
+        ld      hl, _mant_a
+        ld      de, _mant_b
+        call    _mul_64x64      ; Result in _mantx (16 bytes)
+
+        ; The product is in _mantx
+        ; We have 53 * 53 = 106 significant bits max
+        ; The implicit 1 bits multiply to give result at bit 104 (52+52)
+        ; We need to extract bits 104-52 (53 bits) from the 128-bit result
+
+        ; First, check if bit 105 (byte 13, bit 1) is set
+        ld      a, (_mantx + 13)
+        and     02h
+        jr      z, _mul_check_104
+
+        ; Bit 105 is set: shift right and increment exponent
+        ; Extract bytes 13-6 (shifted right by 1)
+        ld      hl, _mantx + 13
+        ld      de, _mant_r + 7
+
+        ; Copy high 8 bytes with right shift
+        or      a               ; Clear carry
+        ld      b, 8
+_mul_shift_105:
+        ld      a, (hl)
+        rra
+        ld      (de), a
+        dec     hl
+        dec     de
+        djnz    _mul_shift_105
+
+        ; Increment exponent
+        ld      hl, (_exp_a)
+        inc     hl
+        ld      (_exp_a), hl
+
+        ; After 1-bit shift during copy, bit 105 is at bit 56
+        ; We need it at bit 52, so shift right by 4 more bits
+        ld      hl, _mant_r
+        ld      c, 4
+        call    _shift_right_64_n
+        jr      _mul_normalize
+
+_mul_check_104:
+        ; Check bit 104 (byte 13, bit 0)
+        ld      a, (_mantx + 13)
+        and     01h
+        jr      z, _mul_normalize_low
+
+        ; Bit 104 is set: extract bytes 6-13 to mant_r
+        ; After extraction, bit 104 is at position 56 (byte 7 bit 0)
+        ; We need it at position 52 (byte 6 bit 4) for IEEE 754
+        ld      hl, _mantx + 6
+        ld      de, _mant_r
+        ld      bc, 8
+        ldir
+
+        ; Shift right by 4 bits to align bit 56 to bit 52
+        ld      hl, _mant_r
+        ld      c, 4
+        call    _shift_right_64_n
+        jr      _mul_normalize
+
+_mul_normalize_low:
+        ; Need to shift left to normalize
+        ; Copy bytes 6-13 first
+        ld      hl, _mantx + 6
+        ld      de, _mant_r
+        ld      bc, 8
+        ldir
+
+        ; Shift left until bit 52 is set
+_mul_norm_loop:
+        ld      a, (_mant_r + 6)
+        and     10h             ; Check bit 52
+        jr      nz, _mul_normalize
+
+        ; Shift mant_r left
+        ld      hl, _mant_r
+        call    _shift_left_64
+
+        ; Decrement exponent
+        ld      hl, (_exp_a)
+        dec     hl
+        ld      (_exp_a), hl
+
+        ; Check for underflow
+        ld      a, h
+        or      l
+        jr      z, _mul_return_zero
+        bit     7, h
+        jr      nz, _mul_return_zero
+
+        jr      _mul_norm_loop
+
+_mul_normalize:
+        ; Copy normalized mantissa to mant_a for packing
+        ld      hl, _mant_r
+        ld      de, _mant_a
+        call    _copy_64
+
+        ; Check exponent bounds
+        ld      hl, (_exp_a)
+        ld      a, h
+        or      l
+        jr      z, _mul_return_zero     ; Exp = 0
+        bit     7, h
+        jr      nz, _mul_return_zero    ; Exp < 0
+
+        ; Pack result
+        ld      hl, _mant_a
+        ld      e, (ix+8)
+        ld      d, (ix+9)               ; DE = result_ptr
+        ld      bc, (_exp_a)
+        ld      a, (_fsign)
+        call    _pack_float
+        jr      _mul_done
+
+_mul_return_zero:
+        ld      l, (ix+8)
+        ld      h, (ix+9)
+        call    _zero_64
+
+_mul_done:
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_div: Divide two 64-bit floats (a / b)
+; Input:  Stack: result_ptr, b_ptr, a_ptr
+; Output: result = a / b
+;
+; Algorithm:
+;   1. Handle special cases (zero, infinity, NaN)
+;   2. Determine result sign (XOR of input signs)
+;   3. Subtract exponents (add bias)
+;   4. Divide mantissas using binary long division
+;   5. Normalize and round result
+; =============================================================================
+_f64_div:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Extract operand A (dividend)
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = a_ptr
+        ld      de, _mant_a
+        call    _extract_float  ; Returns sign in A, exp in BC
+        ld      (_sign_a), a
+        ld      (_exp_a), bc
+
+        ; Check if A is zero (0 / b = 0)
+        ld      hl, _mant_a
+        call    _is_zero_64
+        jr      nz, _div_check_b
+
+        ; A is zero, return zero
+        jp      _div_return_zero
+
+_div_check_b:
+        ; Extract operand B (divisor)
+        ld      l, (ix+6)
+        ld      h, (ix+7)       ; HL = b_ptr
+        ld      de, _mant_b
+        call    _extract_float  ; Returns sign in A, exp in BC
+        ld      (_sign_b), a
+        ld      (_exp_b), bc
+
+        ; Check if B is zero (a / 0 = infinity, return max)
+        ld      hl, _mant_b
+        call    _is_zero_64
+        jr      nz, _div_calc
+
+        ; Division by zero - return infinity (approximated as max value)
+        ; Set all exponent bits, sign from result sign
+        ld      l, (ix+8)
+        ld      h, (ix+9)       ; result_ptr
+        xor     a
+        ld      (hl), a
+        inc     hl
+        ld      (hl), a
+        inc     hl
+        ld      (hl), a
+        inc     hl
+        ld      (hl), a
+        inc     hl
+        ld      (hl), a
+        inc     hl
+        ld      (hl), a
+        inc     hl
+        ld      (hl), 0F0h      ; Exponent bits 0-3 = F
+        inc     hl
+        ; Calculate sign
+        ld      a, (_sign_a)
+        ld      b, a
+        ld      a, (_sign_b)
+        xor     b
+        or      7Fh             ; Exponent bits 4-10 = 7F (total exp = 7FF = infinity)
+        ld      (hl), a
+        jp      _div_done
+
+_div_calc:
+        ; Calculate result sign (XOR of signs)
+        ld      a, (_sign_a)
+        ld      b, a
+        ld      a, (_sign_b)
+        xor     b
+        ld      (_fsign), a  ; Result sign
+
+        ; Calculate result exponent: exp_a - exp_b + bias
+        ld      hl, (_exp_a)
+        ld      de, (_exp_b)
+        or      a               ; Clear carry
+        sbc     hl, de          ; exp_a - exp_b
+
+        ; Add bias (1023)
+        ld      de, EXP_BIAS
+        add     hl, de          ; exp_a - exp_b + 1023
+
+        ; Check for overflow/underflow
+        bit     7, h            ; Check if negative
+        jr      nz, _div_underflow
+
+        ; Check for overflow
+        ld      a, h
+        cp      8               ; If H >= 8, overflow
+        jr      nc, _div_overflow
+        or      a
+        jr      nz, _div_exp_ok
+        ld      a, l
+        cp      0FFh            ; LOW(EXP_INF) = 2047 & 0xFF = 255
+        jr      c, _div_exp_ok
+
+_div_overflow:
+        ; Return a copy of A as approximation
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        ld      e, (ix+8)
+        ld      d, (ix+9)
+        call    _copy_64
+        jp      _div_done
+
+_div_underflow:
+        jp      _div_return_zero
+
+_div_exp_ok:
+        ld      (_exp_a), hl        ; Save result exponent
+
+        ; Divide mantissas using binary long division
+        ; We need 53 bits of precision
+        ; quotient = 0
+        ; remainder = mant_a
+        ; for 53 bits:
+        ;   remainder <<= 1
+        ;   if remainder >= mant_b:
+        ;     remainder -= mant_b
+        ;     quotient = (quotient << 1) | 1
+        ;   else:
+        ;     quotient <<= 1
+
+        ; Clear quotient (mant_r)
+        ld      hl, _mant_r
+        call    _zero_64
+
+        ; Copy mant_a to temp (will be our remainder)
+        ld      hl, _mant_a
+        ld      de, _ftemp
+        call    _copy_64
+
+        ; Binary long division for 53 bits of quotient
+        ; Algorithm: compare, shift-quotient+set-bit, subtract-if-needed, shift-remainder
+        ; This produces bits from MSB (bit 52) to LSB (bit 0)
+        ld      b, 53           ; Bit counter
+
+_div_loop:
+        push    bc
+
+        ; Compare remainder with divisor (BEFORE shifting remainder)
+        ld      hl, _ftemp
+        ld      de, _mant_b
+        call    _cmp_64         ; A = -1 if temp < mant_b, 0 if equal, 1 if greater
+
+        ; Save comparison result
+        push    af
+
+        ; Shift quotient left
+        ld      hl, _mant_r
+        call    _shift_left_64
+
+        ; Restore comparison result
+        pop     af
+        cp      -1              ; temp < divisor?
+        jr      z, _div_skip_sub
+
+        ; remainder >= divisor: subtract and set bit 0 of quotient
+        ld      hl, _ftemp
+        ld      de, _mant_b
+        call    _sub_64         ; temp = temp - mant_b
+
+        ; Set bit 0 of quotient
+        ld      a, (_mant_r)
+        or      01h
+        ld      (_mant_r), a
+
+_div_skip_sub:
+        ; Shift remainder left AFTER comparison (for next iteration)
+        ld      hl, _ftemp
+        call    _shift_left_64
+
+        pop     bc
+        dec     b
+        jr      nz, _div_loop
+
+        ; Quotient is in mant_r
+        ; Normalize if needed
+        ld      a, (_mant_r + 6)
+        and     10h             ; Check bit 52
+        jr      nz, _div_normalized
+
+        ; May need to shift left
+_div_norm_loop:
+        ld      hl, _mant_r
+        call    _is_zero_64
+        jr      z, _div_return_zero
+
+        ld      a, (_mant_r + 6)
+        and     10h             ; Check bit 52
+        jr      nz, _div_normalized
+
+        ; Shift left
+        ld      hl, _mant_r
+        call    _shift_left_64
+
+        ; Decrement exponent
+        ld      hl, (_exp_a)
+        dec     hl
+        ld      (_exp_a), hl
+
+        ; Check for underflow
+        ld      a, h
+        or      l
+        jr      z, _div_return_zero
+        bit     7, h
+        jr      nz, _div_return_zero
+
+        jr      _div_norm_loop
+
+_div_normalized:
+        ; Copy result mantissa to mant_a for packing
+        ld      hl, _mant_r
+        ld      de, _mant_a
+        call    _copy_64
+
+        ; Check exponent bounds
+        ld      hl, (_exp_a)
+        ld      a, h
+        or      l
+        jr      z, _div_return_zero
+        bit     7, h
+        jr      nz, _div_return_zero
+
+        ; Pack result
+        ld      hl, _mant_a
+        ld      e, (ix+8)
+        ld      d, (ix+9)               ; DE = result_ptr
+        ld      bc, (_exp_a)
+        ld      a, (_fsign)
+        call    _pack_float
+        jr      _div_done
+
+_div_return_zero:
+        ld      l, (ix+8)
+        ld      h, (ix+9)
+        call    _zero_64
+
+_div_done:
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_sqrt: Square root of 64-bit float
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = sqrt(src)
+;
+; Uses Newton-Raphson iteration: x[n+1] = (x[n] + S/x[n]) / 2
+; Converges in 5-6 iterations for double precision.
+;
+; Special cases:
+;   sqrt(+0) = +0
+;   sqrt(-0) = -0  (technically)
+;   sqrt(negative) = NaN (we return 0)
+;   sqrt(+inf) = +inf
+;   sqrt(NaN) = NaN
+; =============================================================================
+_f64_sqrt:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input S to _sqrt_s
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _sqrt_s
+        ld      bc, 8
+        ldir
+
+        ; Check for special cases: examine the high byte
+        ld      a, (_sqrt_s + 7)
+        bit     7, a            ; Check sign bit
+        jp      nz, _sqrt_negative
+
+        ; Check if zero (all 8 bytes are 0)
+        ld      hl, _sqrt_s
+        ld      b, 8
+        xor     a
+_sqrt_check_zero:
+        or      (hl)
+        inc     hl
+        djnz    _sqrt_check_zero
+        or      a
+        jp      z, _sqrt_return_zero
+
+        ; Check for infinity/NaN (exponent = 2047 = 0x7FF)
+        ; For inf/NaN: byte7 & 0x7F = 0x7F AND byte6 & 0xF0 = 0xF0
+        ld      a, (_sqrt_s + 7)
+        and     7Fh             ; Remove sign, keep exp bits [10:4]
+        cp      7Fh             ; All 7 bits set?
+        jr      nz, _sqrt_not_special
+        ld      a, (_sqrt_s + 6)
+        and     0F0h            ; Get exp bits [3:0] (in high nibble)
+        cp      0F0h            ; All 4 bits set?
+        jp      z, _sqrt_return_input ; Return input for inf/nan
+
+_sqrt_not_special:
+        ; ==========================================================
+        ; Create initial estimate by halving the exponent
+        ; For x = m * 2^e, sqrt(x) ~ sqrt(m) * 2^(e/2)
+        ; ==========================================================
+
+        ; Extract exponent from _sqrt_s
+        ; IEEE 754: bits 62-52 are exponent (11 bits)
+        ld      a, (_sqrt_s + 6)
+        ld      l, a
+        ld      a, (_sqrt_s + 7)
+        and     7Fh             ; Remove sign
+        ld      h, a
+        ; HL has [exp_high_4bits][mantissa_high_4bits | exp_low_8bits]
+        ; Need to extract 11-bit exponent
+
+        ; Exponent is in bits 52-62 of the 64-bit value
+        ; In our little-endian layout:
+        ;   byte 7: S EEEE EEEE  (sign + high 7 bits of exp)
+        ;   byte 6: EEEE MMMM   (low 4 bits of exp + high 4 bits of mantissa)
+
+        ld      a, (_sqrt_s + 7)
+        and     7Fh             ; Remove sign, A = high 7 bits of exp
+        ld      b, a
+        ld      a, (_sqrt_s + 6)
+        srl     b               ; Shift B right
+        rra                     ; Rotate through carry into A
+        srl     b
+        rra
+        srl     b
+        rra
+        srl     b
+        rra                     ; A now has bits [E6 E5 E4 E3 E2 E1 E0 ?]
+        ; Actually we need the full 11-bit exponent
+
+        ; Let me do this more carefully:
+        ; byte 7: [S E10 E9 E8 E7 E6 E5 E4]
+        ; byte 6: [E3 E2 E1 E0 M51 M50 M49 M48]
+        ; Exponent = (byte7 & 0x7F) << 4 | (byte6 >> 4)
+
+        ld      a, (_sqrt_s + 7)
+        and     7Fh             ; A = S E10..E4 -> 0 E10..E4
+        ld      h, a            ; H = 0 E10..E4 (high byte of exponent, shifted)
+        ; Actually need: exp = (byte7 & 7F) * 16 + (byte6 >> 4)
+        ; Which is: exp_high = (byte7 & 7F) >> 3, exp_low = ((byte7 & 7) << 4) | (byte6 >> 4)
+
+        ld      a, (_sqrt_s + 7)
+        and     7Fh             ; A = 0EEEEEEE (bits E10-E4)
+        rrca
+        rrca
+        rrca
+        rrca                    ; A = EEEE000E (rotate right 4)
+        and     07h             ; A = 00000EEE (exp bits 10-8)
+        ld      h, a            ; H = high 3 bits of exponent
+
+        ld      a, (_sqrt_s + 7)
+        and     7Fh
+        rlca
+        rlca
+        rlca
+        rlca                    ; A = EEE0EEEE
+        and     0F0h            ; A = EEE00000 - bits E7-E4 shifted up
+        ld      b, a
+        ld      a, (_sqrt_s + 6)
+        rrca
+        rrca
+        rrca
+        rrca
+        and     0Fh             ; A = 0000EEEE (bits E3-E0)
+        or      b               ; A = EEEEEEEE (bits E7-E0)
+        ld      l, a            ; L = low 8 bits of exponent
+
+        ; HL now has 11-bit exponent (H=high 3 bits, L=low 8 bits)
+        ; For sqrt: new_exp = (exp - 1023) / 2 + 1023
+        ;                   = (exp + 1023) / 2
+        ;                   = (exp + 1023) >> 1
+
+        ; Add 1023 (bias)
+        ld      bc, 1023
+        add     hl, bc          ; HL = exp + 1023
+
+        ; Divide by 2
+        srl     h
+        rr      l               ; HL = (exp + 1023) / 2
+
+        ; Store new exponent for initial estimate
+        push    hl              ; Save new exponent
+
+        ; Build initial estimate in _sqrt_x
+        ; Start with 1.5 as mantissa (for faster convergence)
+        ; mantissa bits = 0x8000000000000 (1.5 in IEEE 754 implicit form)
+
+        ; Clear _sqrt_x first
+        ld      hl, _sqrt_x
+        ld      b, 8
+        xor     a
+_sqrt_clear_x:
+        ld      (hl), a
+        inc     hl
+        djnz    _sqrt_clear_x
+
+        ; Set mantissa to 1.0 (just implicit bit, no explicit mantissa bits)
+        ; So we just need to set the exponent
+
+        pop     bc              ; BC = new exponent
+        ; Pack into _sqrt_x
+        ; byte 7 = sign (0) | exp_high_7
+        ; byte 6 = exp_low_4 | mantissa_high_4
+
+        ld      a, c            ; Low 8 bits of exp
+        rlca
+        rlca
+        rlca
+        rlca                    ; A = E3E2E1E0 xxxx
+        and     0F0h            ; A = E3E2E1E0 0000
+        ld      (_sqrt_x + 6), a
+
+        ld      a, b            ; High 3 bits
+        rlca
+        rlca
+        rlca
+        rlca                    ; Shift left by 4
+        and     70h             ; Keep bits 6-4
+        ld      d, a
+        ld      a, c
+        rrca
+        rrca
+        rrca
+        rrca
+        and     0Fh             ; Low 4 bits of exp -> high 4 bits of byte7
+        or      d
+        ld      (_sqrt_x + 7), a
+
+        ; ==========================================================
+        ; Newton-Raphson iterations: x = (x + S/x) / 2
+        ; Do 6 iterations for double precision convergence
+        ; ==========================================================
+
+        ld      b, 6            ; 6 iterations
+_sqrt_iterate:
+        push    bc              ; Save iteration counter
+
+        ; Compute S / x -> _sqrt_t
+        ; Stack order after CALL/PUSH IX: a_ptr (IX+4), b_ptr (IX+6), result_ptr (IX+8)
+        ; Push in reverse order: result_ptr first, then b_ptr, then a_ptr last
+        ld      hl, _sqrt_t
+        push    hl              ; result_ptr (will be IX+8)
+        ld      hl, _sqrt_x
+        push    hl              ; b_ptr (divisor x, will be IX+6)
+        ld      hl, _sqrt_s
+        push    hl              ; a_ptr (dividend S, will be IX+4)
+        call    _f64_div
+        pop     hl              ; Clean up stack
+        pop     hl
+        pop     hl
+
+        ; Compute x + S/x -> _ftemp
+        ; Stack order after CALL/PUSH IX: a_ptr (IX+4), b_ptr (IX+6), result_ptr (IX+8)
+        ; Push in reverse order: result_ptr first, then b_ptr, then a_ptr last
+        ld      hl, _ftemp
+        push    hl              ; result_ptr (will be IX+8)
+        ld      hl, _sqrt_t
+        push    hl              ; b_ptr (S/x, will be IX+6)
+        ld      hl, _sqrt_x
+        push    hl              ; a_ptr (x, will be IX+4)
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Divide by 2: (x + S/x) / 2 -> _sqrt_x
+        ; Dividing by 2 is just decrementing exponent by 1
+        ; Extract exponent from _ftemp, decrement, store in _sqrt_x
+
+        ; Copy _ftemp to _sqrt_x
+        ld      hl, _ftemp
+        ld      de, _sqrt_x
+        ld      bc, 8
+        ldir
+
+        ; Decrement exponent of _sqrt_x
+        ; byte 7: [S E10 E9 E8 E7 E6 E5 E4]
+        ; byte 6: [E3 E2 E1 E0 M51 M50 M49 M48]
+        ; Decrement 11-bit exponent by 1
+
+        ld      a, (_sqrt_x + 6)
+        sub     10h             ; Subtract 16 (1 in exponent low bits position)
+        ld      (_sqrt_x + 6), a
+        jr      nc, _sqrt_no_borrow
+        ld      a, (_sqrt_x + 7)
+        dec     a
+        ld      (_sqrt_x + 7), a
+_sqrt_no_borrow:
+
+        pop     bc              ; Restore iteration counter
+        djnz    _sqrt_iterate
+
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _sqrt_x
+        ld      bc, 8
+        ldir
+
+        jr      _sqrt_done
+
+_sqrt_negative:
+        ; Return 0 for negative input (should be NaN, but 0 is simpler)
+_sqrt_return_zero:
+        ld      l, (ix+6)
+        ld      h, (ix+7)       ; HL = result_ptr
+        ld      b, 8
+        xor     a
+_sqrt_zero_loop:
+        ld      (hl), a
+        inc     hl
+        djnz    _sqrt_zero_loop
+        jr      _sqrt_done
+
+_sqrt_return_input:
+        ; Return input unchanged (for inf/nan)
+        ld      l, (ix+6)
+        ld      h, (ix+7)       ; HL = result_ptr
+        ex      de, hl
+        ld      hl, _sqrt_s
+        ld      bc, 8
+        ldir
+
+_sqrt_done:
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_floor: Floor (round toward -infinity)
+; Input:  Stack: result_ptr, src_ptr
+; Output: result = floor(src)
+;
+; Algorithm:
+;   - If |x| < 1: return 0 for x >= 0, -1 for x < 0
+;   - If no fractional part: return x
+;   - Otherwise: trunc(x) for x >= 0, trunc(x) - 1 for x < 0 with frac
+; =============================================================================
+_f64_floor:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Extract the float
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; src_ptr
+        ld      de, _mant_a
+        call    _extract_float  ; A = sign, BC = exponent
+        ld      (_fsign), a
+        ld      (_exp_a), bc
+
+        ; Check if value is zero
+        ld      hl, _mant_a
+        call    _is_zero_64
+        jr      nz, _floor_not_zero
+
+        ; Zero - return zero
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        call    _zero_64
+        jp      _floor_done
+
+_floor_not_zero:
+        ; Check if exponent < bias (|value| < 1)
+        ld      hl, (_exp_a)
+        ld      de, EXP_BIAS
+        or      a
+        sbc     hl, de
+
+        bit     7, h            ; Negative? (exp < bias)
+        jr      z, _floor_check_large
+
+        ; |value| < 1
+        ; If positive: return 0
+        ; If negative: return -1
+        ld      a, (_fsign)
+        or      a
+        jr      nz, _floor_neg_one
+
+        ; Positive, return 0
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        call    _zero_64
+        jp      _floor_done
+
+_floor_neg_one:
+        ; Return -1.0 (0xBFF0_0000_0000_0000)
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        xor     a
+        ld      (hl), a         ; byte 0
+        inc     hl
+        ld      (hl), a         ; byte 1
+        inc     hl
+        ld      (hl), a         ; byte 2
+        inc     hl
+        ld      (hl), a         ; byte 3
+        inc     hl
+        ld      (hl), a         ; byte 4
+        inc     hl
+        ld      (hl), a         ; byte 5
+        inc     hl
+        ld      (hl), 0F0h      ; byte 6
+        inc     hl
+        ld      (hl), 0BFh      ; byte 7 (sign=1, exp=3FF)
+        jp      _floor_done
+
+_floor_check_large:
+        ; HL = unbiased exponent (>= 0)
+        ; If exp >= 52, no fractional part
+        ld      a, h
+        or      a
+        jp      nz, _floor_copy ; exp >= 256, definitely no frac
+        ld      a, l
+        cp      52
+        jp      nc, _floor_copy ; exp >= 52
+
+        ; Has fractional part - need to truncate
+        ; For positive: just mask off fractional bits
+        ; For negative: mask off frac bits, then subtract 1 if frac != 0
+
+        ; Initialize had_frac flag to 0
+        xor     a
+        ld      (_had_frac), a
+
+        ; First, copy source to result
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        ld      e, (ix+6)
+        ld      d, (ix+7)
+        call    _copy_64
+
+        ; Get unbiased exponent
+        ld      hl, (_exp_a)
+        ld      de, EXP_BIAS
+        or      a
+        sbc     hl, de
+        ld      c, l            ; C = unbiased exponent (0-51)
+
+        ; Calculate number of complete fractional bytes
+        ; (51 - exp) / 8
+        ld      a, 51
+        sub     c               ; A = 51 - exp (last fractional bit position)
+        ld      (_frac_bits), a ; Save for later check
+        srl     a
+        srl     a
+        srl     a               ; A = number of complete fractional bytes
+
+        ; Zero complete bytes, tracking if any were non-zero
+        ld      l, (ix+6)
+        ld      h, (ix+7)       ; HL = result_ptr
+        ld      b, a            ; B = bytes to zero
+        or      a
+        jr      z, _floor_mask_partial
+
+_floor_zero_bytes:
+        ld      a, (hl)         ; Get current byte
+        or      a
+        jr      z, _floor_zero_next
+        ; Byte was non-zero, set had_frac flag
+        ld      a, 1
+        ld      (_had_frac), a
+_floor_zero_next:
+        xor     a
+        ld      (hl), a
+        inc     hl
+        djnz    _floor_zero_bytes
+
+_floor_mask_partial:
+        ; HL now points to the partial byte
+        ; Calculate remaining fractional bits: ((51 - exp) % 8) + 1
+        ld      a, 51
+        sub     c               ; A = 51 - exp
+        and     07h             ; A = (51 - exp) % 8 = position within byte
+        inc     a               ; A = position + 1 = count of bits to mask
+        cp      9               ; If 8, all bits already handled by complete byte zeroing
+        jr      nc, _floor_check_neg
+
+        ; Create mask: 0xFF << remaining_bits
+        ld      b, a            ; B = shift count
+        ld      a, 0FFh
+_floor_shift_mask:
+        sla     a               ; Shift mask left
+        djnz    _floor_shift_mask
+        ; A now has the mask (e.g., 0xF8 to keep bits 3-7, clear bits 0-2)
+        ld      d, a            ; Save mask in D
+
+        ; Check if the bits we're about to clear are non-zero
+        ld      a, d
+        cpl                     ; Invert mask to get bits we're clearing (e.g., 0x07)
+        and     (hl)            ; AND with byte to get just the fractional bits
+        jr      z, _floor_apply_mask
+        ; Fractional bits were non-zero, set had_frac flag
+        ld      a, 1
+        ld      (_had_frac), a
+
+_floor_apply_mask:
+        ; Apply mask to the byte
+        ld      a, d            ; Get mask back
+        and     (hl)
+        ld      (hl), a
+
+_floor_check_neg:
+        ; For positive numbers, truncation is floor
+        ld      a, (_fsign)
+        or      a
+        jr      z, _floor_done  ; Positive - done
+
+        ; For negative numbers, only subtract 1 if there was a fractional part
+        ld      a, (_had_frac)
+        or      a
+        jr      z, _floor_done  ; No fractional part - trunc is same as floor
+
+        ; floor(x) = trunc(x) - 1 when x < 0 and has fractional part
+        ; _f64_add expects: result_ptr (IX+8), b_ptr (IX+6), a_ptr (IX+4)
+        ; So push in reverse order: result_ptr, b_ptr, a_ptr
+        ld      l, (ix+6)
+        ld      h, (ix+7)       ; HL = result_ptr
+        push    hl              ; result_ptr (will be IX+8)
+        ld      de, _f64_neg_one
+        push    de              ; b_ptr = -1.0 (will be IX+6)
+        push    hl              ; a_ptr = result (will be IX+4)
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        jr      _floor_done
+
+_floor_copy:
+        ; No fractional part, just copy
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        ld      e, (ix+6)
+        ld      d, (ix+7)
+        call    _copy_64
+
+_floor_done:
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_ceil: Ceiling (round toward +infinity)
+; Input:  Stack: result_ptr, src_ptr
+; Output: result = ceil(src)
+;
+; Algorithm:
+;   - If |x| < 1: return 0 for x <= 0, 1 for x > 0
+;   - If no fractional part: return x
+;   - Otherwise: trunc(x) for x < 0, trunc(x) + 1 for x > 0 with frac
+; =============================================================================
+_f64_ceil:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Extract the float
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; src_ptr
+        ld      de, _mant_a
+        call    _extract_float  ; A = sign, BC = exponent
+        ld      (_fsign), a
+        ld      (_exp_a), bc
+
+        ; Check if value is zero
+        ld      hl, _mant_a
+        call    _is_zero_64
+        jr      nz, _ceil_not_zero
+
+        ; Zero - return zero
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        call    _zero_64
+        jp      _ceil_done
+
+_ceil_not_zero:
+        ; Check if exponent < bias (|value| < 1)
+        ld      hl, (_exp_a)
+        ld      de, EXP_BIAS
+        or      a
+        sbc     hl, de
+
+        bit     7, h            ; Negative? (exp < bias)
+        jr      z, _ceil_check_large
+
+        ; |value| < 1
+        ; If negative: return 0
+        ; If positive: return 1
+        ld      a, (_fsign)
+        or      a
+        jr      z, _ceil_pos_one
+
+        ; Negative, return 0
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        call    _zero_64
+        jp      _ceil_done
+
+_ceil_pos_one:
+        ; Return 1.0 (0x3FF0_0000_0000_0000)
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        xor     a
+        ld      (hl), a         ; byte 0
+        inc     hl
+        ld      (hl), a         ; byte 1
+        inc     hl
+        ld      (hl), a         ; byte 2
+        inc     hl
+        ld      (hl), a         ; byte 3
+        inc     hl
+        ld      (hl), a         ; byte 4
+        inc     hl
+        ld      (hl), a         ; byte 5
+        inc     hl
+        ld      (hl), 0F0h      ; byte 6
+        inc     hl
+        ld      (hl), 03Fh      ; byte 7 (sign=0, exp=3FF)
+        jp      _ceil_done
+
+_ceil_check_large:
+        ; HL = unbiased exponent (>= 0)
+        ; If exp >= 52, no fractional part
+        ld      a, h
+        or      a
+        jr      nz, _ceil_copy  ; exp >= 256
+        ld      a, l
+        cp      52
+        jr      nc, _ceil_copy  ; exp >= 52
+
+        ; May have fractional part (need to check)
+        ; For negative: just truncate (truncation = ceiling for negative)
+        ; For positive: truncate then add 1.0 ONLY if had fractional bits
+
+        ; Copy source to result
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        ld      e, (ix+6)
+        ld      d, (ix+7)
+        call    _copy_64
+
+        ; Check and zero fractional bytes, tracking if any were non-zero
+        ; Get unbiased exponent in C
+        ld      hl, (_exp_a)
+        ld      de, EXP_BIAS
+        or      a
+        sbc     hl, de
+        ld      c, l            ; C = exp (0-51)
+
+        ; Calculate bytes to check/zero: (51 - exp) / 8
+        ld      a, 51
+        sub     c
+        srl     a
+        srl     a
+        srl     a               ; A = fractional bytes to zero
+
+        ; Track whether we found any non-zero bytes
+        ld      d, 0            ; D = had_frac flag (0 = no fractional bits)
+
+        ; Check and zero fractional bytes
+        ld      l, (ix+6)
+        ld      h, (ix+7)       ; HL = result_ptr
+        ld      b, a
+        or      a
+        jr      z, _ceil_skip_zero
+
+_ceil_zero_bytes:
+        ld      a, (hl)         ; Get current byte
+        or      a
+        jr      z, _ceil_byte_zero
+        ld      d, 1            ; Found non-zero byte - has fractional part
+_ceil_byte_zero:
+        xor     a
+        ld      (hl), a         ; Zero the byte
+        inc     hl
+        djnz    _ceil_zero_bytes
+
+_ceil_skip_zero:
+        ; For negative, truncation is ceiling - we're done
+        ld      a, (_fsign)
+        or      a
+        jr      nz, _ceil_done
+
+        ; For positive: only add 1.0 if we had fractional bits
+        ld      a, d            ; D = had_frac flag
+        or      a
+        jr      z, _ceil_done   ; No fractional bits - value was already integer
+
+        ; Positive with fractional part - add 1.0 to result
+        ; First, create 1.0 in _ceil_temp using _f64_one
+        ld      hl, _ceil_temp
+        push    hl
+        call    _f64_one
+        pop     hl
+
+        ; Call _f64_add(result, result, _ceil_temp)
+        ; Push order: result_ptr, b_ptr, a_ptr (last pushed at IX+4)
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl              ; result_ptr (IX+8 in _f64_add)
+        ld      hl, _ceil_temp
+        push    hl              ; b_ptr = 1.0 (IX+6 in _f64_add)
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl              ; a_ptr = result (IX+4 in _f64_add)
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl              ; Clean up stack (6 bytes)
+
+        jr      _ceil_done
+
+_ceil_copy:
+        ; No fractional part, just copy
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        ld      e, (ix+6)
+        ld      d, (ix+7)
+        call    _copy_64
+
+_ceil_done:
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_trunc: Truncate (round toward zero)
+; Input:  Stack: result_ptr, src_ptr
+; Output: result = trunc(src)
+;
+; Algorithm:
+;   - If |x| < 1: return 0
+;   - If no fractional part: return x
+;   - Otherwise: mask off fractional bits (keep sign)
+; =============================================================================
+_f64_trunc:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Extract the float
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; src_ptr
+        ld      de, _mant_a
+        call    _extract_float  ; A = sign, BC = exponent
+        ld      (_fsign), a
+        ld      (_exp_a), bc
+
+        ; Check if value is zero
+        ld      hl, _mant_a
+        call    _is_zero_64
+        jr      nz, _trunc_not_zero
+
+        ; Zero - return zero
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        call    _zero_64
+        jp      _trunc_done
+
+_trunc_not_zero:
+        ; Check if exponent < bias (|value| < 1)
+        ld      hl, (_exp_a)
+        ld      de, EXP_BIAS
+        or      a
+        sbc     hl, de
+
+        bit     7, h            ; Negative? (exp < bias)
+        jr      z, _trunc_check_large
+
+        ; |value| < 1, return 0
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        call    _zero_64
+        jp      _trunc_done
+
+_trunc_check_large:
+        ; HL = unbiased exponent (>= 0)
+        ; If exp >= 52, no fractional part
+        ld      a, h
+        or      a
+        jr      nz, _trunc_copy ; exp >= 256
+        ld      a, l
+        cp      52
+        jr      nc, _trunc_copy ; exp >= 52
+
+        ; Has fractional part - mask off fractional bits
+        ; Fractional bits are bits 0 to (51 - exp)
+        ; We need to zero these bits
+
+        ; First copy source to result
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        ld      e, (ix+6)
+        ld      d, (ix+7)
+        call    _copy_64
+
+        ; Get unbiased exponent in C
+        ld      hl, (_exp_a)
+        ld      de, EXP_BIAS
+        or      a
+        sbc     hl, de
+        ld      c, l            ; C = exp (0-51)
+
+        ; Calculate first fractional bit position: 51 - exp
+        ; Zero bits from position 0 to (51 - exp)
+
+        ; For exp 0-7: all of bytes 0-5 and part of byte 6 are fractional
+        ; For exp 8-15: bytes 0-4 are fractional
+        ; etc.
+
+        ; Number of whole fractional bytes = (51 - exp) / 8 = (51 - exp) >> 3
+        ld      a, 51
+        sub     c               ; A = 51 - exp (last fractional bit position)
+        srl     a
+        srl     a
+        srl     a               ; A = number of complete fractional bytes to zero
+
+        ; Zero complete bytes
+        ld      l, (ix+6)
+        ld      h, (ix+7)       ; HL = result_ptr
+
+        ld      b, a            ; B = bytes to zero
+        or      a
+        jr      z, _trunc_mask_partial
+
+_trunc_zero_bytes:
+        xor     a
+        ld      (hl), a
+        inc     hl
+        djnz    _trunc_zero_bytes
+
+        ; Now HL points to the byte that may need partial masking
+        ; Calculate mask for remaining bits
+
+_trunc_mask_partial:
+        ; Calculate remaining fractional bits in this byte
+        ; remaining = ((51 - exp) % 8) + 1 = ((51 - exp) AND 7) + 1
+        ; C still has exp (0-51)
+        ld      a, 51
+        sub     c               ; A = 51 - exp
+        and     07h             ; A = (51 - exp) % 8 = position within byte
+        inc     a               ; A = position + 1 = count of bits to mask
+        cp      9               ; If 8, all bits already handled by complete byte zeroing
+        jr      nc, _trunc_done
+
+        ; Create mask: 0xFF << remaining_bits
+        ; We need to zero bits 0 to (remaining-1)
+        ld      b, a            ; B = shift count
+        ld      a, 0FFh
+_trunc_shift_mask:
+        sla     a               ; Shift mask left
+        djnz    _trunc_shift_mask
+        ; A now has the mask (e.g., for 3 remaining bits: 0xF8)
+
+        ; Apply mask to the byte
+        and     (hl)
+        ld      (hl), a
+
+        jr      _trunc_done
+
+_trunc_copy:
+        ; No fractional part, just copy
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        ld      e, (ix+6)
+        ld      d, (ix+7)
+        call    _copy_64
+
+_trunc_done:
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_round: Round to nearest (half away from zero)
+; Input:  Stack: result_ptr, src_ptr
+; Output: result = round(src)
+;
+; Algorithm:
+;   - If x >= 0: return trunc(x + 0.5)
+;   - If x < 0: return trunc(x - 0.5)
+; =============================================================================
+_f64_round:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Extract the float to get sign
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; src_ptr
+        ld      de, _mant_a
+        call    _extract_float  ; A = sign, BC = exponent
+        ld      (_fsign), a
+        ld      (_exp_a), bc
+
+        ; Check if value is zero
+        ld      hl, _mant_a
+        call    _is_zero_64
+        jr      nz, _round_not_zero
+
+        ; Zero - return zero
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        call    _zero_64
+        jp      _round_done
+
+_round_not_zero:
+        ; Check if exponent >= 52 (no fractional part)
+        ld      hl, (_exp_a)
+        ld      de, EXP_BIAS
+        or      a
+        sbc     hl, de          ; HL = unbiased exponent
+        bit     7, h
+        jr      nz, _round_small ; exp < 0, |value| < 1
+
+        ld      a, h
+        or      a
+        jp      nz, _round_copy ; exp >= 256, no fractional part
+        ld      a, l
+        cp      52
+        jp      nc, _round_copy ; exp >= 52, no fractional part
+
+        ; Value has fractional part - need to add/subtract 0.5 then truncate
+        ; First, create 0.5 in _ceil_temp
+        ld      hl, _ceil_temp
+        xor     a
+        ld      (hl), a         ; byte 0
+        inc     hl
+        ld      (hl), a         ; byte 1
+        inc     hl
+        ld      (hl), a         ; byte 2
+        inc     hl
+        ld      (hl), a         ; byte 3
+        inc     hl
+        ld      (hl), a         ; byte 4
+        inc     hl
+        ld      (hl), a         ; byte 5
+        inc     hl
+        ld      (hl), 0E0h      ; byte 6 (0.5 = 0x3FE0_0000_0000_0000)
+        inc     hl
+        ld      (hl), 03Fh      ; byte 7
+
+        ; Check sign to decide add or subtract
+        ld      a, (_fsign)
+        or      a
+        jr      nz, _round_negative
+
+        ; Positive: result = trunc(x + 0.5)
+        ; Call _f64_add(result, src, 0.5)
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl              ; result_ptr
+        ld      hl, _ceil_temp
+        push    hl              ; b_ptr = 0.5
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        push    hl              ; a_ptr = src
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Now truncate the result in place
+        ; Call _f64_trunc(result, result)
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl              ; result_ptr (both src and dest)
+        push    hl              ; src_ptr = result
+        call    _f64_trunc
+        pop     hl
+        pop     hl
+        jp      _round_done
+
+_round_negative:
+        ; Negative: result = trunc(x - 0.5)
+        ; First negate 0.5 to get -0.5
+        ld      hl, _ceil_temp+7
+        ld      a, (hl)
+        or      80h             ; Set sign bit
+        ld      (hl), a
+
+        ; Call _f64_add(result, src, -0.5)
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl              ; result_ptr
+        ld      hl, _ceil_temp
+        push    hl              ; b_ptr = -0.5
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        push    hl              ; a_ptr = src
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Now truncate the result in place
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl              ; result_ptr (both src and dest)
+        push    hl              ; src_ptr = result
+        call    _f64_trunc
+        pop     hl
+        pop     hl
+        jr      _round_done
+
+_round_small:
+        ; |value| < 1
+        ; Check if |value| >= 0.5
+        ; If so, return +1 or -1 based on sign
+        ; Otherwise return 0
+        ld      hl, (_exp_a)
+        ld      de, EXP_BIAS - 1  ; exp for 0.5 is 1022
+        or      a
+        sbc     hl, de
+        bit     7, h
+        jr      nz, _round_ret_zero ; exp < 1022, |value| < 0.5
+
+        ; |value| >= 0.5, return +1 or -1
+        ld      a, (_fsign)
+        or      a
+        jr      nz, _round_ret_neg_one
+
+        ; Return 1.0
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl
+        call    _f64_one
+        pop     hl
+        jr      _round_done
+
+_round_ret_neg_one:
+        ; Return -1.0
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        xor     a
+        ld      (hl), a         ; byte 0
+        inc     hl
+        ld      (hl), a         ; byte 1
+        inc     hl
+        ld      (hl), a         ; byte 2
+        inc     hl
+        ld      (hl), a         ; byte 3
+        inc     hl
+        ld      (hl), a         ; byte 4
+        inc     hl
+        ld      (hl), a         ; byte 5
+        inc     hl
+        ld      (hl), 0F0h      ; byte 6
+        inc     hl
+        ld      (hl), 0BFh      ; byte 7 (sign=1, exp=3FF)
+        jr      _round_done
+
+_round_ret_zero:
+        ; Return 0.0
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        call    _zero_64
+        jr      _round_done
+
+_round_copy:
+        ; No fractional part, just copy
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        ld      e, (ix+6)
+        ld      d, (ix+7)
+        call    _copy_64
+
+_round_done:
+        pop     ix
+        ret
+
+; Constant 1.0 for ceiling/floor and exponentiation (0x3FF0_0000_0000_0000 little-endian)
+_const_one: DB      00h, 00h, 00h, 00h, 00h, 00h, 0F0h, 3Fh
+
+; Constant -1.0 for floor of negative numbers (0xBFF0_0000_0000_0000 little-endian)
+_f64_neg_one:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 0F0h, 0BFh
+
+; =============================================================================
+; _f64_exp_int: Float64 ** Integer exponentiation
+; Input:  Stack: result_ptr (IX+8), exponent (IX+6), base_ptr (IX+4)
+; Output: result = base ** exponent
+;
+; Algorithm: Binary exponentiation (repeated squaring)
+;   - If exp == 0: return 1.0
+;   - If exp < 0: compute base^(-exp), then return 1.0 / result
+;   - If exp > 0: use repeated squaring
+; =============================================================================
+_f64_exp_int:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Get exponent
+        ld      c, (ix+6)
+        ld      b, (ix+7)       ; BC = exponent
+
+        ; Check if exponent is zero -> return 1.0
+        ld      a, b
+        or      c
+        jr      nz, _expint_check_neg
+        ; Exponent is 0, return 1.0
+        ld      l, (ix+8)
+        ld      h, (ix+9)       ; HL = result_ptr
+        push    hl
+        call    _f64_one
+        pop     hl
+        jp      _expint_done
+
+_expint_check_neg:
+        ; Check if exponent is negative
+        bit     7, b
+        jr      z, _expint_positive
+
+        ; Negative exponent: negate it, compute, then take reciprocal
+        ; First, negate BC to get absolute value
+        xor     a
+        sub     c
+        ld      c, a
+        sbc     a, a
+        sub     b
+        ld      b, a            ; BC = -exponent (positive now)
+        ; Save flag that we need reciprocal
+        ld      a, 1
+        ld      (_exp_neg_flag), a
+        jr      _expint_compute
+
+_expint_positive:
+        xor     a
+        ld      (_exp_neg_flag), a
+
+_expint_compute:
+        ; Save exponent to counter (BC still has the abs(exponent))
+        ld      (_exp_counter), bc
+
+        ; Initialize result = 1.0 in _exp_result
+        ld      hl, _exp_result
+        push    hl
+        call    _f64_one
+        pop     hl
+
+        ; Copy base to _exp_base
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = base_ptr
+        ld      de, _exp_base
+        push    bc              ; save counter
+        ld      bc, 8
+        ldir
+        pop     bc              ; restore counter (but use _exp_counter in loop)
+
+_expint_loop:
+        ; Check if exp == 0
+        ld      bc, (_exp_counter)
+        ld      a, b
+        or      c
+        jr      z, _expint_loop_done
+
+        ; Check if exp is odd (low bit set)
+        ld      a, c
+        and     1
+        jr      z, _expint_square
+
+        ; Exp is odd: result = result * base
+        ; Push args for _f64_mul: result_ptr, b_ptr, a_ptr
+        ld      hl, _exp_result
+        push    hl              ; result_ptr (IX+8)
+        ld      hl, _exp_base
+        push    hl              ; b_ptr (IX+6)
+        ld      hl, _exp_result
+        push    hl              ; a_ptr (IX+4)
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+_expint_square:
+        ; base = base * base
+        ; Push args for _f64_mul: result_ptr, b_ptr, a_ptr
+        ld      hl, _exp_base
+        push    hl              ; result_ptr (IX+8)
+        ld      hl, _exp_base
+        push    hl              ; b_ptr (IX+6)
+        ld      hl, _exp_base
+        push    hl              ; a_ptr (IX+4)
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; exp = exp >> 1
+        ld      bc, (_exp_counter)
+        srl     b
+        rr      c
+        ld      (_exp_counter), bc
+
+        jr      _expint_loop
+
+_expint_loop_done:
+        ; Check if we need reciprocal (negative exponent)
+        ld      a, (_exp_neg_flag)
+        or      a
+        jr      z, _expint_store
+
+        ; Need reciprocal: result = 1.0 / result
+        ; First, put 1.0 in _exp_base (reuse as temp)
+        ld      hl, _exp_base
+        push    hl
+        call    _f64_one
+        pop     hl
+
+        ; Now divide: 1.0 / result
+        ; Push args: result_ptr, b_ptr (divisor), a_ptr (dividend)
+        ld      hl, _exp_result
+        push    hl              ; result_ptr (IX+8)
+        ld      hl, _exp_result
+        push    hl              ; b_ptr = result (divisor) (IX+6)
+        ld      hl, _exp_base
+        push    hl              ; a_ptr = 1.0 (dividend) (IX+4)
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+_expint_store:
+        ; Copy result to output
+        ld      l, (ix+8)
+        ld      h, (ix+9)       ; HL = result_ptr
+        ex      de, hl          ; DE = result_ptr
+        ld      hl, _exp_result
+        ld      bc, 8
+        ldir
+
+_expint_done:
+        pop     ix
+        ret
+
+; =============================================================================
+; Float64 Remainder: X rem Y = X - Y * trunc(X/Y)
+; The sign of the result follows the sign of the dividend (X).
+;
+; Stack layout:
+;   IX+8: Pointer to result (output)
+;   IX+6: Pointer to Y (divisor)
+;   IX+4: Pointer to X (dividend)
+; =============================================================================
+_f64_rem:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Step 1: Compute X / Y into _rem_quotient
+        ld      hl, _rem_quotient
+        push    hl              ; result_ptr (IX+8 for div)
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl              ; Y pointer (IX+6 for div)
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        push    hl              ; X pointer (IX+4 for div)
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Step 2: Truncate quotient (round toward zero)
+        ld      hl, _rem_quotient
+        push    hl              ; result_ptr (IX+6 for trunc)
+        ld      hl, _rem_quotient
+        push    hl              ; src_ptr (IX+4 for trunc)
+        call    _f64_trunc
+        pop     hl
+        pop     hl
+
+        ; Step 3: Compute Y * trunc(X/Y) into _rem_product
+        ld      hl, _rem_product
+        push    hl              ; result_ptr (IX+8 for mul)
+        ld      hl, _rem_quotient
+        push    hl              ; truncated quotient (IX+6 for mul)
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl              ; Y pointer (IX+4 for mul)
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Step 4: Compute X - (Y * trunc(X/Y)) into result
+        ld      l, (ix+8)
+        ld      h, (ix+9)
+        push    hl              ; result_ptr (IX+8 for sub)
+        ld      hl, _rem_product
+        push    hl              ; product (IX+6 for sub)
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        push    hl              ; X pointer (IX+4 for sub)
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        pop     ix
+        ret
+
+; =============================================================================
+; Float64 Modulo: X mod Y = X - Y * floor(X/Y)
+; The sign of the result follows the sign of the divisor (Y).
+;
+; Stack layout:
+;   IX+8: Pointer to result (output)
+;   IX+6: Pointer to Y (divisor)
+;   IX+4: Pointer to X (dividend)
+; =============================================================================
+_f64_mod:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Step 1: Compute X / Y into _rem_quotient
+        ld      hl, _rem_quotient
+        push    hl              ; result_ptr (IX+8 for div)
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl              ; Y pointer (IX+6 for div)
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        push    hl              ; X pointer (IX+4 for div)
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Step 2: Floor quotient (round toward -infinity)
+        ld      hl, _rem_quotient
+        push    hl              ; result_ptr (IX+6 for floor)
+        ld      hl, _rem_quotient
+        push    hl              ; src_ptr (IX+4 for floor)
+        call    _f64_floor
+        pop     hl
+        pop     hl
+
+        ; Step 3: Compute Y * floor(X/Y) into _rem_product
+        ld      hl, _rem_product
+        push    hl              ; result_ptr (IX+8 for mul)
+        ld      hl, _rem_quotient
+        push    hl              ; floored quotient (IX+6 for mul)
+        ld      l, (ix+6)
+        ld      h, (ix+7)
+        push    hl              ; Y pointer (IX+4 for mul)
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Step 4: Compute X - (Y * floor(X/Y)) into result
+        ld      l, (ix+8)
+        ld      h, (ix+9)
+        push    hl              ; result_ptr (IX+8 for sub)
+        ld      hl, _rem_product
+        push    hl              ; product (IX+6 for sub)
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        push    hl              ; X pointer (IX+4 for sub)
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_sin: Sine function using Taylor series
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = sin(src)
+;
+; Uses Taylor series: sin(x) = x - x³/3! + x⁵/5! - x⁷/7! + ...
+; For accuracy, first reduces argument to [-π, π] range.
+;
+; Taylor coefficients (1/n!):
+;   1/3! = 1/6 ≈ 0.16666666666667
+;   1/5! = 1/120 ≈ 0.00833333333333
+;   1/7! = 1/5040 ≈ 0.00019841269841
+;   1/9! = 1/362880 ≈ 2.7557319e-6
+; =============================================================================
+_f64_sin:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input to _sin_x
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _sin_x
+        ld      bc, 8
+        ldir
+
+        ; Save original sign and work with absolute value
+        ld      a, (_sin_x + 7)
+        ld      (_sin_sign), a
+        and     7Fh             ; Clear sign bit
+        ld      (_sin_x + 7), a
+
+        ; Argument reduction: x = x mod 2π
+        ; We'll use a simpler approach: if |x| is small (< 2π), skip reduction
+        ; For larger values, use repeated subtraction (slow but correct)
+        ; Check if exponent suggests value > 8 (bigger than 2π ≈ 6.28)
+        ld      a, (_sin_x + 7)
+        and     7Fh
+        cp      40h             ; Exponent > 0x402 means |x| > 8
+        jr      c, _sin_small   ; If exponent byte < 0x40, value is small
+
+        ; Need argument reduction - compute x mod 2π
+        ; Push args for mod: result_ptr, Y_ptr (2π), X_ptr
+        ld      hl, _sin_x
+        push    hl              ; result goes back to _sin_x
+        ld      hl, _const_2pi
+        push    hl              ; modulus is 2π
+        ld      hl, _sin_x
+        push    hl              ; input
+        call    _f64_mod
+        pop     hl
+        pop     hl
+        pop     hl
+
+_sin_small:
+        ; Now _sin_x is in range [-2π, 2π], good enough for Taylor series
+        ; Compute x² into _sin_x2
+        ld      hl, _sin_x2
+        push    hl              ; result_ptr
+        ld      hl, _sin_x
+        push    hl              ; b_ptr
+        ld      hl, _sin_x
+        push    hl              ; a_ptr
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Initialize result = x (first term)
+        ld      hl, _sin_x
+        ld      de, _sin_result
+        ld      bc, 8
+        ldir
+
+        ; Compute x³ = x * x²
+        ld      hl, _sin_xn     ; Store x³ here
+        push    hl
+        ld      hl, _sin_x2
+        push    hl
+        ld      hl, _sin_x
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 2: -x³/6
+        ld      hl, _sin_term
+        push    hl
+        ld      hl, _const_6
+        push    hl
+        ld      hl, _sin_xn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; result = result - x³/6
+        ld      hl, _sin_result
+        push    hl
+        ld      hl, _sin_term
+        push    hl
+        ld      hl, _sin_result
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute x⁵ = x³ * x²
+        ld      hl, _sin_xn
+        push    hl
+        ld      hl, _sin_x2
+        push    hl
+        ld      hl, _sin_xn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 3: +x⁵/120
+        ld      hl, _sin_term
+        push    hl
+        ld      hl, _const_120
+        push    hl
+        ld      hl, _sin_xn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; result = result + x⁵/120
+        ld      hl, _sin_result
+        push    hl
+        ld      hl, _sin_term
+        push    hl
+        ld      hl, _sin_result
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute x⁷ = x⁵ * x²
+        ld      hl, _sin_xn
+        push    hl
+        ld      hl, _sin_x2
+        push    hl
+        ld      hl, _sin_xn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 4: -x⁷/5040
+        ld      hl, _sin_term
+        push    hl
+        ld      hl, _const_5040
+        push    hl
+        ld      hl, _sin_xn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; result = result - x⁷/5040
+        ld      hl, _sin_result
+        push    hl
+        ld      hl, _sin_term
+        push    hl
+        ld      hl, _sin_result
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Apply original sign
+        ld      a, (_sin_sign)
+        bit     7, a
+        jr      z, _sin_copy_result
+
+        ; Negate result
+        ld      a, (_sin_result + 7)
+        xor     80h
+        ld      (_sin_result + 7), a
+
+_sin_copy_result:
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _sin_result
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_cos: Cosine function using Taylor series
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = cos(src)
+;
+; Uses Taylor series: cos(x) = 1 - x²/2! + x⁴/4! - x⁶/6! + ...
+; For accuracy, first reduces argument to [-π, π] range.
+;
+; Taylor coefficients (1/n!):
+;   1/2! = 1/2 = 0.5
+;   1/4! = 1/24 ≈ 0.04166666666667
+;   1/6! = 1/720 ≈ 0.00138888888889
+;   1/8! = 1/40320 ≈ 2.4801587e-5
+; =============================================================================
+_f64_cos:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input to _cos_x (cosine is even: cos(-x) = cos(x))
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _cos_x
+        ld      bc, 8
+        ldir
+
+        ; Work with absolute value (cosine is even function)
+        ld      a, (_cos_x + 7)
+        and     7Fh             ; Clear sign bit
+        ld      (_cos_x + 7), a
+
+        ; Argument reduction if needed
+        cp      40h             ; Exponent > 0x402 means |x| > 8
+        jr      c, _cos_small
+
+        ; Compute x mod 2π
+        ld      hl, _cos_x
+        push    hl
+        ld      hl, _const_2pi
+        push    hl
+        ld      hl, _cos_x
+        push    hl
+        call    _f64_mod
+        pop     hl
+        pop     hl
+        pop     hl
+
+_cos_small:
+        ; Compute x²
+        ld      hl, _cos_x2
+        push    hl
+        ld      hl, _cos_x
+        push    hl
+        ld      hl, _cos_x
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Initialize result = 1.0
+        ld      hl, _const_one_f64
+        ld      de, _cos_result
+        ld      bc, 8
+        ldir
+
+        ; Term 2: -x²/2
+        ld      hl, _cos_term
+        push    hl
+        ld      hl, _const_2
+        push    hl
+        ld      hl, _cos_x2
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; result = result - x²/2
+        ld      hl, _cos_result
+        push    hl
+        ld      hl, _cos_term
+        push    hl
+        ld      hl, _cos_result
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute x⁴ = x² * x²
+        ld      hl, _cos_xn
+        push    hl
+        ld      hl, _cos_x2
+        push    hl
+        ld      hl, _cos_x2
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 3: +x⁴/24
+        ld      hl, _cos_term
+        push    hl
+        ld      hl, _const_24
+        push    hl
+        ld      hl, _cos_xn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; result = result + x⁴/24
+        ld      hl, _cos_result
+        push    hl
+        ld      hl, _cos_term
+        push    hl
+        ld      hl, _cos_result
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute x⁶ = x⁴ * x²
+        ld      hl, _cos_xn
+        push    hl
+        ld      hl, _cos_x2
+        push    hl
+        ld      hl, _cos_xn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 4: -x⁶/720
+        ld      hl, _cos_term
+        push    hl
+        ld      hl, _const_720
+        push    hl
+        ld      hl, _cos_xn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; result = result - x⁶/720
+        ld      hl, _cos_result
+        push    hl
+        ld      hl, _cos_term
+        push    hl
+        ld      hl, _cos_result
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute x⁸ = x⁶ * x²
+        ld      hl, _cos_xn
+        push    hl
+        ld      hl, _cos_x2
+        push    hl
+        ld      hl, _cos_xn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 5: +x⁸/40320
+        ld      hl, _cos_term
+        push    hl
+        ld      hl, _const_40320
+        push    hl
+        ld      hl, _cos_xn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; result = result + x⁸/40320
+        ld      hl, _cos_result
+        push    hl
+        ld      hl, _cos_term
+        push    hl
+        ld      hl, _cos_result
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _cos_result
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_tan: Tangent function
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = tan(src) = sin(src) / cos(src)
+;
+; Note: tan has poles at x = π/2 + n*π where cos(x) = 0
+;       Division by near-zero will give very large results or infinity
+; =============================================================================
+_f64_tan:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Compute sin(x) -> _tan_sin
+        ld      hl, _tan_sin
+        push    hl
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        push    hl
+        call    _f64_sin
+        pop     hl
+        pop     hl
+
+        ; Compute cos(x) -> _tan_cos
+        ld      hl, _tan_cos
+        push    hl
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        push    hl
+        call    _f64_cos
+        pop     hl
+        pop     hl
+
+        ; tan(x) = sin(x) / cos(x)
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        push    de
+        ld      hl, _tan_cos
+        push    hl
+        ld      hl, _tan_sin
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_atan: Arctangent function using Taylor series
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = atan(x)
+;
+; Uses Taylor series: atan(x) = x - x³/3 + x⁵/5 - x⁷/7 + ...
+; For |x| > 1: atan(x) = π/2 - atan(1/x) if x > 0
+;              atan(x) = -π/2 - atan(1/x) if x < 0
+; =============================================================================
+_f64_atan:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input to _atan_x
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _atan_x
+        ld      bc, 8
+        ldir
+
+        ; Save original sign and work with absolute value
+        ld      a, (_atan_x + 7)
+        ld      (_atan_sign), a
+        and     7Fh
+        ld      (_atan_x + 7), a
+
+        ; Check if |x| > 1 (need argument reduction)
+        ; Compare exponent with 1.0 (exponent 0x3FF)
+        ld      a, (_atan_x + 7)
+        cp      3Fh
+        jr      c, _atan_small  ; exponent < 0x3F, so |x| < 1
+        jr      nz, _atan_large ; exponent > 0x3F, so |x| > 1
+        ; Exponent byte 7 is 0x3F, check byte 6
+        ld      a, (_atan_x + 6)
+        cp      0F0h
+        jr      c, _atan_small  ; |x| < 1
+        ; |x| >= 1, check if exactly 1.0 or larger
+        jr      _atan_large
+
+_atan_large:
+        ; |x| > 1: use atan(x) = π/2 - atan(1/x)
+        ; Set reduction flag
+        ld      a, 1
+        ld      (_atan_reduce), a
+
+        ; Compute 1/x -> _atan_x
+        ld      hl, _atan_x
+        push    hl              ; result_ptr
+        ld      hl, _atan_x
+        push    hl              ; divisor (x)
+        ld      hl, _const_one_f64
+        push    hl              ; dividend (1.0)
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+        jr      _atan_taylor
+
+_atan_small:
+        ; |x| <= 1, no reduction needed
+        xor     a
+        ld      (_atan_reduce), a
+
+_atan_taylor:
+        ; Taylor series: atan(x) = x - x³/3 + x⁵/5 - x⁷/7 + ...
+        ; Initialize result = x
+        ld      hl, _atan_x
+        ld      de, _atan_res
+        ld      bc, 8
+        ldir
+
+        ; Compute x² -> _atan_x2
+        ld      hl, _atan_x2
+        push    hl
+        ld      hl, _atan_x
+        push    hl
+        ld      hl, _atan_x
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; x³ = x² * x -> _atan_xn
+        ld      hl, _atan_xn
+        push    hl
+        ld      hl, _atan_x
+        push    hl
+        ld      hl, _atan_x2
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 2: - x³/3
+        ld      hl, _atan_term
+        push    hl
+        ld      hl, _const_3
+        push    hl
+        ld      hl, _atan_xn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _atan_res
+        push    hl
+        ld      hl, _atan_term
+        push    hl
+        ld      hl, _atan_res
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; x⁵ = x³ * x²
+        ld      hl, _atan_xn
+        push    hl
+        ld      hl, _atan_x2
+        push    hl
+        ld      hl, _atan_xn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 3: + x⁵/5
+        ld      hl, _atan_term
+        push    hl
+        ld      hl, _const_5
+        push    hl
+        ld      hl, _atan_xn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _atan_res
+        push    hl
+        ld      hl, _atan_term
+        push    hl
+        ld      hl, _atan_res
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; x⁷ = x⁵ * x²
+        ld      hl, _atan_xn
+        push    hl
+        ld      hl, _atan_x2
+        push    hl
+        ld      hl, _atan_xn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 4: - x⁷/7
+        ld      hl, _atan_term
+        push    hl
+        ld      hl, _const_7
+        push    hl
+        ld      hl, _atan_xn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _atan_res
+        push    hl
+        ld      hl, _atan_term
+        push    hl
+        ld      hl, _atan_res
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; x⁹ = x⁷ * x²
+        ld      hl, _atan_xn
+        push    hl
+        ld      hl, _atan_x2
+        push    hl
+        ld      hl, _atan_xn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 5: + x⁹/9
+        ld      hl, _atan_term
+        push    hl
+        ld      hl, _const_9
+        push    hl
+        ld      hl, _atan_xn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _atan_res
+        push    hl
+        ld      hl, _atan_term
+        push    hl
+        ld      hl, _atan_res
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Check if argument reduction was applied
+        ld      a, (_atan_reduce)
+        or      a
+        jr      z, _atan_apply_sign
+
+        ; Apply reduction: result = π/2 - result
+        ld      hl, _atan_res
+        push    hl
+        ld      hl, _atan_res
+        push    hl
+        ld      hl, _const_pi2
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+_atan_apply_sign:
+        ; Apply original sign
+        ld      a, (_atan_sign)
+        and     80h
+        ld      b, a
+        ld      a, (_atan_res + 7)
+        and     7Fh
+        or      b
+        ld      (_atan_res + 7), a
+
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _atan_res
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_asin: Arcsine function using identity asin(x) = atan(x / sqrt(1 - x²))
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = asin(x) for -1 <= x <= 1
+;
+; Special cases:
+;   asin(1) = π/2
+;   asin(-1) = -π/2
+;   asin(0) = 0
+; =============================================================================
+_f64_asin:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input to _asin_x
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _asin_x
+        ld      bc, 8
+        ldir
+
+        ; Save original sign
+        ld      a, (_asin_x + 7)
+        ld      (_asin_sign), a
+
+        ; Check for special case: |x| = 1
+        ; 1.0 = 0x3FF0000000000000
+        ld      a, (_asin_x + 7)
+        and     7Fh             ; Clear sign
+        cp      3Fh
+        jr      nz, _asin_compute
+        ld      a, (_asin_x + 6)
+        cp      0F0h
+        jr      nz, _asin_compute
+        ; Check if mantissa is all zeros (exactly 1.0)
+        ld      hl, _asin_x
+        ld      b, 6            ; Check first 6 bytes
+        xor     a
+_asin_check_one:
+        or      (hl)
+        inc     hl
+        djnz    _asin_check_one
+        or      a
+        jr      nz, _asin_compute
+        ; x = ±1.0, return ±π/2
+        ld      hl, _const_pi2
+        ld      de, _asin_res
+        ld      bc, 8
+        ldir
+        ; Apply sign
+        ld      a, (_asin_sign)
+        and     80h
+        ld      b, a
+        ld      a, (_asin_res + 7)
+        and     7Fh
+        or      b
+        ld      (_asin_res + 7), a
+        jp      _asin_done
+
+_asin_compute:
+        ; Compute 1 - x²
+        ; First compute x² -> _asin_x2
+        ld      hl, _asin_x2
+        push    hl
+        ld      hl, _asin_x
+        push    hl
+        ld      hl, _asin_x
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute 1 - x² -> _asin_tmp
+        ld      hl, _asin_tmp
+        push    hl
+        ld      hl, _asin_x2
+        push    hl
+        ld      hl, _const_one_f64
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute sqrt(1 - x²) -> _asin_tmp
+        ld      hl, _asin_tmp
+        push    hl
+        ld      hl, _asin_tmp
+        push    hl
+        call    _f64_sqrt
+        pop     hl
+        pop     hl
+
+        ; Compute x / sqrt(1 - x²) -> _asin_tmp
+        ld      hl, _asin_tmp
+        push    hl
+        ld      hl, _asin_tmp
+        push    hl
+        ld      hl, _asin_x
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute atan(x / sqrt(1 - x²)) -> _asin_res
+        ld      hl, _asin_res
+        push    hl
+        ld      hl, _asin_tmp
+        push    hl
+        call    _f64_atan
+        pop     hl
+        pop     hl
+
+_asin_done:
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _asin_res
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_acos: Arccosine function using identity acos(x) = π/2 - asin(x)
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = acos(x) for -1 <= x <= 1
+;
+; Special cases:
+;   acos(1) = 0
+;   acos(-1) = π
+;   acos(0) = π/2
+; =============================================================================
+_f64_acos:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; First compute asin(x) -> _acos_tmp
+        ld      hl, _acos_tmp
+        push    hl
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        push    hl
+        call    _f64_asin
+        pop     hl
+        pop     hl
+
+        ; Compute π/2 - asin(x) -> _acos_res
+        ld      hl, _acos_res
+        push    hl
+        ld      hl, _acos_tmp
+        push    hl
+        ld      hl, _const_pi2
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _acos_res
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_at2: Two-argument arctangent atan2(y, x)
+; Input:  Stack: result_ptr (IX+8), x_ptr (IX+6), y_ptr (IX+4)
+; Output: result = atan2(y, x) = angle from positive x-axis to point (x,y)
+;
+; Returns angle in radians in range (-π, π]:
+;   atan2(y, x) = atan(y/x)       if x > 0
+;   atan2(y, x) = atan(y/x) + π   if x < 0 and y >= 0
+;   atan2(y, x) = atan(y/x) - π   if x < 0 and y < 0
+;   atan2(y, x) = +π/2            if x = 0 and y > 0
+;   atan2(y, x) = -π/2            if x = 0 and y < 0
+;   atan2(y, x) = 0               if x = 0 and y = 0 (undefined, return 0)
+; =============================================================================
+_f64_at2:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy y to _atan2_y
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = y_ptr
+        ld      de, _atan2_y
+        ld      bc, 8
+        ldir
+
+        ; Copy x to _atan2_x
+        ld      l, (ix+6)
+        ld      h, (ix+7)       ; HL = x_ptr
+        ld      de, _atan2_x
+        ld      bc, 8
+        ldir
+
+        ; Check if x is zero
+        ld      hl, _atan2_x
+        ld      b, 8
+        xor     a
+_atan2_check_x_zero:
+        or      (hl)
+        inc     hl
+        djnz    _atan2_check_x_zero
+        or      a
+        jr      nz, _atan2_x_nonzero
+
+        ; x = 0, check y
+        ld      hl, _atan2_y
+        ld      b, 8
+        xor     a
+_atan2_check_y_zero:
+        or      (hl)
+        inc     hl
+        djnz    _atan2_check_y_zero
+        or      a
+        jr      nz, _atan2_y_nonzero_x_zero
+
+        ; x = 0 and y = 0, return 0
+        ld      hl, _f64_zero
+        ld      de, _atan2_res
+        ld      bc, 8
+        ldir
+        jp      _atan2_done
+
+_atan2_y_nonzero_x_zero:
+        ; x = 0, y != 0: return ±π/2 based on sign of y
+        ld      hl, _const_pi2
+        ld      de, _atan2_res
+        ld      bc, 8
+        ldir
+        ; Check sign of y
+        ld      a, (_atan2_y + 7)
+        bit     7, a
+        jr      z, _atan2_done  ; y > 0, return +π/2
+        ; y < 0, negate result to get -π/2
+        ld      a, (_atan2_res + 7)
+        xor     80h
+        ld      (_atan2_res + 7), a
+        jp      _atan2_done
+
+_atan2_x_nonzero:
+        ; x != 0, compute y/x
+        ld      hl, _atan2_tmp
+        push    hl
+        ld      hl, _atan2_x
+        push    hl
+        ld      hl, _atan2_y
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute atan(y/x)
+        ld      hl, _atan2_res
+        push    hl
+        ld      hl, _atan2_tmp
+        push    hl
+        call    _f64_atan
+        pop     hl
+        pop     hl
+
+        ; Check sign of x
+        ld      a, (_atan2_x + 7)
+        bit     7, a
+        jr      z, _atan2_done  ; x > 0, result is atan(y/x)
+
+        ; x < 0, need to adjust by ±π
+        ; Check sign of y
+        ld      a, (_atan2_y + 7)
+        bit     7, a
+        jr      nz, _atan2_subtract_pi
+
+        ; y >= 0, add π
+        ld      hl, _atan2_res
+        push    hl
+        ld      hl, _const_pi
+        push    hl
+        ld      hl, _atan2_res
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+        jp      _atan2_done
+
+_atan2_subtract_pi:
+        ; y < 0, subtract π
+        ld      hl, _atan2_res
+        push    hl
+        ld      hl, _const_pi
+        push    hl
+        ld      hl, _atan2_res
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+_atan2_done:
+        ; Copy result to output
+        ld      e, (ix+8)
+        ld      d, (ix+9)       ; DE = result_ptr
+        ld      hl, _atan2_res
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_sinh: Hyperbolic sine using sinh(x) = (e^x - e^(-x)) / 2
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = sinh(x)
+; =============================================================================
+_f64_sinh:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input to _sinh_x
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _sinh_x
+        ld      bc, 8
+        ldir
+
+        ; Compute e^x -> _sinh_exp
+        ld      hl, _sinh_exp
+        push    hl
+        ld      hl, _sinh_x
+        push    hl
+        call    _f64_e2x
+        pop     hl
+        pop     hl
+
+        ; Compute -x -> _sinh_tmp (negate x)
+        ld      hl, _sinh_x
+        ld      de, _sinh_tmp
+        ld      bc, 8
+        ldir
+        ld      a, (_sinh_tmp + 7)
+        xor     80h             ; Flip sign bit
+        ld      (_sinh_tmp + 7), a
+
+        ; Compute e^(-x) -> _sinh_tmp
+        ld      hl, _sinh_tmp
+        push    hl
+        ld      hl, _sinh_tmp
+        push    hl
+        call    _f64_e2x
+        pop     hl
+        pop     hl
+
+        ; Compute e^x - e^(-x) -> _sinh_res
+        ld      hl, _sinh_res
+        push    hl
+        ld      hl, _sinh_tmp
+        push    hl
+        ld      hl, _sinh_exp
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Divide by 2 -> _sinh_res
+        ld      hl, _sinh_res
+        push    hl
+        ld      hl, _const_2
+        push    hl
+        ld      hl, _sinh_res
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _sinh_res
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_cosh: Hyperbolic cosine using cosh(x) = (e^x + e^(-x)) / 2
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = cosh(x)
+; =============================================================================
+_f64_cosh:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input to _cosh_x
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _cosh_x
+        ld      bc, 8
+        ldir
+
+        ; Compute e^x -> _cosh_exp
+        ld      hl, _cosh_exp
+        push    hl
+        ld      hl, _cosh_x
+        push    hl
+        call    _f64_e2x
+        pop     hl
+        pop     hl
+
+        ; Compute -x -> _cosh_tmp (negate x)
+        ld      hl, _cosh_x
+        ld      de, _cosh_tmp
+        ld      bc, 8
+        ldir
+        ld      a, (_cosh_tmp + 7)
+        xor     80h             ; Flip sign bit
+        ld      (_cosh_tmp + 7), a
+
+        ; Compute e^(-x) -> _cosh_tmp
+        ld      hl, _cosh_tmp
+        push    hl
+        ld      hl, _cosh_tmp
+        push    hl
+        call    _f64_e2x
+        pop     hl
+        pop     hl
+
+        ; Compute e^x + e^(-x) -> _cosh_res
+        ld      hl, _cosh_res
+        push    hl
+        ld      hl, _cosh_tmp
+        push    hl
+        ld      hl, _cosh_exp
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Divide by 2 -> _cosh_res
+        ld      hl, _cosh_res
+        push    hl
+        ld      hl, _const_2
+        push    hl
+        ld      hl, _cosh_res
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _cosh_res
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_tanh: Hyperbolic tangent using tanh(x) = (e^x - e^(-x)) / (e^x + e^(-x))
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = tanh(x)
+; =============================================================================
+_f64_tanh:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input to _tanh_x
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _tanh_x
+        ld      bc, 8
+        ldir
+
+        ; Compute e^x -> _tanh_exp
+        ld      hl, _tanh_exp
+        push    hl
+        ld      hl, _tanh_x
+        push    hl
+        call    _f64_e2x
+        pop     hl
+        pop     hl
+
+        ; Compute -x -> _tanh_tmp (negate x)
+        ld      hl, _tanh_x
+        ld      de, _tanh_tmp
+        ld      bc, 8
+        ldir
+        ld      a, (_tanh_tmp + 7)
+        xor     80h             ; Flip sign bit
+        ld      (_tanh_tmp + 7), a
+
+        ; Compute e^(-x) -> _tanh_nex (negative exp)
+        ld      hl, _tanh_nex
+        push    hl
+        ld      hl, _tanh_tmp
+        push    hl
+        call    _f64_e2x
+        pop     hl
+        pop     hl
+
+        ; Compute e^x - e^(-x) -> _tanh_num (numerator for sinh)
+        ld      hl, _tanh_num
+        push    hl
+        ld      hl, _tanh_nex
+        push    hl
+        ld      hl, _tanh_exp
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute e^x + e^(-x) -> _tanh_den (denominator for cosh)
+        ld      hl, _tanh_den
+        push    hl
+        ld      hl, _tanh_nex
+        push    hl
+        ld      hl, _tanh_exp
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute numerator / denominator -> _tanh_res
+        ld      hl, _tanh_res
+        push    hl
+        ld      hl, _tanh_den
+        push    hl
+        ld      hl, _tanh_num
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _tanh_res
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_asnh: Inverse hyperbolic sine using arcsinh(x) = ln(x + sqrt(x² + 1))
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = arcsinh(x)
+; =============================================================================
+_f64_asnh:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input to _asnh_x
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _asnh_x
+        ld      bc, 8
+        ldir
+
+        ; Compute x² -> _asnh_sq
+        ld      hl, _asnh_sq
+        push    hl
+        ld      hl, _asnh_x
+        push    hl
+        ld      hl, _asnh_x
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute x² + 1 -> _asnh_t1
+        ld      hl, _asnh_t1
+        push    hl
+        ld      hl, _const_one_f64
+        push    hl
+        ld      hl, _asnh_sq
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute sqrt(x² + 1) -> _asnh_t2
+        ld      hl, _asnh_t2
+        push    hl
+        ld      hl, _asnh_t1
+        push    hl
+        call    _f64_sqrt
+        pop     hl
+        pop     hl
+
+        ; Compute x + sqrt(x² + 1) -> _asnh_t3
+        ld      hl, _asnh_t3
+        push    hl
+        ld      hl, _asnh_t2
+        push    hl
+        ld      hl, _asnh_x
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute ln(x + sqrt(x² + 1)) -> _asnh_res
+        ld      hl, _asnh_res
+        push    hl
+        ld      hl, _asnh_t3
+        push    hl
+        call    _f64_log
+        pop     hl
+        pop     hl
+
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _asnh_res
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_acsh: Inverse hyperbolic cosine using arccosh(x) = ln(x + sqrt(x² - 1))
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = arccosh(x)
+; Note: Only valid for x >= 1
+; =============================================================================
+_f64_acsh:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input to _acsh_x
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _acsh_x
+        ld      bc, 8
+        ldir
+
+        ; Compute x² -> _acsh_sq
+        ld      hl, _acsh_sq
+        push    hl
+        ld      hl, _acsh_x
+        push    hl
+        ld      hl, _acsh_x
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute x² - 1 -> _acsh_t1
+        ld      hl, _acsh_t1
+        push    hl
+        ld      hl, _const_one_f64
+        push    hl
+        ld      hl, _acsh_sq
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute sqrt(x² - 1) -> _acsh_t2
+        ld      hl, _acsh_t2
+        push    hl
+        ld      hl, _acsh_t1
+        push    hl
+        call    _f64_sqrt
+        pop     hl
+        pop     hl
+
+        ; Compute x + sqrt(x² - 1) -> _acsh_t3
+        ld      hl, _acsh_t3
+        push    hl
+        ld      hl, _acsh_t2
+        push    hl
+        ld      hl, _acsh_x
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute ln(x + sqrt(x² - 1)) -> _acsh_res
+        ld      hl, _acsh_res
+        push    hl
+        ld      hl, _acsh_t3
+        push    hl
+        call    _f64_log
+        pop     hl
+        pop     hl
+
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _acsh_res
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_atnh: Inverse hyperbolic tangent using arctanh(x) = (1/2) * ln((1+x)/(1-x))
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = arctanh(x)
+; Note: Only valid for |x| < 1
+; =============================================================================
+_f64_atnh:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input to _atnh_x
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _atnh_x
+        ld      bc, 8
+        ldir
+
+        ; Compute 1 + x -> _atnh_num
+        ld      hl, _atnh_num
+        push    hl
+        ld      hl, _atnh_x
+        push    hl
+        ld      hl, _const_one_f64
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute 1 - x -> _atnh_den
+        ld      hl, _atnh_den
+        push    hl
+        ld      hl, _atnh_x
+        push    hl
+        ld      hl, _const_one_f64
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute (1 + x) / (1 - x) -> _atnh_quo
+        ld      hl, _atnh_quo
+        push    hl
+        ld      hl, _atnh_den
+        push    hl
+        ld      hl, _atnh_num
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute ln((1 + x) / (1 - x)) -> _atnh_log
+        ld      hl, _atnh_log
+        push    hl
+        ld      hl, _atnh_quo
+        push    hl
+        call    _f64_log
+        pop     hl
+        pop     hl
+
+        ; Compute ln / 2 -> _atnh_res
+        ld      hl, _atnh_res
+        push    hl
+        ld      hl, _const_2
+        push    hl
+        ld      hl, _atnh_log
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _atnh_res
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_e2x: Exponential function e^x using Taylor series
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = e^x
+;
+; Uses Taylor series: e^x = 1 + x + x²/2! + x³/3! + x⁴/4! + ...
+; For argument reduction: e^x = e^(n*ln2 + r) = 2^n * e^r where |r| < ln(2)/2
+; Note: Named _f64_e2x (8 chars) to avoid collision with _f64_exp_int
+; =============================================================================
+_f64_e2x:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input to _expf_x
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _expf_x
+        ld      bc, 8
+        ldir
+
+        ; Save sign and work with value
+        ; For very negative x, result approaches 0
+        ; For very positive x, result approaches infinity
+        ld      a, (_expf_x + 7)
+        ld      (_expf_sign), a
+        and     7Fh             ; Get absolute value for range check
+        ld      (_expf_x + 7), a
+
+        ; Argument reduction: compute n = round(x / ln(2))
+        ; Then r = x - n * ln(2), and e^x = 2^n * e^r
+        ; For simplicity, if |x| < 1, skip reduction
+        cp      3Fh             ; Exponent < 0x3FF means |x| < 1
+        jr      c, _expf_small
+
+        ; Compute n = x / ln(2) (truncated to integer)
+        ld      hl, _expf_n_tmp
+        push    hl
+        ld      hl, _const_ln2
+        push    hl
+        ld      hl, _expf_x
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Restore original sign for n calculation
+        ld      a, (_expf_sign)
+        and     80h
+        ld      b, a
+        ld      a, (_expf_n_tmp + 7)
+        or      b
+        ld      (_expf_n_tmp + 7), a
+
+        ; Truncate to integer -> _expf_n_int
+        ld      hl, _expf_n_int
+        push    hl
+        ld      hl, _expf_n_tmp
+        push    hl
+        call    _f64_ftoi
+        pop     hl
+        pop     hl
+
+        ; Convert n back to float -> _expf_n_tmp
+        ld      hl, _expf_n_tmp
+        push    hl
+        ld      hl, (_expf_n_int)   ; Load the actual integer VALUE
+        push    hl
+        call    _f64_itof
+        pop     hl
+        pop     hl
+
+        ; Compute r = x - n * ln(2) -> _expf_x
+        ; First: n * ln(2) -> _expf_r
+        ld      hl, _expf_r
+        push    hl
+        ld      hl, _const_ln2
+        push    hl
+        ld      hl, _expf_n_tmp
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Restore original sign to _expf_x
+        ld      a, (_expf_sign)
+        and     80h
+        ld      b, a
+        ld      a, (_expf_x + 7)
+        or      b
+        ld      (_expf_x + 7), a
+
+        ; r = x - n*ln(2)
+        ld      hl, _expf_x
+        push    hl
+        ld      hl, _expf_r
+        push    hl
+        ld      hl, _expf_x
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+        jr      _expf_taylor
+
+_expf_small:
+        ; Restore sign for small values
+        ld      a, (_expf_sign)
+        and     80h
+        ld      b, a
+        ld      a, (_expf_x + 7)
+        or      b
+        ld      (_expf_x + 7), a
+
+        ; n = 0 for small x
+        xor     a
+        ld      (_expf_n_int), a
+        ld      (_expf_n_int + 1), a
+
+_expf_taylor:
+        ; Taylor series: e^r = 1 + r + r²/2! + r³/3! + r⁴/4! + ...
+        ; Initialize result = 1.0
+        ld      hl, _const_one_f64
+        ld      de, _expf_res
+        ld      bc, 8
+        ldir
+
+        ; Term 1: + r
+        ld      hl, _expf_res
+        push    hl
+        ld      hl, _expf_x
+        push    hl
+        ld      hl, _expf_res
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Compute r² -> _expf_rn
+        ld      hl, _expf_rn
+        push    hl
+        ld      hl, _expf_x
+        push    hl
+        ld      hl, _expf_x
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 2: + r²/2
+        ld      hl, _expf_term
+        push    hl
+        ld      hl, _const_2
+        push    hl
+        ld      hl, _expf_rn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _expf_res
+        push    hl
+        ld      hl, _expf_term
+        push    hl
+        ld      hl, _expf_res
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; r³ = r² * r
+        ld      hl, _expf_rn
+        push    hl
+        ld      hl, _expf_x
+        push    hl
+        ld      hl, _expf_rn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 3: + r³/6
+        ld      hl, _expf_term
+        push    hl
+        ld      hl, _const_6
+        push    hl
+        ld      hl, _expf_rn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _expf_res
+        push    hl
+        ld      hl, _expf_term
+        push    hl
+        ld      hl, _expf_res
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; r⁴ = r³ * r
+        ld      hl, _expf_rn
+        push    hl
+        ld      hl, _expf_x
+        push    hl
+        ld      hl, _expf_rn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 4: + r⁴/24
+        ld      hl, _expf_term
+        push    hl
+        ld      hl, _const_24
+        push    hl
+        ld      hl, _expf_rn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _expf_res
+        push    hl
+        ld      hl, _expf_term
+        push    hl
+        ld      hl, _expf_res
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; r⁵ = r⁴ * r
+        ld      hl, _expf_rn
+        push    hl
+        ld      hl, _expf_x
+        push    hl
+        ld      hl, _expf_rn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 5: + r⁵/120
+        ld      hl, _expf_term
+        push    hl
+        ld      hl, _const_120
+        push    hl
+        ld      hl, _expf_rn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _expf_res
+        push    hl
+        ld      hl, _expf_term
+        push    hl
+        ld      hl, _expf_res
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; r⁶ = r⁵ * r
+        ld      hl, _expf_rn
+        push    hl
+        ld      hl, _expf_x
+        push    hl
+        ld      hl, _expf_rn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 6: + r⁶/720
+        ld      hl, _expf_term
+        push    hl
+        ld      hl, _const_720
+        push    hl
+        ld      hl, _expf_rn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _expf_res
+        push    hl
+        ld      hl, _expf_term
+        push    hl
+        ld      hl, _expf_res
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Now multiply by 2^n if n != 0
+        ; 2^n is done by adding n to the exponent
+        ld      a, (_expf_n_int)
+        ld      c, a
+        ld      a, (_expf_n_int + 1)
+        ld      b, a
+        or      c
+        jp      z, _expf_done   ; n == 0, skip scaling
+
+        ; Scale result by 2^n
+        ; Get current exponent from result
+        ld      a, (_expf_res + 6)
+        ld      l, a
+        ld      a, (_expf_res + 7)
+        and     7Fh             ; Remove sign
+        ld      h, a
+
+        ; Shift to get 11-bit exponent
+        srl     h
+        rr      l
+        srl     h
+        rr      l
+        srl     h
+        rr      l
+        srl     h
+        rr      l               ; HL = exponent (0-2047)
+
+        ; Add n to exponent
+        ld      a, (_expf_n_int)
+        ld      e, a
+        ld      a, (_expf_n_int + 1)
+        ld      d, a
+        ; Check sign of n
+        bit     7, d
+        jr      z, _expf_add_n
+        ; n is negative (two's complement)
+        ; For small negative n, result should still be positive
+        add     hl, de          ; This works for 16-bit signed add
+        jr      _expf_store_exp
+
+_expf_add_n:
+        add     hl, de
+
+_expf_store_exp:
+        ; Shift exponent back and store
+        sla     l
+        rl      h
+        sla     l
+        rl      h
+        sla     l
+        rl      h
+        sla     l
+        rl      h               ; HL = exponent << 4
+
+        ; Store back (preserve sign and mantissa bits)
+        ld      a, (_expf_res + 7)
+        and     80h             ; Keep sign
+        or      h
+        ld      (_expf_res + 7), a
+        ld      a, (_expf_res + 6)
+        and     0Fh             ; Keep mantissa bits
+        or      l
+        ld      (_expf_res + 6), a
+
+_expf_done:
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _expf_res
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_log: Natural logarithm ln(x)
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = ln(x)
+;
+; Uses identity: x = m * 2^e where 1 <= m < 2
+; Then: ln(x) = ln(m) + e * ln(2)
+; For ln(m), use Taylor series for ln(1+y) where y = m - 1:
+;   ln(1+y) = y - y²/2 + y³/3 - y⁴/4 + y⁵/5 - y⁶/6 + ...
+; =============================================================================
+_f64_log:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Copy input to _log_x
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        ld      de, _log_x
+        ld      bc, 8
+        ldir
+
+        ; Check for negative or zero (return NaN/error - just return 0 for now)
+        ld      a, (_log_x + 7)
+        bit     7, a
+        jp      nz, _log_zero   ; Negative -> return 0 (should be NaN)
+
+        ; Check if x is zero
+        ld      hl, _log_x
+        ld      b, 8
+        xor     a
+_log_check_zero:
+        or      (hl)
+        inc     hl
+        djnz    _log_check_zero
+        jp      z, _log_zero    ; x == 0 -> return 0 (should be -inf)
+
+        ; Extract exponent e from IEEE 754
+        ; Exponent is in bits 52-62 (bytes 6-7)
+        ld      a, (_log_x + 6)
+        ld      l, a
+        ld      a, (_log_x + 7)
+        and     7Fh             ; Remove sign (already checked positive)
+        ld      h, a
+
+        ; Shift to get 11-bit exponent
+        srl     h
+        rr      l
+        srl     h
+        rr      l
+        srl     h
+        rr      l
+        srl     h
+        rr      l               ; HL = biased exponent (0-2047)
+
+        ; e = biased_exp - 1023
+        ld      de, 1023
+        or      a               ; Clear carry
+        sbc     hl, de          ; HL = unbiased exponent (signed)
+        ld      (_log_exp), hl
+
+        ; Set exponent to 1023 (so m is in [1, 2))
+        ; Store 1023 << 4 = 0x3FF0 in upper bits
+        ld      a, (_log_x + 6)
+        and     0Fh             ; Keep mantissa bits (lower 4)
+        or      0F0h            ; Set exponent bits to 0x3FF << 4 (low byte)
+        ld      (_log_x + 6), a
+        ld      a, 3Fh          ; High byte of 0x3FF << 4
+        ld      (_log_x + 7), a
+
+        ; Now _log_x contains m in [1, 2)
+        ; Compute y = m - 1
+        ld      hl, _log_y
+        push    hl
+        ld      hl, _const_one_f64
+        push    hl
+        ld      hl, _log_x
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Taylor series: ln(1+y) = y - y²/2 + y³/3 - y⁴/4 + ...
+        ; Initialize result = y
+        ld      hl, _log_y
+        ld      de, _log_result
+        ld      bc, 8
+        ldir
+
+        ; Compute y² -> _log_yn
+        ld      hl, _log_yn
+        push    hl
+        ld      hl, _log_y
+        push    hl
+        ld      hl, _log_y
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 2: - y²/2
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _const_2
+        push    hl
+        ld      hl, _log_yn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _log_result
+        push    hl
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _log_result
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; y³ = y² * y
+        ld      hl, _log_yn
+        push    hl
+        ld      hl, _log_y
+        push    hl
+        ld      hl, _log_yn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 3: + y³/3
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _const_3
+        push    hl
+        ld      hl, _log_yn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _log_result
+        push    hl
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _log_result
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; y⁴ = y³ * y
+        ld      hl, _log_yn
+        push    hl
+        ld      hl, _log_y
+        push    hl
+        ld      hl, _log_yn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 4: - y⁴/4
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _const_4
+        push    hl
+        ld      hl, _log_yn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _log_result
+        push    hl
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _log_result
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; y⁵ = y⁴ * y
+        ld      hl, _log_yn
+        push    hl
+        ld      hl, _log_y
+        push    hl
+        ld      hl, _log_yn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 5: + y⁵/5
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _const_5
+        push    hl
+        ld      hl, _log_yn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _log_result
+        push    hl
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _log_result
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; y⁶ = y⁵ * y
+        ld      hl, _log_yn
+        push    hl
+        ld      hl, _log_y
+        push    hl
+        ld      hl, _log_yn
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Term 6: - y⁶/6
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _const_6
+        push    hl
+        ld      hl, _log_yn
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ld      hl, _log_result
+        push    hl
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _log_result
+        push    hl
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Now add e * ln(2) to result
+        ; First convert e to float
+        ld      hl, _log_e_float
+        push    hl
+        ld      hl, (_log_exp)      ; Load the actual integer VALUE
+        push    hl
+        call    _f64_itof
+        pop     hl
+        pop     hl
+
+        ; e * ln(2)
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _const_ln2
+        push    hl
+        ld      hl, _log_e_float
+        push    hl
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; result = ln(m) + e * ln(2)
+        ld      hl, _log_result
+        push    hl
+        ld      hl, _log_term
+        push    hl
+        ld      hl, _log_result
+        push    hl
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+        jp      _log_done
+
+_log_zero:
+        ; Return 0 for invalid input (should return NaN or -inf)
+        ld      hl, _const_zero
+        ld      de, _log_result
+        ld      bc, 8
+        ldir
+
+_log_done:
+        ; Copy result to output
+        ld      e, (ix+6)
+        ld      d, (ix+7)       ; DE = result_ptr
+        ld      hl, _log_result
+        ld      bc, 8
+        ldir
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_lg10: Base 10 logarithm log10(x) = ln(x) / ln(10)
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = log10(x)
+; =============================================================================
+_f64_lg10:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Compute ln(x) -> _lg10_ln
+        ld      hl, _lg10_ln
+        push    hl
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        push    hl
+        call    _f64_log
+        pop     hl
+        pop     hl
+
+        ; Compute ln(x) / ln(10) -> result
+        ld      l, (ix+6)
+        ld      h, (ix+7)       ; HL = result_ptr
+        push    hl
+        ld      hl, _const_ln10
+        push    hl
+        ld      hl, _lg10_ln
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_lg2: Base 2 logarithm log2(x) = ln(x) / ln(2)
+; Input:  Stack: result_ptr (IX+6), src_ptr (IX+4)
+; Output: result = log2(x)
+; =============================================================================
+_f64_lg2:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+        push    bc
+        push    de
+        push    hl
+
+        ; Compute ln(x) -> _lg2_ln
+        ld      hl, _lg2_ln
+        push    hl
+        ld      l, (ix+4)
+        ld      h, (ix+5)       ; HL = src_ptr
+        push    hl
+        call    _f64_log
+        pop     hl
+        pop     hl
+
+        ; Compute ln(x) / ln(2) -> result
+        ld      l, (ix+6)
+        ld      h, (ix+7)       ; HL = result_ptr
+        push    hl
+        ld      hl, _const_ln2
+        push    hl
+        ld      hl, _lg2_ln
+        push    hl
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        pop     hl
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; =============================================================================
+; Constants for sin/cos/exp/log (IEEE 754 double precision, little-endian)
+; =============================================================================
+
+        CSEG
+
+; 2π = 6.283185307179586
+; Hex: 0x401921FB54442D18
+_const_2pi:
+        DB      18h, 2Dh, 44h, 54h, 0FBh, 21h, 19h, 40h
+
+; ln(10) = 2.302585092994046
+; Hex: 0x40026BB1BBB55516
+_const_ln10:
+        DB      16h, 55h, 0B5h, 0BBh, 0B1h, 6Bh, 02h, 40h
+
+; 1.0 = 0x3FF0000000000000
+_const_one_f64:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 0F0h, 3Fh
+
+; 2.0 = 0x4000000000000000
+_const_2:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 00h, 40h
+
+; 6.0 = 0x4018000000000000
+_const_6:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 18h, 40h
+
+; 24.0 = 0x4038000000000000
+_const_24:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 38h, 40h
+
+; 120.0 = 0x405E000000000000
+_const_120:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 5Eh, 40h
+
+; 720.0 = 0x4086800000000000
+_const_720:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 68h, 40h
+
+; 5040.0 = 0x40B3B00000000000
+_const_5040:
+        DB      00h, 00h, 00h, 00h, 00h, 0B0h, 0B3h, 40h
+
+; 40320.0 = 0x40E3B00000000000
+_const_40320:
+        DB      00h, 00h, 00h, 00h, 00h, 0B0h, 0E3h, 40h
+
+; 3.0 = 0x4008000000000000
+_const_3:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 08h, 40h
+
+; 4.0 = 0x4010000000000000
+_const_4:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 10h, 40h
+
+; 5.0 = 0x4014000000000000
+_const_5:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 14h, 40h
+
+; 7.0 = 0x401C000000000000
+_const_7:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 1Ch, 40h
+
+; 9.0 = 0x4022000000000000
+_const_9:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 22h, 40h
+
+; π/2 = 1.5707963267948966
+; Hex: 0x3FF921FB54442D18
+_const_pi2:
+        DB      18h, 2Dh, 44h, 54h, 0FBh, 21h, 0F9h, 3Fh
+
+; π = 3.141592653589793
+; Hex: 0x400921FB54442D18
+_const_pi:
+        DB      18h, 2Dh, 44h, 54h, 0FBh, 21h, 09h, 40h
+
+; ln(2) = 0.6931471805599453
+; Hex: 0x3FE62E42FEFA39EF
+_const_ln2:
+        DB      0EFh, 39h, 0FAh, 0FEh, 42h, 2Eh, 0E6h, 3Fh
+
+; 0.0 = 0x0000000000000000
+_const_zero:
+        DB      00h, 00h, 00h, 00h, 00h, 00h, 00h, 00h
+
+; Constant: 10.0 in Float64 format
+; 10.0 = 1.25 * 2^3, exponent = 1023 + 3 = 1026 = 0x402
+; Sign = 0, Exp = 10000000010, Mantissa = 0100000...0
+; Bytes (little-endian): 00 00 00 00 00 00 24 40
+_const_10:
+        DB      00H, 00H, 00H, 00H, 00H, 00H, 24H, 40H
+
+; =============================================================================
+; _str_f64: Convert string to Float64
+; Input:  String pointer on stack (at SP+2)
+; Output: HL = pointer to result Float64 (in static storage)
+; Notes:
+;   - Skips leading whitespace
+;   - Handles optional leading '-' or '+' for sign
+;   - Parses integer part and optional fractional part
+;   - Example: "123.456" -> 123.456 as Float64
+; Destroys: A, BC, DE, HL
+; =============================================================================
+_str_f64:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Get string pointer from stack (at IX+4)
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+
+        ; Initialize parsing state
+        xor     a
+        ld      (_strf_sign), a         ; 0 = positive
+        ld      (_strf_frac), a         ; 0 = no fractional digits yet
+        ld      hl, 0
+        ld      (_strf_int), hl         ; Integer accumulator = 0
+        ld      (_strf_fdig), hl        ; Fractional digit count = 0
+        ld      (_strf_frac_val), hl    ; Fractional value = 0
+
+        ; Get string pointer again
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+
+        ; Skip leading whitespace
+_strf_skip_ws:
+        ld      a, (hl)
+        cp      ' '
+        jr      z, _strf_skip_next
+        cp      9                       ; Tab
+        jr      nz, _strf_check_sign
+_strf_skip_next:
+        inc     hl
+        jr      _strf_skip_ws
+
+_strf_check_sign:
+        ; Check for sign
+        ld      a, (hl)
+        cp      '-'
+        jr      nz, _strf_check_plus
+        ld      a, 1
+        ld      (_strf_sign), a
+        inc     hl
+        jr      _strf_parse_int
+
+_strf_check_plus:
+        cp      '+'
+        jr      nz, _strf_parse_int
+        inc     hl
+
+_strf_parse_int:
+        ; Parse integer part
+        ld      a, (hl)
+        cp      '.'
+        jr      z, _strf_start_frac
+        cp      '0'
+        jr      c, _strf_done_parse     ; Not a digit
+        cp      '9'+1
+        jr      nc, _strf_done_parse    ; Not a digit
+
+        ; Digit found - accumulate: int = int * 10 + digit
+        sub     '0'                     ; A = digit value
+        push    hl                      ; Save string pointer
+        push    af                      ; Save digit
+
+        ; Multiply current integer by 10
+        ld      hl, (_strf_int)
+        ld      d, h
+        ld      e, l                    ; DE = int
+        add     hl, hl                  ; HL = int * 2
+        add     hl, hl                  ; HL = int * 4
+        add     hl, de                  ; HL = int * 5
+        add     hl, hl                  ; HL = int * 10
+
+        ; Add digit
+        pop     af                      ; A = digit
+        ld      e, a
+        ld      d, 0
+        add     hl, de                  ; HL = int * 10 + digit
+        ld      (_strf_int), hl
+
+        pop     hl                      ; Restore string pointer
+        inc     hl
+        jr      _strf_parse_int
+
+_strf_start_frac:
+        ; Found decimal point - start parsing fractional part
+        ld      a, 1
+        ld      (_strf_frac), a
+        inc     hl                      ; Skip '.'
+
+_strf_parse_frac:
+        ld      a, (hl)
+        cp      '0'
+        jr      c, _strf_done_parse     ; Not a digit
+        cp      '9'+1
+        jr      nc, _strf_done_parse    ; Not a digit
+
+        ; Digit found - accumulate fractional part
+        sub     '0'                     ; A = digit value
+        push    hl                      ; Save string pointer
+        push    af                      ; Save digit
+
+        ; Multiply current fractional value by 10
+        ld      hl, (_strf_frac_val)
+        ld      d, h
+        ld      e, l
+        add     hl, hl                  ; * 2
+        add     hl, hl                  ; * 4
+        add     hl, de                  ; * 5
+        add     hl, hl                  ; * 10
+
+        ; Add digit
+        pop     af
+        ld      e, a
+        ld      d, 0
+        add     hl, de
+        ld      (_strf_frac_val), hl
+
+        ; Increment fractional digit count
+        ld      hl, (_strf_fdig)
+        inc     hl
+        ld      (_strf_fdig), hl
+
+        pop     hl                      ; Restore string pointer
+        inc     hl
+        jr      _strf_parse_frac
+
+_strf_done_parse:
+        ; Now convert to Float64
+        ; Step 1: Convert integer part to Float64
+        ; _f64_itof expects: dest_ptr pushed first, then integer value
+        ld      hl, _strf_res
+        push    hl                      ; Dest pointer (pushed first)
+        ld      hl, (_strf_int)
+        push    hl                      ; Value (pushed last)
+        call    _f64_itof
+        pop     hl
+        pop     hl
+
+        ; Apply sign if negative
+        ld      a, (_strf_sign)
+        or      a
+        jr      z, _strf_check_frac
+
+        ; Negate the result
+        ; _f64_neg expects: dest_ptr (IX+4), src_ptr (IX+6)
+        ld      hl, _strf_res
+        push    hl                      ; src_ptr (pushed first, at IX+6)
+        push    hl                      ; dest_ptr (pushed last, at IX+4)
+        call    _f64_neg
+        pop     hl
+        pop     hl
+
+_strf_check_frac:
+        ; Check if we have fractional part
+        ld      hl, (_strf_fdig)
+        ld      a, h
+        or      l
+        jr      z, _strf_return         ; No fractional digits
+
+        ; Step 2: Convert fractional value to Float64
+        ; _f64_itof expects: dest_ptr pushed first, then integer value
+        ld      hl, _strf_frac_f64
+        push    hl                      ; Dest (pushed first)
+        ld      hl, (_strf_frac_val)
+        push    hl                      ; Value (pushed last)
+        call    _f64_itof
+        pop     hl
+        pop     hl
+
+        ; Step 3: Compute 10^(fractional digit count) as divisor
+        ; Start with 1.0
+        ld      hl, _strf_div
+        push    hl
+        call    _f64_one
+        pop     hl
+
+        ; Multiply by 10 for each fractional digit
+        ld      hl, (_strf_fdig)
+        ld      b, l                    ; B = number of digits (assume < 256)
+        ld      a, b
+        or      a
+        jr      z, _strf_do_frac_div
+
+_strf_mul10_loop:
+        push    bc
+        ; _strf_div = _strf_div * 10.0
+        ; _f64_mul expects: result_ptr (IX+8), b_ptr (IX+6), a_ptr (IX+4)
+        ; Push order: result first, then b, then a (last)
+        ld      hl, _strf_div
+        push    hl                      ; result_ptr (pushed first, at IX+8)
+        ld      hl, _const_10
+        push    hl                      ; b_ptr: 10.0 (at IX+6)
+        ld      hl, _strf_div
+        push    hl                      ; a_ptr: current divisor (pushed last, at IX+4)
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+        pop     bc
+        djnz    _strf_mul10_loop
+
+_strf_do_frac_div:
+        ; Divide fractional value by divisor: frac_val / divisor
+        ; _f64_div expects: result_ptr (IX+8), b_ptr (IX+6), a_ptr (IX+4)
+        ; result = a / b, so a = dividend, b = divisor
+        ld      hl, _strf_frac_f64
+        push    hl                      ; result_ptr (at IX+8)
+        ld      hl, _strf_div
+        push    hl                      ; b_ptr: divisor (at IX+6)
+        ld      hl, _strf_frac_f64
+        push    hl                      ; a_ptr: dividend (at IX+4)
+        call    _f64_div
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Apply sign to fractional part if negative
+        ld      a, (_strf_sign)
+        or      a
+        jr      z, _strf_add_frac
+
+        ; Negate fractional part
+        ; _f64_neg expects: dest_ptr (IX+4), src_ptr (IX+6)
+        ld      hl, _strf_frac_f64
+        push    hl                      ; src_ptr (pushed first, at IX+6)
+        push    hl                      ; dest_ptr (pushed last, at IX+4)
+        call    _f64_neg
+        pop     hl
+        pop     hl
+
+_strf_add_frac:
+        ; Add fractional part to integer part: res + frac_f64
+        ; _f64_add expects: result_ptr (IX+8), b_ptr (IX+6), a_ptr (IX+4)
+        ld      hl, _strf_res
+        push    hl                      ; result_ptr (at IX+8)
+        ld      hl, _strf_frac_f64
+        push    hl                      ; b_ptr: fractional (at IX+6)
+        ld      hl, _strf_res
+        push    hl                      ; a_ptr: integer part (at IX+4)
+        call    _f64_add
+        pop     hl
+        pop     hl
+        pop     hl
+
+_strf_return:
+        ; Return pointer to result
+        ld      hl, _strf_res
+        pop     ix
+        ret
+
+; =============================================================================
+; _f64_img: Convert Float64 to string (Long_Float'Image)
+; Input:  Stack: src_ptr (pointer to 8-byte IEEE 754 double)
+; Output: HL = pointer to null-terminated string in static buffer
+; Notes:
+;   - Outputs value with 3 decimal places (limited by 16-bit arithmetic)
+;   - Uses static buffer (not reentrant)
+;   - Format: [-]integer.fraction
+; Destroys: A, BC, DE, HL
+; =============================================================================
+_f64_img:
+        push    ix
+        ld      ix, 0
+        add     ix, sp
+
+        ; Get source pointer from stack (at IX+4)
+        ld      l, (ix+4)
+        ld      h, (ix+5)
+        ld      (_fimg_src), hl
+
+        ; Initialize buffer pointer
+        ld      hl, _fimg_buf
+        ld      (_fimg_ptr), hl
+
+        ; Check for zero: bytes 0-6 = 0, byte 7 = 0 or 0x80
+        ld      hl, (_fimg_src)
+        ld      b, 6
+        xor     a
+_fimg_chk0:
+        or      (hl)
+        inc     hl
+        djnz    _fimg_chk0
+        ; Check byte 6
+        or      (hl)
+        and     0Fh             ; Mask off upper 4 bits (exponent bits)
+        jr      nz, _fimg_not0
+        inc     hl
+        ld      a, (hl)
+        and     7Fh             ; Mask off sign bit
+        jr      nz, _fimg_not0
+
+        ; Value is zero - output "0.0"
+        ld      hl, _fimg_buf
+        ld      (hl), '0'
+        inc     hl
+        ld      (hl), '.'
+        inc     hl
+        ld      (hl), '0'
+        inc     hl
+        ld      (hl), 0
+        ld      hl, _fimg_buf
+        jp      _fimg_done
+
+_fimg_not0:
+        ; Check sign bit (bit 7 of byte 7)
+        ld      hl, (_fimg_src)
+        ld      de, 7
+        add     hl, de
+        ld      a, (hl)
+        ld      (_fimg_sign), a
+        and     80h
+        jr      z, _fimg_pos
+
+        ; Negative - output '-' and clear sign bit
+        ld      hl, (_fimg_ptr)
+        ld      (hl), '-'
+        inc     hl
+        ld      (_fimg_ptr), hl
+
+        ; Clear sign bit in copy of value
+        ld      hl, (_fimg_src)
+        push    hl                      ; src_ptr
+        ld      hl, _fimg_abs
+        push    hl                      ; dest_ptr
+        call    _f64_copy
+        pop     hl
+        pop     hl
+        ; Clear sign bit
+        ld      hl, _fimg_abs+7
+        ld      a, (hl)
+        and     7Fh
+        ld      (hl), a
+        ; Use absolute value from now on
+        ld      hl, _fimg_abs
+        ld      (_fimg_src), hl
+
+_fimg_pos:
+        ; Get integer part via _f64_ftoi
+        ld      hl, (_fimg_src)
+        push    hl
+        call    _f64_ftoi
+        pop     de
+        ; HL = integer part
+        ld      (_fimg_int), hl
+
+        ; Convert integer part to string at _fimg_tmp
+        push    hl
+        call    _int_to_str
+        pop     de
+        ; HL = pointer to integer string
+
+        ; Copy integer string to buffer
+        ld      de, (_fimg_ptr)
+_fimg_cp_int:
+        ld      a, (hl)
+        or      a
+        jr      z, _fimg_cp_done
+        ld      (de), a
+        inc     hl
+        inc     de
+        jr      _fimg_cp_int
+
+_fimg_cp_done:
+        ; Add decimal point
+        ld      a, '.'
+        ld      (de), a
+        inc     de
+        ld      (_fimg_ptr), de
+
+        ; Compute fractional part: value - integer
+        ; First convert integer to Float64
+        ; _f64_itof: dest_ptr (IX+6, pushed first), integer value (IX+4, pushed last)
+        ld      hl, _fimg_intf
+        push    hl                      ; dest_ptr (pushed first)
+        ld      hl, (_fimg_int)
+        push    hl                      ; integer value (pushed last)
+        call    _f64_itof
+        pop     hl
+        pop     hl
+
+        ; frac = value - int_part
+        ; _f64_sub: result = a - b, stack: result_ptr, b_ptr, a_ptr
+        ld      hl, _fimg_frac
+        push    hl                      ; result_ptr
+        ld      hl, _fimg_intf
+        push    hl                      ; b_ptr (int_part)
+        ld      hl, (_fimg_src)
+        push    hl                      ; a_ptr (value)
+        call    _f64_sub
+        pop     hl
+        pop     hl
+        pop     hl
+
+        ; Multiply fraction by 1000 (10^3) for 3 decimal places
+        ; (6 decimal places would overflow 16-bit arithmetic)
+        ; Do this by multiplying by 10 three times
+        ld      b, 3
+_fimg_mul10:
+        push    bc
+        ld      hl, _fimg_frac
+        push    hl                      ; result_ptr
+        ld      hl, _const_10
+        push    hl                      ; b_ptr (10.0)
+        ld      hl, _fimg_frac
+        push    hl                      ; a_ptr
+        call    _f64_mul
+        pop     hl
+        pop     hl
+        pop     hl
+        pop     bc
+        djnz    _fimg_mul10
+
+        ; Convert fractional part to integer
+        ld      hl, _fimg_frac
+        push    hl
+        call    _f64_ftoi
+        pop     de
+        ; HL = fractional digits (0-999999)
+
+        ; Handle negative fractional values (shouldn't happen but safety)
+        bit     7, h
+        jr      z, _fimg_frac_pos
+        ; Negate if negative
+        ld      de, 0
+        ex      de, hl
+        or      a
+        sbc     hl, de
+
+_fimg_frac_pos:
+        ; Output 3 digits with leading zeros
+        ; We'll do it by repeated division by 10
+        ld      (_fimg_fdig), hl
+
+        ; Convert to 3-digit string with leading zeros
+        ; Build digits from right to left in temp buffer
+        ld      hl, _fimg_dtmp+3
+        ld      (hl), 0                 ; Null terminator
+        dec     hl
+        ld      b, 3                    ; 3 digits
+        ld      de, (_fimg_fdig)
+
+_fimg_cvt_digit:
+        push    bc
+        push    hl
+        ; Divide DE by 10, put remainder in A
+        ex      de, hl                  ; HL = value
+        ld      de, 10
+        call    _fimg_div10             ; HL = quotient, A = remainder
+        ex      de, hl                  ; DE = quotient for next iteration
+        pop     hl
+        add     a, '0'
+        ld      (hl), a
+        dec     hl
+        pop     bc
+        djnz    _fimg_cvt_digit
+
+        ; Copy fractional digits to buffer
+        ld      hl, _fimg_dtmp
+        ld      de, (_fimg_ptr)
+_fimg_cp_frac:
+        ld      a, (hl)
+        or      a
+        jr      z, _fimg_finish
+        ld      (de), a
+        inc     hl
+        inc     de
+        jr      _fimg_cp_frac
+
+_fimg_finish:
+        ld      a, 0
+        ld      (de), a                 ; Null terminator
+
+        ld      hl, _fimg_buf           ; Return buffer pointer
+
+_fimg_done:
+        pop     ix
+        ret
+
+; Helper: Divide HL by 10, return quotient in HL and remainder in A
+_fimg_div10:
+        ld      bc, 0                   ; BC = quotient
+        ld      de, 10
+_fd10_loop:
+        or      a
+        sbc     hl, de
+        jr      c, _fd10_done
+        inc     bc
+        jr      _fd10_loop
+_fd10_done:
+        add     hl, de                  ; Restore remainder
+        ld      a, l                    ; A = remainder
+        push    bc
+        pop     hl                      ; HL = quotient
+        ret
+
+        EXTRN   _int_to_str
+
+; =============================================================================
+; Working memory (internal accumulators)
+; Placed at end of file to avoid linker segment calculation bug
+; =============================================================================
+
+        DSEG
+
+; Float accumulator A (for first operand and result)
+_acc_a:     DS      8       ; 64-bit accumulator A
+
+; Float accumulator B (for second operand)
+_acc_b:     DS      8       ; 64-bit accumulator B
+
+; Extended mantissa for multiply/divide (need extra bits for precision)
+_mantx:     DS      16      ; 128-bit extended mantissa
+
+; Temporary storage
+_ftemp:     DS      8       ; Temporary 64-bit value (used by div)
+_sub_temp:  DS      8       ; Temporary for subtraction (separate to avoid conflict with div)
+_exp_a:     DS      2       ; Exponent of A (16-bit for overflow detection)
+_exp_b:     DS      2       ; Exponent of B
+_fsign:     DS      1       ; Result sign
+_sign_a:    DS      1       ; Sign of operand A
+_sign_b:    DS      1       ; Sign of operand B
+
+; 64-bit working registers (8 bytes each, little-endian)
+_mant_a:    DS      8       ; Mantissa A with implicit 1 at bit 52
+_mant_b:    DS      8       ; Mantissa B with implicit 1 at bit 52
+_mant_r:    DS      8       ; Result mantissa
+
+; Square root scratch space
+_sqrt_s:    DS      8       ; Input value S
+_sqrt_x:    DS      8       ; Current approximation x
+_sqrt_t:    DS      8       ; Temporary for S/x
+
+; Local variables for _f64_ftoi
+_ftoi_src:  DS      2       ; Source pointer
+_ftoi_b6:   DS      1       ; Byte 6 of float
+_ftoi_b7:   DS      1       ; Byte 7 of float
+_ftoi_uexp: DS      2       ; Unbiased exponent
+
+; Temp for ceiling/floor
+_ceil_temp: DS      8       ; Temp storage for ceiling calculations
+
+; Temporary storage for exponentiation
+_exp_result:    DS      8       ; Running result
+_exp_base:      DS      8       ; Current base (squared each iteration)
+_exp_counter:   DS      2       ; Exponent counter
+_exp_neg_flag:  DS      1       ; Flag: 1 if original exponent was negative
+
+; Temporary storage for rem/mod operations
+_rem_quotient:  DS      8       ; Quotient X/Y
+_rem_product:   DS      8       ; Y * quotient
+_frac_bits:     DS      1       ; Temporary for fractional bits count
+_had_frac:      DS      1       ; Flag: 1 if any fractional bits were non-zero
+
+; Temporary storage for sin function
+_sin_x:         DS      8       ; Input value (after argument reduction)
+_sin_x2:        DS      8       ; x²
+_sin_xn:        DS      8       ; Current power (x³, x⁵, x⁷, ...)
+_sin_term:      DS      8       ; Current term
+_sin_result:    DS      8       ; Running result
+_sin_sign:      DS      1       ; Original sign
+
+; Temporary storage for cos function
+_cos_x:         DS      8       ; Input value (after argument reduction)
+_cos_x2:        DS      8       ; x²
+_cos_xn:        DS      8       ; Current power (x⁴, x⁶, x⁸, ...)
+_cos_term:      DS      8       ; Current term
+_cos_result:    DS      8       ; Running result
+
+; Temporary storage for tan function
+_tan_sin:       DS      8       ; sin(x) result
+_tan_cos:       DS      8       ; cos(x) result
+
+; Temporary storage for exp function (_f64_e2x)
+_expf_x:        DS      8       ; Input value (reduced)
+_expf_sign:     DS      1       ; Original sign
+_expf_n_tmp:    DS      8       ; n as float (for argument reduction)
+_expf_n_int:    DS      2       ; n as integer
+_expf_r:        DS      8       ; Reduced argument r
+_expf_rn:       DS      8       ; Powers of r (r², r³, ...)
+_expf_term:     DS      8       ; Current term
+_expf_res:      DS      8       ; Running result
+
+; Temporary storage for log function
+_log_x:         DS      8       ; Input value (modified to mantissa m)
+_log_y:         DS      8       ; y = m - 1
+_log_yn:        DS      8       ; Powers of y (y², y³, ...)
+_log_term:      DS      8       ; Current term
+_log_result:    DS      8       ; Running result
+_log_exp:       DS      2       ; Exponent e (signed integer)
+_log_e_float:   DS      8       ; e as float
+
+; Temporary storage for atan function
+_atan_x:        DS      8       ; Input value (after reduction)
+_atan_x2:       DS      8       ; x²
+_atan_xn:       DS      8       ; Current power (x³, x⁵, x⁷, ...)
+_atan_term:     DS      8       ; Current term
+_atan_res:      DS      8       ; Running result
+_atan_sign:     DS      1       ; Original sign
+_atan_reduce:   DS      1       ; Flag: 1 if |x| > 1 reduction applied
+
+; Temporary storage for asin function
+_asin_x:        DS      8       ; Input value
+_asin_x2:       DS      8       ; x²
+_asin_tmp:      DS      8       ; Temporary for sqrt(1-x²) and x/sqrt(1-x²)
+_asin_res:      DS      8       ; Result
+_asin_sign:     DS      1       ; Original sign
+
+; Arccosine working variables
+_acos_tmp:      DS      8       ; Temporary for asin(x)
+_acos_res:      DS      8       ; Result
+
+; Temporary storage for atan2 function
+_atan2_y:       DS      8       ; y input value
+_atan2_x:       DS      8       ; x input value
+_atan2_tmp:     DS      8       ; Temporary for y/x
+_atan2_res:     DS      8       ; Result
+
+; Temporary storage for sinh function
+_sinh_x:        DS      8       ; Input value
+_sinh_exp:      DS      8       ; e^x
+_sinh_tmp:      DS      8       ; Temporary for -x and e^(-x)
+_sinh_res:      DS      8       ; Result
+
+; Temporary storage for cosh function
+_cosh_x:        DS      8       ; Input value
+_cosh_exp:      DS      8       ; e^x
+_cosh_tmp:      DS      8       ; Temporary for -x and e^(-x)
+_cosh_res:      DS      8       ; Result
+
+; Temporary storage for tanh function
+_tanh_x:        DS      8       ; Input value
+_tanh_exp:      DS      8       ; e^x
+_tanh_tmp:      DS      8       ; Temporary for -x
+_tanh_nex:      DS      8       ; e^(-x)
+_tanh_num:      DS      8       ; Numerator: e^x - e^(-x)
+_tanh_den:      DS      8       ; Denominator: e^x + e^(-x)
+_tanh_res:      DS      8       ; Result
+
+; Temporary storage for arcsinh function
+_asnh_x:        DS      8       ; Input value
+_asnh_sq:       DS      8       ; x²
+_asnh_t1:       DS      8       ; x² + 1
+_asnh_t2:       DS      8       ; sqrt(x² + 1)
+_asnh_t3:       DS      8       ; x + sqrt(x² + 1)
+_asnh_res:      DS      8       ; Result: ln(x + sqrt(x² + 1))
+
+; Temporary storage for arccosh function
+_acsh_x:        DS      8       ; Input value
+_acsh_sq:       DS      8       ; x²
+_acsh_t1:       DS      8       ; x² - 1
+_acsh_t2:       DS      8       ; sqrt(x² - 1)
+_acsh_t3:       DS      8       ; x + sqrt(x² - 1)
+_acsh_res:      DS      8       ; Result: ln(x + sqrt(x² - 1))
+
+; Temporary storage for arctanh function
+_atnh_x:        DS      8       ; Input value
+_atnh_num:      DS      8       ; 1 + x
+_atnh_den:      DS      8       ; 1 - x
+_atnh_quo:      DS      8       ; (1 + x) / (1 - x)
+_atnh_log:      DS      8       ; ln((1 + x) / (1 - x))
+_atnh_res:      DS      8       ; Result: (1/2) * ln((1 + x) / (1 - x))
+
+; Temporary storage for log10 function
+_lg10_ln:       DS      8       ; ln(x)
+
+; Temporary storage for log2 function
+_lg2_ln:        DS      8       ; ln(x)
+
+; Temporary storage for _str_f64
+_strf_sign:     DS      1       ; Sign flag (0=pos, 1=neg)
+_strf_frac:     DS      1       ; In fractional part flag
+_strf_int:      DS      2       ; Integer accumulator
+_strf_fdig:     DS      2       ; Fractional digit count
+_strf_frac_val: DS      2       ; Fractional value accumulator
+_strf_res:      DS      8       ; Result Float64
+_strf_frac_f64: DS      8       ; Fractional part as Float64
+_strf_div:      DS      8       ; Divisor (10^n)
+
+; Temporary storage for _f64_img
+_fimg_src:      DS      2       ; Source pointer
+_fimg_ptr:      DS      2       ; Buffer write pointer
+_fimg_sign:     DS      1       ; Sign byte
+_fimg_int:      DS      2       ; Integer part
+_fimg_fdig:     DS      2       ; Fractional digits value
+_fimg_abs:      DS      8       ; Absolute value copy
+_fimg_intf:     DS      8       ; Integer part as Float64
+_fimg_frac:     DS      8       ; Fractional part as Float64
+_fimg_dtmp:     DS      8       ; Digit conversion temp buffer
+_fimg_buf:      DS      24      ; Output buffer: sign + integer + . + 6 digits + null
+
+        END

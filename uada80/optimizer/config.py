@@ -4,7 +4,7 @@ Optimizer configuration for uada80.
 Defines optimization levels and targets following uplm80's proven architecture.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
 
 

@@ -1,87 +1,241 @@
 # UADA80 - Remaining Work for Full Ada/ACATS
 
-## Current Status (2024-12)
+## Current Status (2025-12-14)
 
 | Phase | Pass Rate | Notes |
 |-------|-----------|-------|
 | Parsing | 2849/2849 (100%) | Full Ada syntax supported |
-| Semantic | 1031/2849 (36.2%) | ~1818 failures |
-| Lowering | 1008/2849 (35.4%) | ~8 failures after semantic pass |
-| Unit Tests | 4033/4033 (100%) | All pass |
+| Semantic | 2742/2742 (100%) | All grouped ACATS tests pass |
+| Lowering | 105/105 (100%) | All lowering tests pass |
+| Codegen | 24/24 (100%) | All code generation tests pass |
+| Unit Tests | 6790/6790 (100%) | All pass |
+| Execution | 15/15 (100%) | End-to-end tests via cpmemu |
 
-## Recent Fixes (2024-12-12)
+## Recent Fixes (2025-12-14 Session 2)
 
-1. [x] Universal_Real to Float type compatibility
-2. [x] Type conversion Float(5) was incorrectly parsed as array access
-3. [x] Case expression selector now correctly handles UNIVERSAL_INTEGER
-4. [x] Enumeration literal overloading - same literal in different enum types
-5. [x] Overload resolution with expected type context (initialization/assignment)
-6. [x] Child package visibility - parent's declarations now visible
-7. [x] Universal_Integer and Universal_Real now recognized as numeric types (fixes unary minus)
+1. [x] Static Expression Evaluation Improvements
+   - Added CharacterLiteral support (returns ord value)
+   - Added StringLiteral support (returns length)
+   - Enhanced enumeration literal position detection
+   - Added SelectedName prefix support for attributes (Package.Type'First)
+   - Added enumeration type 'First/'Last (returns 0/len-1)
+   - Added array type 'First/'Last (from index_types)
+   - Added 'Modulus for modular types
+   - Added 'Component_Size for arrays
+   - Improved 'Pos handling for character literals
 
-## Issues to Fix (Non-GNAT)
+2. [x] Type Compatibility Fixes
+   - Universal_Integer now compatible with Float/Fixed types
+   - Allows `X : Float := 5;` (integer literal to float)
+   - Allows `Y := F + 5;` (float arithmetic with integer literal)
+   - Updated common_type() for mixed float/integer operations
 
-### High Priority - Type System Edge Cases
+3. [x] Pragma Atomic Support
+   - Added pragma Atomic handling in semantic analyzer
+   - Sets is_atomic and is_volatile flags on symbol
+   - Codegen already emits DI/EI around atomic memory operations
 
-These are actual bugs in the semantic analyzer that can be fixed without GNAT:
+## Recent Fixes (2025-12-14)
 
-1. [x] Type checking edge cases (Universal_Real, type conversion)
-2. [x] Overload resolution issues (enum literal overloading)
-3. [ ] Generic instantiation type matching
-4. [ ] Discriminant handling
-5. [ ] Array/record constraint checking
+1. [x] Text_IO.Get_Line runtime support
+   - Added `_get_line` to runtime library for reading line input
+   - Fixed `_calc_type_size` to correctly handle `String(1..80)` (Slice AST nodes)
+   - Fixed LEA offset calculation for local string buffers
+   - Fixed return value preservation during stack cleanup
 
-### Medium Priority - Missing Standard Package Members
+2. [x] Minimal Z80 runtime library
+   - Created runtime/runtime.mac with essential Ada runtime functions
+   - `_fin_push_scope` / `_fin_pop_scope` (finalization support)
+   - `_mul16` / `_div16` / `_mod16` (16-bit signed arithmetic)
+   - `_raise_constraint_error`, `_raise_program_error`, `_raise_storage_error`
+   - Fixed EXTRN generation for JP targets (not just CALL)
 
-Some Standard package items may be missing:
+3. [x] Text_IO runtime support
+   - Added `_put_line`, `_put_string`, `_new_line` to runtime library
+   - Uses CP/M BDOS function 2 (console output) for character-by-character output
+   - Added proper CP/M startup code (`_start:` entry point at 0100H)
 
-1. [ ] Wide_Character / Wide_String types
-2. [ ] Wide_Wide_Character / Wide_Wide_String types
-3. [ ] Additional predefined exceptions
-4. [ ] Address type and related operations
+4. [x] Integer_Text_IO runtime support
+   - Added `_put_int` for signed 16-bit integer output
+   - Added `_get_int` for signed 16-bit integer input
+   - Added `_get_char` for single character input
+   - Handles negative numbers, zero, and positive values
+   - Uses unsigned division to extract decimal digits
+   - Fixed lowering to detect Integer_Text_IO vs Text_IO package context
 
-### Lower Priority - Multi-file Compilation
+## Recent Fixes (2025-12-13)
 
-Multi-file compilation is fully supported (pass multiple files on command line).
+1. [x] Ada 2022 declare expressions in expression functions
+   - Parser now handles `(declare ... begin Expr)` syntax in expression function bodies
 
-1. [x] Basic multi-file compilation works
-2. [x] Inter-file dependencies work when files are compiled together
-3. [x] ACATS test runner groups related files automatically
-4. [ ] ACATS support library (Report.a) requires Ada.Text_IO, Ada.Calendar (GNAT)
+2. [x] um80 Assembler Compatibility
+   - Added `.Z80` directive to enable Z80 instruction set
+   - Uppercase instruction mnemonics (um80 requires uppercase)
+   - Fixed peephole optimizer to avoid undocumented IXH/IXL instructions
+   - End-to-end execution tests via cpmemu now working
 
-**Current ACATS semantic results (excluding GNAT-dependency errors):**
-- Effective pass rate: ~48% (would pass if GNAT libs available)
-- Real failures: ~52% (actual semantic bugs or missing features)
+3. [x] Extended GNAT Standard Library Integration
+   - Added Ada.Exceptions (Exception_Name, Exception_Message, Raise_Exception, Reraise_Occurrence)
+   - Added Ada.Tags (Tag type, External_Tag, Internal_Tag, Parent_Tag, etc.)
+   - Added Ada.Characters.Handling (Is_Letter, Is_Digit, To_Upper, To_Lower, etc.)
+   - Added Ada.Characters.Latin_1 (all 256 named character constants)
+   - Added Ada.Characters.Conversions
+   - Added Ada.Text_IO child packages (Integer_IO, Float_IO, Enumeration_IO, Modular_IO)
+   - Added Ada.Integer_Text_IO and Ada.Float_Text_IO
+   - Added Ada.Sequential_IO (generic sequential file I/O)
+   - Added Ada.Direct_IO (generic random access file I/O)
+   - Added Ada.Streams (Root_Stream_Type, Stream_Element types)
+   - Added Ada.Streams.Stream_IO
+   - Added Interfaces package (Integer_8/16/32/64, Unsigned_8/16/32/64)
+   - Added Interfaces.C (int, char, size_t, ptrdiff_t, etc.)
+   - Added Interfaces.C.Strings (chars_ptr, New_String, Value, Strlen)
+   - Added System.Storage_Elements (Storage_Offset, To_Address, To_Integer)
+   - Added System.Address_To_Access_Conversions (generic)
+   - Added System constants (Storage_Unit, Word_Size, Memory_Size, etc.)
 
-## Requires GNAT Standard Library
+## Implemented Features
 
-These need the full GNAT runtime and cannot be fixed without it:
+### Core Language (Ada 83/95)
+- [x] All basic types (Integer, Float, Boolean, Character, String)
+- [x] Enumeration types with attributes
+- [x] Array types (constrained and unconstrained)
+- [x] Record types (simple and variant)
+- [x] Access types (pointers)
+- [x] Subprograms (procedures and functions)
+- [x] Packages (specification and body)
+- [x] Exception handling
+- [x] Generics (packages, procedures, functions)
+- [x] Tasking (task types, protected types, entries)
 
-- Ada.Text_IO and child packages
-- Ada.Strings and child packages
-- Ada.Containers and child packages
-- Ada.Calendar
-- Ada.Numerics
-- System package details
-- Interfaces package
+### Ada 2005 Features
+- [x] Interfaces
+- [x] Null procedures
+- [x] Overriding indicators
 
-## ACATS Support Library
+### Ada 2012 Features
+- [x] Expression functions
+- [x] Conditional expressions (if/case)
+- [x] Quantified expressions (for all/some)
+- [x] Membership tests with multiple choices
+- [x] Contract aspects (Pre, Post, Type_Invariant)
+- [x] Subtype predicates (Static_Predicate, Dynamic_Predicate)
+- [x] Contract attributes ('Old, 'Result, 'Loop_Entry)
+- [x] 'Update attribute for records and arrays
+- [x] Iterator interfaces
 
-ACATS tests use these support packages that need to be provided:
+### Ada 2022 Features
+- [x] Declare expressions
+- [x] Parallel blocks (`parallel do ... and do ... end parallel`)
+- [x] Parallel loops (`parallel for`)
+- [x] Delta aggregates
+- [x] Container aggregates
+- [x] Reduction expressions ('Reduce)
+- [x] Target name (@) in assignments
+- [x] Generalized 'Image for all types
 
-- Report (test reporting)
-- Impdef (implementation defined values)
-- Spprt13 (support for chapter 13 tests)
-- Various FCxx packages (foundation code)
+### Type System
+- [x] Type checking edge cases (Universal_Real, type conversion)
+- [x] Overload resolution with expected type context
+- [x] Enumeration literal overloading
+- [x] Generic instantiation type matching
+- [x] Discriminant handling
+- [x] Array/record constraint checking
 
-## Investigation Needed
+### Standard Library
+- [x] Wide_Character / Wide_String types
+- [x] System.Address type
+- [x] Predefined exceptions
+- [x] Ada.Text_IO (with child packages: Integer_IO, Float_IO, Enumeration_IO, Modular_IO)
+- [x] Ada.Integer_Text_IO, Ada.Float_Text_IO
+- [x] Ada.Finalization (Controlled types)
+- [x] Ada.Strings (with Fixed, Maps, Bounded)
+- [x] Ada.Command_Line
+- [x] Ada.Unchecked_Conversion, Ada.Unchecked_Deallocation
+- [x] Ada.Calendar
+- [x] Ada.Numerics (with Elementary_Functions, Float_Random, Discrete_Random)
+- [x] Ada.Containers (Vectors, Lists, Maps, Sets, Trees)
+- [x] Ada.Exceptions (Exception_Name, Exception_Message, Raise_Exception)
+- [x] Ada.Tags (Tag type, External_Tag, Internal_Tag, etc.)
+- [x] Ada.Characters.Handling (Is_Letter, To_Upper, To_Lower, etc.)
+- [x] Ada.Characters.Latin_1 (NUL, LF, CR, Space, all named constants)
+- [x] Ada.Characters.Conversions
+- [x] Ada.Sequential_IO (generic file I/O)
+- [x] Ada.Direct_IO (random access file I/O)
+- [x] Ada.Streams (Root_Stream_Type, Stream_Element_Array)
+- [x] Ada.Streams.Stream_IO
+- [x] Interfaces (Integer_8/16/32/64, Unsigned_8/16/32/64, shift/rotate ops)
+- [x] Interfaces.C (int, char, size_t, etc.)
+- [x] Interfaces.C.Strings (chars_ptr, New_String, Value)
+- [x] System.Storage_Elements (Storage_Offset, To_Address, To_Integer)
+- [x] System.Address_To_Access_Conversions (generic)
+- [x] Ada.Assertions (Assert procedures, Assertion_Error exception)
+- [x] Ada.Synchronous_Task_Control (Suspension_Object, Set_True, Suspend_Until_True)
+- [x] Ada.Wide_Characters.Handling (Is_Letter, To_Upper, etc. for Wide_Character)
+- [x] Ada.Wide_Wide_Characters.Handling (Is_Letter, To_Upper, etc. for Wide_Wide_Character)
+- [x] Ada.Locales (Language, Country)
+- [x] Ada.Environment_Variables (Value, Exists, Set, Clear)
+- [x] Ada.Long_Long_Integer_Text_IO (Get, Put)
+- [x] Ada.Iterator_Interfaces (Forward_Iterator, Reversible_Iterator)
 
-Run this to see current error breakdown:
+## Remaining Work
+
+### ACATS Test Suite Support
+
+The ACATS test suite requires certain support libraries:
+
+1. [x] Ada.Text_IO and Ada.Calendar (now available for Report.a)
+2. [ ] ACATS support library (Report.a) - can now be compiled
+3. [x] ImpDef (implementation defined values for Z80/CP/M target)
+4. [x] SPPRT13 (address constants for chapter 13 representation clause tests)
+5. [ ] Various FCxx packages (foundation code)
+
+### GNAT Library (Implemented)
+
+GNAT-specific packages for extended functionality:
+
+- [x] GNAT.IO (simple preelaborated I/O)
+- [x] GNAT.Source_Info (compile-time source information)
+- [x] GNAT.Case_Util (case conversion utilities)
+- [x] GNAT.CRC32 (CRC-32 checksum)
+- [x] GNAT.String_Split (string tokenization)
+- [x] GNAT.OS_Lib (operating system interface)
+- [x] GNAT.Calendar (extended calendar, Day_Of_Week, Hour, Minute, Second)
+- [x] GNAT.Directory_Operations (directory handling)
+- [x] GNAT.Command_Line (advanced command line parsing)
+- [x] GNAT.Regpat (regular expressions)
+- [x] GNAT.MD5 (MD5 hash)
+- [x] GNAT.SHA1, GNAT.SHA256 (SHA hash family)
+- [x] GNAT.Traceback (stack traceback)
+- [x] GNAT.Heap_Sort, GNAT.Bubble_Sort (generic sorting)
+
+### Optional Standard Library Extensions (Future)
+
+These packages can be added for extended compatibility:
+
+- Ada.Wide_Text_IO (wide character I/O)
+- Ada.Directories (file system operations - not applicable to CP/M)
+- Ada.Environment_Variables
+- Ada.Real_Time (not applicable to Z80)
+
+## Z80/CP/M Target Notes
+
+This compiler generates Z80 assembly for CP/M 2.2. Key characteristics:
+
+- 16-bit integers (default)
+- Software floating point (48-bit)
+- 64KB address space (~57KB usable TPA)
+- Cooperative multitasking (for tasking support)
+- CP/M BDOS interface for I/O
+
+## Usage
+
 ```bash
-python -c "
-from pathlib import Path
-from uada80.parser import parse
-from uada80.semantic import SemanticAnalyzer
-...
-"
+# Compile Ada source to Z80 assembly
+uada80 program.ada -o program.asm
+
+# Assemble with Z80 assembler (e.g., SLR's Z80ASM)
+z80asm program.asm -o program.rel
+
+# Link with runtime library
+ul80 program.rel -l libada.lib -o program.com
 ```

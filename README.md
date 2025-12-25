@@ -1,10 +1,13 @@
 # uada80 - Ada Compiler for Z80/CP/M
 
+[![Tests](https://github.com/avwohl/uada80/actions/workflows/pytest.yml/badge.svg)](https://github.com/avwohl/uada80/actions/workflows/pytest.yml)
+[![Pylint](https://github.com/avwohl/uada80/actions/workflows/pylint.yml/badge.svg)](https://github.com/avwohl/uada80/actions/workflows/pylint.yml)
+
 An Ada compiler targeting the Z80 processor and CP/M 2.2 operating system, aiming for ACATS (Ada Conformity Assessment Test Suite) compliance.
 
 ## Project Status
 
-🚧 **Pre-Alpha** - Currently in initial development
+🔧 **Alpha** - Core compiler functionality implemented
 
 ## Overview
 
@@ -27,31 +30,32 @@ uada80 is a compiler for the Ada programming language that generates code for th
 
 This project builds on experience from [uplm80](https://github.com/yourusername/uplm80), a PL/M-80 compiler for Z80, reusing proven optimization techniques.
 
-## Features (Planned)
+## Features
 
-### Phase 1 (MVP)
+### Phase 1 (MVP) ✅
 - [x] Project structure
-- [ ] Lexer and parser
-- [ ] Basic types: Integer, Boolean, Character
-- [ ] Procedures and functions
-- [ ] Control flow: if, case, loop, for
-- [ ] Arrays and records
-- [ ] Z80 code generation
+- [x] Lexer and parser
+- [x] Basic types: Integer, Boolean, Character
+- [x] Procedures and functions
+- [x] Control flow: if, case, loop, for
+- [x] Arrays and records
+- [x] Z80 code generation
 
-### Phase 2 (Expanded)
-- [ ] Packages
-- [ ] Enumeration types
-- [ ] Access types (pointers)
-- [ ] Derived types
-- [ ] Unconstrained arrays
-- [ ] Advanced optimization
+### Phase 2 (Expanded) ✅
+- [x] Packages
+- [x] Enumeration types
+- [x] Access types (pointers)
+- [x] Derived types
+- [x] Unconstrained arrays
+- [x] AST optimization
 
-### Phase 3 (ACATS Compliance)
-- [ ] Generics
-- [ ] Exception handling
-- [ ] Full attribute support
-- [ ] Representation clauses
+### Phase 3 (ACATS Compliance) 🔧
+- [x] Generics
+- [x] Exception handling
+- [x] Full attribute support
+- [x] Representation clauses
 - [ ] Standard library (adapted for Z80)
+- [ ] ACATS test validation
 
 ## Architecture
 

@@ -11,12 +11,11 @@ Optimization Levels:
 - Level 3: + CSE, copy propagation, loop optimizations
 """
 
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from typing import Any, Optional
 
 from uada80.ast_nodes import (
     # Base
-    ASTNode,
     Expr,
     Stmt,
     Decl,
@@ -36,7 +35,6 @@ from uada80.ast_nodes import (
     IndexedComponent,
     FunctionCall,
     RangeExpr,
-    Aggregate,
     TypeConversion,
     QualifiedExpr,
     ConditionalExpr,
@@ -45,7 +43,6 @@ from uada80.ast_nodes import (
     ExprChoice,
     RangeChoice,
     OthersChoice,
-    CaseAlternative,
     # Statements
     NullStmt,
     AssignmentStmt,
@@ -716,10 +713,14 @@ class ASTOptimizer:
                 return IntegerLiteral(value=0, text="0")
 
         # x ** 0 = 1, x ** 1 = x
+        # Note: x ** 0 = 1 only safe when x is a known integer (not Float64)
+        # because IntegerLiteral(1) is wrong type for Float64 ** 0 which should be 1.0
         elif op == BinaryOp.EXP:
-            if right_val == 0:
+            if right_val == 0 and left_val is not None:
+                # Only fold when left is also a constant integer
                 return IntegerLiteral(value=1, text="1")
             if right_val == 1:
+                # x ** 1 = x is type-safe for any x
                 return left
 
         # Boolean: x and True = x, x and False = False
@@ -847,19 +848,19 @@ class ASTOptimizer:
                 if 0 <= val <= 127:  # ASCII range
                     char = chr(val)
                     self.stats.attribute_evaluations += 1
-                    return CharacterLiteral(value=char, text=f"'{char}'")
+                    return CharacterLiteral(value=char)
 
         # 'Image for integer literals
         if attr_upper == "IMAGE" and isinstance(prefix, IntegerLiteral):
             text = str(prefix.value)
             self.stats.attribute_evaluations += 1
-            return StringLiteral(value=text, text=f'"{text}"')
+            return StringLiteral(value=text)
 
         # 'Image with argument for integer type
         if attr_upper == "IMAGE" and args and isinstance(args[0], IntegerLiteral):
             text = str(args[0].value)
             self.stats.attribute_evaluations += 1
-            return StringLiteral(value=text, text=f'"{text}"')
+            return StringLiteral(value=text)
 
         # 'Min and 'Max for constant pairs
         if attr_upper in ("MIN", "MAX") and len(args) == 2:
@@ -915,7 +916,7 @@ class ASTOptimizer:
             name = expr.name.upper()
             if name == "TRUE":
                 return True
-            elif name == "FALSE":
+            if name == "FALSE":
                 return False
         if isinstance(expr, BinaryExpr):
             left = self._try_evaluate_constant(expr.left)
@@ -923,6 +924,9 @@ class ASTOptimizer:
             if left is not None and right is not None:
                 return self._eval_binary_int(expr.op, left, right)
         return None
+
+    # Alias for _try_evaluate_constant
+    _get_constant_value = _try_evaluate_constant
 
     def _try_evaluate_boolean(self, expr: Expr) -> Optional[bool]:
         """Try to evaluate a boolean expression at compile time."""
