@@ -899,12 +899,20 @@ _itof_normalized:
         res     7, h
 
         ; Now build the IEEE 754 double
-        ; Mantissa is in bits 51-0, we have 15 bits in HL
-        ; These go into the top 15 bits of the 52-bit mantissa field
+        ; Mantissa is in bits 51-0, we have 15 bits in HL (after clearing implied 1)
+        ; These 15 bits go into the top 15 bits of the 52-bit mantissa field
+        ; Our bits: H[6:0] = m14-m8, L[7:0] = m7-m0
+        ; Map to IEEE mantissa bits 51-37, with bits 36-0 = zeros
+        ;
+        ; Byte layout (little-endian):
+        ;   Byte 0-3: zeros (mantissa bits 31-0)
+        ;   Byte 4: m2,m1,m0,0,0,0,0,0 = L[2:0] << 5 (mantissa bits 39-32)
+        ;   Byte 5: m10,m9,m8,m7,m6,m5,m4,m3 = H[2:0]<<5 | L>>3 (mantissa bits 47-40)
+        ;   Byte 6 low nibble: m14,m13,m12,m11 = H[6:3] (mantissa bits 51-48)
 
         pop     de              ; DE = dest pointer
 
-        ; Byte 0-4: zeros (lower 40 bits of mantissa are 0)
+        ; Bytes 0-3: zeros (mantissa bits 31-0)
         xor     a
         ld      (de), a
         inc     de
@@ -914,34 +922,28 @@ _itof_normalized:
         inc     de
         ld      (de), a
         inc     de
+
+        ; Byte 4: L[2:0] << 5 (mantissa bits 39-32, with bits 36-32 = 0)
+        ld      a, l
+        and     07h             ; Get L[2:0]
+        rrca                    ; Rotate right 3 = shift left 5
+        rrca
+        rrca
         ld      (de), a
         inc     de
 
-        ; Byte 5: mantissa bits 40-47 (from L bits 0-7, shifted)
-        ; Actually for 16-bit int, we have bits 0-14
-        ; Mantissa bits 52-37 come from our value
-        ; We need to position HL into the mantissa field
-
-        ; Let me recalculate:
-        ; HL has 15 significant bits (bit 15 was the implied 1, now cleared)
-        ; Mantissa field is bits 51-0 (52 bits)
-        ; Our 15 bits should go in bits 51-37
-
-        ; Shift HL left by 5 to align (52 - 15 - 32 = 5... no wait)
-        ; Let's think again:
-        ; We have HL = 15 bit value (implied 1 removed)
-        ; These bits need to be the TOP of the 52-bit mantissa
-
-        ; Byte 6 contains: mantissa bits 48-51 (low nibble), exp bits 0-3 (high nibble)
-        ; Byte 7 contains: exp bits 4-10 (bits 0-6), sign (bit 7)
-
-        ; Our L contains bits 0-7 of the post-normalized value
-        ; Our H contains bits 8-14 (bit 15 was cleared)
-
-        ; The 52-bit mantissa: our 14 bits go in positions 51 down to 38
-        ; Positions 37-0 are zero (we only had 15 bits of precision)
-
-        ; Byte 5 (bits 40-47): zeros
+        ; Byte 5: H[2:0] << 5 | L >> 3 (mantissa bits 47-40)
+        ld      a, h
+        and     07h             ; Get H[2:0]
+        rrca                    ; Rotate right 3 = shift left 5
+        rrca
+        rrca
+        ld      c, a            ; Save H[2:0] << 5 in C
+        ld      a, l
+        srl     a               ; L >> 3
+        srl     a
+        srl     a
+        or      c               ; Combine
         ld      (de), a
         inc     de
 
