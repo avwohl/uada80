@@ -1,5 +1,38 @@
 # Claude Code Notes for UADA80
 
+## Session (2025-12-26) - Float64 Comparison & Parsing Fixes
+
+**Session accomplished:**
+- Fixed Float64 comparison bug in `_f64_cmp` runtime function
+- Fixed Float64 type size (was 6 bytes, now 8 bytes)
+- Fixed JR offset calculation in Float64 comparison codegen
+- Fixed `_f64_itof` mantissa bit packing bug (was losing 11 of 15 bits)
+- C24002D ACATS test now passes (lowercase 'e' in based floating literals)
+
+**Float64 Comparison Fixes:**
+1. **`_f64_cmp` pointer setup** - `_cmp_same_sign` was incorrectly setting up pointers,
+   causing both HL and DE to point to a+7 instead of a+7 and b+7. All comparisons
+   were comparing a value with itself.
+2. **JR offsets** - Fixed jump relative offsets in `_lower_float64_comparison` from
+   `$+5/$+3` to `$+7/$+5` to account for 3-byte `LD HL,n` instructions.
+3. **Float type size** - Changed from 6 to 8 bytes in `_calc_type_size` and array
+   element size calculations. Float now uses Float64 runtime on Z80.
+
+**`_f64_itof` Mantissa Bug:**
+- Only 4 bits of the 15-bit mantissa were being stored (H[6:3])
+- Bytes 4-5 were set to zero, losing 11 bits of precision
+- Values like 123, 255 parsed incorrectly due to lost mantissa bits
+- Fix properly packs all 15 bits: byte 4 = L[2:0]<<5, byte 5 = H[2:0]<<5|L>>3
+
+**Files Modified:**
+- `runtime/float64.mac` - Fixed `_cmp_same_sign` pointer setup, `_f64_itof` mantissa packing
+- `uada80/lowering.py` - Fixed JR offsets, Float type size (6→8), array element sizes
+- `tests/test_execution.py` - Updated `test_float_value_attribute` to use 123, 255
+
+**Tests:** 6959/6959 tests pass (174 execution tests, 40 Float tests)
+
+---
+
 ## Session (2025-12-26) - Mac Setup & ACATS Execution Tests
 
 **Session accomplished:**
