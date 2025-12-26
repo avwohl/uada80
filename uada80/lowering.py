@@ -16700,12 +16700,13 @@ class ASTLowering:
                 ada_type = type_sym.ada_type
 
                 if isinstance(ada_type, RecordType):
-                    # Calculate total record size from fields
+                    # Calculate total record size from components
                     total = 0
-                    for field_name, field_type in ada_type.fields.items():
+                    for comp in ada_type.components:
                         # Get field size (default to 2 for unknown types)
                         field_size = 2
-                        if hasattr(field_type, 'name'):
+                        field_type = comp.component_type
+                        if field_type and hasattr(field_type, 'name'):
                             fn = field_type.name.lower()
                             if fn in ('character', 'boolean'):
                                 field_size = 1
