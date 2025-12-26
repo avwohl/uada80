@@ -99,8 +99,11 @@ class Z80CodeGen:
 
         # Generate startup code (entry point for CP/M .COM files)
         # This must come first in CSEG so it's at address 0100H
-        # Use the first function as the main entry point
-        main_entry = module.functions[0].name if module.functions else None
+        # Use the main entry point set by the lowering phase
+        main_entry = module.main_entry
+        if main_entry is None and module.functions:
+            # Fallback: use first function if no main entry was set
+            main_entry = module.functions[0].name
         if main_entry:
             self._emit("; CP/M entry point - execution starts here")
             self._emit("    CSEG")

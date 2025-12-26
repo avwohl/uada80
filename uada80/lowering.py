@@ -149,6 +149,9 @@ class LoweringContext:
     # Parameters that are passed by reference (out, in out modes)
     # Maps param name (lowercase) -> True if byref
     byref_params: dict[str, bool] = field(default_factory=dict)
+    # Parameters that are unconstrained arrays (need dope vector)
+    # Maps param name (lowercase) -> True if unconstrained
+    unconstrained_params: dict[str, bool] = field(default_factory=dict)
     # Parameter types: maps param name (lowercase) -> type name (lowercase)
     param_types: dict[str, str] = field(default_factory=dict)
     loop_exit_label: Optional[str] = None  # For exit statements (innermost loop)
@@ -223,6 +226,9 @@ class ASTLowering:
         # Track which parameters are passed by reference (byref mode or record type)
         # Maps subprogram name (lowercase) -> list of booleans (True if byref)
         self._subprogram_byref_params: dict[str, list[bool]] = {}
+        # Track which parameters are unconstrained arrays (need dope vector)
+        # Maps subprogram name (lowercase) -> list of booleans (True if unconstrained)
+        self._subprogram_unconstrained_params: dict[str, list[bool]] = {}
         # Track parameter default values for all subprograms
         # Maps subprogram name (lowercase) -> list of default value expressions (None if no default)
         self._subprogram_param_defaults: dict[str, list] = {}
@@ -240,6 +246,8 @@ class ASTLowering:
         self._function_label_map: dict[tuple[str, int], str] = {}
         # Global variables (name -> value info)
         self.globals: dict[str, Any] = {}
+        # Stack of package prefixes for resolving package-level variables
+        self._package_prefix_stack: list[str] = []
 
     def _make_memory_location(
         self,
@@ -291,6 +299,11 @@ class ASTLowering:
 
         for unit in program.units:
             self._lower_compilation_unit(unit)
+            # Track standalone procedures as main entry candidates
+            if isinstance(unit.unit, SubprogramBody):
+                spec = unit.unit.spec
+                if not spec.is_function:  # Only procedures, not functions
+                    module.main_entry = spec.name
 
         # Generate vtables for tagged types
         self._generate_vtables()
@@ -639,6 +652,9 @@ class ASTLowering:
         # Store byref info (from ctx.byref_params) for call sites
         byref_list = [pname in self.ctx.byref_params for pname in param_names]
         self._subprogram_byref_params[spec.name.lower()] = byref_list
+        # Store unconstrained info (from ctx.unconstrained_params) for call sites
+        unconstrained_list = [pname in self.ctx.unconstrained_params for pname in param_names]
+        self._subprogram_unconstrained_params[spec.name.lower()] = unconstrained_list
 
         # Add outer variable pointer parameters AFTER regular params
         # (they are pushed before regular args at call site, so end up at higher offsets)
@@ -880,6 +896,9 @@ class ASTLowering:
                 self.ctx.params[f"{name.lower()}'first"] = first_vreg
                 self.ctx.params[f"{name.lower()}'last"] = last_vreg
 
+                # Mark as unconstrained for call site lookup
+                self.ctx.unconstrained_params[name.lower()] = True
+
                 # Add all three to function params (in order: ptr, first, last)
                 self.ctx.function.params.append(ptr_vreg)
                 self.ctx.function.params.append(first_vreg)
@@ -927,19 +946,26 @@ class ASTLowering:
         """Lower a package body."""
         pkg_prefix = body.name + "." if body.name else ""
 
-        # First pass: process declarations (variables become globals, subprograms get lowered)
-        for decl in body.declarations:
-            if isinstance(decl, SubprogramBody):
-                self._lower_subprogram_body(decl)
-            elif isinstance(decl, ObjectDecl):
-                self._lower_package_object_decl(decl, pkg_prefix)
-            elif isinstance(decl, PackageBody):
-                # Nested package body
-                self._lower_package_body(decl)
+        # Push package prefix for identifier resolution
+        self._package_prefix_stack.append(pkg_prefix.rstrip("."))
 
-        # Generate package initialization function if there are init statements
-        if body.statements:
-            self._lower_package_init(body)
+        try:
+            # First pass: process declarations (variables become globals, subprograms get lowered)
+            for decl in body.declarations:
+                if isinstance(decl, SubprogramBody):
+                    self._lower_subprogram_body(decl)
+                elif isinstance(decl, ObjectDecl):
+                    self._lower_package_object_decl(decl, pkg_prefix)
+                elif isinstance(decl, PackageBody):
+                    # Nested package body
+                    self._lower_package_body(decl)
+
+            # Generate package initialization function if there are init statements
+            if body.statements:
+                self._lower_package_init(body)
+        finally:
+            # Pop package prefix
+            self._package_prefix_stack.pop()
 
     def _lower_package_object_decl(self, decl: ObjectDecl, prefix: str = "") -> None:
         """Lower a package-level object declaration as a global variable."""
@@ -3849,6 +3875,34 @@ class ASTLowering:
                     ))
                     return
 
+                # Check for package-level global variables
+                if self.builder.module:
+                    # Try with package prefix first (for variables in current package)
+                    for pkg_prefix in reversed(self._package_prefix_stack):
+                        # Case-insensitive search
+                        search_prefix = f"{pkg_prefix}_".lower()
+                        search_name = name.lower()
+                        for global_name in self.builder.module.globals:
+                            if global_name.lower().startswith(search_prefix):
+                                var_part = global_name[len(pkg_prefix) + 1:]
+                                if var_part.lower() == search_name:
+                                    # Store to global
+                                    self.builder.store(
+                                        MemoryLocation(is_global=True, symbol_name=global_name, ir_type=IRType.WORD),
+                                        value,
+                                        comment=f"store to global {global_name}"
+                                    )
+                                    return
+                    # Try without prefix
+                    for global_name in self.builder.module.globals:
+                        if global_name.lower() == name.lower():
+                            self.builder.store(
+                                MemoryLocation(is_global=True, symbol_name=global_name, ir_type=IRType.WORD),
+                                value,
+                                comment=f"store to global {global_name}"
+                            )
+                            return
+
             elif isinstance(stmt.target, IndexedComponent):
                 # Array assignment
                 self._lower_indexed_store(stmt.target, value)
@@ -4245,23 +4299,32 @@ class ASTLowering:
         if self.ctx is None:
             return
 
+        # Save any existing locals that will be shadowed by block declarations
+        # This allows proper Ada block-scoped shadowing with case-insensitive names
+        shadowed_locals: dict[str, LocalVariable] = {}
+
         # First, allocate stack space for any local variables in the block
         # This is needed because block declarations aren't part of the initial locals scan
         for decl in stmt.declarations:
             if isinstance(decl, ObjectDecl):
                 for name in decl.names:
-                    if name.lower() not in self.ctx.locals:
-                        size = self._calc_type_size(decl, stmt.declarations)
-                        vreg = self.builder.new_vreg(IRType.WORD, name)
-                        stack_offset = self.ctx.locals_size
-                        self.ctx.locals[name.lower()] = LocalVariable(
-                            name=name,
-                            vreg=vreg,
-                            stack_offset=stack_offset,
-                            size=size,
-                            ada_type=decl.type_mark if hasattr(decl, 'type_mark') else None,
-                        )
-                        self.ctx.locals_size += size
+                    name_lower = name.lower()
+                    # Save any existing local that will be shadowed
+                    if name_lower in self.ctx.locals:
+                        shadowed_locals[name_lower] = self.ctx.locals[name_lower]
+
+                    # Always create a new local for block declarations (shadowing)
+                    size = self._calc_type_size(decl, stmt.declarations)
+                    vreg = self.builder.new_vreg(IRType.WORD, name)
+                    stack_offset = self.ctx.locals_size
+                    self.ctx.locals[name_lower] = LocalVariable(
+                        name=name,
+                        vreg=vreg,
+                        stack_offset=stack_offset,
+                        size=size,
+                        ada_type=decl.type_mark if hasattr(decl, 'type_mark') else None,
+                    )
+                    self.ctx.locals_size += size
 
         # Process declarations (initializations)
         for decl in stmt.declarations:
@@ -4276,6 +4339,10 @@ class ASTLowering:
             # No handlers - just lower statements directly
             for s in stmt.statements:
                 self._lower_statement(s)
+
+        # Restore shadowed locals after block exits
+        for name_lower, saved_local in shadowed_locals.items():
+            self.ctx.locals[name_lower] = saved_local
 
     def _lower_block_with_handlers(
         self, statements: list[Stmt], handlers: list[ExceptionHandler]
@@ -4512,20 +4579,59 @@ class ASTLowering:
                 if sym and sym.external_name:
                     call_target = sym.external_name
 
-                # Push arguments in reverse order
-                if stmt.args:
-                    for arg in reversed(stmt.args):
+                # Use proper argument handling with dope vector support
+                proc_name_lower = call_target.lower()
+                effective_args = self._build_effective_args(stmt.args, sym, proc_name_lower)
+
+                # Get parameter modes for out/in out handling
+                param_modes = []
+                if proc_name_lower in self._subprogram_param_modes:
+                    param_modes = self._subprogram_param_modes[proc_name_lower]
+                elif sym and sym.parameters:
+                    param_modes = [p.mode for p in sym.parameters]
+
+                # Get byref params for this procedure
+                byref_params = []
+                if proc_name_lower in self._subprogram_byref_params:
+                    byref_params = self._subprogram_byref_params[proc_name_lower]
+
+                # Push arguments in reverse order with proper dope vector handling
+                stack_slots = 0
+                for idx, arg in enumerate(reversed(effective_args)):
+                    forward_idx = len(effective_args) - 1 - idx
+                    param_mode = param_modes[forward_idx] if forward_idx < len(param_modes) else "in"
+
+                    # Check if this is an unconstrained array parameter
+                    arg_is_unconstrained = self._is_unconstrained_array_arg(sym, forward_idx, proc_name_lower)
+
+                    # Check if parameter is byref (mode or record type)
+                    is_byref = byref_params[forward_idx] if forward_idx < len(byref_params) else False
+
+                    if arg_is_unconstrained:
+                        # Push dope vector: last, first, ptr (reverse order for stack)
+                        first_val, last_val, ptr_val = self._get_array_dope_vector(arg)
+                        self.builder.push(last_val)
+                        self.builder.push(first_val)
+                        self.builder.push(ptr_val)
+                        stack_slots += 3
+                    elif param_mode in ("out", "in out") or is_byref:
+                        # Pass address of the argument
+                        addr = self._get_arg_address(arg)
+                        self.builder.push(addr)
+                        stack_slots += 1
+                    else:
+                        # Pass value
                         val = self._lower_expr(arg)
                         self.builder.push(val)
+                        stack_slots += 1
 
                 # Call the procedure
                 self.builder.call(Label(call_target))
 
-                # Clean up stack
-                if stmt.args:
-                    for _ in stmt.args:
-                        temp = self.builder.new_vreg(IRType.WORD, "_discard")
-                        self.builder.pop(temp)
+                # Clean up stack (use stack_slots which accounts for dope vectors)
+                for _ in range(stack_slots):
+                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                    self.builder.pop(temp)
                 return
 
         if isinstance(stmt.name, Identifier):
@@ -4628,21 +4734,43 @@ class ASTLowering:
                         ))
                         self.builder.push(addr)
 
+            # Get byref params for this procedure
+            byref_params = []
+            if proc_name_lower in self._subprogram_byref_params:
+                byref_params = self._subprogram_byref_params[proc_name_lower]
+
             # Push arguments in reverse order
+            # Track stack slots for proper cleanup (unconstrained arrays use 3 slots)
+            stack_slots = 0
             for idx, arg in enumerate(reversed(effective_args)):
                 # Check if this argument corresponds to an out/in out parameter
                 # idx is reversed, so we need forward_idx
                 forward_idx = len(effective_args) - 1 - idx
                 param_mode = param_modes[forward_idx] if forward_idx < len(param_modes) else "in"
 
-                if param_mode in ("out", "in out"):
+                # Check if this is an unconstrained array parameter
+                arg_is_unconstrained = self._is_unconstrained_array_arg(sym, forward_idx, proc_name_lower)
+
+                # Check if parameter is byref (mode or record type)
+                is_byref = byref_params[forward_idx] if forward_idx < len(byref_params) else False
+
+                if arg_is_unconstrained:
+                    # Push dope vector: last, first, ptr (reverse order for stack)
+                    first_val, last_val, ptr_val = self._get_array_dope_vector(arg)
+                    self.builder.push(last_val)
+                    self.builder.push(first_val)
+                    self.builder.push(ptr_val)
+                    stack_slots += 3
+                elif param_mode in ("out", "in out") or is_byref:
                     # Pass address of the argument
                     addr = self._get_arg_address(arg)
                     self.builder.push(addr)
+                    stack_slots += 1
                 else:
                     # Pass value
                     value = self._lower_expr(arg)
                     self.builder.push(value)
+                    stack_slots += 1
 
             if is_dispatching and sym and sym.vtable_slot >= 0:
                 # Dispatching call - emit DISPATCH instruction
@@ -4660,13 +4788,15 @@ class ASTLowering:
                 # Static call (using external name for imported procedures)
                 self.builder.call(Label(call_target))
 
-            # Clean up stack (regular args + outer variable addresses)
-            num_args = len(effective_args)
+            # Clean up stack (use stack_slots which accounts for dope vectors)
+            # Also add outer variable addresses if any
+            outer_var_slots = 0
             if proc_name_lower in self._nested_outer_vars:
-                num_args += len(self._nested_outer_vars[proc_name_lower])
-            if num_args > 0:
+                outer_var_slots = len(self._nested_outer_vars[proc_name_lower])
+            total_slots = stack_slots + outer_var_slots
+            if total_slots > 0:
                 # Pop arguments (2 bytes each)
-                for _ in range(num_args):
+                for _ in range(total_slots):
                     temp = self.builder.new_vreg(IRType.WORD, "_discard")
                     self.builder.pop(temp)
 
@@ -4919,23 +5049,29 @@ class ASTLowering:
         finally:
             self._inline_depth -= 1
 
-    def _is_unconstrained_array_arg(self, sym: Optional[Symbol], arg_idx: int) -> bool:
+    def _is_unconstrained_array_arg(self, sym: Optional[Symbol], arg_idx: int,
+                                       subprogram_name: Optional[str] = None) -> bool:
         """Check if a parameter at given index expects an unconstrained array.
 
         Returns True if the corresponding parameter type is an unconstrained array,
         meaning we need to pass a dope vector (ptr, first, last).
         """
-        if not sym or not sym.parameters:
-            return False
+        # First try the symbol table lookup (for imported/library subprograms)
+        if sym and sym.parameters:
+            if arg_idx < len(sym.parameters):
+                param = sym.parameters[arg_idx]
+                param_type = param.ada_type if hasattr(param, 'ada_type') else None
 
-        if arg_idx >= len(sym.parameters):
-            return False
+                if param_type and isinstance(param_type, ArrayType):
+                    return not param_type.is_constrained
 
-        param = sym.parameters[arg_idx]
-        param_type = param.ada_type if hasattr(param, 'ada_type') else None
-
-        if param_type and isinstance(param_type, ArrayType):
-            return not param_type.is_constrained
+        # Fallback: check locally tracked unconstrained info (for nested subprograms)
+        if subprogram_name:
+            sub_lower = subprogram_name.lower()
+            if sub_lower in self._subprogram_unconstrained_params:
+                unconstrained_list = self._subprogram_unconstrained_params[sub_lower]
+                if arg_idx < len(unconstrained_list):
+                    return unconstrained_list[arg_idx]
 
         return False
 
@@ -4984,6 +5120,40 @@ class ASTLowering:
             # Slice: bounds come from the slice range
             first_val = self._lower_expr(expr.range_expr.low)
             last_val = self._lower_expr(expr.range_expr.high)
+        elif isinstance(expr, BinaryExpr) and expr.op == BinaryOp.CONCAT:
+            # String concatenation: A & B
+            # Result is 1-indexed with length = length(A) + length(B)
+            first_val = Immediate(1, IRType.WORD)
+
+            # Get lengths of both operands
+            left_first, left_last, _ = self._get_array_dope_vector(expr.left)
+            right_first, right_last, _ = self._get_array_dope_vector(expr.right)
+
+            # Compute total length: (left_last - left_first + 1) + (right_last - right_first + 1)
+            # For most cases, first = 1, so length = last
+            if (isinstance(left_first, Immediate) and left_first.value == 1 and
+                isinstance(right_first, Immediate) and right_first.value == 1):
+                # Simple case: both start at 1, so total length = left_last + right_last
+                if isinstance(left_last, Immediate) and isinstance(right_last, Immediate):
+                    last_val = Immediate(left_last.value + right_last.value, IRType.WORD)
+                else:
+                    # Need runtime computation
+                    temp = self.builder.new_vreg(IRType.WORD, "_concat_len")
+                    self.builder.add(temp, left_last, right_last)
+                    last_val = temp
+            else:
+                # General case: compute (left_last - left_first + 1) + (right_last - right_first + 1)
+                # = left_last - left_first + right_last - right_first + 2
+                left_len = self.builder.new_vreg(IRType.WORD, "_left_len")
+                right_len = self.builder.new_vreg(IRType.WORD, "_right_len")
+                total_len = self.builder.new_vreg(IRType.WORD, "_total_len")
+
+                self.builder.sub(left_len, left_last, left_first)
+                self.builder.add(left_len, left_len, Immediate(1, IRType.WORD))
+                self.builder.sub(right_len, right_last, right_first)
+                self.builder.add(right_len, right_len, Immediate(1, IRType.WORD))
+                self.builder.add(total_len, left_len, right_len)
+                last_val = total_len
         else:
             # Unknown expression - default to 1-indexed
             first_val = Immediate(1, IRType.WORD)
@@ -9791,7 +9961,7 @@ class ASTLowering:
                     return Immediate(pos, IRType.WORD)
 
         # Fallback: check local type declarations for enum literals
-        if hasattr(self, '_current_body_declarations'):
+        if hasattr(self, '_current_body_declarations') and self._current_body_declarations is not None:
             from uada80.ast_nodes import EnumerationTypeDef
             for d in self._current_body_declarations:
                 if isinstance(d, TypeDecl) and d.type_def:
@@ -9800,6 +9970,25 @@ class ASTLowering:
                         for i, lit in enumerate(d.type_def.literals):
                             if lit.lower() == name:
                                 return Immediate(i, IRType.WORD)
+
+        # Check for package-level global variables
+        if self.builder.module:
+            # Try with package prefix first (for variables in current package)
+            # Package globals are stored as "Package.VarName" with dots replaced by underscores
+            for pkg_prefix in reversed(self._package_prefix_stack):
+                # Case-insensitive search: try to match any global with this prefix
+                search_prefix = f"{pkg_prefix}_".lower()
+                search_name = name.lower()
+                for global_name in self.builder.module.globals:
+                    if global_name.lower().startswith(search_prefix):
+                        # Check if the variable name matches (after the prefix)
+                        var_part = global_name[len(pkg_prefix) + 1:]  # Skip "Prefix_"
+                        if var_part.lower() == search_name:
+                            return self._load_global(global_name)
+            # Also try without prefix (for variables in other packages)
+            for global_name in self.builder.module.globals:
+                if global_name.lower() == name.lower():
+                    return self._load_global(global_name)
 
         # Default
         return Immediate(0, IRType.WORD)
@@ -11003,7 +11192,7 @@ class ASTLowering:
                 if arg_value:
                     # Check if this argument is an unconstrained array
                     forward_idx = len(effective_exprs) - 1 - arg_idx
-                    arg_is_unconstrained = self._is_unconstrained_array_arg(sym, forward_idx)
+                    arg_is_unconstrained = self._is_unconstrained_array_arg(sym, forward_idx, func_name_lower)
 
                     # Check parameter mode for out/in out handling
                     param_mode = param_modes[forward_idx] if forward_idx < len(param_modes) else "in"
@@ -11137,6 +11326,24 @@ class ASTLowering:
             if self.ctx and var_name in self.ctx.locals:
                 local_info = self.ctx.locals[var_name]
                 ada_type = self._resolve_local_type(local_info.ada_type)
+
+            # Check if it's a parameter with dope vector (unconstrained array)
+            if ada_type is None and self.ctx and var_name in self.ctx.unconstrained_params:
+                # This is an unconstrained array parameter - handle attributes directly
+                if f"{var_name}'first" in self.ctx.params:
+                    if attr == "first":
+                        return self.ctx.params[f"{var_name}'first"]
+                    if attr == "last":
+                        return self.ctx.params[f"{var_name}'last"]
+                    if attr == "length":
+                        # length = last - first + 1
+                        first = self.ctx.params[f"{var_name}'first"]
+                        last = self.ctx.params[f"{var_name}'last"]
+                        result = self.builder.new_vreg(IRType.WORD, "_length")
+                        temp = self.builder.new_vreg(IRType.WORD, "_temp")
+                        self.builder.sub(temp, last, first)
+                        self.builder.add(result, temp, Immediate(1, IRType.WORD))
+                        return result
 
             # Always look up in symbol table (needed for 'Access, 'Address, etc.)
             sym = self.symbols.lookup(expr.prefix.name)
@@ -16028,12 +16235,18 @@ class ASTLowering:
                         comp_name = getattr(local.ada_type.component_type, 'name', '').lower()
                         if comp_name == 'character':
                             return True
-            # Check params
-            if name in self.ctx.params:
-                param_info = self.ctx.params[name]
-                if hasattr(param_info, 'ada_type') and param_info.ada_type:
-                    type_name = getattr(param_info.ada_type, 'name', '').lower()
-                    if type_name == 'string':
+            # Check params - param_types stores the type name as a string
+            if name in self.ctx.param_types:
+                type_name = self.ctx.param_types[name]
+                if type_name == 'string' or type_name == 'wide_string':
+                    return True
+            # Also check if param has unconstrained_params marking (for String parameters)
+            if name in self.ctx.unconstrained_params:
+                # Unconstrained array - likely String if no explicit type found
+                # Check param_types for confirmation
+                if name in self.ctx.param_types:
+                    type_name = self.ctx.param_types[name]
+                    if 'string' in type_name or 'character' in type_name:
                         return True
 
         # Handle function calls that return strings

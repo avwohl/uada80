@@ -1,5 +1,41 @@
 # Claude Code Notes for UADA80
 
+## Session (2025-12-26) - Mac Setup & ACATS Execution Tests
+
+**Session accomplished:**
+- First run on Mac (Darwin) - verified all 6959 tests pass
+- Removed stale upeep80.py (already using upeepz80 from pip)
+- Updated runtime/Makefile for Mac compatibility (use pip-installed tools)
+- Rebuilt runtime library (fixed _F64_LG2 undefined symbol)
+- Downloaded ACATS 4.2 test suite to tests/acats/
+- Fixed main entry point detection in codegen (was using first function, now properly tracks main procedure)
+- Fixed _lower_identifier None check for _current_body_declarations
+- Created simplified Report package for ACATS tests
+- Initial ACATS C-test execution: ~20% passing (8/40 sampled)
+
+**Key Fixes:**
+1. **Main entry point** - Added `main_entry` field to IRModule. Lowering now tracks standalone procedures as main entry candidates. Codegen uses this instead of heuristic.
+2. **Runtime library** - Rebuilt libada.lib with all modules including _f64_lg2 for log2 function.
+3. **ACATS paths** - Updated test_acats.py to use relative paths that work on both Linux and Mac.
+
+**Files Modified:**
+- `upeep80.py` - Deleted (unused, using upeepz80 from pip)
+- `runtime/Makefile` - Use `um80` and `ulib80` from PATH instead of hardcoded path
+- `uada80/ir.py` - Added `main_entry: Optional[str]` field to IRModule
+- `uada80/lowering.py` - Track main procedure in `module.main_entry`, fix None check
+- `uada80/codegen/__init__.py` - Use `module.main_entry` for entry point
+- `tests/test_acats.py` - Use relative paths for ACATS tests
+- `acats/report.ada` - Simplified Report package for Z80/CP/M
+
+**ACATS Execution Status:**
+- Parser: 2849/2849 (100%)
+- Semantic: 2742/2742 (100%)
+- Execution: ~20% of C-tests pass initially (needs more runtime work)
+
+**Tests:** 6959/6959 tests pass (174 execution tests)
+
+---
+
 ## Session (2025-12-20) - Exception Handling & File I/O Improvements
 
 **Session accomplished:**
