@@ -1080,8 +1080,28 @@ class SemanticAnalyzer:
                 )
                 subp_sym.is_generic_formal = True
                 # Store return type for functions
-                if is_function and hasattr(formal, 'return_type'):
+                if is_function and hasattr(formal, 'return_type') and formal.return_type:
                     subp_sym.return_type = self._resolve_type(formal.return_type)
+                # Process parameters - this is critical for overload resolution
+                params = getattr(formal, 'params', [])
+                for param_spec in params:
+                    param_type = self._resolve_type(param_spec.type_mark)
+                    # Handle access parameters
+                    if param_spec.mode == "access" and param_type:
+                        param_type = AccessType(
+                            name=f"access_{param_type.name}",
+                            designated_type=param_type,
+                            is_access_all=True,
+                        )
+                    for name in param_spec.names:
+                        param_symbol = Symbol(
+                            name=name,
+                            kind=SymbolKind.PARAMETER,
+                            ada_type=param_type,
+                            mode=param_spec.mode,
+                            default_value=param_spec.default_value,
+                        )
+                        subp_sym.parameters.append(param_symbol)
                 self.symbols.define(subp_sym)
                 sym = subp_sym
 
