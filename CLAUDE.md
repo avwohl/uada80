@@ -1,14 +1,42 @@
 # Claude Code Notes for UADA80
 
-## Session (2025-12-26) - Operator Call Syntax & Float64 Fixes
+## Session (2025-12-26) - ACATS Execution Support & Package Function Calls
 
 **Session accomplished:**
+- Added Report and ImpDef package bodies for ACATS test execution
+- Fixed package-qualified function calls (e.g., `Report.Ident_Int(5)`)
 - Added operator call syntax support for quoted operators like `"ABS"(X)` and `"+"(A, B)`
 - Fixed Float64 comparison bug in `_f64_cmp` runtime function
 - Fixed Float64 type size (was 6 bytes, now 8 bytes)
 - Fixed JR offset calculation in Float64 comparison codegen
 - Fixed `_f64_itof` mantissa bit packing bug (was losing 11 of 15 bits)
 - C24002D ACATS test now passes (lowercase 'e' in based floating literals)
+- **ACATS execution tests: 4/50 simple tests pass (8%)**
+
+**Package-Qualified Function Call Fix:**
+Bug: `Report.Ident_Int(5)` was not generating any code - returning uninitialized value.
+
+Root cause: In `_lower_function_call`, when `expr.name` was a `SelectedName` and the prefix
+wasn't a protected type, no call was generated. The code fell through without handling the
+package-qualified function call.
+
+Fix: Added else branch at lowering.py:11134-11170 to handle package-qualified function calls:
+```python
+else:
+    # Not a protected type - package-qualified function call
+    call_target = selector
+    sym = self._resolve_overload(selector, expr.args)
+    # ... push args, call, capture result, cleanup
+```
+
+**ACATS Execution Test Results (50 simple tests):**
+- pass: 4 (8%)
+- wrong_output: 15 (30%) - tests run but exit early
+- assemble_fail: 13 (26%) - um80 assembly errors
+- timeout: 7 (14%)
+- test_failed: 6 (12%) - tests report FAILED
+- link_fail: 3 (6%) - missing symbols
+- compile_fail: 2 (4%)
 
 **Operator Call Syntax Support:**
 Ada allows operators to be called as functions using quoted names. This is now fully supported:
