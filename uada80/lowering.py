@@ -5930,6 +5930,21 @@ class ASTLowering:
                     ))
                     return addr
 
+            # Check for outer-scope arrays (nested subprogram accessing outer array)
+            outer_param_name = f"_outer_{name}"
+            if outer_param_name in self.ctx.params:
+                # The outer parameter IS the pointer to the array data
+                ptr_vreg = self.ctx.params[outer_param_name]
+                # Load the pointer value from the parameter
+                addr = self.builder.new_vreg(IRType.PTR, f"_{name}_outer_arr")
+                self.builder.emit(IRInstr(
+                    OpCode.LOAD,
+                    dst=addr,
+                    src1=MemoryLocation(offset=0, ir_type=IRType.WORD, base=ptr_vreg),
+                    comment=f"load outer array base {name}"
+                ))
+                return addr
+
             # Check for global arrays
             sym = self.symbols.lookup(name)
             if sym and sym.kind == SymbolKind.VARIABLE:
