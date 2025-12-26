@@ -4454,8 +4454,6 @@ def test_float_value_attribute():
     """Test Float'Value attribute for string to float conversion.
 
     Float now uses Float64 (IEEE 754 double precision) on Z80.
-    Note: Values like 123, 255 lose lower bits due to a known Float64 parsing bug.
-    Using values that don't trigger this bug (powers of 2, small values).
     """
     source = """
     with Ada.Text_IO;
@@ -4467,11 +4465,11 @@ def test_float_value_attribute():
         Ada.Integer_Text_IO.Put(Integer(F));
         Ada.Text_IO.New_Line;
 
-        F := Float'Value("42");
+        F := Float'Value("123");
         Ada.Integer_Text_IO.Put(Integer(F));
         Ada.Text_IO.New_Line;
 
-        F := Float'Value("100");
+        F := Float'Value("255");
         Ada.Integer_Text_IO.Put(Integer(F));
         Ada.Text_IO.New_Line;
     end Test;
@@ -4482,8 +4480,8 @@ def test_float_value_attribute():
     lines = stdout.strip().split('\n')
     assert len(lines) >= 3, f"Expected 3 lines, got: {stdout}"
     assert "0" in lines[0], f"Expected 0 in output, got: {lines[0]}"
-    assert "42" in lines[1], f"Expected 42 in output, got: {lines[1]}"
-    assert "100" in lines[2], f"Expected 100 in output, got: {lines[2]}"
+    assert "123" in lines[1], f"Expected 123 in output, got: {lines[1]}"
+    assert "255" in lines[2], f"Expected 255 in output, got: {lines[2]}"
 
 
 @skip_if_no_tools
