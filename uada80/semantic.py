@@ -1426,6 +1426,17 @@ class SemanticAnalyzer:
                     pkg.private_symbols[name] = symbol
                 else:
                     pkg.public_symbols[name] = symbol
+
+            # For enumeration types, also add the literals to the package
+            if isinstance(decl, TypeDecl) and isinstance(decl.type_def, EnumerationTypeDef):
+                for literal in decl.type_def.literals:
+                    lit_name = literal.lower()
+                    lit_sym = self.symbols.lookup_local(lit_name)
+                    if lit_sym:
+                        if is_private:
+                            pkg.private_symbols[lit_name] = lit_sym
+                        else:
+                            pkg.public_symbols[lit_name] = lit_sym
         elif hasattr(decl, "names"):
             for name in decl.names:
                 # Handle both string names and Identifier objects
