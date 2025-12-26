@@ -73,10 +73,12 @@ class Z80CodeGen:
         Prefixes user symbols with '_' to avoid collisions with Z80 instruction
         mnemonics like ADD, SUB, INC, DEC, CALL, RET, PUSH, POP, etc.
         Runtime symbols (already starting with '_') are left unchanged.
+
+        Also normalizes to lowercase since Ada identifiers are case-insensitive.
         """
         if name.startswith("_"):
-            return name  # Already prefixed (runtime symbol or internal)
-        return f"_{name}"
+            return name.lower()  # Already prefixed (runtime symbol or internal)
+        return f"_{name.lower()}"
 
     def generate(self, module: IRModule) -> str:
         """Generate Z80 assembly for an IR module."""
