@@ -26,7 +26,7 @@ def test_compile_empty_procedure():
 
     assert result.success
     assert not result.has_errors
-    assert "Main:" in result.output
+    assert "_main:" in result.output
 
 
 def test_compile_hello_world():
@@ -41,7 +41,7 @@ def test_compile_hello_world():
     result = compile_source(source)
 
     assert result.success
-    assert "Hello:" in result.output
+    assert "_hello:" in result.output
 
 
 def test_compile_function_returns_integer():
@@ -56,7 +56,7 @@ def test_compile_function_returns_integer():
     result = compile_source(source)
 
     assert result.success
-    assert "Get_Answer:" in result.output
+    assert "_get_answer:" in result.output
     assert "ret" in result.output.lower()
 
 
@@ -74,7 +74,7 @@ def test_compile_with_local_variables():
     result = compile_source(source)
 
     assert result.success
-    assert "Calculate:" in result.output
+    assert "_calculate:" in result.output
 
 
 def test_compile_with_if_statement():
@@ -93,7 +93,7 @@ def test_compile_with_if_statement():
     result = compile_source(source)
 
     assert result.success
-    assert "Max:" in result.output
+    assert "_max:" in result.output
     assert "jp" in result.output.lower()  # Conditional jump
 
 
@@ -116,7 +116,7 @@ def test_compile_with_loop():
     result = compile_source(source)
 
     assert result.success
-    assert "Sum_To_N:" in result.output
+    assert "_sum_to_n:" in result.output
 
 
 def test_compile_with_while_loop():
@@ -135,7 +135,7 @@ def test_compile_with_while_loop():
     result = compile_source(source)
 
     assert result.success
-    assert "Count_Down:" in result.output
+    assert "_count_down:" in result.output
 
 
 def test_compile_with_for_loop():
@@ -154,7 +154,7 @@ def test_compile_with_for_loop():
     result = compile_source(source)
 
     assert result.success
-    assert "Sum_1_To_10:" in result.output
+    assert "_sum_1_to_10:" in result.output
 
 
 # ============================================================================
@@ -183,7 +183,7 @@ def test_dump_ir():
 
     assert result.success
     assert "IR Module" in result.output
-    assert "Function: Test" in result.output
+    assert "function: test" in result.output.lower()
 
 
 # ============================================================================
@@ -205,7 +205,7 @@ def test_compile_file():
     try:
         result = compile_file(filepath)
         assert result.success
-        assert "From_File:" in result.output
+        assert "_from_file:" in result.output
     finally:
         filepath.unlink()
 
@@ -279,8 +279,8 @@ def test_multiple_functions():
     result = compile_source(source)
 
     assert result.success
-    assert "Add:" in result.output
-    assert "Sub:" in result.output
+    assert "_add:" in result.output
+    assert "_sub:" in result.output
 
 
 def test_nested_if():
@@ -303,7 +303,7 @@ def test_nested_if():
     result = compile_source(source)
 
     assert result.success
-    assert "Classify:" in result.output
+    assert "_classify:" in result.output
 
 
 def test_arithmetic_expression():
@@ -321,7 +321,7 @@ def test_arithmetic_expression():
     result = compile_source(source)
 
     assert result.success
-    assert "Calculate:" in result.output
+    assert "_calculate:" in result.output
 
 
 def test_boolean_expression():
@@ -336,7 +336,7 @@ def test_boolean_expression():
     result = compile_source(source)
 
     assert result.success
-    assert "Is_Valid:" in result.output
+    assert "_is_valid:" in result.output
 
 
 def test_procedure_with_params():
@@ -352,7 +352,7 @@ def test_procedure_with_params():
     result = compile_source(source)
 
     assert result.success
-    assert "Process:" in result.output
+    assert "_process:" in result.output
 
 
 # ============================================================================
@@ -501,7 +501,7 @@ def test_multidimensional_array():
     result = compile_source(source)
 
     assert result.success
-    assert "Test_Matrix:" in result.output
+    assert "_test_matrix:" in result.output
 
 
 def test_multidimensional_array_ir():
@@ -622,7 +622,7 @@ def test_record_field_access():
 
     result = compile_source(source)
     assert result.success
-    assert "Test_Fields:" in result.output
+    assert "_test_fields:" in result.output
 
 
 # ============================================================================
@@ -642,7 +642,7 @@ def test_target_name_simple():
 
     result = compile_source(source)
     assert result.success
-    assert "Test_Increment:" in result.output
+    assert "_test_increment:" in result.output
 
 
 def test_target_name_multiply():
@@ -657,7 +657,7 @@ def test_target_name_multiply():
 
     result = compile_source(source)
     assert result.success
-    assert "Test_Double:" in result.output
+    assert "_test_double:" in result.output
 
 
 def test_target_name_complex_expr():
@@ -672,4 +672,4 @@ def test_target_name_complex_expr():
 
     result = compile_source(source)
     assert result.success
-    assert "Test_Complex:" in result.output
+    assert "_test_complex:" in result.output
