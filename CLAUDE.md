@@ -1,13 +1,37 @@
 # Claude Code Notes for UADA80
 
-## Session (2025-12-26) - Float64 Comparison & Parsing Fixes
+## Session (2025-12-26) - Operator Call Syntax & Float64 Fixes
 
 **Session accomplished:**
+- Added operator call syntax support for quoted operators like `"ABS"(X)` and `"+"(A, B)`
 - Fixed Float64 comparison bug in `_f64_cmp` runtime function
 - Fixed Float64 type size (was 6 bytes, now 8 bytes)
 - Fixed JR offset calculation in Float64 comparison codegen
 - Fixed `_f64_itof` mantissa bit packing bug (was losing 11 of 15 bits)
 - C24002D ACATS test now passes (lowercase 'e' in based floating literals)
+
+**Operator Call Syntax Support:**
+Ada allows operators to be called as functions using quoted names. This is now fully supported:
+- `"ABS"(X)` → calls `abs X`
+- `"+"(A, B)` → calls `A + B`
+- `"NOT"(X)` → calls `not X`
+- `"AND"(A, B)` → calls `A and B`
+
+Supported operators:
+- Unary: `ABS`, `NOT`, `+`, `-`
+- Binary: `+`, `-`, `*`, `/`, `MOD`, `REM`, `**`, `&`, `AND`, `OR`, `XOR`, `=`, `/=`, `<`, `>`, `<=`, `>=`
+
+**Implementation:**
+1. **semantic.py:4504-4565** - Added operator call recognition in `_analyze_indexed_component`
+   - Detects quoted operator names converted to identifiers by parser
+   - Validates argument types for each operator
+   - Returns appropriate result types (numeric for arithmetic, Boolean for comparison)
+2. **lowering.py:15861-15949** - Added operator call code generation in `_lower_indexed`
+   - Unary operators reuse `_lower_unary` by creating synthetic `UnaryExpr` nodes
+   - Binary operators emit appropriate IR instructions (ADD, SUB, MUL, etc.)
+
+**Key insight:** Boolean is an ENUMERATION type in Ada, not a separate TypeKind. Checks use
+`arg_type.name.lower() == 'boolean'` instead of `TypeKind.BOOLEAN`.
 
 **Float64 Comparison Fixes:**
 1. **`_f64_cmp` pointer setup** - `_cmp_same_sign` was incorrectly setting up pointers,
