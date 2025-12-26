@@ -208,6 +208,22 @@ class Parser:
         # Main unit (package, subprogram, generic, etc.)
         unit = self.parse_library_item()
 
+        # Consume trailing pragmas (e.g., pragma Preelaborate after library unit)
+        # These apply to the library unit, not to a new compilation unit
+        while self.match(TokenType.PRAGMA):
+            self.expect_identifier()  # pragma name
+            if self.match(TokenType.LEFT_PAREN):
+                # Skip pragma arguments
+                depth = 1
+                while depth > 0 and not self.check(TokenType.EOF):
+                    if self.match(TokenType.LEFT_PAREN):
+                        depth += 1
+                    elif self.match(TokenType.RIGHT_PAREN):
+                        depth -= 1
+                    else:
+                        self.advance()
+            self.expect(TokenType.SEMICOLON)
+
         return CompilationUnit(
             context_clauses=context, unit=unit, span=self.make_span(start)
         )
