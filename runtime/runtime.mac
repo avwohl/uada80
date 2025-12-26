@@ -321,6 +321,106 @@ _mod16_zero:
     JP _exc_do_raise
 
 ; ============================================================
+; _rem16 - 16-bit signed remainder (Ada rem semantics)
+; Ada rem: result has sign of dividend
+; E.g., (-7) rem 3 = -1, 7 rem (-3) = 1
+; Input: HL = dividend, DE = divisor
+; Output: HL = remainder
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _rem16
+_rem16:
+    ; Check for division by zero
+    LD A, D
+    OR E
+    JR Z, _rem16_zero
+
+    PUSH BC
+
+    ; Save dividend sign for remainder
+    LD A, H
+    PUSH AF
+
+    ; Make HL positive
+    BIT 7, H
+    JR Z, _rem16_hl_pos
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+_rem16_hl_pos:
+
+    ; Make DE positive
+    BIT 7, D
+    JR Z, _rem16_de_pos
+    LD A, E
+    CPL
+    LD E, A
+    LD A, D
+    CPL
+    LD D, A
+    INC DE
+_rem16_de_pos:
+
+    ; Unsigned division - we want remainder
+    LD B, H
+    LD C, L             ; BC = dividend
+    LD HL, 0            ; HL = remainder
+
+    LD A, 16
+_rem16_loop:
+    ; Shift BC left into HL
+    SLA C
+    RL B
+    ADC HL, HL
+
+    ; Try to subtract DE from HL
+    OR A
+    SBC HL, DE
+    JR NC, _rem16_sub_ok
+
+    ; Add back
+    ADD HL, DE
+    JR _rem16_next
+
+_rem16_sub_ok:
+    SET 0, C
+
+_rem16_next:
+    DEC A
+    JR NZ, _rem16_loop
+
+    ; HL now contains remainder
+    ; Apply dividend's sign to remainder (Ada rem semantics)
+    POP AF
+    BIT 7, A
+    JR Z, _rem16_ret
+
+    ; Negate result
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+
+_rem16_ret:
+    POP BC
+    RET
+
+_rem16_zero:
+    ; Division by zero - raise Constraint_Error
+    LD HL, 1
+    LD (_exc_current), HL
+    LD HL, 0
+    LD (_exc_message), HL
+    JP _exc_do_raise
+
+; ============================================================
 ; _raise_constraint_error - Handle constraint error
 ; Called when array bounds check fails or other constraint violation.
 ; For CP/M, this halts the program with an error.
