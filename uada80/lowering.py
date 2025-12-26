@@ -11131,6 +11131,43 @@ class ASTLowering:
                         self.builder.pop(temp)
 
                     return result
+                else:
+                    # Not a protected type - this is a package-qualified function call
+                    # Use the selector as the function name and generate a regular call
+                    call_target = selector
+                    sym = self._resolve_overload(selector, expr.args)
+                    if sym:
+                        if sym.runtime_name:
+                            call_target = sym.runtime_name
+                        elif sym.is_imported and sym.external_name:
+                            call_target = sym.external_name
+                        else:
+                            call_target = sym.name
+
+                    # Push arguments in reverse order
+                    stack_slots = 0
+                    if expr.args:
+                        for arg in reversed(expr.args):
+                            val = self._lower_expr(arg.value if hasattr(arg, 'value') else arg)
+                            self.builder.push(val)
+                            stack_slots += 1
+
+                    # Make the call
+                    self.builder.call(Label(call_target), comment=f"call {selector}")
+
+                    # Capture result from HL
+                    self.builder.emit(IRInstr(
+                        OpCode.MOV, result,
+                        MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                        comment=f"capture return from {selector}"
+                    ))
+
+                    # Clean up stack
+                    for _ in range(stack_slots):
+                        temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                        self.builder.pop(temp)
+
+                    return result
 
         if isinstance(expr.name, Identifier):
             # Resolve overloaded function
