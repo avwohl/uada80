@@ -6,12 +6,35 @@
 - Added Report and ImpDef package bodies for ACATS test execution
 - Fixed package-qualified function calls (e.g., `Report.Ident_Int(5)`)
 - Added operator call syntax support for quoted operators like `"ABS"(X)` and `"+"(A, B)`
+- Fixed nested subprogram access to outer scope arrays
 - Fixed Float64 comparison bug in `_f64_cmp` runtime function
 - Fixed Float64 type size (was 6 bytes, now 8 bytes)
 - Fixed JR offset calculation in Float64 comparison codegen
 - Fixed `_f64_itof` mantissa bit packing bug (was losing 11 of 15 bits)
 - C24002D ACATS test now passes (lowercase 'e' in based floating literals)
 - **ACATS execution tests: 4/50 simple tests pass (8%)**
+
+**Nested Subprogram Outer Array Access Fix:**
+Bug: `Arr(I)` returned 0 when accessed inside a nested procedure, where `Arr` is an array
+defined in the enclosing scope. The nested procedure receives `Arr`'s address via a hidden
+`_outer_arr` parameter, but `_get_array_base` wasn't checking these parameters.
+
+Root cause: `_get_array_base` only checked `self.ctx.locals` and global symbols for array
+base addresses. It didn't check for `_outer_{name}` parameters used by nested subprograms.
+
+Fix: Added check in `_get_array_base` (lowering.py:5933-5946) for outer parameters:
+```python
+outer_param_name = f"_outer_{name}"
+if outer_param_name in self.ctx.params:
+    ptr_vreg = self.ctx.params[outer_param_name]
+    addr = self.builder.new_vreg(IRType.PTR, f"_{name}_outer_arr")
+    self.builder.emit(IRInstr(
+        OpCode.LOAD, dst=addr,
+        src1=MemoryLocation(offset=0, ir_type=IRType.WORD, base=ptr_vreg),
+        comment=f"load outer array base {name}"
+    ))
+    return addr
+```
 
 **Package-Qualified Function Call Fix:**
 Bug: `Report.Ident_Int(5)` was not generating any code - returning uninitialized value.
