@@ -594,8 +594,9 @@ class ASTLowering:
 
         # Generate unique function label for overloaded functions
         # Use (name, param_count) to distinguish overloads
-        func_name = spec.name
-        func_name_lower = spec.name.lower()
+        # Ada is case-insensitive, so normalize all labels to lowercase
+        func_name = spec.name.lower()
+        func_name_lower = func_name
         param_count = sum(len(ps.names) for ps in spec.parameters)
         label_key = (func_name_lower, param_count)
 
@@ -4532,8 +4533,9 @@ class ASTLowering:
                 if prot_type:
                     # This is a call to a protected operation
                     # Generate: push protected object address, then call operation
-                    prot_type_name = prot_type.name if hasattr(prot_type, 'name') else prefix_name
-                    op_name = f"{prot_type_name}_{selector}"
+                    # Ada is case-insensitive, so normalize to lowercase
+                    prot_type_name = (prot_type.name if hasattr(prot_type, 'name') else prefix_name).lower()
+                    op_name = f"{prot_type_name}_{selector.lower()}"
 
                     # Push arguments first (right to left in C calling convention)
                     # The protected object address is pushed LAST so it's at (ix+4)
@@ -4581,10 +4583,11 @@ class ASTLowering:
                 return
             else:
                 # For other SelectedName calls, just use the selector as the call target
-                call_target = stmt.name.selector
+                # Ada is case-insensitive, so normalize to lowercase
+                call_target = stmt.name.selector.lower()
                 sym = self._resolve_overload(call_target, stmt.args)
                 if sym and sym.external_name:
-                    call_target = sym.external_name
+                    call_target = sym.external_name.lower()
 
                 # Use proper argument handling with dope vector support
                 proc_name_lower = call_target.lower()
@@ -4694,19 +4697,20 @@ class ASTLowering:
 
             # Determine the call target - use external name if imported
             # or runtime_name for built-in container operations
-            call_target = stmt.name.name
+            # Ada is case-insensitive, so normalize to lowercase for consistent linking
+            call_target = stmt.name.name.lower()
             if sym:
                 if sym.runtime_name:
                     # Built-in container/library operation
-                    call_target = sym.runtime_name
+                    call_target = sym.runtime_name.lower()
                 elif sym.is_imported and sym.external_name:
-                    call_target = sym.external_name
+                    call_target = sym.external_name.lower()
                 else:
-                    call_target = sym.name
+                    call_target = sym.name.lower()
 
             # Check for overloaded procedure - use unique label if available
             arg_count = len(stmt.args) if stmt.args else 0
-            label_key = (call_target.lower(), arg_count)
+            label_key = (call_target, arg_count)
             if label_key in self._function_label_map:
                 call_target = self._function_label_map[label_key]
 
@@ -11119,8 +11123,9 @@ class ASTLowering:
                 if prot_type:
                     # This is a call to a protected function
                     # Generate: push protected object address, call function, get result
-                    prot_type_name = prot_type.name if hasattr(prot_type, 'name') else prefix_name
-                    func_label = f"{prot_type_name}_{selector}"
+                    # Ada is case-insensitive, so normalize to lowercase
+                    prot_type_name = (prot_type.name if hasattr(prot_type, 'name') else prefix_name).lower()
+                    func_label = f"{prot_type_name}_{selector.lower()}"
 
                     # Get address of protected object (it's a local variable)
                     if self.ctx and prefix_name in self.ctx.locals:
@@ -11164,15 +11169,16 @@ class ASTLowering:
                 else:
                     # Not a protected type - this is a package-qualified function call
                     # Use the selector as the function name and generate a regular call
-                    call_target = selector
+                    # Ada is case-insensitive, so normalize to lowercase
+                    call_target = selector.lower()
                     sym = self._resolve_overload(selector, expr.args)
                     if sym:
                         if sym.runtime_name:
-                            call_target = sym.runtime_name
+                            call_target = sym.runtime_name.lower()
                         elif sym.is_imported and sym.external_name:
-                            call_target = sym.external_name
+                            call_target = sym.external_name.lower()
                         else:
-                            call_target = sym.name
+                            call_target = sym.name.lower()
 
                     # Push arguments in reverse order
                     stack_slots = 0
@@ -11212,20 +11218,21 @@ class ASTLowering:
 
             # Determine the call target - use external name if imported
             # or runtime_name for built-in container operations
-            call_target = expr.name.name
+            # Ada is case-insensitive, so normalize to lowercase for consistent linking
+            call_target = expr.name.name.lower()
             if sym:
                 if sym.runtime_name:
                     # Built-in container/library operation
-                    call_target = sym.runtime_name
+                    call_target = sym.runtime_name.lower()
                 elif sym.is_imported and sym.external_name:
-                    call_target = sym.external_name
+                    call_target = sym.external_name.lower()
                 else:
-                    call_target = sym.name
+                    call_target = sym.name.lower()
 
             # Check for overloaded function - use unique label if available
             # Count actual arguments being passed
             arg_count = len(expr.args) if expr.args else 0
-            label_key = (call_target.lower(), arg_count)
+            label_key = (call_target, arg_count)
             if label_key in self._function_label_map:
                 call_target = self._function_label_map[label_key]
 
