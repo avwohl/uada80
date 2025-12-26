@@ -1235,12 +1235,11 @@ _cmp_a_neg:
 _cmp_same_sign:
         ; Same sign - compare magnitude
         ; Start from MSB (byte 7) and work down
-        push    hl
+        ; HL = a_ptr, DE = b_ptr at entry
+        push    hl              ; Save a_ptr (for _cmp_diff to use later)
         ld      bc, 7
-        add     hl, bc
-        ex      de, hl          ; DE = a+7
-        pop     hl
-        push    hl
+        add     hl, bc          ; HL = a+7
+        ex      de, hl          ; DE = a+7, HL = b_ptr
         add     hl, bc          ; HL = b+7
         ex      de, hl          ; DE = b+7, HL = a+7
 

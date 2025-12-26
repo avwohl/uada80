@@ -8029,41 +8029,45 @@ class ASTLowering:
         # Generate comparison based on op
         result = self.builder.new_vreg(IRType.WORD, "_f64cmp")
 
+        # For EQ/NE: OR A (1 byte), JR at offset 1, LD HL,1 at 3, JR at 6, LD HL,0 at 8
+        # JR to LD HL,0: $+7 (1+7=8), JR to skip: $+5 (6+5=11)
+        # For LT/GT/LE/GE: CP XX (2 bytes), JR at offset 2, LD HL,1 at 4, JR at 7, LD HL,0 at 9
+        # JR to LD HL,0: $+7 (2+7=9), JR to skip: $+5 (7+5=12)
         if op == BinaryOp.EQ:
             # A == 0 means equal
             self.builder.emit(IRInstr(
                 OpCode.INLINE_ASM, None, None, None,
-                comment="OR A\nJR NZ, $+5\nLD HL, 1\nJR $+3\nLD HL, 0"
+                comment="OR A\nJR NZ, $+7\nLD HL, 1\nJR $+5\nLD HL, 0"
             ))
         elif op == BinaryOp.NE:
             # A != 0 means not equal
             self.builder.emit(IRInstr(
                 OpCode.INLINE_ASM, None, None, None,
-                comment="OR A\nJR Z, $+5\nLD HL, 1\nJR $+3\nLD HL, 0"
+                comment="OR A\nJR Z, $+7\nLD HL, 1\nJR $+5\nLD HL, 0"
             ))
         elif op == BinaryOp.LT:
             # A == -1 (0xFF) means less than
             self.builder.emit(IRInstr(
                 OpCode.INLINE_ASM, None, None, None,
-                comment="CP 0FFH\nJR NZ, $+5\nLD HL, 1\nJR $+3\nLD HL, 0"
+                comment="CP 0FFH\nJR NZ, $+7\nLD HL, 1\nJR $+5\nLD HL, 0"
             ))
         elif op == BinaryOp.GT:
             # A == 1 means greater than
             self.builder.emit(IRInstr(
                 OpCode.INLINE_ASM, None, None, None,
-                comment="CP 1\nJR NZ, $+5\nLD HL, 1\nJR $+3\nLD HL, 0"
+                comment="CP 1\nJR NZ, $+7\nLD HL, 1\nJR $+5\nLD HL, 0"
             ))
         elif op == BinaryOp.LE:
             # A != 1 means less or equal (A == -1 or A == 0)
             self.builder.emit(IRInstr(
                 OpCode.INLINE_ASM, None, None, None,
-                comment="CP 1\nJR Z, $+5\nLD HL, 1\nJR $+3\nLD HL, 0"
+                comment="CP 1\nJR Z, $+7\nLD HL, 1\nJR $+5\nLD HL, 0"
             ))
         elif op == BinaryOp.GE:
             # A != -1 means greater or equal (A == 0 or A == 1)
             self.builder.emit(IRInstr(
                 OpCode.INLINE_ASM, None, None, None,
-                comment="CP 0FFH\nJR Z, $+5\nLD HL, 1\nJR $+3\nLD HL, 0"
+                comment="CP 0FFH\nJR Z, $+7\nLD HL, 1\nJR $+5\nLD HL, 0"
             ))
 
         # Capture from HL
@@ -16394,10 +16398,8 @@ class ASTLowering:
                         comp_name = type_mark.component_type.name.lower()
                     if comp_name in ('character', 'boolean'):
                         elem_size = 1
-                    elif comp_name == 'float':
-                        elem_size = 6
-                    elif comp_name in ('long_float', 'long_long_float'):
-                        elem_size = 8
+                    elif comp_name in ('float', 'long_float', 'long_long_float'):
+                        elem_size = 8  # All floats use Float64 on Z80
                 return total_elem_count * elem_size
 
         # Handle String type with constraint (IndexConstraint case)
@@ -16417,10 +16419,8 @@ class ASTLowering:
             return 1
         elif type_name == 'boolean':
             return 1
-        elif type_name == 'float':
-            return 6  # 48-bit float
-        elif type_name in ('long_float', 'long_long_float'):
-            return 8  # 64-bit IEEE 754 double
+        elif type_name in ('float', 'long_float', 'long_long_float'):
+            return 8  # 64-bit IEEE 754 double (Float uses Float64 runtime on Z80)
 
         # First try to look up the type in local declarations
         # This handles locally-declared types that aren't in the symbol table yet
@@ -16505,10 +16505,8 @@ class ASTLowering:
                                     comp_name = type_def.component_type.name.lower()
                                 if comp_name in ('character', 'boolean'):
                                     elem_size = 1
-                                elif comp_name == 'float':
-                                    elem_size = 6
-                                elif comp_name in ('long_float', 'long_long_float'):
-                                    elem_size = 8
+                                elif comp_name in ('float', 'long_float', 'long_long_float'):
+                                    elem_size = 8  # All floats use Float64 on Z80
                                 elif comp_name and declarations:
                                     # Look up component type in local declarations
                                     for comp_d in declarations:
@@ -16569,10 +16567,8 @@ class ASTLowering:
                                     et_name = getattr(et, 'name', '').lower()
                                     if et_name in ('character', 'boolean'):
                                         elem_size = 1
-                                    elif et_name == 'float':
-                                        elem_size = 6
-                                    elif et_name in ('long_float', 'long_long_float'):
-                                        elem_size = 8
+                                    elif et_name in ('float', 'long_float', 'long_long_float'):
+                                        elem_size = 8  # All floats use Float64 on Z80
                                     elif isinstance(et, RecordType):
                                         # Element is a record - sum up field sizes
                                         elem_size = 0
@@ -16580,10 +16576,8 @@ class ASTLowering:
                                             fn = getattr(field_type, 'name', '').lower() if field_type else ''
                                             if fn in ('character', 'boolean'):
                                                 elem_size += 1
-                                            elif fn == 'float':
-                                                elem_size += 6
-                                            elif fn in ('long_float', 'long_long_float'):
-                                                elem_size += 8
+                                            elif fn in ('float', 'long_float', 'long_long_float'):
+                                                elem_size += 8  # All floats use Float64 on Z80
                                             else:
                                                 elem_size += 2  # Default field size
                                         elem_size = max(elem_size, 2)
