@@ -108,6 +108,10 @@ class Z80CodeGen:
             self._emit("; CP/M entry point - execution starts here")
             self._emit("    CSEG")
             self._emit("_start:")
+            # Call package initialization functions first
+            if module.init_functions:
+                for init_func in module.init_functions:
+                    self._emit_instr("call", init_func)
             self._emit_instr("call", self._mangle_symbol(main_entry))
             self._emit_instr("jp", "0")
             self._emit("; Exit to CP/M")

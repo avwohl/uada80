@@ -1028,6 +1028,10 @@ class ASTLowering:
         self.builder.ret()
         self.ctx = None
 
+        # Register this init function to be called at startup
+        if self.builder.module:
+            self.builder.module.init_functions.append(init_func_name)
+
     def _lower_generic_instantiation(self, inst: GenericInstantiation) -> None:
         """Lower a generic instantiation.
 
@@ -9974,7 +9978,7 @@ class ASTLowering:
         # Check for package-level global variables
         if self.builder.module:
             # Try with package prefix first (for variables in current package)
-            # Package globals are stored as "Package.VarName" with dots replaced by underscores
+            # Package globals are stored as "Package_VarName"
             for pkg_prefix in reversed(self._package_prefix_stack):
                 # Case-insensitive search: try to match any global with this prefix
                 search_prefix = f"{pkg_prefix}_".lower()
@@ -9988,6 +9992,13 @@ class ASTLowering:
             # Also try without prefix (for variables in other packages)
             for global_name in self.builder.module.globals:
                 if global_name.lower() == name.lower():
+                    return self._load_global(global_name)
+
+            # Check for variables from USE'd packages (globals ending with _<varname>)
+            # This handles cases like looking up "A" finding "C23006B_PKG_A"
+            search_suffix = f"_{name}".lower()
+            for global_name in self.builder.module.globals:
+                if global_name.lower().endswith(search_suffix):
                     return self._load_global(global_name)
 
         # Default
