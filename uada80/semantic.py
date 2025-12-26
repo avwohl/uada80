@@ -4501,6 +4501,65 @@ class SemanticAnalyzer:
         """
         # Check if prefix is a type name (type conversion)
         if isinstance(expr.prefix, Identifier):
+            # First check if this is an operator call like "ABS"(X) or "+"(A, B)
+            # The parser converts quoted operator names to identifiers
+            op_name = expr.prefix.name.upper()
+            UNARY_OPS = {'ABS', 'NOT'}
+            BINARY_OPS = {'+', '-', '*', '/', 'MOD', 'REM', '**', '&',
+                          'AND', 'OR', 'XOR', '=', '/=', '<', '>', '<=', '>='}
+
+            if op_name in UNARY_OPS and len(expr.indices) == 1:
+                # Unary operator call: "ABS"(X) -> abs X
+                arg_type = self._analyze_expr(expr.indices[0])
+                if arg_type is None:
+                    return None
+                # Check that the type supports this operator
+                if op_name == 'ABS':
+                    if arg_type.kind in (TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.FLOAT):
+                        return arg_type
+                    self.error(f"operator 'abs' not defined for type '{arg_type.name}'", expr)
+                    return None
+                elif op_name == 'NOT':
+                    if arg_type.name and arg_type.name.lower() == 'boolean':
+                        return arg_type
+                    if arg_type.kind == TypeKind.MODULAR:
+                        return arg_type  # Bitwise not for modular types
+                    if arg_type.kind == TypeKind.ARRAY:
+                        # Array of Boolean - element-wise not
+                        return arg_type
+                    self.error(f"operator 'not' not defined for type '{arg_type.name}'", expr)
+                    return None
+
+            if op_name in BINARY_OPS and len(expr.indices) == 2:
+                # Binary operator call: "+"(A, B) -> A + B
+                left_type = self._analyze_expr(expr.indices[0])
+                right_type = self._analyze_expr(expr.indices[1])
+                if left_type is None or right_type is None:
+                    return None
+                # For arithmetic operators, return common numeric type
+                if op_name in {'+', '-', '*', '/', 'MOD', 'REM', '**'}:
+                    if left_type.kind in (TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.FLOAT):
+                        return left_type
+                # For comparison operators, return Boolean
+                if op_name in {'=', '/=', '<', '>', '<=', '>='}:
+                    return self.symbols.lookup_type('Boolean')
+                # For logical operators
+                if op_name in {'AND', 'OR', 'XOR'}:
+                    if left_type.name and left_type.name.lower() == 'boolean':
+                        return left_type
+                    if left_type.kind == TypeKind.MODULAR:
+                        return left_type  # Bitwise for modular
+                # For concatenation
+                if op_name == '&':
+                    return left_type
+                return left_type
+
+            # Also handle unary + and - with single argument
+            if op_name in {'+', '-'} and len(expr.indices) == 1:
+                arg_type = self._analyze_expr(expr.indices[0])
+                if arg_type and arg_type.kind in (TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.FLOAT):
+                    return arg_type
+
             symbol = self.symbols.lookup(expr.prefix.name)
             if symbol and symbol.kind in (SymbolKind.TYPE, SymbolKind.SUBTYPE):
                 # This is a type conversion: Type(Expr)
