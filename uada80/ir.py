@@ -315,6 +315,7 @@ class IRModule:
     vtables: dict[str, list[str]] = field(default_factory=dict)  # vtable_name -> [proc_names]
     runtime_deps: set[str] = field(default_factory=set)  # Runtime routines needed from libada.lib
     enum_tables: dict[str, list[tuple[str, int]]] = field(default_factory=dict)  # label -> [(name, value)]
+    main_entry: Optional[str] = None  # Name of main procedure (entry point)
 
     def add_function(self, func: IRFunction) -> None:
         """Add a function to the module."""

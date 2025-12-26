@@ -10,10 +10,9 @@
 # Target selection: cpm (default) or mpm
 TARGET ?= cpm
 
-# Path to um80 tools
-UM80_PATH = /home/wohl2/src/um80_and_friends
-UM80 = PYTHONPATH=$(UM80_PATH) python3 -m um80.um80
-ULIB80 = PYTHONPATH=$(UM80_PATH) python3 -m um80.ulib80
+# Path to um80 tools (installed via pip, available in PATH)
+UM80 = um80
+ULIB80 = ulib80
 
 # Common source files (non-tasking)
 # NOTE: protlock.mac MUST be before tasking.mac to provide _PROT_LCK/_PROT_ULK

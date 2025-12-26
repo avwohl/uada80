@@ -18,9 +18,9 @@ from uada80.parser import parse
 from uada80.semantic import SemanticAnalyzer
 from uada80.ast_nodes import Program
 
-# Path to ACATS tests
-ACATS_PATH = Path("/home/wohl/src/acats/tests")
-ACATS_SUPPORT = Path("/home/wohl/src/acats/support")
+# Path to ACATS tests (relative to this file, works on both Linux and Mac)
+ACATS_PATH = Path(__file__).parent / "acats" / "tests"
+ACATS_SUPPORT = Path(__file__).parent / "acats" / "support"
 # Path to adalib (Ada standard library stubs)
 ADALIB_PATH = Path(__file__).parent.parent / "adalib"
 

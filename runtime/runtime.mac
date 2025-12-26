@@ -2617,6 +2617,33 @@ _strcat:
     ADD IX, SP
     ; IX+6: s2_ptr, IX+8: s1_ptr
 
+    ; Check if s2 points to _strcat_buf (aliasing)
+    ; If so, copy s2 to temp buffer first
+    LD L, (IX+6)
+    LD H, (IX+7)        ; HL = s2
+    LD DE, _strcat_buf
+    OR A
+    SBC HL, DE          ; Compare s2 with _strcat_buf
+    JR NZ, _strcat_no_alias
+
+    ; s2 points to _strcat_buf - copy to temp first
+    LD HL, _strcat_buf
+    LD DE, _strcat_tmp
+_strcat_copy_tmp:
+    LD A, (HL)
+    LD (DE), A
+    OR A
+    JR Z, _strcat_tmp_done
+    INC HL
+    INC DE
+    JR _strcat_copy_tmp
+_strcat_tmp_done:
+    ; Update s2 pointer to temp buffer
+    LD HL, _strcat_tmp
+    LD (IX+6), L
+    LD (IX+7), H
+
+_strcat_no_alias:
     LD DE, _strcat_buf  ; destination
 
     ; Copy s1
@@ -2832,6 +2859,10 @@ _int_str_buf:
 ; String concatenation buffer (moved from middle of CSEG)
 _strcat_buf:
     DS 256                  ; 256-byte buffer for concatenation
+
+; Temporary buffer for strcat aliasing (when s2 = _strcat_buf)
+_strcat_tmp:
+    DS 256                  ; 256-byte temp buffer
 
 ; Character'Image buffers
 _c_img_buf:
