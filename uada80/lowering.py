@@ -1326,19 +1326,27 @@ class ASTLowering:
                 from uada80.type_system import ArrayType, IntegerType
                 array_def = decl.type_mark
                 bounds = []
+                has_dynamic_bounds = False
                 if array_def.index_subtypes:
                     for idx_range in array_def.index_subtypes:
                         if isinstance(idx_range, RangeExpr):
                             low = self._eval_static_expr(idx_range.low)
                             high = self._eval_static_expr(idx_range.high)
-                            bounds.append((low, high))
-                comp_type = IntegerType(name="Integer", size_bits=16)
-                ada_type = ArrayType(
-                    name="<anonymous>",
-                    component_type=comp_type,
-                    bounds=bounds,
-                    is_constrained=True,
-                )
+                            if low is None or high is None:
+                                has_dynamic_bounds = True
+                            else:
+                                bounds.append((low, high))
+                # Only create ArrayType if all bounds are static
+                if not has_dynamic_bounds and bounds:
+                    comp_type = IntegerType(name="Integer", size_bits=16)
+                    ada_type = ArrayType(
+                        name="<anonymous>",
+                        component_type=comp_type,
+                        bounds=bounds,
+                        is_constrained=True,
+                    )
+                # For dynamic bounds, ada_type remains None and we fall through
+                # to handle the declaration without static type info
             elif isinstance(decl.type_mark, Identifier):
                 # Direct type name
                 type_name = decl.type_mark.name
@@ -10811,19 +10819,26 @@ class ASTLowering:
         # Handle anonymous ArrayTypeDef directly
         if isinstance(type_node, ArrayTypeDef):
             bounds = []
+            has_dynamic_bounds = False
             if type_node.index_subtypes:
                 for idx_range in type_node.index_subtypes:
                     if isinstance(idx_range, RangeExpr):
                         low = self._eval_static_expr(idx_range.low)
                         high = self._eval_static_expr(idx_range.high)
-                        bounds.append((low, high))
-            comp_type = IntegerType(name="Integer", size_bits=16)
-            return ArrayType(
-                name="<anonymous>",
-                component_type=comp_type,
-                bounds=bounds,
-                is_constrained=True,
-            )
+                        if low is None or high is None:
+                            has_dynamic_bounds = True
+                        else:
+                            bounds.append((low, high))
+            # Only create ArrayType if all bounds are static
+            if not has_dynamic_bounds and bounds:
+                comp_type = IntegerType(name="Integer", size_bits=16)
+                return ArrayType(
+                    name="<anonymous>",
+                    component_type=comp_type,
+                    bounds=bounds,
+                    is_constrained=True,
+                )
+            # For dynamic bounds, return None (caller must handle)
         # If it's an Identifier, look up the type name
         if isinstance(type_node, Identifier):
             type_name = type_node.name.lower()
