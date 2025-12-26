@@ -3720,16 +3720,11 @@ class ASTLowering:
             # Get target type first to determine how to lower the value
             target_type = self._get_target_type(stmt.target)
 
-            # For Float64 targets, use _lower_float64_operand to get a proper pointer
+            # For Float/Long_Float targets, use _lower_float64_operand to get a proper pointer
             # This handles RealLiteral correctly (creates Float64 constant in code segment)
+            # Note: All floating point types use Float64 runtime on Z80
             if self._is_float64_type(target_type):
                 value = self._lower_float64_operand(stmt.value)
-            # For Float (fixed-point) targets with negated RealLiteral, create fixed-point directly
-            # This avoids the issue where _get_expr_type(RealLiteral) returns Long_Float
-            elif (target_type and hasattr(target_type, 'name') and target_type.name == 'Float'
-                  and isinstance(stmt.value, UnaryExpr) and stmt.value.op == UnaryOp.MINUS
-                  and isinstance(stmt.value.operand, RealLiteral)):
-                value = self._lower_fixed_point_literal(-stmt.value.operand.value)
             else:
                 value = self._lower_expr(stmt.value)
 
@@ -7861,13 +7856,17 @@ class ASTLowering:
         return result
 
     def _is_float64_type(self, ada_type) -> bool:
-        """Check if a type is Float64 (Long_Float or Long_Long_Float)."""
+        """Check if a type is a floating point type.
+
+        On Z80, all floating point types (Float, Long_Float, Long_Long_Float) use
+        the Float64 runtime since we don't have a separate 32-bit float implementation.
+        """
         if ada_type is None:
             return False
         from uada80.type_system import FloatType
         if isinstance(ada_type, FloatType):
-            # Float64 has 64 bits (8 bytes)
-            return ada_type.size_bits == 64 or ada_type.name in ('Long_Float', 'Long_Long_Float')
+            # All floating point types use Float64 runtime on Z80
+            return ada_type.name in ('Float', 'Long_Float', 'Long_Long_Float')
         return False
 
     def _lower_float64_operand(self, expr):
