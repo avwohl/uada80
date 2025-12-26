@@ -15858,6 +15858,95 @@ class ASTLowering:
         if isinstance(expr.prefix, Identifier):
             func_name = expr.prefix.name.lower()
 
+            # Check for operator calls like "ABS"(X) or "+"(A, B)
+            # The parser converts quoted operator names to identifiers
+            op_name = expr.prefix.name.upper()
+            UNARY_OPS = {'ABS', 'NOT', '+', '-'}
+            BINARY_OPS = {'+', '-', '*', '/', 'MOD', 'REM', '**', '&',
+                          'AND', 'OR', 'XOR', '=', '/=', '<', '>', '<=', '>='}
+
+            if op_name in UNARY_OPS and len(expr.indices) == 1:
+                # Unary operator call - extract argument (may have named parameter)
+                arg = expr.indices[0]
+                if isinstance(arg, ActualParameter):
+                    arg = arg.value
+                elif hasattr(arg, 'value'):
+                    arg = arg.value
+
+                if op_name == 'ABS':
+                    # Reuse the existing ABS logic by creating a UnaryExpr
+                    unary_expr = UnaryExpr(op=UnaryOp.ABS, operand=arg, span=expr.span)
+                    return self._lower_unary(unary_expr)
+                elif op_name == 'NOT':
+                    unary_expr = UnaryExpr(op=UnaryOp.NOT, operand=arg, span=expr.span)
+                    return self._lower_unary(unary_expr)
+                elif op_name == '+':
+                    unary_expr = UnaryExpr(op=UnaryOp.PLUS, operand=arg, span=expr.span)
+                    return self._lower_unary(unary_expr)
+                elif op_name == '-':
+                    unary_expr = UnaryExpr(op=UnaryOp.MINUS, operand=arg, span=expr.span)
+                    return self._lower_unary(unary_expr)
+
+            if op_name in BINARY_OPS and len(expr.indices) == 2:
+                # Binary operator call - extract arguments
+                left_arg = expr.indices[0]
+                right_arg = expr.indices[1]
+                if isinstance(left_arg, ActualParameter):
+                    left_arg = left_arg.value
+                if isinstance(right_arg, ActualParameter):
+                    right_arg = right_arg.value
+
+                left = self._lower_expr(left_arg)
+                right = self._lower_expr(right_arg)
+                if left is None or right is None:
+                    return Immediate(0, IRType.WORD)
+
+                result = self.builder.new_vreg(IRType.WORD, "_binop")
+                if op_name == '+':
+                    self.builder.emit(IRInstr(OpCode.ADD, result, left, right))
+                elif op_name == '-':
+                    self.builder.emit(IRInstr(OpCode.SUB, result, left, right))
+                elif op_name == '*':
+                    self.builder.emit(IRInstr(OpCode.MUL, result, left, right))
+                elif op_name == '/':
+                    self.builder.emit(IRInstr(OpCode.DIV, result, left, right))
+                elif op_name == 'MOD':
+                    self.builder.emit(IRInstr(OpCode.MOD, result, left, right))
+                elif op_name == 'REM':
+                    self.builder.emit(IRInstr(OpCode.MOD, result, left, right))  # Same as mod for now
+                elif op_name == '**':
+                    # Exponentiation - use existing power handling
+                    # Push right (exponent), then left (base)
+                    self.builder.emit(IRInstr(OpCode.PUSH, None, right, None))
+                    self.builder.emit(IRInstr(OpCode.PUSH, None, left, None))
+                    self.builder.emit(IRInstr(OpCode.CALL, None, Label("_exp16"), None))
+                    self.builder.emit(IRInstr(OpCode.POP, None, None, None))  # cleanup
+                    self.builder.emit(IRInstr(OpCode.POP, None, None, None))
+                    self.builder.emit(IRInstr(OpCode.MOV, result, VReg("hl", IRType.WORD), None))
+                elif op_name == '&':
+                    self.builder.emit(IRInstr(OpCode.AND, result, left, right))
+                elif op_name == 'AND':
+                    self.builder.emit(IRInstr(OpCode.AND, result, left, right))
+                elif op_name == 'OR':
+                    self.builder.emit(IRInstr(OpCode.OR, result, left, right))
+                elif op_name == 'XOR':
+                    self.builder.emit(IRInstr(OpCode.XOR, result, left, right))
+                elif op_name == '=':
+                    self.builder.emit(IRInstr(OpCode.CMP_EQ, result, left, right))
+                elif op_name == '/=':
+                    self.builder.emit(IRInstr(OpCode.CMP_NE, result, left, right))
+                elif op_name == '<':
+                    self.builder.emit(IRInstr(OpCode.CMP_LT, result, left, right))
+                elif op_name == '>':
+                    self.builder.emit(IRInstr(OpCode.CMP_GT, result, left, right))
+                elif op_name == '<=':
+                    self.builder.emit(IRInstr(OpCode.CMP_LE, result, left, right))
+                elif op_name == '>=':
+                    self.builder.emit(IRInstr(OpCode.CMP_GE, result, left, right))
+                else:
+                    return Immediate(0, IRType.WORD)
+                return result
+
             # Check symbol table first
             sym = self.symbols.lookup(expr.prefix.name)
             is_function = sym and sym.kind == SymbolKind.FUNCTION
