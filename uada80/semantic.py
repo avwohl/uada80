@@ -533,6 +533,11 @@ class SemanticAnalyzer:
                 except Exception:
                     pass  # Skip declarations that fail analysis
 
+            # For standard packages, merge in fallback values for constants
+            # that weren't properly evaluated during analysis
+            if pkg_name.upper() in ("SYSTEM", "ADA", "INTERFACES"):
+                self._merge_standard_values(pkg_symbol, pkg_name.upper())
+
             self.symbols.leave_scope()
 
             # Restore state
@@ -689,6 +694,21 @@ class SemanticAnalyzer:
                 else:
                     type_sym.ada_type = AdaType(kind=TypeKind.INTEGER, name=c_type)
                 pkg_symbol.public_symbols[c_type.lower()] = type_sym
+
+    def _merge_standard_values(self, pkg_symbol: Symbol, name: str) -> None:
+        """Merge fallback values for standard package constants that weren't evaluated.
+
+        When loading standard packages from files, some constant expressions may not
+        be evaluated properly. This merges in known values from _setup_standard_package.
+        """
+        fallback = Symbol(name=name, kind=SymbolKind.PACKAGE)
+        self._setup_standard_package(fallback, name)
+        for sym_name, fallback_sym in fallback.public_symbols.items():
+            if sym_name in pkg_symbol.public_symbols:
+                existing = pkg_symbol.public_symbols[sym_name]
+                # If the loaded symbol is a constant without a value, use the fallback
+                if existing.is_constant and existing.value is None and fallback_sym.value is not None:
+                    existing.value = fallback_sym.value
 
     def _analyze_use_clause(self, clause: UseClause) -> None:
         """Analyze a use clause."""
@@ -1263,12 +1283,19 @@ class SemanticAnalyzer:
                     # Handle multi-name formals (e.g., "X, Y : Integer")
                     names = getattr(formal, 'names', None) or [formal.name]
                     for obj_name in names:
-                        actual_type = self._analyze_expr(actual)
+                        # Extract the expression from ActualParameter if needed
+                        actual_expr = getattr(actual, 'value', actual)
+                        actual_type = self._analyze_expr(actual_expr)
+                        # Evaluate static value of the actual for constants
+                        static_value = None
+                        if formal.mode == "in":
+                            static_value = self._try_eval_static(actual_expr)
                         obj_sym = Symbol(
                             name=obj_name,
                             kind=SymbolKind.VARIABLE,
                             ada_type=actual_type,
                             is_constant=(formal.mode == "in"),
+                            value=static_value,
                         )
                         self.symbols.define(obj_sym)
 
@@ -5130,7 +5157,8 @@ class SemanticAnalyzer:
         """Try to evaluate a static expression. Returns None if not static."""
         try:
             return self._eval_static_impl(expr, report_errors=False)
-        except Exception:
+        except (TypeError, ValueError, AttributeError, KeyError):
+            # Expected exceptions for non-static expressions
             return None
 
     def _eval_static_expr(self, expr: Expr) -> int:
@@ -5158,8 +5186,15 @@ class SemanticAnalyzer:
         if isinstance(expr, Identifier):
             # Look up constant value
             sym = self.symbols.lookup(expr.name)
-            if sym and sym.is_constant and sym.value is not None:
-                return sym.value
+            if sym and sym.is_constant:
+                if sym.value is not None:
+                    return sym.value
+                # Try to evaluate the constant's definition if value wasn't set
+                if sym.definition and hasattr(sym.definition, 'value'):
+                    val = self._eval_static_impl(sym.definition.value, report_errors=False)
+                    if val is not None:
+                        sym.value = val  # Cache for future use
+                        return val
             # Check if it's an enumeration literal (constant with enumeration type)
             if sym and sym.is_constant and sym.ada_type:
                 if hasattr(sym.ada_type, 'kind') and sym.ada_type.kind == TypeKind.ENUMERATION:
@@ -5189,8 +5224,15 @@ class SemanticAnalyzer:
             # Handle Package.Name for constants like SYSTEM.MIN_INT
             if isinstance(expr.prefix, Identifier):
                 sym = self.symbols.lookup_selected(expr.prefix.name, expr.selector)
-                if sym and sym.is_constant and sym.value is not None:
-                    return sym.value
+                if sym and sym.is_constant:
+                    if sym.value is not None:
+                        return sym.value
+                    # Try to evaluate the constant's definition if value wasn't set
+                    if sym.definition and hasattr(sym.definition, 'value'):
+                        val = self._eval_static_impl(sym.definition.value, report_errors=False)
+                        if val is not None:
+                            sym.value = val  # Cache for future use
+                            return val
             if report_errors:
                 self.error("expression is not static", expr)
             return None
