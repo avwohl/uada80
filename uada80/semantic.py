@@ -466,23 +466,33 @@ class SemanticAnalyzer:
                 renamed_name = self._get_hierarchical_name(pkg_decl.renames)
                 renamed_pkg = self._load_external_package(renamed_name)
                 if renamed_pkg:
+                    # Preserve the generic nature if renaming a generic package
                     pkg_symbol = Symbol(
                         name=pkg_name,
-                        kind=SymbolKind.PACKAGE,
+                        kind=renamed_pkg.kind,
                     )
                     pkg_symbol.is_withed = True
                     pkg_symbol.public_symbols = renamed_pkg.public_symbols
                     pkg_symbol.private_symbols = renamed_pkg.private_symbols
+                    # Copy generic-related attributes for generic package renamings
+                    if renamed_pkg.kind == SymbolKind.GENERIC_PACKAGE:
+                        pkg_symbol.generic_decl = renamed_pkg.generic_decl
+                        pkg_symbol.generic_formal_symbols = renamed_pkg.generic_formal_symbols
                     self._loaded_packages[pkg_key] = pkg_symbol
                     return pkg_symbol
                 return None
 
             # Create a symbol for this package and extract its public declarations
+            # Check if the package is a generic package
+            is_generic = getattr(pkg_decl, 'is_generic', False) or bool(pkg_decl.generic_formals)
             pkg_symbol = Symbol(
                 name=pkg_name,
-                kind=SymbolKind.PACKAGE,
+                kind=SymbolKind.GENERIC_PACKAGE if is_generic else SymbolKind.PACKAGE,
             )
             pkg_symbol.is_withed = True
+            # Store the AST node for generic instantiation
+            if is_generic:
+                pkg_symbol.generic_decl = pkg_decl
 
             # Save current state
             saved_errors = self.errors
@@ -907,14 +917,19 @@ class SemanticAnalyzer:
             if renamed_pkg is None:
                 # Try to load from file
                 renamed_pkg = self._load_external_package(renamed_name)
-            if renamed_pkg and renamed_pkg.kind == SymbolKind.PACKAGE:
+            if renamed_pkg and renamed_pkg.kind in (SymbolKind.PACKAGE, SymbolKind.GENERIC_PACKAGE):
                 # Create renaming symbol that points to the renamed package
+                # Preserve the generic nature if renaming a generic package
                 pkg_symbol = Symbol(
                     name=pkg.name,
-                    kind=SymbolKind.PACKAGE,
+                    kind=renamed_pkg.kind,
                 )
                 pkg_symbol.public_symbols = renamed_pkg.public_symbols
                 pkg_symbol.private_symbols = renamed_pkg.private_symbols
+                # Copy generic-related attributes for generic package renamings
+                if renamed_pkg.kind == SymbolKind.GENERIC_PACKAGE:
+                    pkg_symbol.generic_decl = renamed_pkg.generic_decl
+                    pkg_symbol.generic_formal_symbols = renamed_pkg.generic_formal_symbols
                 self.symbols.define(pkg_symbol)
             else:
                 self.error(f"'{renamed_name}' is not a package", pkg)
@@ -3573,12 +3588,39 @@ class SemanticAnalyzer:
             if entry_sym is None:
                 self.error(f"entry '{stmt.entry_name}' not found in current task", stmt)
 
+        # Enter a scope for the accept body
+        self.symbols.enter_scope(f"accept_{stmt.entry_name}")
+
+        # Add accept parameters to scope
+        for param_spec in stmt.parameters:
+            param_type = self._resolve_type(param_spec.type_mark)
+            for param_name in param_spec.names:
+                param_sym = Symbol(
+                    name=param_name,
+                    kind=SymbolKind.PARAMETER,
+                    ada_type=param_type,
+                    mode=param_spec.mode or "in",
+                )
+                self.symbols.define(param_sym)
+
+        # Make entry name visible for attributes like E'COUNT
+        if entry_sym:
+            # Create a symbol that allows entry attribute access
+            entry_ref = Symbol(
+                name=stmt.entry_name,
+                kind=SymbolKind.ENTRY,
+                ada_type=entry_sym.ada_type if hasattr(entry_sym, 'ada_type') else None,
+            )
+            self.symbols.define(entry_ref)
+
         # Analyze the statements in the accept body (requeue is valid here)
         old_in_accept = self.in_accept_or_entry
         self.in_accept_or_entry = True
         for s in stmt.statements:
             self._analyze_statement(s)
         self.in_accept_or_entry = old_in_accept
+
+        self.symbols.leave_scope()
 
     def _analyze_select_stmt(self, stmt: SelectStmt) -> None:
         """Analyze a select statement."""
