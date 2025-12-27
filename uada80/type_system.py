@@ -108,7 +108,8 @@ class IntegerType(AdaType):
 
     low: int = 0
     high: int = 0
-    base_type: Optional["IntegerType"] = None  # For subtypes
+    base_type: Optional["IntegerType"] = None  # For subtypes/derived
+    is_derived: bool = False  # True for "type X is new Y", False for "subtype X is Y"
 
     def __post_init__(self) -> None:
         self.kind = TypeKind.INTEGER
@@ -182,6 +183,7 @@ class EnumerationType(AdaType):
     # Position values (usually 0, 1, 2, ... but can be customized via rep clause)
     positions: dict[str, int] = field(default_factory=dict)
     base_type: Optional["EnumerationType"] = None  # For derived enumeration types
+    is_derived: bool = False  # True for "type X is new Y", False for "subtype X is Y"
 
     def __post_init__(self) -> None:
         self.kind = TypeKind.ENUMERATION
@@ -297,6 +299,7 @@ class ArrayType(AdaType):
     # For constrained arrays, the bounds
     bounds: list[tuple[int, int]] = field(default_factory=list)
     base_type: Optional["ArrayType"] = None  # For derived array types
+    is_derived: bool = False  # True for "type X is new Y", False for "subtype X is Y"
 
     def __post_init__(self) -> None:
         self.kind = TypeKind.ARRAY
@@ -1038,32 +1041,64 @@ def same_type(t1: AdaType, t2: AdaType) -> bool:
     return t1.name == t2.name
 
 
+def is_derived_from(t: AdaType, root_name: str) -> bool:
+    """Check if a type is derived from a type with the given root name.
+
+    This follows the derivation chain (via is_derived=True) to find
+    if the type ultimately derives from the named root type.
+
+    Examples:
+        is_derived_from(My_Bool, "Boolean") -> True if type My_Bool is new Boolean
+        is_derived_from(Integer, "Boolean") -> False
+    """
+    # Direct match
+    if t.name.lower() == root_name.lower():
+        return True
+
+    # Check if it's a derived type with a base_type we can follow
+    if hasattr(t, 'is_derived') and t.is_derived and hasattr(t, 'base_type') and t.base_type:
+        return is_derived_from(t.base_type, root_name)
+
+    return False
+
+
 def get_root_type(t: AdaType) -> AdaType:
-    """Get the root (base) type of a subtype chain."""
-    if isinstance(t, IntegerType) and t.base_type:
+    """Get the root (base) type of a subtype chain.
+
+    Note: Stops at derived types (is_derived=True) because derived types
+    are distinct types in Ada, not subtypes.
+    """
+    # For integer types, follow base_type only for subtypes (not derived types)
+    if isinstance(t, IntegerType) and t.base_type and not t.is_derived:
         return get_root_type(t.base_type)
-    if isinstance(t, EnumerationType) and t.base_type:
+    # For enumeration types, follow base_type only for subtypes
+    if isinstance(t, EnumerationType) and t.base_type and not t.is_derived:
         return get_root_type(t.base_type)
-    if isinstance(t, ArrayType) and t.base_type:
+    # For array types, follow base_type only for subtypes
+    if isinstance(t, ArrayType) and t.base_type and not t.is_derived:
         return get_root_type(t.base_type)
     return t
 
 
 def is_subtype_of(subtype: AdaType, parent: AdaType) -> bool:
-    """Check if subtype is a subtype of parent."""
+    """Check if subtype is a subtype of parent.
+
+    Note: This only returns True for true Ada subtypes, not derived types.
+    Derived types are distinct types in Ada.
+    """
     if same_type(subtype, parent):
         return True
 
-    # Check base type chain for integer subtypes
-    if isinstance(subtype, IntegerType) and subtype.base_type:
+    # Check base type chain for integer subtypes (not derived types)
+    if isinstance(subtype, IntegerType) and subtype.base_type and not subtype.is_derived:
         return is_subtype_of(subtype.base_type, parent)
 
-    # Check base type chain for enumeration subtypes
-    if isinstance(subtype, EnumerationType) and subtype.base_type:
+    # Check base type chain for enumeration subtypes (not derived types)
+    if isinstance(subtype, EnumerationType) and subtype.base_type and not subtype.is_derived:
         return is_subtype_of(subtype.base_type, parent)
 
-    # Check base type chain for array subtypes
-    if isinstance(subtype, ArrayType) and subtype.base_type:
+    # Check base type chain for array subtypes (not derived types)
+    if isinstance(subtype, ArrayType) and subtype.base_type and not subtype.is_derived:
         return is_subtype_of(subtype.base_type, parent)
 
     return False
@@ -1074,9 +1109,19 @@ def same_base_type(t1: AdaType, t2: AdaType) -> bool:
 
     In Ada, subtypes of the same type are compatible with each other.
     For example, Positive and Natural are both subtypes of Integer.
+
+    Note: Derived types do NOT share a base type with their parent.
+    "type Meters is new Integer" creates a distinct type.
     """
     if t1.kind != t2.kind:
         return False
+
+    # Derived types are distinct - they don't share a base type with parent
+    if hasattr(t1, 'is_derived') and t1.is_derived:
+        return False
+    if hasattr(t2, 'is_derived') and t2.is_derived:
+        return False
+
     root1 = get_root_type(t1)
     root2 = get_root_type(t2)
     return same_type(root1, root2)
@@ -1118,6 +1163,20 @@ def types_compatible(t1: AdaType, t2: AdaType) -> bool:
     if t2.kind == TypeKind.UNIVERSAL_REAL:
         if t1.kind in (TypeKind.FLOAT, TypeKind.FIXED, TypeKind.UNIVERSAL_REAL):
             return True
+
+    # Boolean literals (True/False) are compatible with types derived from Boolean
+    # In Ada, True and False can be used to initialize any Boolean-derived type
+    if t1.name == "Boolean" and is_derived_from(t2, "Boolean"):
+        return True
+    if t2.name == "Boolean" and is_derived_from(t1, "Boolean"):
+        return True
+
+    # Character literals are compatible with types derived from Character
+    # In Ada, character literals like 'A' can be used with any Character-derived type
+    if t1.name == "Character" and is_derived_from(t2, "Character"):
+        return True
+    if t2.name == "Character" and is_derived_from(t1, "Character"):
+        return True
 
     # Interface compatibility: a tagged type is compatible with interfaces it implements
     if isinstance(t2, InterfaceType) and isinstance(t1, RecordType):
