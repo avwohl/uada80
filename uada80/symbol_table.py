@@ -135,12 +135,19 @@ class Scope:
                     sym.ada_type is not None and
                     sym.ada_type.kind == TypeKind.ENUMERATION)
 
-        # Check for overloading (allowed for subprograms and enum literals)
+        # Check for overloading (allowed for subprograms, entries, and enum literals)
         if name_lower in self.symbols:
             existing = self.symbols[name_lower]
             # Subprogram overloading
             if symbol.kind in (SymbolKind.PROCEDURE, SymbolKind.FUNCTION):
                 if existing.kind in (SymbolKind.PROCEDURE, SymbolKind.FUNCTION):
+                    # Add to overload chain
+                    symbol.overloaded_next = existing
+                    self.symbols[name_lower] = symbol
+                    return
+            # Entry overloading (Ada allows entries to be overloaded like subprograms)
+            elif symbol.kind == SymbolKind.ENTRY:
+                if existing.kind == SymbolKind.ENTRY:
                     # Add to overload chain
                     symbol.overloaded_next = existing
                     self.symbols[name_lower] = symbol
