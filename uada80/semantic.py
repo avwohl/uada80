@@ -3205,8 +3205,10 @@ class SemanticAnalyzer:
             # pragma Import(Convention, Entity, External_Name);
             # Used to import external (assembly) routines
             if len(stmt.args) >= 2:
-                # Get entity name
+                # Get entity name - handle ActualParameter wrapper
                 entity = stmt.args[1]
+                if isinstance(entity, ActualParameter):
+                    entity = entity.value
                 if isinstance(entity, Identifier):
                     sym = self.symbols.lookup(entity.name)
                     if sym:
@@ -3214,6 +3216,9 @@ class SemanticAnalyzer:
                         # External name is optional
                         if len(stmt.args) >= 3:
                             ext_name = stmt.args[2]
+                            # Handle ActualParameter wrapper
+                            if isinstance(ext_name, ActualParameter):
+                                ext_name = ext_name.value
                             if isinstance(ext_name, StringLiteral):
                                 sym.external_name = ext_name.value
                             elif isinstance(ext_name, Identifier):
@@ -3223,6 +3228,9 @@ class SemanticAnalyzer:
             # pragma Inline(subprogram);
             if stmt.args:
                 entity = stmt.args[0]
+                # Handle ActualParameter wrapper
+                if isinstance(entity, ActualParameter):
+                    entity = entity.value
                 if isinstance(entity, Identifier):
                     sym = self.symbols.lookup(entity.name)
                     if sym:
@@ -3232,6 +3240,9 @@ class SemanticAnalyzer:
             # pragma Volatile(variable);
             if stmt.args:
                 entity = stmt.args[0]
+                # Handle ActualParameter wrapper
+                if isinstance(entity, ActualParameter):
+                    entity = entity.value
                 if isinstance(entity, Identifier):
                     sym = self.symbols.lookup(entity.name)
                     if sym:
@@ -3242,6 +3253,9 @@ class SemanticAnalyzer:
             # Atomic implies volatile behavior plus indivisible access
             if stmt.args:
                 entity = stmt.args[0]
+                # Handle ActualParameter wrapper
+                if isinstance(entity, ActualParameter):
+                    entity = entity.value
                 if isinstance(entity, Identifier):
                     sym = self.symbols.lookup(entity.name)
                     if sym:
@@ -3252,6 +3266,9 @@ class SemanticAnalyzer:
             # pragma No_Return(procedure);
             if stmt.args:
                 entity = stmt.args[0]
+                # Handle ActualParameter wrapper
+                if isinstance(entity, ActualParameter):
+                    entity = entity.value
                 if isinstance(entity, Identifier):
                     sym = self.symbols.lookup(entity.name)
                     if sym:
@@ -3261,6 +3278,9 @@ class SemanticAnalyzer:
             # pragma Pack(type);
             if stmt.args:
                 entity = stmt.args[0]
+                # Handle ActualParameter wrapper
+                if isinstance(entity, ActualParameter):
+                    entity = entity.value
                 if isinstance(entity, Identifier):
                     sym = self.symbols.lookup(entity.name)
                     if sym and sym.ada_type:
@@ -3274,6 +3294,9 @@ class SemanticAnalyzer:
             # Package has no state, can be preelaborated
             if stmt.args:
                 entity = stmt.args[0]
+                # Handle ActualParameter wrapper
+                if isinstance(entity, ActualParameter):
+                    entity = entity.value
                 if isinstance(entity, Identifier):
                     sym = self.symbols.lookup(entity.name)
                     if sym:
@@ -3287,6 +3310,9 @@ class SemanticAnalyzer:
             # Package can be elaborated before execution
             if stmt.args:
                 entity = stmt.args[0]
+                # Handle ActualParameter wrapper
+                if isinstance(entity, ActualParameter):
+                    entity = entity.value
                 if isinstance(entity, Identifier):
                     sym = self.symbols.lookup(entity.name)
                     if sym:

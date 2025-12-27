@@ -3531,34 +3531,35 @@ class ASTLowering:
             #   pragma Machine_Code(Asm("nop"));              -- Asm record
             args = getattr(stmt, 'args', None) or getattr(stmt, 'arguments', [])
             for arg in args:
-                if hasattr(arg, 'value'):
-                    if isinstance(arg.value, int):
-                        # Emit raw byte using special inline asm instruction
-                        self.builder.emit(IRInstr(
-                            OpCode.INLINE_ASM,
-                            comment=f".db {arg.value:#04x}"
-                        ))
-                    elif isinstance(arg.value, str):
-                        # Emit assembly string directly
-                        self.builder.emit(IRInstr(
-                            OpCode.INLINE_ASM,
-                            comment=arg.value
-                        ))
-                elif isinstance(arg, StringLiteral):
-                    # String literal containing assembly
+                # arg is ActualParameter, arg.value is the actual AST node
+                arg_value = getattr(arg, 'value', arg)  # Handle both ActualParameter and raw nodes
+                if isinstance(arg_value, IntegerLiteral):
+                    # Emit raw byte using special inline asm instruction
                     self.builder.emit(IRInstr(
                         OpCode.INLINE_ASM,
-                        comment=arg.value
+                        comment=f"    db {arg_value.value:#04x}"
                     ))
-                elif isinstance(arg, FunctionCall) and hasattr(arg, 'name'):
+                elif isinstance(arg_value, StringLiteral):
+                    # Emit assembly string directly
+                    self.builder.emit(IRInstr(
+                        OpCode.INLINE_ASM,
+                        comment=f"    {arg_value.value}"
+                    ))
+                elif isinstance(arg_value, FunctionCall) and hasattr(arg_value, 'name'):
                     # Asm() or other machine code record
-                    name = arg.name.name if hasattr(arg.name, 'name') else str(arg.name)
-                    if name.lower() == 'asm' and arg.args:
-                        for asm_arg in arg.args:
-                            if hasattr(asm_arg, 'value'):
+                    name = arg_value.name.name if hasattr(arg_value.name, 'name') else str(arg_value.name)
+                    if name.lower() == 'asm' and arg_value.args:
+                        for asm_arg in arg_value.args:
+                            asm_val = getattr(asm_arg, 'value', asm_arg)
+                            if isinstance(asm_val, StringLiteral):
                                 self.builder.emit(IRInstr(
                                     OpCode.INLINE_ASM,
-                                    comment=str(asm_arg.value)
+                                    comment=f"    {asm_val.value}"
+                                ))
+                            elif hasattr(asm_val, 'value'):
+                                self.builder.emit(IRInstr(
+                                    OpCode.INLINE_ASM,
+                                    comment=f"    {asm_val.value}"
                                 ))
 
         elif pragma_name == "linker_alias":
