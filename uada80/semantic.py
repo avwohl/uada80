@@ -144,6 +144,7 @@ from uada80.type_system import (
     common_type,
     can_convert,
     same_type,
+    is_derived_from,
 )
 
 
@@ -2772,7 +2773,8 @@ class SemanticAnalyzer:
                 size_bits=parent.size_bits,
                 low=parent.low,
                 high=parent.high,
-                base_type=parent,  # Link to parent for derived type compatibility
+                base_type=parent,  # Link to parent for type info (e.g., operations)
+                is_derived=True,  # Mark as derived type - distinct from parent
             )
 
         # Handle derivation from enumeration type (e.g., type MyBool is new Boolean)
@@ -2784,7 +2786,8 @@ class SemanticAnalyzer:
                 size_bits=parent.size_bits,
                 literals=parent.literals.copy(),
                 positions=parent.positions.copy(),
-                base_type=parent,  # Link to parent for derived type compatibility
+                base_type=parent,  # Link to parent for type info (e.g., operations)
+                is_derived=True,  # Mark as derived type - distinct from parent
             )
 
         # Handle tagged type derivation with record extension and interfaces
@@ -3908,8 +3911,15 @@ class SemanticAnalyzer:
                     )
 
     def _check_boolean(self, t: Optional[AdaType], node: ASTNode) -> None:
-        """Check that a type is Boolean."""
+        """Check that a type is Boolean or derived from Boolean.
+
+        In Ada, any type derived from Boolean can be used in Boolean contexts
+        (if conditions, while conditions, etc.).
+        """
         if t is None:
+            return
+        # Accept Boolean or any type derived from Boolean
+        if is_derived_from(t, "Boolean"):
             return
         bool_type = PREDEFINED_TYPES.get("Boolean")
         if bool_type and not types_compatible(t, bool_type):
