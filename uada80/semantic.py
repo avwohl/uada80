@@ -1212,6 +1212,37 @@ class SemanticAnalyzer:
         old_generic_formals = getattr(self, '_generic_formals', {})
         self._generic_formals = formal_to_actual
 
+        # Add generic formal type and object symbols to the instance scope
+        # This ensures that references to formal names resolve correctly
+        from uada80.ast_nodes import GenericObjectDecl
+        for i, formal in enumerate(generic_decl.generic_formals):
+            if i < len(inst.actual_parameters):
+                actual = inst.actual_parameters[i]
+                if isinstance(formal, GenericTypeDecl):
+                    # Type formal: create a type symbol with the actual type
+                    type_name = formal.name
+                    actual_type = self._resolve_type(actual)
+                    if actual_type:
+                        type_sym = Symbol(
+                            name=type_name,
+                            kind=SymbolKind.TYPE,
+                            ada_type=actual_type,
+                        )
+                        self.symbols.define(type_sym)
+                elif isinstance(formal, GenericObjectDecl):
+                    # Object formal: create a variable symbol with the actual's type
+                    # Handle multi-name formals (e.g., "X, Y : Integer")
+                    names = getattr(formal, 'names', None) or [formal.name]
+                    for obj_name in names:
+                        actual_type = self._analyze_expr(actual)
+                        obj_sym = Symbol(
+                            name=obj_name,
+                            kind=SymbolKind.VARIABLE,
+                            ada_type=actual_type,
+                            is_constant=(formal.mode == "in"),
+                        )
+                        self.symbols.define(obj_sym)
+
         # Process the generic package's declarations
         for decl in generic_decl.declarations:
             self._analyze_declaration(decl)
