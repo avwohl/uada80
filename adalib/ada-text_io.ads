@@ -168,6 +168,197 @@ package Ada.Text_IO is
    Data_Error   : exception;
    Layout_Error : exception;
 
+   -- Generic packages for numeric I/O (Ada 83 style nested generics)
+   generic
+      type Num is range <>;
+   package Integer_IO is
+      Default_Width : Field := Num'Width;
+      Default_Base  : Number_Base := 10;
+
+      procedure Get
+        (File  : File_Type;
+         Item  : out Num;
+         Width : Field := 0);
+
+      procedure Get
+        (Item  : out Num;
+         Width : Field := 0);
+
+      procedure Put
+        (File  : File_Type;
+         Item  : Num;
+         Width : Field := Default_Width;
+         Base  : Number_Base := Default_Base);
+
+      procedure Put
+        (Item  : Num;
+         Width : Field := Default_Width;
+         Base  : Number_Base := Default_Base);
+
+      procedure Get
+        (From : String;
+         Item : out Num;
+         Last : out Positive);
+
+      procedure Put
+        (To   : out String;
+         Item : Num;
+         Base : Number_Base := Default_Base);
+   end Integer_IO;
+
+   generic
+      type Num is mod <>;
+   package Modular_IO is
+      Default_Width : Field := Num'Width;
+      Default_Base  : Number_Base := 10;
+
+      procedure Get
+        (File  : File_Type;
+         Item  : out Num;
+         Width : Field := 0);
+
+      procedure Get
+        (Item  : out Num;
+         Width : Field := 0);
+
+      procedure Put
+        (File  : File_Type;
+         Item  : Num;
+         Width : Field := Default_Width;
+         Base  : Number_Base := Default_Base);
+
+      procedure Put
+        (Item  : Num;
+         Width : Field := Default_Width;
+         Base  : Number_Base := Default_Base);
+
+      procedure Get
+        (From : String;
+         Item : out Num;
+         Last : out Positive);
+
+      procedure Put
+        (To   : out String;
+         Item : Num;
+         Base : Number_Base := Default_Base);
+   end Modular_IO;
+
+   generic
+      type Num is digits <>;
+   package Float_IO is
+      Default_Fore : Field := 2;
+      Default_Aft  : Field := Num'Digits - 1;
+      Default_Exp  : Field := 3;
+
+      procedure Get
+        (File  : File_Type;
+         Item  : out Num;
+         Width : Field := 0);
+
+      procedure Get
+        (Item  : out Num;
+         Width : Field := 0);
+
+      procedure Put
+        (File : File_Type;
+         Item : Num;
+         Fore : Field := Default_Fore;
+         Aft  : Field := Default_Aft;
+         Exp  : Field := Default_Exp);
+
+      procedure Put
+        (Item : Num;
+         Fore : Field := Default_Fore;
+         Aft  : Field := Default_Aft;
+         Exp  : Field := Default_Exp);
+
+      procedure Get
+        (From : String;
+         Item : out Num;
+         Last : out Positive);
+
+      procedure Put
+        (To   : out String;
+         Item : Num;
+         Aft  : Field := Default_Aft;
+         Exp  : Field := Default_Exp);
+   end Float_IO;
+
+   generic
+      type Num is delta <>;
+   package Fixed_IO is
+      Default_Fore : Field := Num'Fore;
+      Default_Aft  : Field := Num'Aft;
+      Default_Exp  : Field := 0;
+
+      procedure Get
+        (File  : File_Type;
+         Item  : out Num;
+         Width : Field := 0);
+
+      procedure Get
+        (Item  : out Num;
+         Width : Field := 0);
+
+      procedure Put
+        (File : File_Type;
+         Item : Num;
+         Fore : Field := Default_Fore;
+         Aft  : Field := Default_Aft;
+         Exp  : Field := Default_Exp);
+
+      procedure Put
+        (Item : Num;
+         Fore : Field := Default_Fore;
+         Aft  : Field := Default_Aft;
+         Exp  : Field := Default_Exp);
+
+      procedure Get
+        (From : String;
+         Item : out Num;
+         Last : out Positive);
+
+      procedure Put
+        (To   : out String;
+         Item : Num;
+         Aft  : Field := Default_Aft;
+         Exp  : Field := Default_Exp);
+   end Fixed_IO;
+
+   -- Type_Set for Enumeration_IO
+   type Type_Set is (Lower_Case, Upper_Case);
+
+   generic
+      type Enum is (<>);
+   package Enumeration_IO is
+      Default_Width   : Field := 0;
+      Default_Setting : Type_Set := Upper_Case;
+
+      procedure Get (File : File_Type; Item : out Enum);
+      procedure Get (Item : out Enum);
+
+      procedure Put
+        (File  : File_Type;
+         Item  : Enum;
+         Width : Field := Default_Width;
+         Set   : Type_Set := Default_Setting);
+
+      procedure Put
+        (Item  : Enum;
+         Width : Field := Default_Width;
+         Set   : Type_Set := Default_Setting);
+
+      procedure Get
+        (From : String;
+         Item : out Enum;
+         Last : out Positive);
+
+      procedure Put
+        (To   : out String;
+         Item : Enum;
+         Set  : Type_Set := Default_Setting);
+   end Enumeration_IO;
+
 private
    -- File type implementation (simplified for Z80)
    type File_Handle is range 0 .. 255;
