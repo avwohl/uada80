@@ -1861,6 +1861,22 @@ class SemanticAnalyzer:
                 # Use define which handles overloading
                 self.symbols.define(literal_symbol)
 
+        # For derived enumeration types, add overloaded literals for the derived type
+        # In Ada, when TYPE T IS NEW Parent_Enum, the literals work with both types
+        # through overload resolution. We need to register the literals with the
+        # derived type so that they can be used in contexts expecting the derived type.
+        if isinstance(ada_type, EnumerationType) and isinstance(decl.type_def, DerivedTypeDef):
+            for literal in ada_type.literals:
+                literal_symbol = Symbol(
+                    name=literal,
+                    kind=SymbolKind.VARIABLE,
+                    ada_type=ada_type,
+                    is_constant=True,
+                    definition=decl,
+                )
+                # Use define which handles overloading
+                self.symbols.define(literal_symbol)
+
     def _analyze_subtype_decl(self, decl: SubtypeDecl) -> None:
         """Analyze a subtype declaration."""
         if self.symbols.is_defined_locally(decl.name):
