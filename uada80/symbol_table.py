@@ -6320,7 +6320,7 @@ class SymbolTable:
 
     def lookup_selected(self, prefix: str, selector: str) -> Optional[Symbol]:
         """
-        Look up a selected component (Package.Name or Record.Field).
+        Look up a selected component (Package.Name, Block.Name, or Record.Field).
 
         Returns the symbol for the selector.
         """
@@ -6332,14 +6332,47 @@ class SymbolTable:
 
         # Package prefix
         if prefix_symbol.kind == SymbolKind.PACKAGE:
-            # Check public symbols
-            if selector_lower in prefix_symbol.public_symbols:
+            # Follow renaming chain if this is a package renaming
+            target = prefix_symbol
+            while target.alias_for:
+                renamed = self.lookup(target.alias_for)
+                if renamed and renamed.kind == SymbolKind.PACKAGE:
+                    target = renamed
+                else:
+                    break
+            # Check public symbols in the target package
+            if selector_lower in target.public_symbols:
+                return target.public_symbols[selector_lower]
+            return None
+
+        # Block label prefix (labeled blocks can be used as prefixes)
+        if prefix_symbol.kind == SymbolKind.LABEL:
+            if prefix_symbol.public_symbols and selector_lower in prefix_symbol.public_symbols:
                 return prefix_symbol.public_symbols[selector_lower]
             return None
 
         # Could also be record component access, but that's handled
         # by type checking, not symbol lookup
 
+        return None
+
+    def lookup_in_named_scope(self, scope_name: str, symbol_name: str) -> Optional[Symbol]:
+        """Look up a symbol in a named scope (for block label prefixes).
+
+        When a block has a label like 'DD:', the label can be used as a prefix
+        to access declarations inside the block (e.g., DD.P1).
+        This method finds the scope with the given name and looks up the symbol in it.
+        """
+        name_lower = symbol_name.lower()
+        scope_name_lower = scope_name.lower()
+
+        # Search the scope stack for a scope with the matching name
+        for scope in self.scope_stack:
+            if scope.name.lower() == scope_name_lower:
+                # Found the named scope, look up the symbol in it
+                sym = scope.lookup_local(name_lower)
+                if sym is not None:
+                    return sym
         return None
 
     def all_overloads(self, name: str) -> list[Symbol]:

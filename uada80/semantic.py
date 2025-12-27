@@ -374,6 +374,7 @@ class SemanticAnalyzer:
         """Resolve a hierarchical package name to its symbol.
 
         E.g., Ada.Text_IO -> look up "Ada", then find "Text_IO" in Ada.public_symbols
+        Also handles block labels as prefixes (e.g., DD.P1 where DD is a block label).
         """
         if isinstance(name, Identifier):
             return self.symbols.lookup(name.name)
@@ -382,8 +383,15 @@ class SemanticAnalyzer:
             prefix_sym = self._resolve_hierarchical_package(name.prefix)
             if prefix_sym is None:
                 return None
-            # Look up the selector in the prefix's public symbols
             selector = name.selector.lower() if isinstance(name.selector, str) else name.selector.lower()
+            # For block labels, look up in the named scope directly
+            # This handles the case where we're still inside the block
+            if prefix_sym.kind == SymbolKind.LABEL:
+                result = self.symbols.lookup_in_named_scope(prefix_sym.name, selector)
+                if result is not None:
+                    return result
+            # Look up the selector in the prefix's public symbols
+            # Works for both packages and block labels (both have public_symbols)
             if prefix_sym.public_symbols and selector in prefix_sym.public_symbols:
                 return prefix_sym.public_symbols[selector]
         return None
@@ -913,7 +921,11 @@ class SemanticAnalyzer:
         # Handle package renaming: package X renames Y;
         if pkg.renames:
             renamed_name = self._get_hierarchical_name(pkg.renames)
-            renamed_pkg = self.symbols.lookup(renamed_name)
+            # First try to resolve as hierarchical name (handles DD.P1, PQ2.PK2, etc.)
+            renamed_pkg = self._resolve_hierarchical_package(pkg.renames)
+            if renamed_pkg is None:
+                # Try simple lookup for non-hierarchical names
+                renamed_pkg = self.symbols.lookup(renamed_name)
             if renamed_pkg is None:
                 # Try to load from file
                 renamed_pkg = self._load_external_package(renamed_name)
@@ -923,6 +935,7 @@ class SemanticAnalyzer:
                 pkg_symbol = Symbol(
                     name=pkg.name,
                     kind=renamed_pkg.kind,
+                    alias_for=renamed_name,  # Track the renaming chain
                 )
                 pkg_symbol.public_symbols = renamed_pkg.public_symbols
                 pkg_symbol.private_symbols = renamed_pkg.private_symbols
@@ -3392,14 +3405,34 @@ class SemanticAnalyzer:
         self.in_loop = old_in_loop
 
     def _analyze_block_stmt(self, stmt: BlockStmt) -> None:
-        """Analyze a block statement."""
-        self.symbols.enter_scope()
+        """Analyze a block statement.
+
+        If the block has a label, the label can be used as a prefix to access
+        declarations inside the block (e.g., DD.P1 where DD is a block label).
+        """
+        # Create a symbol for the block label if present
+        block_symbol = None
+        if stmt.label:
+            block_symbol = Symbol(
+                name=stmt.label,
+                kind=SymbolKind.LABEL,
+            )
+            # Define the block label in the current scope (before entering block scope)
+            self.symbols.define(block_symbol)
+
+        self.symbols.enter_scope(stmt.label if stmt.label else None)
 
         for decl in stmt.declarations:
             self._analyze_declaration(decl)
 
         for s in stmt.statements:
             self._analyze_statement(s)
+
+        # If block has a label, collect all declarations for prefix access
+        if block_symbol:
+            block_symbol.public_symbols = {}
+            for sym in self.symbols.current_scope_symbols():
+                block_symbol.public_symbols[sym.name.lower()] = sym
 
         self.symbols.leave_scope()
 
