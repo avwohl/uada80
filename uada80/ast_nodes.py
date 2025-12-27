@@ -846,9 +846,10 @@ class PackageBody(Decl):
 
 @dataclass
 class ExceptionDecl(Decl):
-    """Exception declaration."""
+    """Exception declaration or exception renaming."""
 
     names: list[str]
+    renames: Optional[Expr] = None  # For exception renaming declarations
 
 
 @dataclass
@@ -1269,6 +1270,7 @@ class AcceptStmt(Stmt):
     """Accept statement (for tasks)."""
 
     entry_name: str
+    entry_index: Optional[Expr] = None  # For entry families: accept E(index)
     parameters: list[ParameterSpec] = field(default_factory=list)
     statements: list[Stmt] = field(default_factory=list)
 
@@ -1311,7 +1313,7 @@ class PragmaStmt(Stmt):
     """Pragma statement/directive."""
 
     name: str
-    args: list[Expr] = field(default_factory=list)
+    args: list["ActualParameter"] = field(default_factory=list)  # Supports named args
 
 
 # ============================================================================
