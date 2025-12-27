@@ -1871,6 +1871,7 @@ class SemanticAnalyzer:
                     kind=SymbolKind.PARAMETER,
                     ada_type=param_type,
                     mode=param_spec.mode,
+                    default_value=param_spec.default_value,
                 )
                 symbol.parameters.append(param_symbol)
 
@@ -2239,11 +2240,11 @@ class SemanticAnalyzer:
         self.symbols.leave_scope()
 
     def _analyze_entry_decl(self, decl: EntryDecl) -> None:
-        """Analyze an entry declaration."""
-        if self.symbols.is_defined_locally(decl.name):
-            self.error(f"entry '{decl.name}' is already defined", decl)
-            return
+        """Analyze an entry declaration.
 
+        Note: Entries can be overloaded like subprograms, so we don't check
+        for duplicate names here. The symbol table handles overloading.
+        """
         # Build parameter list
         params = []
         for param in decl.parameters:
@@ -3556,37 +3557,42 @@ class SemanticAnalyzer:
             return
 
         # Look up the entry being accepted
+        entry_sym = None
         if self.current_task:
-            entry_sym = None
+            # Count parameters in accept statement
+            accept_param_count = sum(len(p.names) for p in stmt.parameters)
+
             # Look for the entry in the task type's entries
             if self.current_task.ada_type and hasattr(self.current_task.ada_type, 'entries'):
                 for entry_info in self.current_task.ada_type.entries:
                     if entry_info.name.lower() == stmt.entry_name.lower():
-                        # Found entry - parameter count check based on entry_info
-                        if len(stmt.parameters) != len(entry_info.parameter_types):
-                            self.error(
-                                f"wrong number of parameters in accept: expected {len(entry_info.parameter_types)}, "
-                                f"got {len(stmt.parameters)}",
-                                stmt,
-                            )
-                        entry_sym = entry_info
-                        break
+                        # Check if parameter count matches (for overload resolution)
+                        if len(entry_info.parameter_types) == accept_param_count:
+                            entry_sym = entry_info
+                            break
 
             # Also check current scope for entries (for single tasks defined inline)
+            # Need to check the full overload chain
             if entry_sym is None:
-                for sym in self.symbols.current_scope_symbols():
-                    if sym.name.lower() == stmt.entry_name.lower() and sym.kind == SymbolKind.ENTRY:
-                        entry_sym = sym
-                        break
+                sym = self.symbols.lookup(stmt.entry_name)
+                while sym is not None:
+                    if sym.kind == SymbolKind.ENTRY:
+                        # Check if parameter count matches
+                        if len(sym.parameters) == accept_param_count:
+                            entry_sym = sym
+                            break
+                    sym = sym.overloaded_next
 
-            # Also check parent scope (entries might be in task type scope)
             if entry_sym is None:
-                entry_sym = self.symbols.lookup(stmt.entry_name)
-                if entry_sym and entry_sym.kind != SymbolKind.ENTRY:
-                    entry_sym = None
-
-            if entry_sym is None:
-                self.error(f"entry '{stmt.entry_name}' not found in current task", stmt)
+                # Check if any entry exists with that name (for error message)
+                any_entry = self.symbols.lookup(stmt.entry_name)
+                if any_entry and any_entry.kind == SymbolKind.ENTRY:
+                    self.error(
+                        f"no matching entry '{stmt.entry_name}' for accept with {accept_param_count} parameters",
+                        stmt,
+                    )
+                else:
+                    self.error(f"entry '{stmt.entry_name}' not found in current task", stmt)
 
         # Enter a scope for the accept body
         self.symbols.enter_scope(f"accept_{stmt.entry_name}")
@@ -4301,8 +4307,19 @@ class SemanticAnalyzer:
         # X(Low..High) where X is access-to-array implicitly dereferences X
         if isinstance(prefix_type, AccessType):
             designated = prefix_type.designated_type
+            # Resolve incomplete/private types
+            if designated and designated.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE):
+                completed = self.symbols.lookup_type(designated.name)
+                if completed:
+                    designated = completed
             if isinstance(designated, ArrayType):
                 prefix_type = designated
+
+        # Resolve private types for direct array access (e.g., X2(1) where type is private array)
+        if prefix_type and prefix_type.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE):
+            completed = self.symbols.lookup_type(prefix_type.name)
+            if completed:
+                prefix_type = completed
 
         # Prefix must be an array type
         if not isinstance(prefix_type, ArrayType):
@@ -4341,14 +4358,28 @@ class SemanticAnalyzer:
             )
             return None
 
-        # Return the designated type, resolving incomplete types
+        # Return the designated type, resolving incomplete/private types
         designated = prefix_type.designated_type
-        if designated and designated.kind == TypeKind.INCOMPLETE:
+        if designated and designated.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE):
             # Try to find the completed type
             completed = self.symbols.lookup_type(designated.name)
             if completed:
                 designated = completed
         return designated
+
+    def _resolve_private_type(self, ada_type: Optional[AdaType]) -> Optional[AdaType]:
+        """Resolve incomplete/private types to their completed definitions.
+
+        When inside a package body, private types declared in the spec
+        should be resolved to their full definitions.
+        """
+        if ada_type is None:
+            return None
+        if ada_type.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE):
+            completed = self.symbols.lookup_type(ada_type.name)
+            if completed:
+                return completed
+        return ada_type
 
     def _analyze_identifier(self, expr: Identifier, expected_type: Optional[AdaType] = None) -> Optional[AdaType]:
         """Analyze an identifier expression.
@@ -4720,14 +4751,26 @@ class SemanticAnalyzer:
 
         # Handle implicit dereference: access-to-array types can be indexed directly
         if isinstance(prefix_type, AccessType):
-            if isinstance(prefix_type.designated_type, ArrayType):
-                prefix_type = prefix_type.designated_type
+            designated = prefix_type.designated_type
+            # If designated type is incomplete/private, try to get the completed type
+            if designated and designated.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE):
+                completed = self.symbols.lookup_type(designated.name)
+                if completed:
+                    designated = completed
+            if isinstance(designated, ArrayType):
+                prefix_type = designated
             else:
                 self.error(
                     f"'{prefix_type.name}' is not an access-to-array type",
                     expr.prefix,
                 )
                 return None
+
+        # Resolve private types for direct array access
+        if prefix_type.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE):
+            completed = self.symbols.lookup_type(prefix_type.name)
+            if completed:
+                prefix_type = completed
 
         if not isinstance(prefix_type, ArrayType):
             self.error(f"'{prefix_type.name}' is not an array", expr.prefix)
@@ -4737,7 +4780,8 @@ class SemanticAnalyzer:
         for idx in expr.indices:
             self._analyze_expr(idx)
 
-        return prefix_type.component_type
+        # Resolve private types to their full definitions
+        return self._resolve_private_type(prefix_type.component_type)
 
     def _analyze_selected_name(self, expr: SelectedName) -> Optional[AdaType]:
         """Analyze a selected name (record.field, package.item, or pointer.all)."""
@@ -4772,8 +4816,8 @@ class SemanticAnalyzer:
         if expr.selector.lower() == "all":
             if isinstance(prefix_type, AccessType):
                 designated = prefix_type.designated_type
-                # If designated type is incomplete, try to get the completed type
-                if designated and designated.kind == TypeKind.INCOMPLETE:
+                # If designated type is incomplete/private, try to get the completed type
+                if designated and designated.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE):
                     completed = self.symbols.lookup_type(designated.name)
                     if completed:
                         designated = completed
@@ -4784,6 +4828,12 @@ class SemanticAnalyzer:
             )
             return None
 
+        # Resolve private types for direct record access
+        if prefix_type.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE):
+            completed = self.symbols.lookup_type(prefix_type.name)
+            if completed:
+                prefix_type = completed
+
         # Record component access
         if isinstance(prefix_type, RecordType):
             comp = prefix_type.get_component(expr.selector)
@@ -4793,13 +4843,13 @@ class SemanticAnalyzer:
                     expr,
                 )
                 return None
-            return comp.component_type
+            return self._resolve_private_type(comp.component_type)
 
         # Access to record - implicit dereference
         if isinstance(prefix_type, AccessType):
             designated = prefix_type.designated_type
-            # If designated type is incomplete, try to get the completed type
-            if designated and designated.kind == TypeKind.INCOMPLETE:
+            # If designated type is incomplete/private, try to get the completed type
+            if designated and designated.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE):
                 completed = self.symbols.lookup_type(designated.name)
                 if completed:
                     designated = completed
@@ -4811,7 +4861,7 @@ class SemanticAnalyzer:
                         expr,
                     )
                     return None
-                return comp.component_type
+                return self._resolve_private_type(comp.component_type)
 
         # Protected type operation access (Counter.Increment, Counter.Value)
         if isinstance(prefix_type, ProtectedType):
@@ -4943,7 +4993,7 @@ class SemanticAnalyzer:
                     return init_type
             # If prefix is an array, the result type is component type
             if isinstance(prefix_type, ArrayType):
-                return prefix_type.component_type
+                return self._resolve_private_type(prefix_type.component_type)
             return PREDEFINED_TYPES["Integer"]
 
         # Parallel_Reduce attribute (Ada 2022)
@@ -4954,7 +5004,7 @@ class SemanticAnalyzer:
                 if init_type:
                     return init_type
             if isinstance(prefix_type, ArrayType):
-                return prefix_type.component_type
+                return self._resolve_private_type(prefix_type.component_type)
             return PREDEFINED_TYPES["Integer"]
 
         # 'Old attribute (Ada 2012) - used in postconditions
