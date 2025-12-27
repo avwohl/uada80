@@ -1488,12 +1488,12 @@ class Parser:
             self.expect(TokenType.SEMICOLON)
             return RequeueStmt(entry_name=entry_name, is_with_abort=is_with_abort, span=self.make_span(start))
 
-        # Pragma
+        # Pragma (supports named parameters like: pragma P(Arg => Value))
         if self.match(TokenType.PRAGMA):
             name = self.expect_identifier()
             args = []
             if self.match(TokenType.LEFT_PAREN):
-                args = self.parse_expression_list()
+                args = self.parse_actual_parameter_list()
                 self.expect(TokenType.RIGHT_PAREN)
             self.expect(TokenType.SEMICOLON)
             return PragmaStmt(name=name, args=args, span=self.make_span(start))
@@ -1891,14 +1891,37 @@ class Parser:
         return DelayStmt(is_until=is_until, expression=expression, span=self.make_span(start))
 
     def parse_accept_statement(self) -> AcceptStmt:
-        """Parse accept statement."""
+        """Parse accept statement.
+
+        Syntax:
+            accept entry_name [(index)] [(parameters)] [do statements end [entry_name]];
+
+        For entry families, the index is a simple expression.
+        For parametered entries, parameters are formal parameter specs.
+        """
         start = self.current
         entry_name = self.expect_identifier()
 
+        entry_index = None
         parameters = []
+
+        # First parenthesized part could be entry index or parameters
         if self.match(TokenType.LEFT_PAREN):
-            parameters = self.parse_parameter_specifications()
+            # Look ahead to distinguish index from parameters
+            # Parameters have the form: name : type
+            # Index is just an expression
+            if self.check(TokenType.IDENTIFIER) and self.peek(1).type == TokenType.COLON:
+                # This is parameter list
+                parameters = self.parse_parameter_specifications()
+            else:
+                # This is entry index expression
+                entry_index = self.parse_expression()
             self.expect(TokenType.RIGHT_PAREN)
+
+            # After index, there may be another parenthesis for parameters
+            if entry_index is not None and self.match(TokenType.LEFT_PAREN):
+                parameters = self.parse_parameter_specifications()
+                self.expect(TokenType.RIGHT_PAREN)
 
         statements = []
         if self.match(TokenType.DO):
@@ -1909,7 +1932,8 @@ class Parser:
 
         self.expect(TokenType.SEMICOLON)
 
-        return AcceptStmt(entry_name=entry_name, parameters=parameters, statements=statements, span=self.make_span(start))
+        return AcceptStmt(entry_name=entry_name, entry_index=entry_index,
+                          parameters=parameters, statements=statements, span=self.make_span(start))
 
     def parse_select_statement(self) -> SelectStmt:
         """Parse select statement.
@@ -2113,12 +2137,12 @@ class Parser:
         if self.match(TokenType.USE):
             return self.parse_use_clause()
 
-        # Pragma
+        # Pragma (supports named parameters like: pragma P(Arg => Value))
         if self.match(TokenType.PRAGMA):
             name = self.expect_identifier()
             args = []
             if self.match(TokenType.LEFT_PAREN):
-                args = self.parse_expression_list()
+                args = self.parse_actual_parameter_list()
                 self.expect(TokenType.RIGHT_PAREN)
             self.expect(TokenType.SEMICOLON)
             return PragmaStmt(name=name, args=args, span=self.make_span(start))
@@ -2713,10 +2737,13 @@ class Parser:
 
         self.expect(TokenType.COLON)
 
-        # Exception declaration: Name : exception;
+        # Exception declaration: Name : exception; or Name : exception renames Other;
         if self.match(TokenType.EXCEPTION):
+            renames_expr = None
+            if self.match(TokenType.RENAMES):
+                renames_expr = self.parse_name()
             self.expect(TokenType.SEMICOLON)
-            return ExceptionDecl(names=names, span=self.make_span(start))
+            return ExceptionDecl(names=names, renames=renames_expr, span=self.make_span(start))
 
         is_constant = self.match(TokenType.CONSTANT)
         is_aliased = self.match(TokenType.ALIASED)
