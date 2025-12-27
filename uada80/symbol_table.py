@@ -3951,6 +3951,31 @@ class SymbolTable:
             )
             system_pkg.public_symbols["null_address"] = null_addr_sym
 
+            # Standard Ada constants (universal integer)
+            univ_int = PREDEFINED_TYPES.get("Universal_Integer") or int_type
+            for name, value in [
+                ("Min_Int", -32768),
+                ("Max_Int", 32767),
+                ("Storage_Unit", 8),
+                ("Word_Size", 16),
+                ("Memory_Size", 65536),
+                ("Max_Binary_Modulus", 65536),
+                ("Max_Nonbinary_Modulus", 65535),
+                ("Max_Base_Digits", 4),
+                ("Max_Digits", 15),
+                ("Max_Mantissa", 31),
+                ("Address_Size", 16),
+            ]:
+                sym = Symbol(
+                    name=name,
+                    kind=SymbolKind.VARIABLE,
+                    ada_type=univ_int,
+                    is_constant=True,
+                    value=value,
+                    scope_level=0,
+                )
+                system_pkg.public_symbols[name.lower()] = sym
+
         addr_type = system_pkg.public_symbols.get("address")
         if addr_type:
             addr_type = addr_type.ada_type
