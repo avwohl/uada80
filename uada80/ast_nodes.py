@@ -302,10 +302,13 @@ class ContainerAggregate(Expr):
 
 @dataclass
 class ComponentAssociation(ASTNode):
-    """Component association in aggregate."""
+    """Component association in aggregate.
+
+    value is None when using box notation (<>) for default initialization.
+    """
 
     choices: list["Choice"]  # Empty for positional
-    value: Expr
+    value: Optional[Expr] = None  # None means <> (default value)
 
 
 @dataclass
@@ -761,6 +764,7 @@ class TypeDecl(Decl):
     is_abstract: bool = False
     is_tagged: bool = False
     is_limited: bool = False
+    has_unknown_discriminants: bool = False  # True for (<>)
     aspects: list[AspectSpecification] = field(default_factory=list)
     # Analyzed type from semantic analysis (preserves is_packed, etc.)
     ada_type: Optional[any] = None  # AdaType (avoid circular import)

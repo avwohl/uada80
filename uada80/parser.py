@@ -573,8 +573,21 @@ class Parser:
         # Positional parameter
         value = self.parse_expression()
 
-        # Check for range expression (for slices)
-        if self.match(TokenType.DOUBLE_DOT):
+        # Check for discrete range with RANGE keyword: Subtype RANGE low .. high
+        # Used in array constraints: Array_Type (Index_Type RANGE 0 .. 10)
+        if self.match(TokenType.RANGE):
+            low = self.parse_expression()
+            self.expect(TokenType.DOUBLE_DOT)
+            high = self.parse_expression()
+            # Wrap as a SubtypeIndication with range constraint
+            # The 'value' is the subtype mark, and the constraint is the range
+            value = SubtypeIndication(
+                type_mark=value,
+                constraint=RangeExpr(low=low, high=high, span=None),
+                span=None
+            )
+        elif self.match(TokenType.DOUBLE_DOT):
+            # Simple range expression (for slices)
             high = self.parse_expression()
             value = RangeExpr(low=value, high=high, span=None)
 
@@ -929,7 +942,10 @@ class Parser:
                         choices.append(ExprChoice(expr=next_expr))
 
                 self.expect(TokenType.ARROW)
-                value = self.parse_expression()
+                # Check for box notation (<>) for default value
+                value = None
+                if not self.match(TokenType.BOX):
+                    value = self.parse_expression()
                 components = [ComponentAssociation(choices=choices, value=value)]
 
                 while self.match(TokenType.COMMA):
@@ -955,7 +971,10 @@ class Parser:
                         choices.append(ExprChoice(expr=next_expr))
 
                 self.expect(TokenType.ARROW)
-                value = self.parse_expression()
+                # Check for box notation (<>) for default value
+                value = None
+                if not self.match(TokenType.BOX):
+                    value = self.parse_expression()
                 components = [ComponentAssociation(choices=choices, value=value)]
 
                 while self.match(TokenType.COMMA):
@@ -1268,10 +1287,16 @@ class Parser:
 
         if self.match(TokenType.OTHERS):
             self.expect(TokenType.ARROW)
-            value = self.parse_expression()
-            components.append(
-                ComponentAssociation(choices=[OthersChoice()], value=value)
-            )
+            # Check for box notation (<>) for default value
+            if self.match(TokenType.BOX):
+                components.append(
+                    ComponentAssociation(choices=[OthersChoice()], value=None)
+                )
+            else:
+                value = self.parse_expression()
+                components.append(
+                    ComponentAssociation(choices=[OthersChoice()], value=value)
+                )
         else:
             while True:
                 comp = self.parse_aggregate_component()
@@ -1292,6 +1317,9 @@ class Parser:
         # Check for 'others'
         if self.match(TokenType.OTHERS):
             self.expect(TokenType.ARROW)
+            # Check for box notation (<>) for default value
+            if self.match(TokenType.BOX):
+                return ComponentAssociation(choices=[OthersChoice()], value=None)
             value = self.parse_expression()
             return ComponentAssociation(choices=[OthersChoice()], value=value)
 
@@ -1316,6 +1344,9 @@ class Parser:
                     choices.append(ExprChoice(expr=next_expr))
 
             self.expect(TokenType.ARROW)
+            # Check for box notation (<>) for default value
+            if self.match(TokenType.BOX):
+                return ComponentAssociation(choices=choices, value=None)
             value = self.parse_expression()
             return ComponentAssociation(choices=choices, value=value)
         elif self.check(TokenType.PIPE) or self.check(TokenType.ARROW):
@@ -1332,6 +1363,9 @@ class Parser:
                     choices.append(ExprChoice(expr=next_expr))
             # Now expect the arrow
             self.expect(TokenType.ARROW)
+            # Check for box notation (<>) for default value
+            if self.match(TokenType.BOX):
+                return ComponentAssociation(choices=choices, value=None)
             value = self.parse_expression()
             return ComponentAssociation(choices=choices, value=value)
         else:
@@ -2205,7 +2239,14 @@ class Parser:
         if self.match(TokenType.LEFT_PAREN):
             values = []
             while True:
-                lit_name = self.expect_identifier()
+                # Enumeration literals can be identifiers or character literals
+                if self.check(TokenType.IDENTIFIER):
+                    lit_name = self.expect_identifier()
+                elif self.check(TokenType.CHARACTER_LITERAL):
+                    lit_name = self.current.value  # Include the quotes
+                    self.advance()
+                else:
+                    raise ParseError("Expected identifier or character literal", self.current)
                 self.expect(TokenType.ARROW)
                 lit_value = self.parse_expression()
                 values.append((lit_name, lit_value))
@@ -2265,8 +2306,13 @@ class Parser:
 
         # Discriminants
         discriminants = []
+        has_unknown_discriminants = False
         if self.match(TokenType.LEFT_PAREN):
-            discriminants = self.parse_discriminant_specifications()
+            # Check for unknown discriminant part: (<>)
+            if self.match(TokenType.BOX):
+                has_unknown_discriminants = True
+            else:
+                discriminants = self.parse_discriminant_specifications()
             self.expect(TokenType.RIGHT_PAREN)
 
         is_abstract = False
@@ -2300,6 +2346,7 @@ class Parser:
             is_abstract=is_abstract,
             is_tagged=is_tagged,
             is_limited=is_limited,
+            has_unknown_discriminants=has_unknown_discriminants,
             aspects=aspects,
             span=self.make_span(start),
         )
