@@ -2200,17 +2200,23 @@ class SemanticAnalyzer:
             return
 
         # Process each value assignment
-        for lit_name, lit_value in decl.values:
+        for idx, (lit_name, lit_value) in enumerate(decl.values):
             value = self._eval_static_expr(lit_value)
 
             # Update the position value for this literal
             # EnumerationType.positions is a dict mapping literal name to value
             if sym.ada_type.positions is not None:
-                # Find the literal (case-insensitive)
-                for lit in sym.ada_type.literals:
-                    if lit.lower() == lit_name.lower():
+                if lit_name is not None:
+                    # Named form: match by literal name (case-insensitive)
+                    for lit in sym.ada_type.literals:
+                        if lit.lower() == lit_name.lower():
+                            sym.ada_type.positions[lit] = value
+                            break
+                else:
+                    # Positional form: use index to match against literals
+                    if idx < len(sym.ada_type.literals):
+                        lit = sym.ada_type.literals[idx]
                         sym.ada_type.positions[lit] = value
-                        break
 
     # =========================================================================
     # Task and Protected Types

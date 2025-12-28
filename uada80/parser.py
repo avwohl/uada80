@@ -404,10 +404,15 @@ class Parser:
         start = self.current
 
         # Handle operator symbol as name (e.g., function "+" renames Other."+";)
+        # Also handle character literals as names (e.g., function Sea renames 'C';)
         if self.check(TokenType.STRING_LITERAL):
             op_name = self.current.value
             self.advance()
             name: Expr = Identifier(name=op_name, span=self.make_span(start))
+        elif self.check(TokenType.CHARACTER_LITERAL):
+            char_name = self.current.value
+            self.advance()
+            name = Identifier(name=char_name, span=self.make_span(start))
         else:
             name = Identifier(name=self.expect_identifier(), span=self.make_span(start))
 
@@ -816,7 +821,7 @@ class Parser:
                 self.expect(TokenType.RIGHT_PAREN)
                 indices = [arg.value for arg in args]
                 name = IndexedComponent(prefix=name, indices=indices, span=self.make_span(start))
-                # Continue parsing additional suffixes (e.g., "(5)" for indexing result)
+                # Continue parsing additional suffixes (e.g., "(5)" for indexing, ".ALL" for dereference)
                 while True:
                     if self.match(TokenType.LEFT_PAREN):
                         args = self.parse_actual_parameter_list()
@@ -825,6 +830,13 @@ class Parser:
                             name = Slice(prefix=name, range_expr=args[0].value, span=self.make_span(start))
                         else:
                             name = IndexedComponent(prefix=name, indices=[arg.value for arg in args], span=self.make_span(start))
+                    elif self.match(TokenType.DOT):
+                        # Selected component: .selector or .ALL (dereference)
+                        if self.match(TokenType.ALL):
+                            name = Dereference(prefix=name, span=self.make_span(start))
+                        else:
+                            selector = self.expect_identifier()
+                            name = SelectedName(prefix=name, selector=selector, span=self.make_span(start))
                     elif self.match(TokenType.APOSTROPHE):
                         attr_name = self._parse_attribute_designator()
                         attr_args = []
@@ -1482,14 +1494,30 @@ class Parser:
         )
 
     def parse_discrete_range_or_name(self) -> Expr:
-        """Parse a discrete range or subtype name."""
-        # This can be a range (1 .. 10) or a subtype mark (Integer)
+        """Parse a discrete range or subtype name.
+
+        Forms:
+            low .. high                     -- simple range
+            TypeMark                        -- subtype name only
+            TypeMark RANGE low .. high      -- subtype indication with range constraint
+        """
         expr = self.parse_additive()
 
-        # Check for ".." to see if it's a range
+        # Check for ".." to see if it's a simple range
         if self.match(TokenType.DOUBLE_DOT):
             high = self.parse_additive()
             return RangeExpr(low=expr, high=high)
+
+        # Check for "RANGE" keyword for subtype indication with range constraint
+        if self.match(TokenType.RANGE):
+            low = self.parse_additive()
+            self.expect(TokenType.DOUBLE_DOT)
+            high = self.parse_additive()
+            range_expr = RangeExpr(low=low, high=high)
+            return SubtypeIndication(
+                type_mark=expr,
+                constraint=RangeConstraint(range_expr=range_expr),
+            )
 
         return expr
 
@@ -2327,20 +2355,39 @@ class Parser:
         # Check for enumeration representation clause (parenthesized list)
         if self.match(TokenType.LEFT_PAREN):
             values = []
-            while True:
-                # Enumeration literals can be identifiers or character literals
-                if self.check(TokenType.IDENTIFIER):
-                    lit_name = self.expect_identifier()
-                elif self.check(TokenType.CHARACTER_LITERAL):
-                    lit_name = self.current.value  # Include the quotes
-                    self.advance()
-                else:
-                    raise ParseError("Expected identifier or character literal", self.current)
-                self.expect(TokenType.ARROW)
-                lit_value = self.parse_expression()
-                values.append((lit_name, lit_value))
-                if not self.match(TokenType.COMMA):
-                    break
+            # Detect whether this is positional or named form
+            # by looking for ARROW after first identifier/character literal
+            is_named = False
+            if self.check(TokenType.IDENTIFIER, TokenType.CHARACTER_LITERAL):
+                saved_pos = self.pos
+                saved_current = self.current
+                self.advance()  # skip identifier/char literal
+                is_named = self.check(TokenType.ARROW)
+                self.pos = saved_pos
+                self.current = saved_current
+
+            if is_named:
+                # Named form: (A => 0, B => 1)
+                while True:
+                    if self.check(TokenType.IDENTIFIER):
+                        lit_name = self.expect_identifier()
+                    elif self.check(TokenType.CHARACTER_LITERAL):
+                        lit_name = self.current.value  # Include the quotes
+                        self.advance()
+                    else:
+                        raise ParseError("Expected identifier or character literal", self.current)
+                    self.expect(TokenType.ARROW)
+                    lit_value = self.parse_expression()
+                    values.append((lit_name, lit_value))
+                    if not self.match(TokenType.COMMA):
+                        break
+            else:
+                # Positional form: (-15, -14, -11, ...)
+                while True:
+                    lit_value = self.parse_expression()
+                    values.append((None, lit_value))  # No literal name in positional form
+                    if not self.match(TokenType.COMMA):
+                        break
             self.expect(TokenType.RIGHT_PAREN)
             self.expect(TokenType.SEMICOLON)
             return EnumerationRepresentationClause(
