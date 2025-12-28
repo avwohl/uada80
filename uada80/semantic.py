@@ -2202,9 +2202,10 @@ class SemanticAnalyzer:
             param_types = []
             for param in entry_decl.parameters:
                 param_type = self._resolve_type(param.type_mark)
-                # Always count the parameter even if type can't be resolved
-                # (e.g., for generic formal types)
-                param_types.append(param_type)
+                # Add one entry per parameter name (for multiple params of same type)
+                # e.g., "PIN1, PIN2 : in Square" has 2 names, so add 2 entries
+                for _ in param.names:
+                    param_types.append(param_type)
 
             family_type = None
             if entry_decl.family_index:
@@ -2348,8 +2349,9 @@ class SemanticAnalyzer:
                 param_types = []
                 for param in item.parameters:
                     param_type = self._resolve_type(param.type_mark)
-                    # Always count the parameter even if type can't be resolved
-                    param_types.append(param_type)
+                    # Add one entry per parameter name (for multiple params of same type)
+                    for _ in param.names:
+                        param_types.append(param_type)
                 entries.append(EntryInfo(
                     name=item.name,
                     parameter_types=param_types,
@@ -2358,8 +2360,10 @@ class SemanticAnalyzer:
                 param_types = []
                 for param in item.parameters:
                     param_type = self._resolve_type(param.type_mark)
-                    if param_type:
-                        param_types.append(param_type)
+                    # Add one entry per parameter name
+                    for _ in param.names:
+                        if param_type:
+                            param_types.append(param_type)
                 ret_type = None
                 if item.is_function and item.return_type:
                     ret_type = self._resolve_type(item.return_type)
