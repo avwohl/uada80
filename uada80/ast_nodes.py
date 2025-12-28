@@ -343,9 +343,14 @@ class ExprChoice(Choice):
 
 @dataclass
 class RangeChoice(Choice):
-    """Range choice."""
+    """Range choice.
+
+    Can include an optional type_mark for constrained discrete ranges
+    like 'MID_WEEK RANGE MON .. WED'.
+    """
 
     range_expr: "RangeExpr"
+    type_mark: Optional["Expr"] = None
 
 
 @dataclass

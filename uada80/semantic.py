@@ -4855,6 +4855,36 @@ class SemanticAnalyzer:
                         )
                         return None
 
+        # Check if prefix is a qualified type name (type conversion via SelectedName)
+        # e.g., Ada.Text_IO.Count (I+1)
+        if isinstance(expr.prefix, SelectedName):
+            # Try to look up the type via its package
+            # Get the package part (prefix) and type name (selector)
+            prefix_name = self._get_hierarchical_name(expr.prefix.prefix)
+            type_name = expr.prefix.selector
+            pkg_symbol = self.symbols.lookup(prefix_name)
+            if pkg_symbol and pkg_symbol.kind == SymbolKind.PACKAGE:
+                # Look for the type in the package's public symbols
+                type_key = type_name.lower() if isinstance(type_name, str) else type_name
+                if type_key in pkg_symbol.public_symbols:
+                    symbol = pkg_symbol.public_symbols[type_key]
+                    if symbol.kind in (SymbolKind.TYPE, SymbolKind.SUBTYPE):
+                        # This is a type conversion: Package.Type(Expr)
+                        if len(expr.indices) != 1:
+                            self.error("type conversion takes exactly one argument", expr)
+                            return None
+                        # Analyze the argument
+                        arg_type = self._analyze_expr(expr.indices[0])
+                        target_type = symbol.ada_type
+                        # Check if conversion is valid
+                        if arg_type and target_type:
+                            if not can_convert(arg_type, target_type):
+                                self.error(
+                                    f"cannot convert from '{arg_type.name}' to '{target_type.name}'",
+                                    expr
+                                )
+                        return target_type
+
         # Otherwise, it's array indexing
         prefix_type = self._analyze_expr(expr.prefix)
 
@@ -4887,6 +4917,17 @@ class SemanticAnalyzer:
         if not isinstance(prefix_type, ArrayType):
             self.error(f"'{prefix_type.name}' is not an array", expr.prefix)
             return None
+
+        # Check if this is a slice (single index that's a range)
+        # Slices return the same array type, not the component type
+        if len(expr.indices) == 1:
+            idx = expr.indices[0]
+            # Check for explicit Slice node, RangeExpr, or SubtypeIndication with range
+            if isinstance(idx, (RangeExpr, SubtypeIndication)):
+                # This is a slice - analyze the range bounds
+                self._analyze_expr(idx)
+                # Return the array type (slice of array has same type)
+                return prefix_type
 
         # Check indices
         for idx in expr.indices:

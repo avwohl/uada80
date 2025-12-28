@@ -925,6 +925,36 @@ class Parser:
                 return self.parse_aggregate_attribute_suffix(agg, start)
 
             # Check what follows to determine aggregate vs parenthesized
+            # TypeMark RANGE low .. high (discrete range with type constraint)
+            if self.match(TokenType.RANGE):
+                low = self.parse_expression()
+                self.expect(TokenType.DOUBLE_DOT)
+                high = self.parse_expression()
+                range_choice = RangeChoice(
+                    range_expr=RangeExpr(low=low, high=high, span=self.make_span(start)),
+                    type_mark=first_expr
+                )
+                choices: list[Choice] = [range_choice]
+
+                # Check for additional choices with pipe
+                while self.match(TokenType.PIPE):
+                    next_choice = self._parse_single_choice()
+                    choices.append(next_choice)
+
+                self.expect(TokenType.ARROW)
+                value = None
+                if not self.match(TokenType.BOX):
+                    value = self.parse_expression()
+                components = [ComponentAssociation(choices=choices, value=value)]
+
+                while self.match(TokenType.COMMA):
+                    comp = self.parse_aggregate_component()
+                    components.append(comp)
+
+                self.expect(TokenType.RIGHT_PAREN)
+                agg = Aggregate(components=components, span=self.make_span(start))
+                return self.parse_aggregate_attribute_suffix(agg, start)
+
             if self.match(TokenType.DOUBLE_DOT):
                 # Range choice: (low .. high => value, ...)
                 high = self.parse_expression()
@@ -1327,6 +1357,29 @@ class Parser:
         choices: list[Choice] = []
         first_expr = self.parse_expression()
 
+        # Check for TypeMark RANGE low .. high (discrete range with type constraint)
+        if self.match(TokenType.RANGE):
+            # Parse the range constraint
+            low = self.parse_expression()
+            self.expect(TokenType.DOUBLE_DOT)
+            high = self.parse_expression()
+            range_choice = RangeChoice(
+                range_expr=RangeExpr(low=low, high=high),
+                type_mark=first_expr
+            )
+            choices.append(range_choice)
+
+            # Check for additional choices with pipe
+            while self.match(TokenType.PIPE):
+                next_choice = self._parse_single_choice()
+                choices.append(next_choice)
+
+            self.expect(TokenType.ARROW)
+            if self.match(TokenType.BOX):
+                return ComponentAssociation(choices=choices, value=None)
+            value = self.parse_expression()
+            return ComponentAssociation(choices=choices, value=value)
+
         # Check for range choice: expr .. expr => value
         if self.match(TokenType.DOUBLE_DOT):
             high = self.parse_expression()
@@ -1371,6 +1424,25 @@ class Parser:
         else:
             # Positional association
             return ComponentAssociation(choices=[], value=first_expr)
+
+    def _parse_single_choice(self) -> Choice:
+        """Parse a single choice (expr, range, or type-constrained range)."""
+        expr = self.parse_expression()
+        if self.match(TokenType.RANGE):
+            # TypeMark RANGE low .. high
+            low = self.parse_expression()
+            self.expect(TokenType.DOUBLE_DOT)
+            high = self.parse_expression()
+            return RangeChoice(
+                range_expr=RangeExpr(low=low, high=high),
+                type_mark=expr
+            )
+        elif self.match(TokenType.DOUBLE_DOT):
+            # low .. high
+            high = self.parse_expression()
+            return RangeChoice(range_expr=RangeExpr(low=expr, high=high))
+        else:
+            return ExprChoice(expr=expr)
 
     def parse_iterated_component(self) -> IteratedComponentAssociation:
         """Parse iterated component association (Ada 2012).
@@ -1619,12 +1691,7 @@ class Parser:
             if self.match(TokenType.OTHERS):
                 choices.append(OthersChoice())
             else:
-                expr = self.parse_expression()
-                if self.match(TokenType.DOUBLE_DOT):
-                    high = self.parse_expression()
-                    choices.append(RangeChoice(range_expr=RangeExpr(low=expr, high=high)))
-                else:
-                    choices.append(ExprChoice(expr=expr))
+                choices.append(self._parse_single_choice())
 
             if not self.match(TokenType.PIPE):
                 break
@@ -1942,9 +2009,25 @@ class Parser:
         # First parenthesized part could be entry index or parameters
         if self.match(TokenType.LEFT_PAREN):
             # Look ahead to distinguish index from parameters
-            # Parameters have the form: name : type
+            # Parameters have the form: name [, name] : [mode] type
             # Index is just an expression
-            if self.check(TokenType.IDENTIFIER) and self.peek(1).type == TokenType.COLON:
+            # Look for a colon within reasonable lookahead to detect parameters
+            is_params = False
+            if self.check(TokenType.IDENTIFIER):
+                # Scan ahead for colon (parameters) before closing paren
+                lookahead = 1
+                while lookahead < 10:  # Reasonable limit
+                    tok = self.peek(lookahead)
+                    if tok.type == TokenType.COLON:
+                        is_params = True
+                        break
+                    if tok.type == TokenType.RIGHT_PAREN:
+                        break
+                    if tok.type not in (TokenType.IDENTIFIER, TokenType.COMMA):
+                        # Found non-identifier/comma before colon - likely expression
+                        break
+                    lookahead += 1
+            if is_params:
                 # This is parameter list
                 parameters = self.parse_parameter_specifications()
             else:
@@ -2738,9 +2821,12 @@ class Parser:
             range_constraint = None
             if self.match(TokenType.RANGE):
                 low = self.parse_expression()
-                self.expect(TokenType.DOUBLE_DOT)
-                high = self.parse_expression()
-                range_constraint = RangeExpr(low=low, high=high, span=self.make_span(start))
+                if self.match(TokenType.DOUBLE_DOT):
+                    high = self.parse_expression()
+                    range_constraint = RangeExpr(low=low, high=high, span=self.make_span(start))
+                else:
+                    # Range attribute (e.g., A'Range)
+                    range_constraint = low
             constraint = DigitsConstraint(digits=digits_expr, range_constraint=range_constraint)
             return SubtypeIndication(type_mark=type_mark, constraint=constraint, span=self.make_span(start))
 
@@ -2751,18 +2837,25 @@ class Parser:
             range_constraint = None
             if self.match(TokenType.RANGE):
                 low = self.parse_expression()
-                self.expect(TokenType.DOUBLE_DOT)
-                high = self.parse_expression()
-                range_constraint = RangeExpr(low=low, high=high, span=self.make_span(start))
+                if self.match(TokenType.DOUBLE_DOT):
+                    high = self.parse_expression()
+                    range_constraint = RangeExpr(low=low, high=high, span=self.make_span(start))
+                else:
+                    # Range attribute (e.g., A'Range)
+                    range_constraint = low
             constraint = DeltaConstraint(delta=delta_expr, range_constraint=range_constraint)
             return SubtypeIndication(type_mark=type_mark, constraint=constraint, span=self.make_span(start))
 
         # Parse range constraint
         if self.match(TokenType.RANGE):
+            # Could be "Type range Low..High" or "Type range Attr" (where Attr is a range attribute)
             low = self.parse_expression()
-            self.expect(TokenType.DOUBLE_DOT)
-            high = self.parse_expression()
-            constraint = RangeConstraint(range_expr=RangeExpr(low=low, high=high, span=self.make_span(start)))
+            if self.match(TokenType.DOUBLE_DOT):
+                high = self.parse_expression()
+                constraint = RangeConstraint(range_expr=RangeExpr(low=low, high=high, span=self.make_span(start)))
+            else:
+                # The expression itself is the range (e.g., A'Range attribute)
+                constraint = RangeConstraint(range_expr=low)
 
         # Always return SubtypeIndication for consistent interface
         return SubtypeIndication(type_mark=type_mark, constraint=constraint, span=self.make_span(start))
