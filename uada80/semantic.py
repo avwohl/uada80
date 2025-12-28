@@ -1638,6 +1638,10 @@ class SemanticAnalyzer:
         for name in decl.names:
             existing = self.symbols.lookup_local(name)
 
+            # Character literals don't conflict with identifiers
+            if existing is not None and self._is_character_literal_symbol(existing):
+                existing = None
+
             # Check for deferred constant completion
             if existing is not None:
                 if (decl.is_constant and decl.init_expr and
@@ -1751,6 +1755,11 @@ class SemanticAnalyzer:
     def _analyze_type_decl(self, decl: TypeDecl) -> None:
         """Analyze a type declaration."""
         existing = self.symbols.lookup_local(decl.name)
+
+        # Character literals (single character names) don't conflict with identifiers
+        # in Ada, because 'T' and T are syntactically distinct
+        if existing is not None and self._is_character_literal_symbol(existing):
+            existing = None
 
         # Check for incomplete type declaration (type T;)
         if decl.type_def is None:
@@ -3161,6 +3170,25 @@ class SemanticAnalyzer:
         if isinstance(expr, Identifier):
             return expr.name
         return None
+
+    def _is_character_literal_symbol(self, sym: Symbol) -> bool:
+        """Check if a symbol is a character literal (from Character or derived type).
+
+        Character literals don't conflict with identifiers in Ada because
+        'T' (character literal) and T (identifier) are syntactically distinct.
+        """
+        if sym is None:
+            return False
+        # Character literals are stored as single-character names
+        if len(sym.name) != 1:
+            return False
+        # Must be a constant (literals are constants)
+        if not sym.is_constant:
+            return False
+        # Must be from an enumeration type (Character is an enumeration)
+        if sym.ada_type is None or sym.ada_type.kind != TypeKind.ENUMERATION:
+            return False
+        return True
 
     # =========================================================================
     # Statements
