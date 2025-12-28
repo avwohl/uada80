@@ -3205,6 +3205,58 @@ class SemanticAnalyzer:
             return False
         return True
 
+    def _find_prefix_notation_primitive(
+        self, tagged_type: RecordType, selector: str
+    ) -> Optional[AdaType]:
+        """Find a primitive operation for prefix notation calls.
+
+        In Ada 2005+, you can call X.Method(Args) where Method is a primitive
+        operation that takes X (or access to X, or X'Class) as the first parameter.
+
+        Returns the return type for functions, None for procedures.
+        """
+        selector_lower = selector.lower()
+
+        def check_symbol(sym: Symbol) -> Optional[AdaType]:
+            """Check if symbol is a matching primitive operation."""
+            while sym is not None:
+                if sym.kind in (SymbolKind.FUNCTION, SymbolKind.PROCEDURE):
+                    if sym.parameters:
+                        first_param = sym.parameters[0]
+                        first_type = first_param.ada_type
+
+                        # Check if first param matches the tagged type
+                        is_match = False
+                        if first_type:
+                            # Direct match
+                            if same_type(first_type, tagged_type):
+                                is_match = True
+                            # Class-wide type match
+                            elif (isinstance(first_type, RecordType) and
+                                  first_type.is_tagged and
+                                  is_derived_from(first_type, tagged_type)):
+                                is_match = True
+                            # Access to tagged type match
+                            elif isinstance(first_type, AccessType):
+                                designated = first_type.designated_type
+                                if designated and same_type(designated, tagged_type):
+                                    is_match = True
+
+                        if is_match:
+                            return sym.return_type  # None for procedures
+
+                # Check for overloaded version
+                sym = sym.overloaded_next
+            return None
+
+        # Look in current and all enclosing scopes
+        sym = self.symbols.lookup(selector_lower)
+        result = check_symbol(sym)
+        if result is not None:
+            return result
+
+        return None
+
     # =========================================================================
     # Statements
     # =========================================================================
@@ -5055,13 +5107,21 @@ class SemanticAnalyzer:
         # Record component access
         if isinstance(prefix_type, RecordType):
             comp = prefix_type.get_component(expr.selector)
-            if comp is None:
-                self.error(
-                    f"record '{prefix_type.name}' has no component '{expr.selector}'",
-                    expr,
-                )
-                return None
-            return self._resolve_private_type(comp.component_type)
+            if comp is not None:
+                return self._resolve_private_type(comp.component_type)
+
+            # For tagged types, check for prefix notation calls (Ada 2005+)
+            # X.Method where Method is a primitive of X's type
+            if prefix_type.is_tagged:
+                prim_type = self._find_prefix_notation_primitive(prefix_type, expr.selector)
+                if prim_type is not None:
+                    return prim_type
+
+            self.error(
+                f"record '{prefix_type.name}' has no component '{expr.selector}'",
+                expr,
+            )
+            return None
 
         # Access to record - implicit dereference
         if isinstance(prefix_type, AccessType):
@@ -5073,13 +5133,20 @@ class SemanticAnalyzer:
                     designated = completed
             if isinstance(designated, RecordType):
                 comp = designated.get_component(expr.selector)
-                if comp is None:
-                    self.error(
-                        f"record '{designated.name}' has no component '{expr.selector}'",
-                        expr,
-                    )
-                    return None
-                return self._resolve_private_type(comp.component_type)
+                if comp is not None:
+                    return self._resolve_private_type(comp.component_type)
+
+                # For tagged types, check for prefix notation calls (Ada 2005+)
+                if designated.is_tagged:
+                    prim_type = self._find_prefix_notation_primitive(designated, expr.selector)
+                    if prim_type is not None:
+                        return prim_type
+
+                self.error(
+                    f"record '{designated.name}' has no component '{expr.selector}'",
+                    expr,
+                )
+                return None
 
         # Protected type operation access (Counter.Increment, Counter.Value)
         if isinstance(prefix_type, ProtectedType):
