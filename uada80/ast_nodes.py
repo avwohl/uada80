@@ -7,7 +7,7 @@ Based on Ada Reference Manual structure.
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import List, Optional
+from typing import List, Optional, Union
 
 
 @dataclass
@@ -1234,9 +1234,12 @@ class LabeledStmt(Stmt):
 
 @dataclass
 class GotoStmt(Stmt):
-    """Goto statement."""
+    """Goto statement.
 
-    label: str
+    Label can be a simple string or a qualified name (e.g., Block.Label).
+    """
+
+    label: Union[str, "Expr"]
 
 
 @dataclass

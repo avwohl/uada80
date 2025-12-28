@@ -423,6 +423,11 @@ class Parser:
                     selector = self.current.value
                     self.advance()
                     name = SelectedName(prefix=name, selector=selector, span=self.make_span(start))
+                elif self.check(TokenType.CHARACTER_LITERAL):
+                    # Character literal: Package.'C'
+                    selector = self.current.value
+                    self.advance()
+                    name = SelectedName(prefix=name, selector=selector, span=self.make_span(start))
                 else:
                     selector = self.expect_identifier()
                     name = SelectedName(prefix=name, selector=selector, span=self.make_span(start))
@@ -1555,8 +1560,9 @@ class Parser:
             return self.parse_return_statement()
 
         # Goto statement
+        # Labels can be qualified: GOTO Block.Label
         if self.match(TokenType.GOTO):
-            label = self.expect_identifier()
+            label = self.parse_name()
             self.expect(TokenType.SEMICOLON)
             return GotoStmt(label=label, span=self.make_span(start))
 

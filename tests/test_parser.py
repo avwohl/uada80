@@ -1340,7 +1340,10 @@ def test_goto_and_label():
     # Second statement is goto
     stmt2 = unit.statements[1]
     assert isinstance(stmt2, GotoStmt)
-    assert stmt2.label == "My_Label"
+    # Label can be an Identifier or a SelectedName for qualified labels
+    from uada80.ast_nodes import Identifier
+    assert isinstance(stmt2.label, Identifier)
+    assert stmt2.label.name == "My_Label"
 
 
 def test_multiple_labels():
