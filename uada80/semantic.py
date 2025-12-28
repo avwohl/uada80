@@ -4922,8 +4922,15 @@ class SemanticAnalyzer:
         # Slices return the same array type, not the component type
         if len(expr.indices) == 1:
             idx = expr.indices[0]
-            # Check for explicit Slice node, RangeExpr, or SubtypeIndication with range
+            # Check for RangeExpr, SubtypeIndication, or Range attribute
+            is_slice = False
             if isinstance(idx, (RangeExpr, SubtypeIndication)):
+                is_slice = True
+            elif isinstance(idx, AttributeReference):
+                # A'Range is a slice
+                if idx.attribute.upper() == 'RANGE':
+                    is_slice = True
+            if is_slice:
                 # This is a slice - analyze the range bounds
                 self._analyze_expr(idx)
                 # Return the array type (slice of array has same type)
