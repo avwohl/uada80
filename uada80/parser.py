@@ -2899,6 +2899,9 @@ class Parser:
             # Check for anonymous array type: array (Index) of Element
             if self.check(TokenType.ARRAY):
                 type_mark = self.parse_type_definition()
+            elif self.check(TokenType.ACCESS) or (self.check(TokenType.NOT) and self.peek(1).type == TokenType.NULL):
+                # Anonymous access type: access T, not null access T
+                type_mark = self._parse_access_type_indication()
             else:
                 type_mark = self.parse_subtype_indication()
 
@@ -3102,6 +3105,72 @@ class Parser:
             return_type=return_type,
             is_overriding=is_overriding,
             is_not_overriding=is_not_overriding,
+            span=self.make_span(start),
+        )
+
+    def _parse_access_type_indication(self) -> AccessTypeIndication | AccessSubprogramTypeIndication:
+        """Parse anonymous access type indication.
+
+        Handles:
+        - access T
+        - access constant T
+        - access all T
+        - not null access T
+        - access procedure (params)
+        - access function (params) return T
+        """
+        start = self.current
+
+        # Check for "not null" prefix
+        not_null = False
+        if self.match(TokenType.NOT):
+            self.expect(TokenType.NULL)
+            not_null = True
+
+        self.expect(TokenType.ACCESS)
+
+        # Optional "constant" or "protected"
+        is_constant = self.match(TokenType.CONSTANT)
+        is_protected = self.match(TokenType.PROTECTED)
+        # Optional "all"
+        is_all = self.match(TokenType.ALL)
+
+        # Check for access-to-subprogram type: access function/procedure
+        if self.check(TokenType.FUNCTION) or self.check(TokenType.PROCEDURE):
+            is_function = self.match(TokenType.FUNCTION)
+            if not is_function:
+                self.advance()  # consume PROCEDURE
+
+            # Parse parameters
+            parameters = []
+            if self.match(TokenType.LEFT_PAREN):
+                parameters = self.parse_parameter_specifications()
+                self.expect(TokenType.RIGHT_PAREN)
+
+            # Parse return type for functions
+            return_type = None
+            if is_function:
+                self.expect(TokenType.RETURN)
+                return_type = self._parse_return_type()
+
+            return AccessSubprogramTypeIndication(
+                is_function=is_function,
+                parameters=parameters,
+                return_type=return_type,
+                is_protected=is_protected,
+                not_null=not_null,
+                span=self.make_span(start),
+            )
+
+        # The actual type for regular access types
+        subtype = self.parse_name()
+
+        return AccessTypeIndication(
+            subtype=subtype,
+            is_constant=is_constant,
+            not_null=not_null,
+            is_all=is_all,
+            is_protected=is_protected,
             span=self.make_span(start),
         )
 

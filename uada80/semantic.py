@@ -106,6 +106,7 @@ from uada80.ast_nodes import (
     RecordTypeDef,
     AccessTypeDef,
     AccessSubprogramTypeDef,
+    AccessTypeIndication,
     DerivedTypeDef,
     InterfaceTypeDef,
     PrivateTypeDef,
@@ -1597,6 +1598,16 @@ class SemanticAnalyzer:
             # Handle anonymous array types (e.g., X : array (1..10) of Integer)
             if isinstance(decl.type_mark, ArrayTypeDef):
                 obj_type = self._build_array_type(decl.names[0] if decl.names else "_anon", decl.type_mark)
+            elif isinstance(decl.type_mark, AccessTypeIndication):
+                # Handle anonymous access types (e.g., X : access Integer)
+                designated_type = self._resolve_type(decl.type_mark.subtype)
+                obj_type = AccessType(
+                    name="_anonymous_access",
+                    designated_type=designated_type,
+                    is_access_constant=decl.type_mark.is_constant,
+                    is_not_null=decl.type_mark.not_null,
+                    is_access_all=decl.type_mark.is_all,
+                )
             elif isinstance(decl.type_mark, SubtypeIndication):
                 obj_type = self._resolve_subtype_indication(decl.type_mark)
             else:
