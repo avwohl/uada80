@@ -756,14 +756,14 @@ class SemanticAnalyzer:
         else:
             # Regular use clause (use Package;)
             for name in clause.names:
-                if isinstance(name, Identifier):
-                    pkg_symbol = self.symbols.lookup(name.name)
-                    if pkg_symbol is None:
-                        self.error(f"package '{name.name}' not found", name)
-                    elif pkg_symbol.kind != SymbolKind.PACKAGE:
-                        self.error(f"'{name.name}' is not a package", name)
-                    else:
-                        self.symbols.add_use_clause(pkg_symbol)
+                pkg_name = self._get_hierarchical_name(name)
+                pkg_symbol = self.symbols.lookup(pkg_name)
+                if pkg_symbol is None:
+                    self.error(f"package '{pkg_name}' not found", name)
+                elif pkg_symbol.kind != SymbolKind.PACKAGE:
+                    self.error(f"'{pkg_name}' is not a package", name)
+                else:
+                    self.symbols.add_use_clause(pkg_symbol)
 
     # =========================================================================
     # Subprograms
