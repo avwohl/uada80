@@ -107,6 +107,7 @@ from uada80.ast_nodes import (
     AccessTypeDef,
     AccessSubprogramTypeDef,
     AccessTypeIndication,
+    AccessSubprogramTypeIndication,
     DerivedTypeDef,
     InterfaceTypeDef,
     PrivateTypeDef,
@@ -1724,7 +1725,21 @@ class SemanticAnalyzer:
         # Resolve declared type if provided
         obj_type = renamed_type
         if decl.type_mark:
-            declared_type = self._resolve_subtype_indication(decl.type_mark)
+            # Handle different type mark forms
+            if isinstance(decl.type_mark, AccessTypeIndication):
+                designated_type = self._resolve_type(decl.type_mark.subtype)
+                declared_type = AccessType(
+                    name="_anonymous_access",
+                    designated_type=designated_type,
+                    is_access_constant=decl.type_mark.is_constant,
+                    is_not_null=decl.type_mark.not_null,
+                    is_access_all=decl.type_mark.is_all,
+                )
+            elif isinstance(decl.type_mark, AccessSubprogramTypeIndication):
+                # For access-to-subprogram types, just use the renamed type
+                declared_type = renamed_type
+            else:
+                declared_type = self._resolve_subtype_indication(decl.type_mark)
             if declared_type and renamed_type:
                 if not types_compatible(declared_type, renamed_type):
                     self.error(

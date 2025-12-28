@@ -3256,6 +3256,7 @@ class Parser:
 
             # Parse mode
             mode = "in"
+            is_access_param = False
             if self.match(TokenType.IN):
                 if self.match(TokenType.OUT):
                     mode = "in out"
@@ -3263,11 +3264,16 @@ class Parser:
                     mode = "in"
             elif self.match(TokenType.OUT):
                 mode = "out"
-            elif self.match(TokenType.ACCESS):
-                mode = "access"
 
             is_aliased = self.match(TokenType.ALIASED)
-            type_mark = self.parse_name()
+
+            # Check for anonymous access parameter types
+            # e.g., X : access T, X : access constant T, X : not null access T
+            if self.check(TokenType.ACCESS) or (self.check(TokenType.NOT) and self.peek(1).type == TokenType.NULL):
+                is_access_param = True
+                type_mark = self._parse_access_type_indication()
+            else:
+                type_mark = self.parse_name()
 
             default_value = None
             if self.match(TokenType.ASSIGN):
