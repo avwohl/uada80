@@ -3652,7 +3652,9 @@ class SemanticAnalyzer:
             if stmt.value is None:
                 self.error("function must return a value", stmt)
             else:
-                value_type = self._analyze_expr(stmt.value)
+                # Pass expected return type for proper overload resolution of literals
+                expected_return = self.current_subprogram.return_type
+                value_type = self._analyze_expr(stmt.value, expected_type=expected_return)
                 if value_type and self.current_subprogram.return_type:
                     if not types_compatible(
                         self.current_subprogram.return_type, value_type
@@ -4130,6 +4132,16 @@ class SemanticAnalyzer:
         elif isinstance(expr, StringLiteral):
             return PREDEFINED_TYPES["String"]
         elif isinstance(expr, CharacterLiteral):
+            # Check if expected_type is a character enumeration type containing this literal
+            if expected_type and hasattr(expected_type, 'literals'):
+                char_val = expr.value
+                if char_val in expected_type.literals:
+                    return expected_type
+            # Also check for derived character types
+            if expected_type and hasattr(expected_type, 'base_type'):
+                base = expected_type.base_type
+                if hasattr(base, 'literals') and expr.value in base.literals:
+                    return expected_type
             return PREDEFINED_TYPES["Character"]
         elif isinstance(expr, NullLiteral):
             return None  # Type determined by context
