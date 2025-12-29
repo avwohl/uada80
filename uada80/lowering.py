@@ -6000,6 +6000,48 @@ class ASTLowering:
                     # Array field at offset 0, just use outer base
                     return outer_base
 
+            # Handle procedure/package-qualified variable access (e.g., C41103A.N1)
+            # Look up the selector as a variable in the symbol table
+            selector = prefix.selector.lower()
+            sym = self.symbols.lookup(selector)
+            if sym and sym.kind == SymbolKind.VARIABLE:
+                # Check if it's in locals first (might be outer scope variable)
+                if self.ctx and selector in self.ctx.locals:
+                    local = self.ctx.locals[selector]
+                    frame_offset = -(self.ctx.locals_size - local.stack_offset)
+                    local_type = self._resolve_local_type(local.ada_type) if local.ada_type else None
+                    is_array_type = (local_type and hasattr(local_type, 'kind') and
+                                     local_type.kind == TypeKind.ARRAY)
+
+                    if is_array_type and local.size == 2:
+                        addr = self.builder.new_vreg(IRType.PTR, f"_{selector}_ptr")
+                        self.builder.emit(IRInstr(
+                            OpCode.LOAD,
+                            dst=addr,
+                            src1=MemoryLocation(offset=frame_offset, ir_type=IRType.WORD, is_frame_offset=True),
+                            comment=f"load array pointer from {selector}"
+                        ))
+                        return addr
+                    else:
+                        addr = self.builder.new_vreg(IRType.PTR, f"_{selector}_addr")
+                        self.builder.emit(IRInstr(
+                            OpCode.LEA,
+                            dst=addr,
+                            src1=MemoryLocation(offset=frame_offset, ir_type=IRType.PTR, is_frame_offset=True),
+                        ))
+                        return addr
+                else:
+                    # Global variable
+                    addr = self.builder.new_vreg(IRType.PTR, f"_{selector}_addr")
+                    self.builder.emit(IRInstr(
+                        OpCode.LEA,
+                        dst=addr,
+                        src1=self._make_memory_location(
+                            selector, is_global=True, ir_type=IRType.PTR, symbol=sym
+                        ),
+                    ))
+                    return addr
+
         return None
 
     def _calc_element_addr(
@@ -16459,14 +16501,28 @@ class ASTLowering:
 
             # If it's an array field, fall through to array indexing below
             if not is_array_field:
-                # For package-qualified function calls, treat as function call
-                # Build the FunctionCall and dispatch
-                if expr.actual_params:
-                    args = expr.actual_params
+                # Check if this is a procedure/package-qualified array variable access
+                # e.g., C41103A.N1(2) where N1 is an array in procedure C41103A
+                is_array_var = False
+                sel_sym = self.symbols.lookup(selector)
+                if sel_sym and sel_sym.kind == SymbolKind.VARIABLE:
+                    # Check if it's an array type
+                    if sel_sym.ada_type and hasattr(sel_sym.ada_type, 'kind'):
+                        if sel_sym.ada_type.kind == TypeKind.ARRAY:
+                            is_array_var = True
+
+                if is_array_var:
+                    # This is a qualified array variable access - fall through to array indexing
+                    pass
                 else:
-                    args = [ActualParameter(name=None, value=idx) for idx in expr.indices]
-                func_call = FunctionCall(name=expr.prefix, args=args)
-                return self._lower_function_call(func_call)
+                    # For package-qualified function calls, treat as function call
+                    # Build the FunctionCall and dispatch
+                    if expr.actual_params:
+                        args = expr.actual_params
+                    else:
+                        args = [ActualParameter(name=None, value=idx) for idx in expr.indices]
+                    func_call = FunctionCall(name=expr.prefix, args=args)
+                    return self._lower_function_call(func_call)
 
         # Get array base address
         base_addr = self._get_array_base(expr.prefix)
