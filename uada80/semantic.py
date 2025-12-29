@@ -5331,6 +5331,25 @@ class SemanticAnalyzer:
             # Return the floating-point type (from prefix)
             return prefix_type
 
+        # Fixed-point attributes that return the fixed-point type itself
+        # 'Small returns the smallest positive value of the type
+        # 'Delta returns the delta value of the type
+        if attr_lower in ("small", "delta"):
+            if prefix_type and prefix_type.kind == TypeKind.FIXED:
+                return prefix_type
+            # For type names, look up the type
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.kind == SymbolKind.TYPE and sym.ada_type:
+                    if sym.ada_type.kind == TypeKind.FIXED:
+                        return sym.ada_type
+            # Fall back to Universal_Real for compatibility
+            return PREDEFINED_TYPES.get("Universal_Real", PREDEFINED_TYPES["Integer"])
+
+        # Fixed-point display attributes (return integers)
+        if attr_lower in ("fore", "aft"):
+            return PREDEFINED_TYPES["Integer"]
+
         # Default: return Integer for unknown attributes
         return PREDEFINED_TYPES["Integer"]
 
