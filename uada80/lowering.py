@@ -648,6 +648,9 @@ class ASTLowering:
             self._nested_outer_vars[spec.name.lower()] = outer_var_refs
             # Store the full label for call site lookup (no type sig needed)
             self._nested_subprogram_labels[spec.name.lower()] = func_label
+            # Also store with mangled name for operators (e.g., "+" -> "op_add")
+            if func_name != spec.name.lower():
+                self._nested_subprogram_labels[func_name] = func_label
 
         # Process parameters and record their modes, names, defaults, and byref info for call sites
         param_modes = []
@@ -10298,6 +10301,11 @@ class ASTLowering:
 
         # Call the operator function - mangle operator name for assembly
         op_func_name = self._mangle_operator_name(sym.name.lower())
+
+        # Check for nested subprogram label (includes scope prefix)
+        if op_func_name in self._nested_subprogram_labels:
+            op_func_name = self._nested_subprogram_labels[op_func_name]
+
         self.builder.call(Label(op_func_name), comment=f"user-defined operator {sym.name}")
 
         # Capture result from HL register IMMEDIATELY after call
