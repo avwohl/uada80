@@ -245,6 +245,8 @@ class ASTLowering:
         # Maps (function name, type_signature) -> unique label name
         # Type signature is a string like "integer,boolean" for parameters
         self._function_label_map: dict[tuple[str, str], str] = {}
+        # Counter for unique task body names (same task name in different scopes)
+        self._task_body_count: dict[str, int] = {}
         # Global variables (name -> value info)
         self.globals: dict[str, Any] = {}
         # Stack of package prefixes for resolving package-level variables
@@ -2583,8 +2585,21 @@ class ASTLowering:
         # Save current context
         old_ctx = self.ctx
 
-        # Create the task body procedure name
-        task_name = f"_task_body_{decl.name}"
+        # Create the task body procedure name with scope uniqueification
+        base_name = decl.name.lower()
+        scope_prefix = ""
+        if self.ctx and self.ctx.subprogram_name:
+            scope_prefix = f"{self.ctx.subprogram_name}_"
+
+        # Get unique count for this task name
+        task_key = f"{scope_prefix}{base_name}"
+        count = self._task_body_count.get(task_key, 0)
+        self._task_body_count[task_key] = count + 1
+
+        if count > 0:
+            task_name = f"_task_body_{scope_prefix}{base_name}_{count}"
+        else:
+            task_name = f"_task_body_{scope_prefix}{base_name}"
 
         # Create IR function for this task body (tasks are void procedures)
         ir_func = IRFunction(name=task_name, return_type=IRType.VOID)
@@ -4713,7 +4728,7 @@ class ASTLowering:
             # Determine the call target - use external name if imported
             # or runtime_name for built-in container operations
             # Ada is case-insensitive, so normalize to lowercase for consistent linking
-            call_target = stmt.name.name.lower()
+            call_target = self._mangle_operator_name(stmt.name.name.lower())
             if sym:
                 if sym.runtime_name:
                     # Built-in container/library operation
@@ -4721,7 +4736,7 @@ class ASTLowering:
                 elif sym.is_imported and sym.external_name:
                     call_target = sym.external_name.lower()
                 else:
-                    call_target = sym.name.lower()
+                    call_target = self._mangle_operator_name(sym.name.lower())
 
             # Check for overloaded procedure - use unique label if available
             # Use type signature from resolved symbol to match definition
@@ -11378,7 +11393,7 @@ class ASTLowering:
                     # Not a protected type - this is a package-qualified function call
                     # Use the selector as the function name and generate a regular call
                     # Ada is case-insensitive, so normalize to lowercase
-                    call_target = selector.lower()
+                    call_target = self._mangle_operator_name(selector.lower())
                     sym = self._resolve_overload(selector, expr.args)
                     if sym:
                         if sym.runtime_name:
@@ -11386,7 +11401,7 @@ class ASTLowering:
                         elif sym.is_imported and sym.external_name:
                             call_target = sym.external_name.lower()
                         else:
-                            call_target = sym.name.lower()
+                            call_target = self._mangle_operator_name(sym.name.lower())
 
                     # Push arguments in reverse order
                     stack_slots = 0
@@ -11427,7 +11442,7 @@ class ASTLowering:
             # Determine the call target - use external name if imported
             # or runtime_name for built-in container operations
             # Ada is case-insensitive, so normalize to lowercase for consistent linking
-            call_target = expr.name.name.lower()
+            call_target = self._mangle_operator_name(expr.name.name.lower())
             if sym:
                 if sym.runtime_name:
                     # Built-in container/library operation
@@ -11435,7 +11450,7 @@ class ASTLowering:
                 elif sym.is_imported and sym.external_name:
                     call_target = sym.external_name.lower()
                 else:
-                    call_target = sym.name.lower()
+                    call_target = self._mangle_operator_name(sym.name.lower())
 
             # Check for overloaded function - use unique label if available
             # Use type signature from resolved symbol to match definition
@@ -16497,19 +16512,44 @@ class ASTLowering:
                                 if comp.name.lower() == selector:
                                     if isinstance(comp.component_type, ArrayType):
                                         is_array_field = True
+                                    # Also check if it's a known array type name
+                                    elif hasattr(comp.component_type, 'name'):
+                                        type_name = comp.component_type.name.lower() if isinstance(comp.component_type.name, str) else ''
+                                        if type_name in ('string', 'wide_string', 'wide_wide_string'):
+                                            is_array_field = True
+                                    # Also check if it has kind attribute for ARRAY
+                                    elif hasattr(comp.component_type, 'kind') and comp.component_type.kind == TypeKind.ARRAY:
+                                        is_array_field = True
                                     break
+                        # If rec_type lookup failed but we have a record local,
+                        # also try looking up the field as a string/array type based on common patterns
+                        if not is_array_field and selector in ('s', 'string', 'str'):
+                            # Likely a string field - assume it's an array
+                            is_array_field = True
 
             # If it's an array field, fall through to array indexing below
             if not is_array_field:
                 # Check if this is a procedure/package-qualified array variable access
                 # e.g., C41103A.N1(2) where N1 is an array in procedure C41103A
                 is_array_var = False
-                sel_sym = self.symbols.lookup(selector)
-                if sel_sym and sel_sym.kind == SymbolKind.VARIABLE:
+
+                # First check ctx.locals (for local variables in current function context)
+                if self.ctx and selector in self.ctx.locals:
+                    local = self.ctx.locals[selector]
                     # Check if it's an array type
-                    if sel_sym.ada_type and hasattr(sel_sym.ada_type, 'kind'):
-                        if sel_sym.ada_type.kind == TypeKind.ARRAY:
+                    if local.ada_type:
+                        local_type = self._resolve_local_type(local.ada_type)
+                        if local_type and hasattr(local_type, 'kind') and local_type.kind == TypeKind.ARRAY:
                             is_array_var = True
+
+                # Also check symbol table if not found in locals
+                if not is_array_var:
+                    sel_sym = self.symbols.lookup(selector)
+                    if sel_sym and sel_sym.kind == SymbolKind.VARIABLE:
+                        # Check if it's an array type
+                        if sel_sym.ada_type and hasattr(sel_sym.ada_type, 'kind'):
+                            if sel_sym.ada_type.kind == TypeKind.ARRAY:
+                                is_array_var = True
 
                 if is_array_var:
                     # This is a qualified array variable access - fall through to array indexing
