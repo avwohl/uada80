@@ -239,12 +239,16 @@ class ASTLowering:
         # Track which outer variables each nested subprogram needs
         # Maps subprogram name -> set of outer variable names
         self._nested_outer_vars: dict[str, set[str]] = {}
+        # Maps nested subprogram name -> its full label (for call site lookup)
+        # This is a simpler map that doesn't need type signature matching
+        self._nested_subprogram_labels: dict[str, str] = {}
         # Track overloaded functions for unique label generation
         # Maps function name (lowercase) -> count of overloads
         self._function_overload_count: dict[str, int] = {}
-        # Maps (function name, type_signature) -> unique label name
+        # Maps (scope_prefix, function name, type_signature) -> unique label name
         # Type signature is a string like "integer,boolean" for parameters
-        self._function_label_map: dict[tuple[str, str], str] = {}
+        # scope_prefix is empty for top-level, "outer_" for nested subprograms
+        self._function_label_map: dict[tuple[str, str, str], str] = {}
         # Counter for unique task body names (same task name in different scopes)
         self._task_body_count: dict[str, int] = {}
         # Global variables (name -> value info)
@@ -642,6 +646,8 @@ class ASTLowering:
             # Track which outer variables this subprogram needs
             self._nested_subprograms.add(spec.name.lower())
             self._nested_outer_vars[spec.name.lower()] = outer_var_refs
+            # Store the full label for call site lookup (no type sig needed)
+            self._nested_subprogram_labels[spec.name.lower()] = func_label
 
         # Process parameters and record their modes, names, defaults, and byref info for call sites
         param_modes = []
@@ -4747,9 +4753,24 @@ class ASTLowering:
             # Check for overloaded procedure - use unique label if available
             # Use type signature from resolved symbol to match definition
             type_sig = self._get_param_type_sig_from_symbol(sym)
-            label_key = (call_target, type_sig)
-            if label_key in self._function_label_map:
-                call_target = self._function_label_map[label_key]
+            # For nested subprograms, check the simple nested label map first
+            # (doesn't require type signature matching since nested can't be overloaded)
+            if call_target in self._nested_subprogram_labels:
+                call_target = self._nested_subprogram_labels[call_target]
+            else:
+                # For overloaded procedures, use the full label map with type signature
+                # Try with scope prefix first (for nested calls), then without (for top-level)
+                scope_prefix = ""
+                if self.ctx and self.ctx.subprogram_name:
+                    scope_prefix = self.ctx.subprogram_name + "_"
+                label_key = (scope_prefix, call_target, type_sig)
+                if label_key in self._function_label_map:
+                    call_target = self._function_label_map[label_key]
+                else:
+                    # Try without scope prefix (top-level or different scope)
+                    label_key = ("", call_target, type_sig)
+                    if label_key in self._function_label_map:
+                        call_target = self._function_label_map[label_key]
 
             # Get parameter modes for out/in out handling
             # First try locally-tracked modes (for nested subprograms), then symbol table
@@ -11461,9 +11482,24 @@ class ASTLowering:
             # Check for overloaded function - use unique label if available
             # Use type signature from resolved symbol to match definition
             type_sig = self._get_param_type_sig_from_symbol(sym)
-            label_key = (call_target, type_sig)
-            if label_key in self._function_label_map:
-                call_target = self._function_label_map[label_key]
+            # For nested subprograms, check the simple nested label map first
+            # (doesn't require type signature matching since nested can't be overloaded)
+            if call_target in self._nested_subprogram_labels:
+                call_target = self._nested_subprogram_labels[call_target]
+            else:
+                # For overloaded functions, use the full label map with type signature
+                # Try with scope prefix first (for nested calls), then without (for top-level)
+                scope_prefix = ""
+                if self.ctx and self.ctx.subprogram_name:
+                    scope_prefix = self.ctx.subprogram_name + "_"
+                label_key = (scope_prefix, call_target, type_sig)
+                if label_key in self._function_label_map:
+                    call_target = self._function_label_map[label_key]
+                else:
+                    # Try without scope prefix (top-level or different scope)
+                    label_key = ("", call_target, type_sig)
+                    if label_key in self._function_label_map:
+                        call_target = self._function_label_map[label_key]
 
             # Check if this is a dispatching call
             is_dispatching = self._is_dispatching_call(sym, expr.args)
