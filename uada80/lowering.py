@@ -10269,8 +10269,8 @@ class ASTLowering:
             left_val = self._lower_expr(left_operand)
         self.builder.push(left_val)
 
-        # Call the operator function
-        op_func_name = sym.name
+        # Call the operator function - mangle operator name for assembly
+        op_func_name = self._mangle_operator_name(sym.name.lower())
         self.builder.call(Label(op_func_name), comment=f"user-defined operator {sym.name}")
 
         # Capture result from HL register IMMEDIATELY after call
