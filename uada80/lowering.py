@@ -597,7 +597,7 @@ class ASTLowering:
         # Use (name, type_signature) to distinguish overloads by both name and parameter types
         # Include return type for functions (Ada allows overloading by return type)
         # Ada is case-insensitive, so normalize all labels to lowercase
-        func_name = spec.name.lower()
+        func_name = self._mangle_operator_name(spec.name.lower())
         func_name_lower = func_name
         return_type_expr = spec.return_type if spec.is_function else None
         type_sig = self._get_param_type_sig_from_spec(spec.parameters, return_type_expr)
@@ -2825,7 +2825,9 @@ class ASTLowering:
         scope_prefix = ""
         if self.ctx.subprogram_name:
             scope_prefix = f"{self.ctx.subprogram_name}_"
-        label_name = f"_usr_{scope_prefix}{stmt.label.lower()}"
+        # Handle both string and Identifier labels
+        label_str = stmt.label if isinstance(stmt.label, str) else stmt.label.name
+        label_name = f"_usr_{scope_prefix}{label_str.lower()}"
         self.builder.label(label_name)
 
         # Lower the inner statement
@@ -2840,7 +2842,9 @@ class ASTLowering:
         scope_prefix = ""
         if self.ctx.subprogram_name:
             scope_prefix = f"{self.ctx.subprogram_name}_"
-        label_name = f"_usr_{scope_prefix}{stmt.label.lower()}"
+        # Handle both string and Identifier labels
+        label_str = stmt.label if isinstance(stmt.label, str) else stmt.label.name
+        label_name = f"_usr_{scope_prefix}{label_str.lower()}"
         self.builder.jmp(Label(label_name))
 
     # =========================================================================
@@ -10802,6 +10806,63 @@ class ASTLowering:
 
         return best_match if best_match else overloads[0]
 
+    def _mangle_operator_name(self, name: str) -> str:
+        """Mangle Ada operator names to valid assembly symbol names.
+
+        Ada operator function names like "-", "+", "*" need to be converted
+        to valid Z80 assembly symbols.
+        """
+        # Map of Ada operator symbols to assembly-safe names
+        operator_map = {
+            '"++"': 'op_pos',    # Unary plus (same name in Ada)
+            '"+"': 'op_add',
+            '"-"': 'op_sub',
+            '"*"': 'op_mul',
+            '"/"': 'op_div',
+            '"**"': 'op_exp',
+            '"mod"': 'op_mod',
+            '"rem"': 'op_rem',
+            '"abs"': 'op_abs',
+            '"and"': 'op_and',
+            '"or"': 'op_or',
+            '"xor"': 'op_xor',
+            '"not"': 'op_not',
+            '"="': 'op_eq',
+            '"/="': 'op_ne',
+            '"<"': 'op_lt',
+            '"<="': 'op_le',
+            '">"': 'op_gt',
+            '">="': 'op_ge',
+            '"&"': 'op_concat',
+            # Handle without quotes as well
+            '+': 'op_add',
+            '-': 'op_sub',
+            '*': 'op_mul',
+            '/': 'op_div',
+            '**': 'op_exp',
+            'mod': 'op_mod',
+            'rem': 'op_rem',
+            'abs': 'op_abs',
+            'and': 'op_and',
+            'or': 'op_or',
+            'xor': 'op_xor',
+            'not': 'op_not',
+            '=': 'op_eq',
+            '/=': 'op_ne',
+            '<': 'op_lt',
+            '<=': 'op_le',
+            '>': 'op_gt',
+            '>=': 'op_ge',
+            '&': 'op_concat',
+        }
+        # Strip quotes if present
+        clean_name = name.strip('"')
+        if clean_name in operator_map:
+            return operator_map[clean_name]
+        if name in operator_map:
+            return operator_map[name]
+        return name
+
     def _get_type_name_from_expr(self, expr: Expr) -> Optional[str]:
         """Get the type name from an expression (for type references)."""
         if isinstance(expr, Identifier):
@@ -10826,6 +10887,9 @@ class ASTLowering:
             type_name = self._get_type_name_from_expr(param_spec.type_mark)
             if type_name:
                 type_name = type_name.lower()
+                # For generic instantiations, substitute actual types for formal types
+                if hasattr(self, '_generic_type_map') and self._generic_type_map:
+                    type_name = self._generic_type_map.get(type_name, type_name)
             else:
                 type_name = "_unknown"
             # Each param_spec can have multiple names (e.g., X, Y: Integer)
@@ -10836,7 +10900,11 @@ class ASTLowering:
         if return_type_expr:
             ret_type = self._get_type_name_from_expr(return_type_expr)
             if ret_type:
-                sig = f"{sig}->{ret_type.lower()}"
+                ret_type_lower = ret_type.lower()
+                # For generic instantiations, substitute actual types for formal types
+                if hasattr(self, '_generic_type_map') and self._generic_type_map:
+                    ret_type_lower = self._generic_type_map.get(ret_type_lower, ret_type_lower)
+                sig = f"{sig}->{ret_type_lower}"
         return sig
 
     def _get_param_type_sig_from_symbol(self, sym: Optional[Symbol]) -> str:

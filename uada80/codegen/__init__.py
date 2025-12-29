@@ -129,7 +129,8 @@ class Z80CodeGen:
             self._emit("; String literals")
             self._emit("    CSEG")
             for label, value in module.string_literals.items():
-                escaped = value.replace('"', '\\"')
+                # MACRO-80 uses "" to represent a single quote inside a string
+                escaped = value.replace('"', '""')
                 self._emit(f'{label}:')
                 self._emit(f'    DB "{escaped}", 0')
             self._emit("")
@@ -164,7 +165,8 @@ class Z80CodeGen:
                 self._emit(f"    DB {len(entries)}  ; count")
                 for name, value in entries:
                     # Store uppercase name (null-terminated) followed by value byte
-                    escaped = name.upper().replace('"', '\\"')
+                    # MACRO-80 uses "" to represent a single quote inside a string
+                    escaped = name.upper().replace('"', '""')
                     self._emit(f'    DB "{escaped}", 0, {value}')
             self._emit("")
 

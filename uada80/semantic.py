@@ -4657,7 +4657,7 @@ class SemanticAnalyzer:
         left_type = self._analyze_expr(expr.left)
         right_type = self._analyze_expr(expr.right)
 
-        # Relational operators return Boolean
+        # Relational operators return Boolean (unless user-defined to return something else)
         if expr.op in (
             BinaryOp.EQ,
             BinaryOp.NE,
@@ -4666,6 +4666,22 @@ class SemanticAnalyzer:
             BinaryOp.GT,
             BinaryOp.GE,
         ):
+            # First check for user-defined relational operator
+            if left_type and right_type:
+                op_name = {
+                    BinaryOp.EQ: "=", BinaryOp.NE: "/=", BinaryOp.LT: "<",
+                    BinaryOp.LE: "<=", BinaryOp.GT: ">", BinaryOp.GE: ">="
+                }.get(expr.op)
+                if op_name:
+                    overloads = self.symbols.all_overloads(op_name)
+                    for candidate in overloads:
+                        if candidate.kind == SymbolKind.FUNCTION and len(candidate.parameters) == 2:
+                            param1_type = candidate.parameters[0].ada_type
+                            param2_type = candidate.parameters[1].ada_type
+                            if (param1_type and param2_type and
+                                types_compatible(param1_type, left_type) and
+                                types_compatible(param2_type, right_type)):
+                                return candidate.return_type
             return PREDEFINED_TYPES["Boolean"]
 
         # Logical/bitwise operators
@@ -4723,6 +4739,18 @@ class SemanticAnalyzer:
                     # Both operands must be compatible array types
                     if right_type and types_compatible(left_type, right_type):
                         return left_type  # Result is same array type
+            # Check for user-defined AND/OR/XOR operator before requiring Boolean
+            op_name = {BinaryOp.AND: "and", BinaryOp.OR: "or", BinaryOp.XOR: "xor"}.get(expr.op)
+            if op_name and left_type and right_type:
+                overloads = self.symbols.all_overloads(op_name)
+                for candidate in overloads:
+                    if candidate.kind == SymbolKind.FUNCTION and len(candidate.parameters) == 2:
+                        param1_type = candidate.parameters[0].ada_type
+                        param2_type = candidate.parameters[1].ada_type
+                        if (param1_type and param2_type and
+                            types_compatible(param1_type, left_type) and
+                            types_compatible(param2_type, right_type)):
+                            return candidate.return_type
             # For Boolean, these are logical operators
             self._check_boolean(left_type, expr.left)
             self._check_boolean(right_type, expr.right)
@@ -4731,6 +4759,17 @@ class SemanticAnalyzer:
         # Exponentiation is special: X ** N where N must be integer, result is type of X
         if expr.op == BinaryOp.EXP:
             if left_type and right_type:
+                # First check for user-defined "**" operator
+                overloads = self.symbols.all_overloads("**")
+                for candidate in overloads:
+                    if candidate.kind == SymbolKind.FUNCTION and len(candidate.parameters) == 2:
+                        param1_type = candidate.parameters[0].ada_type
+                        param2_type = candidate.parameters[1].ada_type
+                        if (param1_type and param2_type and
+                            types_compatible(param1_type, left_type) and
+                            types_compatible(param2_type, right_type)):
+                            return candidate.return_type
+                # No matching user-defined operator - apply built-in rule
                 # Right operand must be integer type
                 if right_type.kind not in (TypeKind.INTEGER, TypeKind.MODULAR,
                                            TypeKind.UNIVERSAL_INTEGER):
@@ -4752,6 +4791,22 @@ class SemanticAnalyzer:
             BinaryOp.REM,
         ):
             if left_type and right_type:
+                # First check for user-defined arithmetic operator
+                op_name = {
+                    BinaryOp.ADD: "+", BinaryOp.SUB: "-", BinaryOp.MUL: "*",
+                    BinaryOp.DIV: "/", BinaryOp.MOD: "mod", BinaryOp.REM: "rem"
+                }.get(expr.op)
+                if op_name:
+                    overloads = self.symbols.all_overloads(op_name)
+                    for candidate in overloads:
+                        if candidate.kind == SymbolKind.FUNCTION and len(candidate.parameters) == 2:
+                            param1_type = candidate.parameters[0].ada_type
+                            param2_type = candidate.parameters[1].ada_type
+                            if (param1_type and param2_type and
+                                types_compatible(param1_type, left_type) and
+                                types_compatible(param2_type, right_type)):
+                                return candidate.return_type
+                # No user-defined operator - use common_type
                 result = common_type(left_type, right_type)
                 if result is None:
                     self.error(
