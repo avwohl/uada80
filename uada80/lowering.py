@@ -997,7 +997,8 @@ class ASTLowering:
 
     def _lower_package_init(self, body: PackageBody) -> None:
         """Generate initialization function for a package body."""
-        init_func_name = f"_{body.name}_init".replace(".", "_")
+        # Use lowercase for consistency with codegen's symbol mangling
+        init_func_name = f"_{body.name}_init".replace(".", "_").lower()
 
         # Create init function
         func = self.builder.new_function(init_func_name, IRType.VOID)
