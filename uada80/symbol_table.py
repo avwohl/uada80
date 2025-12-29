@@ -6391,9 +6391,10 @@ class SymbolTable:
             """Add a symbol and its overload chain to results."""
             current = sym
             while current is not None:
-                if id(current) not in seen_ids:
-                    seen_ids.add(id(current))
-                    result.append(current)
+                if id(current) in seen_ids:
+                    break  # Circular reference or already seen - stop
+                seen_ids.add(id(current))
+                result.append(current)
                 current = current.overloaded_next
 
         # Search from current scope outward

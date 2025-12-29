@@ -236,7 +236,9 @@ class FloatType(AdaType):
     base_type: Optional["FloatType"] = None  # For subtypes
 
     def __post_init__(self) -> None:
-        self.kind = TypeKind.FLOAT
+        # Only set kind to FLOAT if kind is still the default INTEGER (allows FIXED kind to be passed in)
+        if self.kind == TypeKind.INTEGER:
+            self.kind = TypeKind.FLOAT
         if self.size_bits == 0:
             self.size_bits = self._compute_size()
 
@@ -1276,6 +1278,21 @@ def can_convert(from_type: AdaType, to_type: AdaType) -> bool:
                 return True
             ancestor = ancestor.base_type
 
+    # Check if both types share a common ultimate ancestor (for derivation)
+    # This handles cases like ENUM1 derived from ENUM and ENUM2 derived from ENUM
+    # We need to trace the full derivation chain, not just subtypes
+    def get_ultimate_ancestor(t: AdaType) -> AdaType:
+        """Follow base_type chain to find ultimate ancestor for derived types."""
+        current = t
+        while hasattr(current, 'base_type') and current.base_type:
+            current = current.base_type
+        return current
+
+    from_ancestor = get_ultimate_ancestor(from_type)
+    to_ancestor = get_ultimate_ancestor(to_type)
+    if from_ancestor and to_ancestor and same_type(from_ancestor, to_ancestor):
+        return True
+
     # Enumeration types that aren't related via derivation are not convertible
     if from_type.kind == TypeKind.ENUMERATION and to_type.kind == TypeKind.ENUMERATION:
         return False
@@ -1349,6 +1366,28 @@ def common_type(t1: AdaType, t2: AdaType) -> Optional[AdaType]:
         return t1  # Universal_Real
     if t2.kind == TypeKind.UNIVERSAL_REAL and t1.kind == TypeKind.UNIVERSAL_INTEGER:
         return t2  # Universal_Real
+
+    # Mixed fixed-point and integer arithmetic (Ada RM 4.5.5)
+    # Integer * Fixed_Point -> Fixed_Point
+    # Fixed_Point * Integer -> Fixed_Point
+    # Fixed_Point / Integer -> Fixed_Point
+    if t1.kind == TypeKind.FIXED and t2.kind == TypeKind.INTEGER:
+        return t1
+    if t1.kind == TypeKind.INTEGER and t2.kind == TypeKind.FIXED:
+        return t2
+
+    # Fixed-point * Fixed-point -> universal_fixed (Ada RM 4.5.5)
+    # The result is universal_fixed and must be explicitly converted
+    # For semantic analysis, we return Universal_Real as a stand-in for universal_fixed
+    if t1.kind == TypeKind.FIXED and t2.kind == TypeKind.FIXED:
+        return PREDEFINED_TYPES.get("Universal_Real")
+
+    # Universal_Fixed with fixed-point -> the fixed-point type
+    # This allows universal_fixed results to be converted to specific fixed-point types
+    if t1.kind == TypeKind.UNIVERSAL_REAL and t2.kind == TypeKind.FIXED:
+        return t2
+    if t2.kind == TypeKind.UNIVERSAL_REAL and t1.kind == TypeKind.FIXED:
+        return t1
 
     # Subtype and base type -> base type
     if is_subtype_of(t1, t2):

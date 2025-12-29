@@ -234,6 +234,21 @@ class SemanticAnalyzer:
 
         self.symbols.define(ascii_pkg)
 
+        # Standard package - the implicit root package containing predefined entities
+        # This allows explicit qualification like STANDARD."*"
+        standard_pkg = Symbol(name="Standard", kind=SymbolKind.PACKAGE)
+        standard_pkg.public_symbols = {}
+
+        # Add predefined operators as functions
+        # The operator symbols are stored as operator names
+        for op in ("*", "/", "+", "-", "mod", "rem", "**", "abs", "not",
+                   "=", "/=", "<", "<=", ">", ">=", "and", "or", "xor"):
+            op_sym = Symbol(name=op, kind=SymbolKind.FUNCTION)
+            op_sym.is_intrinsic = True  # Mark as built-in
+            standard_pkg.public_symbols[op.lower()] = op_sym
+
+        self.symbols.define(standard_pkg)
+
     def analyze(self, program: Program) -> SemanticResult:
         """Analyze a complete program."""
         for unit in program.units:
@@ -1064,33 +1079,63 @@ class SemanticAnalyzer:
             # Mark it as a generic formal type
             type_sym.is_generic_formal = True
 
-            # Determine the appropriate type kind based on the constraint
-            constraint = getattr(formal, 'constraint', None) or 'private'
-            if constraint == 'range':
-                # Signed integer type (type T is range <>)
-                type_kind = TypeKind.INTEGER
-            elif constraint == 'mod':
-                # Modular integer type (type T is mod <>)
-                type_kind = TypeKind.MODULAR
-            elif constraint == 'digits':
-                # Floating point type (type T is digits <>)
-                type_kind = TypeKind.FLOAT
-            elif constraint in ('delta', 'delta_digits'):
-                # Fixed point type (type T is delta <>)
-                type_kind = TypeKind.FIXED
-            elif constraint == 'discrete':
-                # Discrete type (type T is (<>))
-                type_kind = TypeKind.ENUMERATION
-            else:
-                # Private, tagged private, derived, etc.
-                type_kind = TypeKind.PRIVATE
+            # Check if this is an array type formal (has definition with ArrayTypeDef)
+            if hasattr(formal, 'definition') and formal.definition is not None:
+                if isinstance(formal.definition, ArrayTypeDef):
+                    # Create an ArrayType for the formal
+                    # Resolve index types and component type
+                    index_types = []
+                    for idx_subtype in formal.definition.index_subtypes:
+                        idx_type = self._resolve_type(idx_subtype)
+                        if idx_type:
+                            index_types.append(idx_type)
+                        else:
+                            # Fallback for unresolvable index types
+                            index_types.append(PREDEFINED_TYPES["Integer"])
+                    component_type = self._resolve_type(formal.definition.component_type)
+                    type_sym.ada_type = ArrayType(
+                        name=formal.name,
+                        kind=TypeKind.ARRAY,
+                        size_bits=0,
+                        index_types=index_types,
+                        component_type=component_type,
+                        is_constrained=formal.definition.is_constrained,
+                    )
+                    type_sym.ada_type.is_generic_formal = True
+                    self.symbols.define(type_sym)
+                    sym = type_sym
+                else:
+                    # Other type definitions (access, etc.) - fall through to constraint handling
+                    pass
 
-            type_sym.ada_type = AdaType(
-                kind=type_kind,
-                name=formal.name,
-            )
-            self.symbols.define(type_sym)
-            sym = type_sym
+            if not hasattr(type_sym, 'ada_type') or type_sym.ada_type is None:
+                # Determine the appropriate type kind based on the constraint
+                constraint = getattr(formal, 'constraint', None) or 'private'
+                if constraint == 'range':
+                    # Signed integer type (type T is range <>)
+                    type_kind = TypeKind.INTEGER
+                elif constraint == 'mod':
+                    # Modular integer type (type T is mod <>)
+                    type_kind = TypeKind.MODULAR
+                elif constraint == 'digits':
+                    # Floating point type (type T is digits <>)
+                    type_kind = TypeKind.FLOAT
+                elif constraint in ('delta', 'delta_digits'):
+                    # Fixed point type (type T is delta <>)
+                    type_kind = TypeKind.FIXED
+                elif constraint == 'discrete':
+                    # Discrete type (type T is (<>))
+                    type_kind = TypeKind.ENUMERATION
+                else:
+                    # Private, tagged private, derived, etc.
+                    type_kind = TypeKind.PRIVATE
+
+                type_sym.ada_type = AdaType(
+                    kind=type_kind,
+                    name=formal.name,
+                )
+                self.symbols.define(type_sym)
+                sym = type_sym
 
         elif isinstance(formal, GenericObjectDecl):
             # Generic formal object: X : in Integer := 0
@@ -1116,6 +1161,9 @@ class SemanticAnalyzer:
                 obj_sym.ada_type = resolved_type
                 self.symbols.define(obj_sym)
                 sym = obj_sym  # Last one becomes the representative
+                # Store each name in generic_formal_symbols for body visibility
+                if owner_symbol is not None:
+                    owner_symbol.generic_formal_symbols[obj_sym.name.lower()] = obj_sym
 
         elif hasattr(formal, '__class__') and formal.__class__.__name__ == 'GenericSubprogramDecl':
             # Generic formal subprogram
@@ -2689,9 +2737,17 @@ class SemanticAnalyzer:
         digits = 6  # Default precision
         range_first = None
         range_last = None
+        delta_value = None
 
         if type_def.is_floating and type_def.digits_expr:
             digits = self._eval_static_expr(type_def.digits_expr)
+
+        # Handle fixed-point delta expression
+        if not type_def.is_floating and type_def.delta_expr:
+            try:
+                delta_value = float(self._eval_static_expr(type_def.delta_expr))
+            except (TypeError, ValueError):
+                pass
 
         if type_def.range_constraint:
             # Try to evaluate bounds as floats
@@ -2701,14 +2757,21 @@ class SemanticAnalyzer:
             except (TypeError, ValueError):
                 pass
 
-        return FloatType(
+        # Determine the type kind based on is_floating
+        type_kind = TypeKind.FLOAT if type_def.is_floating else TypeKind.FIXED
+
+        result = FloatType(
             name=name,
-            kind=TypeKind.FLOAT,
+            kind=type_kind,
             size_bits=32 if digits <= 6 else 64,
             digits=digits,
             range_first=range_first,
             range_last=range_last,
         )
+        # Store delta value for fixed-point types
+        if delta_value is not None:
+            result.delta_value = delta_value
+        return result
 
     def _build_enumeration_type(
         self, name: str, type_def: EnumerationTypeDef
@@ -3021,9 +3084,37 @@ class SemanticAnalyzer:
                 parent_package = self.symbols.lookup(prefix_name)
         else:
             # Simple name - parent type is in current or enclosing scope
-            # Look for a package in scope that contains this type
-            # For now, skip inheritance for types not from explicit packages
-            return
+            # Try to find the package that contains the parent type
+            parent_type_name = None
+            if isinstance(parent_type_expr, Identifier):
+                parent_type_name = parent_type_expr.name.lower()
+            elif hasattr(parent_type_expr, 'name'):
+                parent_type_name = str(parent_type_expr.name).lower()
+
+            if parent_type_name:
+                # Check current package first
+                if self.current_package:
+                    if parent_type_name in self.current_package.public_symbols:
+                        parent_package = self.current_package
+                    elif parent_type_name in self.current_package.private_symbols:
+                        parent_package = self.current_package
+
+                # If not found, search visible packages for this type
+                if parent_package is None:
+                    # Look up the parent type symbol and find its defining package
+                    parent_sym = self.symbols.lookup(parent_type_name)
+                    if parent_sym and hasattr(parent_sym, 'defining_package'):
+                        parent_package = parent_sym.defining_package
+                    else:
+                        # Search all visible packages in the scope stack
+                        for scope in self.symbols.scope_stack:
+                            for sym_name, sym in scope.symbols.items():
+                                if sym.kind == SymbolKind.PACKAGE and sym.public_symbols:
+                                    if parent_type_name in sym.public_symbols:
+                                        parent_package = sym
+                                        break
+                            if parent_package:
+                                break
 
         if parent_package is None or parent_package.kind != SymbolKind.PACKAGE:
             return
@@ -4130,6 +4221,36 @@ class SemanticAnalyzer:
         elif isinstance(expr, RealLiteral):
             return PREDEFINED_TYPES["Universal_Real"]
         elif isinstance(expr, StringLiteral):
+            # Ada RM 4.2(9): String literals can match any array type with character component
+            # Ada RM 3.5.2(3): A "character type" is any enumeration type containing
+            # at least one character literal (like 'A', 'B', etc.)
+            if expected_type and isinstance(expected_type, ArrayType):
+                comp_type = expected_type.component_type
+                if comp_type:
+                    is_char_type = False
+                    # Check if component is Character or derived from Character
+                    if hasattr(comp_type, 'name') and comp_type.name == 'Character':
+                        is_char_type = True
+                    elif hasattr(comp_type, 'base_type'):
+                        base = comp_type.base_type
+                        while base:
+                            if hasattr(base, 'name') and base.name == 'Character':
+                                is_char_type = True
+                                break
+                            base = getattr(base, 'base_type', None)
+                    # Check if it's an enumeration type with character literals
+                    # Ada RM 3.5.2(3): enumeration types containing character literals
+                    # are considered "character types"
+                    if not is_char_type and hasattr(comp_type, 'kind'):
+                        if comp_type.kind == TypeKind.ENUMERATION:
+                            # Check if literals contain character literals (single chars)
+                            if hasattr(comp_type, 'literals') and comp_type.literals:
+                                for lit in comp_type.literals:
+                                    if isinstance(lit, str) and len(lit) == 1:
+                                        is_char_type = True
+                                        break
+                    if is_char_type:
+                        return expected_type
             return PREDEFINED_TYPES["String"]
         elif isinstance(expr, CharacterLiteral):
             # Check if expected_type is a character enumeration type containing this literal
@@ -4154,7 +4275,7 @@ class SemanticAnalyzer:
         elif isinstance(expr, IndexedComponent):
             return self._analyze_indexed_component(expr)
         elif isinstance(expr, SelectedName):
-            return self._analyze_selected_name(expr)
+            return self._analyze_selected_name(expr, expected_type)
         elif isinstance(expr, AttributeReference):
             return self._analyze_attribute_ref(expr)
         elif isinstance(expr, FunctionCall):
@@ -4869,6 +4990,14 @@ class SemanticAnalyzer:
                                 break
                     if is_boolean_component:
                         return operand_type  # Returns array of same type
+            # Check for user-defined NOT operator before requiring Boolean
+            if operand_type:
+                overloads = self.symbols.all_overloads('not')
+                for candidate in overloads:
+                    if candidate.kind == SymbolKind.FUNCTION and len(candidate.parameters) == 1:
+                        param_type = candidate.parameters[0].ada_type
+                        if param_type and types_compatible(param_type, operand_type):
+                            return candidate.return_type
             # For Boolean, NOT is logical negation
             self._check_boolean(operand_type, expr.operand)
             return PREDEFINED_TYPES["Boolean"]
@@ -4934,20 +5063,28 @@ class SemanticAnalyzer:
             # First check if this is an operator call like "ABS"(X) or "+"(A, B)
             # The parser converts quoted operator names to identifiers
             op_name = expr.prefix.name.upper()
-            UNARY_OPS = {'ABS', 'NOT'}
+            UNARY_OPS = {'ABS', 'NOT', '+', '-'}  # + and - can be unary
             BINARY_OPS = {'+', '-', '*', '/', 'MOD', 'REM', '**', '&',
                           'AND', 'OR', 'XOR', '=', '/=', '<', '>', '<=', '>='}
 
+            # Handle unary operators (including unary + and -)
             if op_name in UNARY_OPS and len(expr.indices) == 1:
-                # Unary operator call: "ABS"(X) -> abs X
+                # Unary operator call: "ABS"(X) -> abs X, "+"(X) -> +X, "-"(X) -> -X
                 arg_type = self._analyze_expr(expr.indices[0])
                 if arg_type is None:
                     return None
                 # Check that the type supports this operator
                 if op_name == 'ABS':
-                    if arg_type.kind in (TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.FLOAT):
+                    if arg_type.kind in (TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.FLOAT, TypeKind.FIXED,
+                                         TypeKind.UNIVERSAL_INTEGER, TypeKind.UNIVERSAL_REAL):
                         return arg_type
                     self.error(f"operator 'abs' not defined for type '{arg_type.name}'", expr)
+                    return None
+                elif op_name in ('+', '-'):
+                    # Unary + and - are valid for numeric types
+                    if arg_type.is_numeric():
+                        return arg_type
+                    self.error(f"operator '{op_name.lower()}' not defined for type '{arg_type.name}'", expr)
                     return None
                 elif op_name == 'NOT':
                     if arg_type.name and arg_type.name.lower() == 'boolean':
@@ -5126,18 +5263,35 @@ class SemanticAnalyzer:
         # Resolve private types to their full definitions
         return self._resolve_private_type(prefix_type.component_type)
 
-    def _analyze_selected_name(self, expr: SelectedName) -> Optional[AdaType]:
+    def _analyze_selected_name(self, expr: SelectedName, expected_type: Optional[AdaType] = None) -> Optional[AdaType]:
         """Analyze a selected name (record.field, package.item, or pointer.all)."""
         prefix_type = self._analyze_expr(expr.prefix)
 
         if prefix_type is None:
+            # Helper to select best match from overload chain based on expected_type
+            def select_from_overloads(symbol: Symbol) -> Optional[AdaType]:
+                """Select the best matching symbol from an overload chain."""
+                if symbol is None:
+                    return None
+                # If no expected type, return first (most recent) symbol
+                if expected_type is None:
+                    return symbol.ada_type
+                # Traverse overload chain looking for matching type
+                current = symbol
+                while current is not None:
+                    if current.ada_type and same_type(current.ada_type, expected_type):
+                        return current.ada_type
+                    current = current.overloaded_next
+                # No match found, return first
+                return symbol.ada_type
+
             # Might be a package prefix - handle both simple and hierarchical names
             if isinstance(expr.prefix, Identifier):
                 symbol = self.symbols.lookup_selected(
                     expr.prefix.name, expr.selector
                 )
                 if symbol:
-                    return symbol.ada_type
+                    return select_from_overloads(symbol)
             elif isinstance(expr.prefix, SelectedName):
                 # Handle recursive SelectedName prefix (e.g., Ada.Text_IO.Put)
                 # First try to look up the full prefix as a registered package
@@ -5146,13 +5300,13 @@ class SemanticAnalyzer:
                 if prefix_sym and prefix_sym.kind == SymbolKind.PACKAGE:
                     selector = expr.selector.lower() if isinstance(expr.selector, str) else expr.selector.lower()
                     if selector in prefix_sym.public_symbols:
-                        return prefix_sym.public_symbols[selector].ada_type
+                        return select_from_overloads(prefix_sym.public_symbols[selector])
                 # Try resolving through the package hierarchy
                 prefix_pkg = self._resolve_hierarchical_package(expr.prefix)
                 if prefix_pkg and prefix_pkg.kind == SymbolKind.PACKAGE:
                     selector = expr.selector.lower() if isinstance(expr.selector, str) else expr.selector.lower()
                     if selector in prefix_pkg.public_symbols:
-                        return prefix_pkg.public_symbols[selector].ada_type
+                        return select_from_overloads(prefix_pkg.public_symbols[selector])
             return None
 
         # Access type dereference (Ptr.all)
@@ -5266,9 +5420,29 @@ class SemanticAnalyzer:
             ):
                 return prefix_type
             # For arrays, First/Last return the index type
+            # The dimension argument (if present) specifies which dimension (1-based)
             if isinstance(prefix_type, ArrayType) and prefix_type.index_types:
-                return prefix_type.index_types[0]
+                dim = 0  # Default to first dimension (0-indexed)
+                if expr.args:
+                    # Get dimension from argument (e.g., A'FIRST(2) for second dimension)
+                    dim_val = self._try_eval_static(expr.args[0])
+                    if dim_val is not None and isinstance(dim_val, int):
+                        dim = dim_val - 1  # Convert to 0-indexed
+                    self._analyze_expr(expr.args[0])  # Analyze the argument
+                if 0 <= dim < len(prefix_type.index_types):
+                    return prefix_type.index_types[dim]
+                return prefix_type.index_types[0]  # Fallback to first
             return PREDEFINED_TYPES["Integer"]
+
+        # BASE attribute - returns the base type (Ada RM 3.5(14))
+        # T'BASE is the unconstrained base type of T
+        if attr_lower == "base":
+            if prefix_type:
+                # If there's a base_type, return it; otherwise return the type itself
+                if hasattr(prefix_type, 'base_type') and prefix_type.base_type:
+                    return prefix_type.base_type
+                return prefix_type
+            return None
 
         # Integer-valued attributes
         # 'Length and 'Size return Universal_Integer (implicitly convertible to any integer)
@@ -5336,7 +5510,10 @@ class SemanticAnalyzer:
             return PREDEFINED_TYPES["Integer"]
 
         # Boolean attributes
-        if attr_lower in ("valid", "constrained", "terminated", "callable"):
+        if attr_lower in ("valid", "constrained", "terminated", "callable",
+                          "machine_overflows", "machine_rounds", "denorm",
+                          "signed_zeros", "has_discriminants", "has_access_values",
+                          "has_tagged_values", "definite", "preelaborable_initialization"):
             return PREDEFINED_TYPES["Boolean"]
 
         # Reduce attribute (Ada 2022)
@@ -5423,12 +5600,67 @@ class SemanticAnalyzer:
     def _analyze_function_call(self, expr: FunctionCall) -> Optional[AdaType]:
         """Analyze a function call."""
         if isinstance(expr.name, Identifier):
-            symbol = self.symbols.lookup(expr.name.name)
+            func_name = expr.name.name
+
+            # Check if this is a predefined operator call like "+"(RIGHT => X)
+            UNARY_OPS = {'+', '-', 'ABS', 'NOT', 'abs', 'not'}
+            BINARY_OPS = {'+', '-', '*', '/', 'MOD', 'REM', '**', '&',
+                          'AND', 'OR', 'XOR', '=', '/=', '<', '>', '<=', '>=',
+                          'mod', 'rem', 'and', 'or', 'xor'}
+
+            op_name = func_name.upper() if func_name else ''
+
+            # Handle unary operator calls with named parameter
+            if op_name in {'ABS', 'NOT', '+', '-'} and len(expr.args) == 1:
+                # Get the actual argument value
+                arg = expr.args[0]
+                arg_expr = arg.value if hasattr(arg, 'value') else arg
+                arg_type = self._analyze_expr(arg_expr)
+                if arg_type is None:
+                    return None
+
+                if op_name == 'ABS':
+                    if arg_type.kind in (TypeKind.INTEGER, TypeKind.MODULAR,
+                                         TypeKind.FLOAT, TypeKind.FIXED,
+                                         TypeKind.UNIVERSAL_INTEGER, TypeKind.UNIVERSAL_REAL):
+                        return arg_type
+                elif op_name in ('+', '-'):
+                    if arg_type.is_numeric():
+                        return arg_type
+                elif op_name == 'NOT':
+                    if arg_type.name and arg_type.name.lower() == 'boolean':
+                        return arg_type
+                    if arg_type.kind == TypeKind.MODULAR:
+                        return arg_type
+                # Return the type if it's valid
+                return arg_type
+
+            # Handle binary operator calls with named/positional parameters
+            if op_name in BINARY_OPS and len(expr.args) == 2:
+                arg1 = expr.args[0]
+                arg2 = expr.args[1]
+                left_expr = arg1.value if hasattr(arg1, 'value') else arg1
+                right_expr = arg2.value if hasattr(arg2, 'value') else arg2
+                left_type = self._analyze_expr(left_expr)
+                right_type = self._analyze_expr(right_expr)
+
+                if left_type and right_type:
+                    result = common_type(left_type, right_type)
+                    if result:
+                        return result
+                    # For comparison operators, return Boolean
+                    if op_name in ('=', '/=', '<', '>', '<=', '>='):
+                        return PREDEFINED_TYPES["Boolean"]
+                    return left_type
+                return left_type or right_type
+
+            # Regular function call
+            symbol = self.symbols.lookup(func_name)
             if symbol is None:
-                self.error(f"function '{expr.name.name}' not found", expr)
+                self.error(f"'{func_name}' not found", expr)
                 return None
             if symbol.kind != SymbolKind.FUNCTION:
-                self.error(f"'{expr.name.name}' is not a function", expr)
+                self.error(f"'{func_name}' is not a function", expr)
                 return None
 
             self._check_call_arguments(symbol, expr.args, expr)
