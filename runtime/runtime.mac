@@ -1259,6 +1259,62 @@ _strlen_done:
     RET
 
 ; ============================================================
+; _str_cmp - Compare two null-terminated strings
+; Input: Stack: str1_ptr (16-bit at IX+6), str2_ptr (16-bit at IX+4)
+; Output: HL = negative if str1 < str2, 0 if equal, positive if str1 > str2
+; Destroys: A, BC, DE
+; ============================================================
+    PUBLIC _str_cmp
+_str_cmp:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+    PUSH BC
+    PUSH DE
+    ; Get str1 pointer from stack (at IX+6)
+    LD L, (IX+6)
+    LD H, (IX+7)
+    ; Get str2 pointer from stack (at IX+4)
+    LD E, (IX+4)
+    LD D, (IX+5)
+_str_cmp_loop:
+    LD A, (HL)
+    LD B, A
+    LD A, (DE)
+    ; Compare characters
+    CP B
+    JR NZ, _str_cmp_diff
+    ; Characters equal, check if end of string
+    OR A
+    JR Z, _str_cmp_equal
+    ; Move to next character
+    INC HL
+    INC DE
+    JR _str_cmp_loop
+_str_cmp_diff:
+    ; Characters differ: B = char1, A = char2
+    ; Return char1 - char2 (negative if str1 < str2, positive if str1 > str2)
+    LD A, B                 ; A = char1
+    LD C, A                 ; C = char1 (save)
+    LD A, (DE)              ; A = char2
+    LD B, A                 ; B = char2
+    LD A, C                 ; A = char1
+    SUB B                   ; A = char1 - char2
+    ; Sign-extend A to HL
+    LD L, A
+    RLCA
+    SBC A, A
+    LD H, A
+    JR _str_cmp_done
+_str_cmp_equal:
+    LD HL, 0
+_str_cmp_done:
+    POP DE
+    POP BC
+    POP IX
+    RET
+
+; ============================================================
 ; _int_to_str - Convert integer to string
 ; Input: Stack: value (16-bit signed at IX+4)
 ; Output: HL = pointer to null-terminated string in static buffer

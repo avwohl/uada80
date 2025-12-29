@@ -11449,14 +11449,28 @@ class ASTLowering:
                 # Handle array attributes
                 if isinstance(ada_type, ArrayType):
                     if ada_type.is_constrained and ada_type.bounds:
-                        low, high = ada_type.bounds[0]  # First dimension
-                        if attr == "first":
-                            return Immediate(low, IRType.WORD)
-                        if attr == "last":
-                            return Immediate(high, IRType.WORD)
-                        if attr == "length":
-                            length = high - low + 1
-                            return Immediate(length, IRType.WORD)
+                        # Determine which dimension (default is 1)
+                        dim = 0  # 0-indexed internally
+                        if expr.args:
+                            # A'Last(N) - get dimension N (1-indexed in Ada)
+                            dim_arg = expr.args[0]
+                            if isinstance(dim_arg, IntegerLiteral):
+                                dim = dim_arg.value - 1  # Convert to 0-indexed
+                            elif isinstance(dim_arg, Identifier):
+                                # Static integer - try to evaluate
+                                dim_sym = self.symbols.lookup(dim_arg.name)
+                                if dim_sym and dim_sym.value is not None:
+                                    dim = int(dim_sym.value) - 1
+
+                        if dim < len(ada_type.bounds):
+                            low, high = ada_type.bounds[dim]
+                            if attr == "first":
+                                return Immediate(low, IRType.WORD)
+                            if attr == "last":
+                                return Immediate(high, IRType.WORD)
+                            if attr == "length":
+                                length = high - low + 1
+                                return Immediate(length, IRType.WORD)
                     elif not ada_type.is_constrained:
                         # Unconstrained array (like String) - need runtime calculation
                         # Check if this is a parameter with dope vector
@@ -15234,8 +15248,10 @@ class ASTLowering:
         if attr == "first":
             # Container.First - Get first cursor
             # Note: 'First for arrays is handled earlier
+            # Only use container calls if first arg is actually a container, not a dimension number
             result = self.builder.new_vreg(IRType.WORD, "_first_cursor")
-            if expr.args:
+            if expr.args and not isinstance(expr.args[0], IntegerLiteral):
+                # Check if arg looks like a container (not an integer dimension)
                 container = self._lower_expr(expr.args[0])
                 self.builder.push(container)
                 self.builder.call(Label("_container_first"), comment="First")
@@ -15252,8 +15268,10 @@ class ASTLowering:
         if attr == "last":
             # Container.Last - Get last cursor
             # Note: 'Last for arrays is handled earlier
+            # Only use container calls if first arg is actually a container, not a dimension number
             result = self.builder.new_vreg(IRType.WORD, "_last_cursor")
-            if expr.args:
+            if expr.args and not isinstance(expr.args[0], IntegerLiteral):
+                # Check if arg looks like a container (not an integer dimension)
                 container = self._lower_expr(expr.args[0])
                 self.builder.push(container)
                 self.builder.call(Label("_container_last"), comment="Last")
