@@ -596,30 +596,36 @@ class ASTLowering:
         is_nested = old_ctx is not None
 
         # Generate unique function label for overloaded functions
-        # Use (name, type_signature) to distinguish overloads by both name and parameter types
-        # Include return type for functions (Ada allows overloading by return type)
+        # Use scope prefix and counter to ensure each function definition gets a unique label
         # Ada is case-insensitive, so normalize all labels to lowercase
         func_name = self._mangle_operator_name(spec.name.lower())
         func_name_lower = func_name
         return_type_expr = spec.return_type if spec.is_function else None
         type_sig = self._get_param_type_sig_from_spec(spec.parameters, return_type_expr)
-        label_key = (func_name_lower, type_sig)
 
-        if label_key in self._function_label_map:
-            # Already have a label for this exact overload - reuse it
-            func_label = self._function_label_map[label_key]
+        # Include scope in the label to distinguish same-named functions in different scopes
+        scope_prefix = ""
+        if old_ctx and old_ctx.subprogram_name:
+            scope_prefix = old_ctx.subprogram_name + "_"
+
+        # Always generate a unique label for each function definition
+        # Use a counter on full_name to ensure uniqueness even for same-named functions
+        # in different declare blocks within the same enclosing subprogram
+        full_name = f"{scope_prefix}{func_name}"
+        if full_name in self._function_overload_count:
+            # Increment counter for this name
+            count = self._function_overload_count[full_name] + 1
+            self._function_overload_count[full_name] = count
+            func_label = f"{full_name}_{count}"
         else:
-            # Check if this name was used before (different overload)
-            if func_name_lower in self._function_overload_count:
-                # This is an overload - append suffix
-                count = self._function_overload_count[func_name_lower] + 1
-                self._function_overload_count[func_name_lower] = count
-                func_label = f"{func_name}_{count}"
-            else:
-                # First occurrence - use name as-is
-                self._function_overload_count[func_name_lower] = 0
-                func_label = func_name
-            self._function_label_map[label_key] = func_label
+            # First occurrence - use name as-is
+            self._function_overload_count[full_name] = 0
+            func_label = full_name
+
+        # Store the label in the map for call site lookup
+        # Key includes scope, name, and type signature for overload resolution
+        label_key = (scope_prefix, func_name_lower, type_sig)
+        self._function_label_map[label_key] = func_label
 
         # Create function with unique label
         func = self.builder.new_function(func_label, return_type)
