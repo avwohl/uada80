@@ -5751,9 +5751,18 @@ class SemanticAnalyzer:
             # Handle 'Pos and 'Val for enumeration types
             if attr == "pos" and expr.args:
                 # 'Pos(X) returns position of X
-                # If X is a character literal, return its ord value
                 arg = expr.args[0]
                 if isinstance(arg, CharacterLiteral):
+                    char_val = arg.value
+                    # Check if this character is in a user-defined enum type (not Character)
+                    if type_obj and hasattr(type_obj, "literals") and type_obj.literals:
+                        type_name = getattr(type_obj, 'name', '').lower()
+                        # Skip standard Character types - check user-defined enums
+                        if type_name not in ('character', 'wide_character', 'wide_wide_character'):
+                            for i, lit in enumerate(type_obj.literals):
+                                if lit == char_val:
+                                    return i
+                    # Fall back to ASCII value for Character type
                     return ord(arg.value)
                 arg_val = self._eval_static_impl(arg, report_errors)
                 return arg_val

@@ -833,12 +833,15 @@ class ASTOptimizer:
             return IntegerLiteral(value=size, text=str(size))
 
         # 'Pos for character literals - returns code point
+        # Only optimize for Character type, NOT user-defined enum types
         if attr_upper == "POS" and args and isinstance(args[0], CharacterLiteral):
-            char = args[0].value
-            if len(char) == 1:
-                pos = ord(char)
-                self.stats.attribute_evaluations += 1
-                return IntegerLiteral(value=pos, text=str(pos))
+            # Only apply if prefix is explicitly Character type (not a user-defined enum)
+            if isinstance(prefix, Identifier) and prefix.name.upper() in ("CHARACTER", "WIDE_CHARACTER", "WIDE_WIDE_CHARACTER"):
+                char = args[0].value
+                if len(char) == 1:
+                    pos = ord(char)
+                    self.stats.attribute_evaluations += 1
+                    return IntegerLiteral(value=pos, text=str(pos))
 
         # 'Val for integers with known prefix type (Character)
         if attr_upper == "VAL" and args and isinstance(args[0], IntegerLiteral):

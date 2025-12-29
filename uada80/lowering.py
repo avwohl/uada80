@@ -242,8 +242,9 @@ class ASTLowering:
         # Track overloaded functions for unique label generation
         # Maps function name (lowercase) -> count of overloads
         self._function_overload_count: dict[str, int] = {}
-        # Maps (function name, param count) -> unique label name
-        self._function_label_map: dict[tuple[str, int], str] = {}
+        # Maps (function name, type_signature) -> unique label name
+        # Type signature is a string like "integer,boolean" for parameters
+        self._function_label_map: dict[tuple[str, str], str] = {}
         # Global variables (name -> value info)
         self.globals: dict[str, Any] = {}
         # Stack of package prefixes for resolving package-level variables
@@ -593,16 +594,17 @@ class ASTLowering:
         is_nested = old_ctx is not None
 
         # Generate unique function label for overloaded functions
-        # Use (name, param_count) to distinguish overloads
+        # Use (name, type_signature) to distinguish overloads by both name and parameter types
+        # Include return type for functions (Ada allows overloading by return type)
         # Ada is case-insensitive, so normalize all labels to lowercase
         func_name = spec.name.lower()
         func_name_lower = func_name
-        param_count = sum(len(ps.names) for ps in spec.parameters)
-        label_key = (func_name_lower, param_count)
+        return_type_expr = spec.return_type if spec.is_function else None
+        type_sig = self._get_param_type_sig_from_spec(spec.parameters, return_type_expr)
+        label_key = (func_name_lower, type_sig)
 
         if label_key in self._function_label_map:
-            # Already have a label for this overload - this is a redefinition (error?)
-            # But for now, generate a unique one
+            # Already have a label for this exact overload - reuse it
             func_label = self._function_label_map[label_key]
         else:
             # Check if this name was used before (different overload)
@@ -2817,8 +2819,12 @@ class ASTLowering:
         if self.ctx is None:
             return
 
-        # Emit the label
-        label_name = f"_usr_{stmt.label.lower()}"
+        # Emit the label with scope prefix to make it unique across subprograms
+        # Use the current function name as a prefix
+        scope_prefix = ""
+        if self.ctx.subprogram_name:
+            scope_prefix = f"{self.ctx.subprogram_name}_"
+        label_name = f"_usr_{scope_prefix}{stmt.label.lower()}"
         self.builder.label(label_name)
 
         # Lower the inner statement
@@ -2829,8 +2835,11 @@ class ASTLowering:
         if self.ctx is None:
             return
 
-        # Jump to the user-defined label
-        label_name = f"_usr_{stmt.label.lower()}"
+        # Jump to the user-defined label with scope prefix
+        scope_prefix = ""
+        if self.ctx.subprogram_name:
+            scope_prefix = f"{self.ctx.subprogram_name}_"
+        label_name = f"_usr_{scope_prefix}{stmt.label.lower()}"
         self.builder.jmp(Label(label_name))
 
     # =========================================================================
@@ -4710,8 +4719,9 @@ class ASTLowering:
                     call_target = sym.name.lower()
 
             # Check for overloaded procedure - use unique label if available
-            arg_count = len(stmt.args) if stmt.args else 0
-            label_key = (call_target, arg_count)
+            # Use type signature from resolved symbol to match definition
+            type_sig = self._get_param_type_sig_from_symbol(sym)
+            label_key = (call_target, type_sig)
             if label_key in self._function_label_map:
                 call_target = self._function_label_map[label_key]
 
@@ -6880,6 +6890,36 @@ class ASTLowering:
             return self._lower_fixed_point_literal(expr.value)
 
         if isinstance(expr, CharacterLiteral):
+            # Check if this character literal is an enumeration literal
+            # (e.g., type Parent is (E1, E2, 'A', E3) where 'A' has position 2)
+            char_val = expr.value  # e.g., 'A'
+            char_name_quoted = f"'{char_val}'"  # e.g., "'A'" for symbol table lookups
+
+            # Check local type declarations for enum containing this char literal
+            if hasattr(self, '_current_body_declarations') and self._current_body_declarations is not None:
+                from uada80.ast_nodes import EnumerationTypeDef
+                for d in self._current_body_declarations:
+                    if isinstance(d, TypeDecl) and d.type_def:
+                        if isinstance(d.type_def, EnumerationTypeDef) and d.type_def.literals:
+                            for i, lit in enumerate(d.type_def.literals):
+                                # Compare with the char value (without quotes) - parser stores 'A' as 'A'
+                                if lit == char_val or lit.lower() == char_val.lower():
+                                    return Immediate(i, IRType.WORD)
+
+            # Check symbol table for EnumerationType containing this literal
+            # Skip Character/Wide_Character types - they always have all chars at ASCII positions
+            from uada80.type_system import EnumerationType
+            for scope in self.symbols.scope_stack:
+                for name, sym in scope.symbols.items():
+                    if sym.ada_type and isinstance(sym.ada_type, EnumerationType):
+                        # Skip predefined character types - use only user-defined enum types
+                        type_name = getattr(sym.ada_type, 'name', '').lower()
+                        if type_name in ('character', 'wide_character', 'wide_wide_character'):
+                            continue
+                        if char_name_quoted in sym.ada_type.positions:
+                            return Immediate(sym.ada_type.positions[char_name_quoted], IRType.WORD)
+
+            # Default: treat as Character type (ASCII value)
             return Immediate(ord(expr.value), IRType.BYTE)
 
         if isinstance(expr, StringLiteral):
@@ -10226,12 +10266,19 @@ class ASTLowering:
 
         # Check if this is a string comparison
         if op in (BinaryOp.EQ, BinaryOp.NE, BinaryOp.LT, BinaryOp.LE, BinaryOp.GT, BinaryOp.GE):
+            # Check left type via _get_expr_type
             left_type = self._get_expr_type(expr.left)
+            is_string = False
             if left_type and isinstance(left_type, ArrayType):
                 if left_type.name == "String" or (left_type.component_type and
                     hasattr(left_type.component_type, 'name') and
                     left_type.component_type.name == "Character"):
-                    return self._lower_string_comparison(op, left, right)
+                    is_string = True
+            # Also check via _is_string_type (handles 'IMAGE, etc.)
+            if not is_string and self._is_string_type(expr.left):
+                is_string = True
+            if is_string:
+                return self._lower_string_comparison(op, left, right)
 
         if op == BinaryOp.ADD:
             self.builder.add(result, left, right)
@@ -10531,17 +10578,19 @@ class ASTLowering:
         self.builder.push(right)  # second string
         self.builder.push(left)   # first string
         self.builder.call(Label("_str_cmp"), comment="string comparison")
-        temp = self.builder.new_vreg(IRType.WORD, "_discard")
-        self.builder.pop(temp)
-        self.builder.pop(temp)
 
-        # Get comparison result from HL
+        # Get comparison result from HL BEFORE cleaning stack (pop clobbers HL!)
         cmp_result = self.builder.new_vreg(IRType.WORD, "_cmp")
         self.builder.emit(IRInstr(
             OpCode.MOV, cmp_result,
             MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
             comment="capture string comparison result"
         ))
+
+        # Now clean up the stack
+        temp = self.builder.new_vreg(IRType.WORD, "_discard")
+        self.builder.pop(temp)
+        self.builder.pop(temp)
 
         # Convert strcmp-style result to boolean based on operator
         if op == BinaryOp.EQ:
@@ -10763,6 +10812,53 @@ class ASTLowering:
             # T'Base, T'Class etc. -> T
             return self._get_type_name_from_expr(expr.prefix)
         return None
+
+    def _get_param_type_sig_from_spec(self, parameters: list, return_type_expr: Optional[Expr] = None) -> str:
+        """Build a type signature string from ParameterSpec list (at definition time).
+
+        Returns a string combining parameter types and return type, used to uniquely
+        identify overloaded functions with the same name.
+        Format: "param1,param2->return" or "param1,param2" for procedures.
+        """
+        types = []
+        for param_spec in parameters:
+            type_name = self._get_type_name_from_expr(param_spec.type_mark)
+            if type_name:
+                type_name = type_name.lower()
+            else:
+                type_name = "_unknown"
+            # Each param_spec can have multiple names (e.g., X, Y: Integer)
+            for _ in param_spec.names:
+                types.append(type_name)
+        sig = ",".join(types)
+        # Add return type for functions (distinguishes overloads by return type)
+        if return_type_expr:
+            ret_type = self._get_type_name_from_expr(return_type_expr)
+            if ret_type:
+                sig = f"{sig}->{ret_type.lower()}"
+        return sig
+
+    def _get_param_type_sig_from_symbol(self, sym: Optional[Symbol]) -> str:
+        """Build a type signature string from a Symbol's parameters (at call time).
+
+        Returns a string matching what was created at definition time.
+        Format: "param1,param2->return" or "param1,param2" for procedures.
+        """
+        if not sym:
+            return ""
+        types = []
+        for param in sym.parameters if sym.parameters else []:
+            if param.ada_type:
+                type_name = getattr(param.ada_type, 'name', '_unknown').lower()
+            else:
+                type_name = "_unknown"
+            types.append(type_name)
+        sig = ",".join(types)
+        # Add return type for functions
+        if sym.return_type:
+            ret_type = getattr(sym.return_type, 'name', '_unknown').lower()
+            sig = f"{sig}->{ret_type}"
+        return sig
 
     def _expr_to_name(self, expr) -> str:
         """Convert an expression to a string name (for generating unique identifiers)."""
@@ -11231,9 +11327,9 @@ class ASTLowering:
                     call_target = sym.name.lower()
 
             # Check for overloaded function - use unique label if available
-            # Count actual arguments being passed
-            arg_count = len(expr.args) if expr.args else 0
-            label_key = (call_target, arg_count)
+            # Use type signature from resolved symbol to match definition
+            type_sig = self._get_param_type_sig_from_symbol(sym)
+            label_key = (call_target, type_sig)
             if label_key in self._function_label_map:
                 call_target = self._function_label_map[label_key]
 
