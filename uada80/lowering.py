@@ -16318,6 +16318,10 @@ class ASTLowering:
                         is_function = True
                         break
 
+            # Check if this is a nested subprogram (tracked in _nested_subprogram_labels)
+            if not is_function and func_name in self._nested_subprogram_labels:
+                is_function = True
+
             # Check for common type names (Integer, Character, etc.)
             # These are built-in types that may not have explicit symbols
             if not is_function and not is_type:
