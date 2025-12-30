@@ -370,7 +370,7 @@ class TestTaskingCodegen:
         # Check that task body function was generated
         assert result.success, f"Compilation failed: {result.errors}"
         assert result.output is not None
-        assert "_task_body_Worker" in result.output or "Worker" in result.output
+        assert "_task_body" in result.output.lower() and "worker" in result.output.lower()
 
     def test_task_with_entry_compilation(self):
         """Test task with entry compiles correctly."""
@@ -396,7 +396,7 @@ class TestTaskingCodegen:
         # Should generate task body and entry accept code
         assert result.success, f"Compilation failed: {result.errors}"
         assert result.output is not None
-        assert "_task_body_Server" in result.output or "Server" in result.output
+        assert "_task_body" in result.output.lower() and "server" in result.output.lower()
 
     def test_delay_statement_compilation(self):
         """Test delay statement generates correct runtime call."""
