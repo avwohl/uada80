@@ -9,7 +9,12 @@ Differences handled:
 - EXTERN -> EXTRN
 - lowercase mnemonics -> UPPERCASE
 - $xx hex -> 0xxH or xxH
+- 0xXXXX hex -> 0XXXXH
+- %binary -> 0nnnnnnnnB or nnnnnnnnB
 - defw/defb/defs -> DW/DB/DS
+- DEFQ (32-bit) -> 4x DB
+- DEFC name = value -> name EQU value
+- Local labels (.name) -> global$name
 - Labels: z88dk uses label: or label, um80 uses label: at start of line
 
 Usage:
@@ -51,8 +56,82 @@ def convert_hex(match: re.Match) -> str:
     return f"{hex_val.upper()}H"
 
 
+def convert_hex_0x(match: re.Match) -> str:
+    """Convert 0xXXXX hex notation to MACRO-80 format (0XXXXH or XXXXH)."""
+    hex_val = match.group(1)
+    # If starts with a-f, prefix with 0
+    if hex_val[0].lower() in 'abcdef':
+        return f"0{hex_val.upper()}H"
+    return f"{hex_val.upper()}H"
+
+
+def convert_binary(match: re.Match) -> str:
+    """Convert %nnnn binary notation to MACRO-80 format (0nnnnB or nnnnB)."""
+    bin_val = match.group(1)
+    # Binary always starts with 0 or 1, so no need for leading 0
+    return f"{bin_val}B"
+
+
+# Track current global label for local label expansion
+current_global_label = ""
+
+
+def expand_local_label(name: str) -> str:
+    """Expand .local label to global$local format."""
+    global current_global_label
+    if name.startswith('.'):
+        if current_global_label:
+            return f"{current_global_label}${name[1:]}"
+        else:
+            # No global context, just remove the dot
+            return name[1:]
+    return name
+
+
+def convert_defq_value(value_str: str) -> list:
+    """Convert a 32-bit value to 4 DB bytes (little-endian).
+
+    Returns list of 4 byte values, or None if cannot parse.
+    """
+    value_str = value_str.strip()
+
+    # Try to evaluate the expression
+    try:
+        # Handle hex formats
+        if value_str.startswith('$'):
+            val = int(value_str[1:], 16)
+        elif value_str.lower().startswith('0x'):
+            val = int(value_str[2:], 16)
+        elif value_str.upper().endswith('H'):
+            hex_part = value_str[:-1]
+            if hex_part.startswith('0') and len(hex_part) > 1:
+                val = int(hex_part, 16)
+            else:
+                val = int(hex_part, 16)
+        elif value_str.startswith('%'):
+            val = int(value_str[1:], 2)
+        elif value_str.upper().endswith('B'):
+            val = int(value_str[:-1], 2)
+        elif value_str.upper().endswith('O') or value_str.upper().endswith('Q'):
+            val = int(value_str[:-1], 8)
+        else:
+            val = int(value_str)
+
+        # Split into 4 bytes (little-endian)
+        return [
+            val & 0xFF,
+            (val >> 8) & 0xFF,
+            (val >> 16) & 0xFF,
+            (val >> 24) & 0xFF
+        ]
+    except ValueError:
+        # Cannot parse - return None, caller will handle as expression
+        return None
+
+
 def convert_line(line: str) -> str:
     """Convert a single line from z88dk to um80 syntax."""
+    global current_global_label
     original = line
 
     # Preserve empty lines
@@ -87,6 +166,12 @@ def convert_line(line: str) -> str:
     # Convert hex notation: $xx -> xxH
     code_part = re.sub(r'\$([0-9a-fA-F]+)', convert_hex, code_part)
 
+    # Convert 0xXXXX hex notation to XXXXH
+    code_part = re.sub(r'0x([0-9a-fA-F]+)', convert_hex_0x, code_part, flags=re.IGNORECASE)
+
+    # Convert %binary notation to nnnB
+    code_part = re.sub(r'%([01]+)', convert_binary, code_part)
+
     # Convert pseudo-ops
     code_part = re.sub(r'\bdefw\b', 'DW', code_part, flags=re.IGNORECASE)
     code_part = re.sub(r'\bdefb\b', 'DB', code_part, flags=re.IGNORECASE)
@@ -103,19 +188,31 @@ def convert_line(line: str) -> str:
     # Check if line starts with a label (identifier followed by colon)
     # Don't treat PUBLIC/EXTRN/etc as labels
     DIRECTIVES = {'public', 'extrn', 'extern', 'equ', 'org', 'end', 'name', 'cseg', 'dseg',
-                  'dw', 'db', 'ds', 'defw', 'defb', 'defs', 'include', 'if', 'endif', 'else'}
+                  'dw', 'db', 'ds', 'defw', 'defb', 'defs', 'defq', 'defc', 'include', 'if', 'endif', 'else'}
 
     label = ""
-    label_match = re.match(r'^([a-zA-Z_][a-zA-Z0-9_]*):?\s*', code_part)
-    if label_match:
-        potential_label = label_match.group(1)
-        has_colon = code_part[len(potential_label):len(potential_label)+1] == ':'
-        rest_after = code_part[label_match.end():]
+    # Check for local label (starts with dot)
+    local_label_match = re.match(r'^(\.([a-zA-Z_][a-zA-Z0-9_]*)):?\s*', code_part)
+    if local_label_match:
+        # This is a local label
+        local_name = local_label_match.group(2)
+        expanded = expand_local_label('.' + local_name)
+        label = expanded + ':'
+        code_part = code_part[local_label_match.end():]
+    else:
+        # Check for global label
+        label_match = re.match(r'^([a-zA-Z_][a-zA-Z0-9_]*):?\s*', code_part)
+        if label_match:
+            potential_label = label_match.group(1)
+            has_colon = code_part[len(potential_label):len(potential_label)+1] == ':'
+            rest_after = code_part[label_match.end():]
 
-        # It's a label if: has explicit colon AND not a directive
-        if has_colon and potential_label.lower() not in DIRECTIVES:
-            label = potential_label + ':'
-            code_part = rest_after
+            # It's a label if: has explicit colon AND not a directive
+            if has_colon and potential_label.lower() not in DIRECTIVES:
+                label = potential_label + ':'
+                code_part = rest_after
+                # Track this as the current global label for local label expansion
+                current_global_label = potential_label
 
     # Now process the instruction part
     code_part = code_part.strip()
@@ -127,11 +224,70 @@ def convert_line(line: str) -> str:
     mnemonic = parts[0]
     operands = parts[1] if len(parts) > 1 else ""
 
+    # Handle DEFQ (32-bit data) - convert to 4 DB bytes
+    if mnemonic.upper() == 'DEFQ':
+        # Split operands by comma, convert each to 4 DB bytes
+        ops = [o.strip() for o in operands.split(',')]
+        db_values = []
+        for op in ops:
+            bytes_list = convert_defq_value(op)
+            if bytes_list:
+                for b in bytes_list:
+                    db_values.append(f"{b}")
+            else:
+                # Cannot parse as constant - output LOW/HIGH operations
+                # For expressions, we need to emit them using LOW/HIGH
+                db_values.append(f"LOW({op})")
+                db_values.append(f"HIGH({op})")
+                db_values.append(f"LOW(({op}) SHR 16)")
+                db_values.append(f"HIGH(({op}) SHR 16)")
+
+        if label:
+            return f"{label}\tDB\t{','.join(db_values)}{comment}"
+        else:
+            return f"\tDB\t{','.join(db_values)}{comment}"
+
+    # Handle DEFC (name = value)
+    # If value looks like a constant, use EQU
+    # If value looks like a symbol (likely external), use JP to create a jump alias
+    if mnemonic.upper() == 'DEFC':
+        # operands should be "name = value"
+        if '=' in operands:
+            parts = operands.split('=', 1)
+            name = parts[0].strip()
+            value = parts[1].strip()
+            # Expand any local label references in the value
+            value = re.sub(r'\.([\w]+)', lambda m: expand_local_label('.' + m.group(1)), value)
+
+            # Check if value looks like a constant (number) vs symbol
+            # Constants: 0x..., 0...H, %..., decimal, etc.
+            is_constant = bool(re.match(
+                r'^[+-]?('
+                r'0x[0-9a-fA-F]+|'       # 0xHEX
+                r'[0-9a-fA-F]+H|'         # HEXH
+                r'%[01]+|'                # %binary
+                r'[01]+B|'                # binaryB
+                r'\$[0-9a-fA-F]+|'        # $HEX
+                r'[0-9]+D?|'              # decimal
+                r'[0-9]+[OQ]'             # octal
+                r')$', value, re.IGNORECASE
+            ))
+
+            if is_constant:
+                return f"{name}\tEQU\t{value}{comment}"
+            else:
+                # Symbol (likely external) - create a jump instruction alias
+                return f"{name}:\tJP\t{value}{comment}"
+
     # Uppercase mnemonic if it's a Z80 instruction or pseudo-op
     if mnemonic.lower() in Z80_MNEMONICS:
         mnemonic = mnemonic.upper()
     elif mnemonic.upper() in ('PUBLIC', 'EXTRN', 'EQU', 'ORG', 'END', 'NAME', 'CSEG', 'DSEG', 'DW', 'DB', 'DS'):
         mnemonic = mnemonic.upper()
+
+    # Expand local label references in operands (e.g., JP .loop -> JP global$loop)
+    if operands:
+        operands = re.sub(r'\.([\w]+)', lambda m: expand_local_label('.' + m.group(1)), operands)
 
     # Uppercase register names in operands
     if operands:
@@ -158,6 +314,11 @@ def convert_line(line: str) -> str:
 
 def convert_file(input_path: Path, output_path: Path = None, module_name: str = None) -> str:
     """Convert a z88dk assembly file to um80 format."""
+    global current_global_label
+
+    # Reset global label tracking for each file
+    current_global_label = ""
+
     with open(input_path, 'r') as f:
         lines = f.readlines()
 
@@ -210,6 +371,9 @@ def convert_file(input_path: Path, output_path: Path = None, module_name: str = 
     # Add CSEG
     result.append("\tCSEG")
     result.append("")
+
+    # Reset global label before second pass
+    current_global_label = ""
 
     # Second pass: convert the rest
     for line in lines:
