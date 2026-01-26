@@ -157,6 +157,16 @@ def convert_line(line: str) -> str:
     if re.match(r'^\s*SECTION\s+', code_part, re.IGNORECASE):
         return ""  # Just remove SECTION lines
 
+    # Handle IF conditional compilation - for now, assume Z80 target
+    # Skip lines like: IF __CPU_Z80__ | __CPU_KC160__
+    # We'll include all code and ignore the conditionals
+    if re.match(r'^\s*IF\s+', code_part, re.IGNORECASE):
+        return "; SKIPPED: " + original.strip()  # Comment out IF lines
+
+    # Handle ENDIF
+    if re.match(r'^\s*ENDIF\s*', code_part, re.IGNORECASE):
+        return "; SKIPPED: " + original.strip()  # Comment out ENDIF lines
+
     # Convert EXTERN to EXTRN
     code_part = re.sub(r'\bEXTERN\b', 'EXTRN', code_part, flags=re.IGNORECASE)
 
@@ -288,6 +298,79 @@ def convert_line(line: str) -> str:
     # Expand local label references in operands (e.g., JP .loop -> JP global$loop)
     if operands:
         operands = re.sub(r'\.([\w]+)', lambda m: expand_local_label('.' + m.group(1)), operands)
+
+    # Handle special instruction cases before uppercasing registers
+    expanded_instructions = []
+
+    # Handle EX AF,AF -> EX AF,AF'
+    if mnemonic.upper() == 'EX' and operands and re.match(r'^\s*AF\s*,\s*AF\s*$', operands, re.IGNORECASE):
+        operands = "AF,AF'"
+
+    # Handle LD r,(HL+) and LD r,(HL-) - not supported in MACRO-80
+    # LD A,(HL+) -> LD A,(HL) \ INC HL
+    # LD A,(HL-) -> LD A,(HL) \ DEC HL
+    if mnemonic.upper() == 'LD' and operands:
+        # Match LD reg,(HL+) or LD reg,(HL-)
+        inc_match = re.match(r'^\s*([A-Z]+)\s*,\s*\(HL\+\)\s*$', operands, re.IGNORECASE)
+        dec_match = re.match(r'^\s*([A-Z]+)\s*,\s*\(HL-\)\s*$', operands, re.IGNORECASE)
+
+        if inc_match:
+            reg = inc_match.group(1).upper()
+            if label:
+                expanded_instructions.append(f"{label}\tLD\t{reg},(HL){comment}")
+                label = ""
+                comment = ""
+            else:
+                expanded_instructions.append(f"\tLD\t{reg},(HL){comment}")
+                comment = ""
+            expanded_instructions.append(f"\tINC\tHL")
+            return '\n'.join(expanded_instructions)
+
+        if dec_match:
+            reg = dec_match.group(1).upper()
+            if label:
+                expanded_instructions.append(f"{label}\tLD\t{reg},(HL){comment}")
+                label = ""
+                comment = ""
+            else:
+                expanded_instructions.append(f"\tLD\t{reg},(HL){comment}")
+                comment = ""
+            expanded_instructions.append(f"\tDEC\tHL")
+            return '\n'.join(expanded_instructions)
+
+    # Handle 16-bit rotate/shift instructions (not supported by MACRO-80)
+    # These need to be expanded to operate on individual bytes
+    # For right operations (RR, SRL, SRA): high byte first, then low byte
+    # For left operations (RL, SLA): low byte first, then high byte
+    if mnemonic.upper() in ('RR', 'RL', 'SRL', 'SRA', 'SLA', 'RLC', 'RRC'):
+        operand_stripped = operands.strip().upper() if operands else ""
+        if operand_stripped in ('DE', 'HL', 'BC'):
+            high_reg = operand_stripped[0]
+            low_reg = operand_stripped[1]
+
+            # Determine order based on instruction type
+            # For right shifts/rotates: process high byte first so carry propagates down
+            # For left shifts/rotates: process low byte first so carry propagates up
+            if mnemonic.upper() in ('RR', 'SRL', 'SRA', 'RRC'):
+                # Right operations: RR D, then RR E (carry flows from D to E)
+                first_reg = high_reg
+                second_reg = low_reg
+            else:
+                # Left operations: RL E, then RL D (carry flows from E to D)
+                first_reg = low_reg
+                second_reg = high_reg
+
+            # Expand to two instructions
+            if label:
+                expanded_instructions.append(f"{label}\t{mnemonic}\t{first_reg}{comment}")
+                label = ""
+                comment = ""
+            else:
+                expanded_instructions.append(f"\t{mnemonic}\t{first_reg}{comment}")
+                comment = ""
+            expanded_instructions.append(f"\t{mnemonic}\t{second_reg}")
+            # Return early with expanded instructions joined by newlines
+            return '\n'.join(expanded_instructions)
 
     # Uppercase register names in operands
     if operands:
