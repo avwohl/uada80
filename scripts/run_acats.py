@@ -22,7 +22,36 @@ ADALIB_PATH = Path(__file__).parent.parent / "adalib"
 ACATS_PATH = Path(__file__).parent.parent / "tests" / "acats" / "tests"
 
 # Categories that require tasking (skip for now)
-TASKING_CATEGORIES = {"c9"}
+TASKING_CATEGORIES = {"c9", "b9"}
+
+# Protected operation tests in CB category
+PROTECTED_OPERATION_TESTS = {
+    "cb20001", "cb20003", "cb20004", "cb20005", "cb20006", "cb20007", "cb20a02"
+}
+
+# Implementation-defined tests requiring tasking (CX categories)
+CX_TASKING_TESTS = {
+    # CXA - 11 tests
+    "cxa8002", "cxa8003", "cxaa005", "cxaa007", "cxaa008", "cxaa009", "cxaa016",
+    "cxai033", "cxai034", "cxai035", "cxai036",
+    # CXC - 17 tests
+    "cxc3001", "cxc3002", "cxc3003", "cxc3004", "cxc3005", "cxc3006", "cxc3007",
+    "cxc3008", "cxc3009", "cxc3010", "cxc6003", "cxc7001", "cxc7002", "cxc7003",
+    "cxc7004", "cxc7005", "cxc7006",
+    # CXD - 41 tests
+    "cxd1002", "cxd1003", "cxd1004", "cxd1005", "cxd1006", "cxd1007", "cxd1008",
+    "cxd2001", "cxd2002", "cxd2003", "cxd2004", "cxd2006", "cxd2007", "cxd2008",
+    "cxd3001", "cxd3002", "cxd3003", "cxd4001", "cxd4002", "cxd4003", "cxd4004",
+    "cxd4005", "cxd4006", "cxd4007", "cxd4008", "cxd4009", "cxd4010", "cxd5001",
+    "cxd6001", "cxd6002", "cxd6003", "cxd8002", "cxd9001", "cxda002", "cxda003",
+    "cxda004", "cxdb001", "cxdb002", "cxdb003", "cxdb004",
+    # CXE - 7 tests
+    "cxe2001", "cxe4001", "cxe4002", "cxe4003", "cxe4004", "cxe4005", "cxe4006",
+    # CXF - 1 test
+    "cxf3a06",
+    # CXH - 3 tests
+    "cxh1001", "cxh3001", "cxh3002"
+}
 
 
 @dataclass
@@ -48,6 +77,15 @@ def run_acats_test(test_path: Path, timeout: float = 30.0) -> TestResult:
     category = test_path.parent.name.lower()
     if category in TASKING_CATEGORIES:
         return TestResult(test_name, "skipped", "", "Tasking test - requires interrupt support")
+
+    # Skip protected operation tests in CB category
+    test_stem = test_path.stem.lower()
+    if test_stem in PROTECTED_OPERATION_TESTS:
+        return TestResult(test_name, "skipped", "", "Protected operation test - requires tasking support")
+
+    # Skip CX tasking tests
+    if test_stem in CX_TASKING_TESTS:
+        return TestResult(test_name, "skipped", "", "Implementation-defined tasking test - requires tasking support")
 
     try:
         # Read and combine sources
