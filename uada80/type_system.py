@@ -1201,6 +1201,29 @@ def types_compatible(t1: AdaType, t2: AdaType) -> bool:
                 # Also check if designated types are compatible
                 if types_compatible(t1.designated_type, t2.designated_type):
                     return True
+                # Special case: access T is compatible with access T'Class
+                # In assignments like "Ref : access T'Class := new T", we need to allow
+                # an access to a specific type to be assigned to access to class-wide.
+                # t1 is the target type, t2 is the source type.
+                # If t1's designated type is class-wide (T'Class), accept t2 if its
+                # designated type is T or any type derived from T.
+                if isinstance(t1.designated_type, RecordType) and t1.designated_type.is_class_wide:
+                    if isinstance(t2.designated_type, RecordType):
+                        # Check if t2.designated_type is T and t1.designated_type is T'Class
+                        specific = getattr(t1.designated_type, 'specific_type', None)
+                        if specific and same_type(t2.designated_type, specific):
+                            return True
+                        # Also check derived types: if t2 is derived from t1's specific type
+                        if specific and is_derived_from(t2.designated_type, specific.name):
+                            return True
+                # Similarly handle the reverse case (though less common in practice)
+                if isinstance(t2.designated_type, RecordType) and t2.designated_type.is_class_wide:
+                    if isinstance(t1.designated_type, RecordType):
+                        specific = getattr(t2.designated_type, 'specific_type', None)
+                        if specific and same_type(t1.designated_type, specific):
+                            return True
+                        if specific and is_derived_from(t1.designated_type, specific.name):
+                            return True
 
     # Check subtype relationship
     if is_subtype_of(t1, t2) or is_subtype_of(t2, t1):

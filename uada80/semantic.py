@@ -147,6 +147,7 @@ from uada80.type_system import (
     can_convert,
     same_type,
     is_derived_from,
+    get_root_type,
 )
 
 
@@ -3219,6 +3220,19 @@ class SemanticAnalyzer:
                 )
                 if symbol and symbol.ada_type:
                     return symbol.ada_type
+        elif isinstance(type_expr, AttributeReference):
+            # Handle type attributes like Type'Class, Type'Base
+            if type_expr.attribute.lower() == 'class':
+                # Resolve the prefix type
+                prefix_type = self._resolve_type(type_expr.prefix)
+                if prefix_type and isinstance(prefix_type, RecordType) and prefix_type.is_tagged:
+                    # Return the class-wide type
+                    return prefix_type.get_class_wide_type()
+            elif type_expr.attribute.lower() == 'base':
+                # Base attribute returns the base type
+                prefix_type = self._resolve_type(type_expr.prefix)
+                if prefix_type:
+                    return get_root_type(prefix_type)
         elif isinstance(type_expr, SubtypeIndication):
             # Delegate to subtype indication resolver
             return self._resolve_subtype_indication(type_expr)
