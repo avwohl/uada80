@@ -200,9 +200,15 @@ This project is licensed under the GNU General Public License v2.0 - see LICENSE
 
 ## Related Projects
 
-- [GNAT](https://www.adacore.com/gnatpro) - Production Ada compiler
-- [AVR-Ada](https://avr-ada.sourceforge.net/) - Ada for AVR microcontrollers
-- [cc65](https://cc65.github.io/) - C compiler for 6502
+- [80un](https://github.com/avwohl/80un) - CP/M archive unpacker (LBR, ARC, Squeeze, Crunch, CrLZH)
+- [cpmdroid](https://github.com/avwohl/cpmdroid) - CP/M emulator for Android
+- [ioscpm](https://github.com/avwohl/ioscpm) - CP/M emulator for iOS/macOS
+- [learn-ada-z80](https://github.com/avwohl/learn-ada-z80) - Ada programming examples for Z80/CP/M
+- [uc80](https://github.com/avwohl/uc80) - C compiler for Z80/CP/M
+- [um80_and_friends](https://github.com/avwohl/um80_and_friends) - MACRO-80 compatible assembler/linker toolchain
+- [upeepz80](https://github.com/avwohl/upeepz80) - Peephole optimizer for Z80 assembly
+- [uplm80](https://github.com/avwohl/uplm80) - PL/M-80 compiler for Z80
+- [z80cpmw](https://github.com/avwohl/z80cpmw) - CP/M emulator for Windows
 
 ## Acknowledgments
 
