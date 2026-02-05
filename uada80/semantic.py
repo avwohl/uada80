@@ -239,6 +239,9 @@ class SemanticAnalyzer:
         standard_pkg = Symbol(name="Standard", kind=SymbolKind.PACKAGE)
         standard_pkg.public_symbols = {}
 
+        # Add ASCII package as a child of Standard
+        standard_pkg.public_symbols["ascii"] = ascii_pkg
+
         # Add predefined operators as functions
         # The operator symbols are stored as operator names
         for op in ("*", "/", "+", "-", "mod", "rem", "**", "abs", "not",
@@ -739,7 +742,7 @@ class SemanticAnalyzer:
                 if isinstance(name, SelectedName):
                     # Qualified name like P.T
                     pkg_name = self._get_hierarchical_name(name.prefix)
-                    pkg_symbol = self.symbols.lookup(pkg_name)
+                    pkg_symbol = self._resolve_hierarchical_package(name.prefix)
                     if pkg_symbol and pkg_symbol.kind == SymbolKind.PACKAGE:
                         type_name = name.selector.lower() if isinstance(name.selector, str) else name.selector
                         if type_name in pkg_symbol.public_symbols:
@@ -774,7 +777,7 @@ class SemanticAnalyzer:
             # Regular use clause (use Package;)
             for name in clause.names:
                 pkg_name = self._get_hierarchical_name(name)
-                pkg_symbol = self.symbols.lookup(pkg_name)
+                pkg_symbol = self._resolve_hierarchical_package(name)
                 if pkg_symbol is None:
                     self.error(f"package '{pkg_name}' not found", name)
                 elif pkg_symbol.kind != SymbolKind.PACKAGE:

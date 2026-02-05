@@ -25,18 +25,31 @@ Based on real_failures.txt, there are 7181 total ACATS semantic errors to fix:
 
 ## Completed This Iteration
 
-Fixed "already defined" errors (2 errors total):
-- c34005g.ada: Named number 'N' conflicted with Character enumeration literal 'N'
-- c87b41a.ada: Task type 'T' conflicted with Character enumeration literal 'T'
+Partial fix for "not found" errors - Hierarchical package lookup:
+- Fixed STANDARD.ASCII access (use STANDARD.ASCII; now works)
+- Fixed hierarchical package resolution in use clauses (use P.Q.R;)
+- Fixed hierarchical package resolution in use type clauses (use type P.Q.T;)
 
-Root cause: When derived enumeration types (like `type NEW_CHAR is new Character`) are declared, all
-their enumeration literals (including ASCII characters like 'N' and 'T') are added to the symbol table.
-When subsequent declarations use those same names, the compiler incorrectly rejected them as duplicates.
+Root cause: The _analyze_use_clause() function was using simple lookup() for package names,
+which doesn't handle hierarchical names like "STANDARD.ASCII". It should use
+_resolve_hierarchical_package() which walks the package hierarchy.
 
-Fix: Modified semantic.py to allow task type declarations and named number declarations to shadow
-enumeration literals, which is legal in Ada. Added checks in:
-- _analyze_task_type_decl() at line 2282-2286
-- _analyze_number_decl() at line 1755-1762
+Changes made in semantic.py:
+1. Line 242: Added ASCII to STANDARD.public_symbols so STANDARD.ASCII is accessible
+2. Line 745: Changed use type clause to use _resolve_hierarchical_package() for prefix
+3. Line 780: Changed use clause to use _resolve_hierarchical_package() instead of simple lookup()
+
+This fixes hierarchical package access in use clauses, though many "not found" errors remain
+due to other issues (child packages, external package loading, etc.)
 
 ## Notes
+
+Root cause analysis of "not found" errors (5705 total):
+1. STANDARD.ASCII not accessible - FIXED in this iteration
+2. Child package parent not available (~1200 errors) - needs parent body analysis first
+3. Parent package symbols not visible in children (~2500 errors) - visibility issue
+4. Task entry names in SELECT statements (~700 errors) - scope issue
+5. Package specifications not found (~500 errors) - search path issue
+
+Next priority: Fix child/parent package visibility (fixes ~3700 errors)
 
