@@ -1301,6 +1301,28 @@ def can_convert(from_type: AdaType, to_type: AdaType) -> bool:
                 return True
             ancestor = ancestor.base_type
 
+    # For tagged types (RecordType), also check parent_type chain
+    # This handles conversions like Car(derived) to Vehicle(parent)
+    if isinstance(from_type, RecordType) and from_type.parent_type:
+        if same_type(from_type.parent_type, to_type):
+            return True
+        # Check ancestor chain via parent_type
+        ancestor = from_type.parent_type
+        while isinstance(ancestor, RecordType) and ancestor.parent_type:
+            if same_type(ancestor, to_type) or same_type(ancestor.parent_type, to_type):
+                return True
+            ancestor = ancestor.parent_type
+
+    if isinstance(to_type, RecordType) and to_type.parent_type:
+        if same_type(to_type.parent_type, from_type):
+            return True
+        # Check ancestor chain via parent_type
+        ancestor = to_type.parent_type
+        while isinstance(ancestor, RecordType) and ancestor.parent_type:
+            if same_type(ancestor, from_type) or same_type(ancestor.parent_type, from_type):
+                return True
+            ancestor = ancestor.parent_type
+
     # Check if both types share a common ultimate ancestor (for derivation)
     # This handles cases like ENUM1 derived from ENUM and ENUM2 derived from ENUM
     # We need to trace the full derivation chain, not just subtypes
