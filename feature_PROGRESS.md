@@ -11,7 +11,7 @@ IN_PROGRESS
 - [x] Task 2: Make a list of failed tests (already exists in real_failures.txt - 11,107 semantic errors)
 - [x] Task 3: Identify tests to skip (multitasking-related tests)
 - [x] Task 4: Fix compiler to pass non-skipped tests (focus on core language features) - IN PROGRESS
-- [ ] Task 5: Verify floating point support (native Z80 hardware support)
+- [x] Task 5: Verify floating point support (native Z80 hardware support)
 - [ ] Task 6: Verify long numbers support (native Z80 hardware support)
 - [ ] Task 7: Run execution tests to validate fixes
 
@@ -40,4 +40,27 @@ IN_PROGRESS
   - Matches the pattern already used in `_eval_static_impl()` at line 5947
 - **File changed**: `/home/wohl/src/uada80/uada80/semantic.py:5399-5418`
 - **Next priority**: Address remaining 5,705 "not found" errors (likely package dependency and generic issues)
+
+### Task 5: Verify floating point support (VERIFIED WORKING)
+- **Status**: Floating point is **fully implemented and working**
+- **Implementation**: Software emulation (Z80 has no hardware FPU)
+- **Runtime library**: `/home/wohl/src/uada80/runtime/float64.mac` (6,714 lines)
+- **Types supported**:
+  - Float (32-bit declared, 64-bit actual)
+  - Long_Float (64-bit)
+  - Long_Long_Float (64-bit)
+  - All use IEEE 754 double precision
+- **Operations verified**:
+  - Basic arithmetic: +, -, *, /, rem, mod
+  - Comparisons: <, >, <=, >=, =, /=
+  - Advanced math: sqrt, sin, cos, tan, atan, exp, log, etc.
+  - String conversions: Image, Value attributes
+  - Rounding: Floor, Ceiling, Truncation, Rounding
+- **Tests verified passing**:
+  - test_long_float_addition ✓
+  - test_long_float_multiplication ✓
+  - test_long_float_division ✓
+  - test_long_float_sqrt ✓
+  - test_long_float_sin ✓
+- **Documentation note**: References to "native Z80 hardware support" are incorrect - Z80 uses software emulation for all floating point operations
 
