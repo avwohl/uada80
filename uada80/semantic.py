@@ -1751,9 +1751,18 @@ class SemanticAnalyzer:
 
         # Create symbols for each name
         for name in decl.names:
-            if self.symbols.is_defined_locally(name):
-                self.error(f"'{name}' is already defined in this scope", decl)
-                continue
+            existing = self.symbols.lookup_local(name)
+            if existing is not None:
+                # Allow shadowing enumeration literals (Ada allows this)
+                if (existing.kind == SymbolKind.VARIABLE and
+                    existing.is_constant and
+                    existing.ada_type and
+                    existing.ada_type.kind == TypeKind.ENUMERATION):
+                    # This number declaration shadows an enumeration literal - allow it
+                    pass
+                else:
+                    self.error(f"'{name}' is already defined in this scope", decl)
+                    continue
 
             symbol = Symbol(
                 name=name,
@@ -2280,6 +2289,13 @@ class SemanticAnalyzer:
                 existing.ada_type and
                 existing.ada_type.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE)):
                 # This is completing an incomplete/private type - will update below
+                pass
+            # Allow shadowing enumeration literals (Ada allows this)
+            elif (existing.kind == SymbolKind.VARIABLE and
+                  existing.is_constant and
+                  existing.ada_type and
+                  existing.ada_type.kind == TypeKind.ENUMERATION):
+                # This task type shadows an enumeration literal - allow it
                 pass
             else:
                 self.error(f"task type '{decl.name}' is already defined", decl)
