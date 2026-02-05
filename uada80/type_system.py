@@ -1188,6 +1188,31 @@ def types_compatible(t1: AdaType, t2: AdaType) -> bool:
         if t2.is_tagged and t2.implements_interface(t1):
             return True
 
+    # Class-wide parameter compatibility: A specific tagged type T (or any type derived
+    # from T) is compatible with the class-wide type T'Class when passed as a parameter.
+    # This allows: procedure P(X : Vehicle'Class) to accept Vehicle, Car, etc.
+    # t1 is the expected type (parameter), t2 is the actual type (argument).
+    if isinstance(t1, RecordType) and isinstance(t2, RecordType):
+        if t1.is_tagged and t2.is_tagged:
+            # Case 1: Parameter is T'Class, argument is T (the specific type)
+            if t1.is_class_wide and not t2.is_class_wide:
+                specific = getattr(t1, 'specific_type', None)
+                if specific:
+                    # Allow if t2 is the specific type or derived from it
+                    if same_type(t2, specific):
+                        return True
+                    if is_derived_from(t2, specific.name):
+                        return True
+            # Case 2: Parameter is T'Class, argument is Derived'Class
+            # where Derived is derived from T
+            if t1.is_class_wide and t2.is_class_wide:
+                specific1 = getattr(t1, 'specific_type', None)
+                specific2 = getattr(t2, 'specific_type', None)
+                if specific1 and specific2:
+                    # Allow if specific2 is derived from specific1
+                    if is_derived_from(specific2, specific1.name):
+                        return True
+
     # Access type compatibility: two access types are compatible if they
     # have the same designated type. This handles:
     # - Named access types with same designated type
