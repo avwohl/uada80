@@ -1,170 +1,149 @@
 # ACATS Real Semantic Failures
 # (Excludes GNAT library dependency errors)
 
-Total errors: 11107
+Total errors: 7181
 
 ## Error Categories
 
- 8787 - not found
- 1004 - not a X
-  432 - static
-  283 - other
-  208 - expected X
-  188 - type mismatch
-  159 - incompatible
-   42 - already defined
-    4 - cannot convert
+ 5705 - not found
+  531 - not a X
+  318 - type mismatch
+  278 - expected X
+  170 - static
+  128 - other
+   49 - cannot convert
+    2 - already defined
 
 ## Sample Errors by Category
 
-### not found (8787 errors)
+### not found (5705 errors)
 
-a35801f.ada: <input>:45:19-26: error: 'SURREAL' not found
-a35801f.ada: <input>:46:19-26: error: 'SURREAL' not found
-a49027c.ada: <input>:54:24-27: error: generic 'GP' not found
-a71004a.ada: error: package specification for 'P1' not found
-a83009a.ada: <input>:161:20-27: error: generic 'G_PACK' not found
-a83009a.ada: <input>:180:25-32: error: generic 'G_PACK' not found
-a83009b.ada: <input>:178:25-32: error: generic 'G_PACK' not found
-a83a08a.ada: <input>:72:24-31: error: 'PASSES' not found
-a83a08a.ada: <input>:73:26-33: error: 'PASSES' not found
-a83a08a.ada: <input>:73:36-43: error: 'PASSES' not found
-a87b59a.ada: <input>:213:31-33: error: generic 'P' not found
-a87b59a.ada: <input>:214:31-33: error: generic 'P' not found
-a87b59a.ada: <input>:238:21-23: error: 'F1' not found
-a87b59a.ada: <input>:239:21-24: error: 'F2' not found
-a95074d.ada: <input>:59:26-28: error: 'C2' not found
+a71004a.ada: /home/wohl/src/uada80/tests/acats/tests/a/a71004a.ada:74:20-34: error: package 'STANDARD.ASCII' not found
+ad7001c1.ada: error: package specification for 'AD7001C_PACKAGE' not found
+c324002.a: /home/wohl/src/uada80/tests/acats/tests/c3/c324002.a:322:16-34: error: 'Max_10_Char_String' not found
+c330001.a: error: package specification for 'C330001_0' not found
+c330001.a: /home/wohl/src/uada80/tests/acats/tests/c3/c330001.a:143:57-70: error: 'Indef_Func_2' not found
+c330001.a: /home/wohl/src/uada80/tests/acats/tests/c3/c330001.a:161:58-70: error: 'Indef_Func_1' not found
+c330001.a: /home/wohl/src/uada80/tests/acats/tests/c3/c330001.a:163:58-71: error: 'Indef_Func_2' not found
+c340001.a: error: package specification for 'C340001_2' not found
+c340001.a: /home/wohl/src/uada80/tests/acats/tests/c3/c340001.a:269:13-34: error: type 'C340001_2.Transaction' not found for use type clause
+c340001.a: /home/wohl/src/uada80/tests/acats/tests/c3/c340001.a:270:13-36: error: type 'C340001_2.Authorization' not found for use type clause
+c34008a.ada: /home/wohl/src/uada80/tests/acats/tests/c3/c34008a.ada:90:37-38: error: 'H' not found
+c34008a.ada: /home/wohl/src/uada80/tests/acats/tests/c3/c34008a.ada:94:39-40: error: 'E' not found
+c34008a.ada: /home/wohl/src/uada80/tests/acats/tests/c3/c34008a.ada:95:39-40: error: 'F' not found
+c34008a.ada: /home/wohl/src/uada80/tests/acats/tests/c3/c34008a.ada:96:39-40: error: 'F' not found
+c34008a.ada: /home/wohl/src/uada80/tests/acats/tests/c3/c34008a.ada:97:39-40: error: 'F' not found
 
-### not a X (1004 errors)
+### not a X (531 errors)
 
-a49027c.ada: <input>:57:6-62:1: error: 'NR' is not a record type
-a87b59a.ada: <input>:242:31-33: error: 'P' is not a generic
-ac1015b.ada: <input>:50:30-31: error: 'T' is not a generic
-ac1015b.ada: <input>:69:29-30: error: 'A' is not a generic
-ada101a.ada: <input>:80:28-50: error: 'UNCHECKED_DEALLOCATION' is not a generic
-ada101a.ada: <input>:81:28-50: error: 'UNCHECKED_DEALLOCATION' is not a generic
-ada101a.ada: <input>:82:28-50: error: 'UNCHECKED_DEALLOCATION' is not a generic
-ada101a.ada: <input>:83:28-50: error: 'UNCHECKED_DEALLOCATION' is not a generic
-ada101a.ada: <input>:84:28-50: error: 'UNCHECKED_DEALLOCATION' is not a generic
-ada101a.ada: <input>:85:28-50: error: 'UNCHECKED_DEALLOCATION' is not a generic
-ada101a.ada: <input>:86:28-50: error: 'UNCHECKED_DEALLOCATION' is not a generic
-ada101a.ada: <input>:87:28-50: error: 'UNCHECKED_DEALLOCATION' is not a generic
-ada101a.ada: <input>:88:28-50: error: 'UNCHECKED_DEALLOCATION' is not a generic
-ada101a.ada: <input>:89:28-50: error: 'UNCHECKED_DEALLOCATION' is not a generic
-ada101a.ada: <input>:90:29-51: error: 'UNCHECKED_DEALLOCATION' is not a generic
+c340a01.a: /home/wohl/src/uada80/tests/acats/tests/c3/c340a01.a:92:26-35: error: 'F340A000' is not a generic
+c340a02.a: /home/wohl/src/uada80/tests/acats/tests/c3/c340a02.a:140:26-141:3: error: 'F340A000' is not a generic
+c341a04.a: /home/wohl/src/uada80/tests/acats/tests/c3/c341a04.a:121:16-19: error: 'Bank_Account_Pointer' is not a record
+c35507b.ada: /home/wohl/src/uada80/tests/acats/tests/c3/c35507b.ada:68:31-33: error: 'P' is not a generic
+c35507b.ada: /home/wohl/src/uada80/tests/acats/tests/c3/c35507b.ada:69:31-33: error: 'P' is not a generic
+c35507b.ada: /home/wohl/src/uada80/tests/acats/tests/c3/c35507b.ada:70:31-33: error: 'P' is not a generic
+c391001.a: /home/wohl/src/uada80/tests/acats/tests/c3/c391001.a:214:14-44: error: '_unknown' is not a record
+c391001.a: /home/wohl/src/uada80/tests/acats/tests/c3/c391001.a:216:14-44: error: '_unknown' is not a record
+c391001.a: /home/wohl/src/uada80/tests/acats/tests/c3/c391001.a:218:14-44: error: '_unknown' is not a record
+c391001.a: /home/wohl/src/uada80/tests/acats/tests/c3/c391001.a:222:14-44: error: '_unknown' is not a record
+c391001.a: /home/wohl/src/uada80/tests/acats/tests/c3/c391001.a:224:14-44: error: '_unknown' is not a record
+c391001.a: /home/wohl/src/uada80/tests/acats/tests/c3/c391001.a:226:14-44: error: '_unknown' is not a record
+c391001.a: /home/wohl/src/uada80/tests/acats/tests/c3/c391001.a:235:14-43: error: '_unknown' is not a record
+c391001.a: /home/wohl/src/uada80/tests/acats/tests/c3/c391001.a:237:14-43: error: '_unknown' is not a record
+c391001.a: /home/wohl/src/uada80/tests/acats/tests/c3/c391001.a:241:14-43: error: '_unknown' is not a record
 
-### static (432 errors)
+### type mismatch (318 errors)
 
-a35402a.ada: <input>:50:35-38: error: expression is not static
-a35402a.ada: <input>:50:41-43: error: expression is not static
-a35402a.ada: <input>:52:35-38: error: expression is not static
-a35402a.ada: <input>:52:41-43: error: expression is not static
-a35402a.ada: <input>:54:35-38: error: expression is not static
-a35402a.ada: <input>:54:41-43: error: expression is not static
-a35402a.ada: <input>:56:35-38: error: expression is not static
-a35402a.ada: <input>:56:41-42: error: expression is not static
-ad7101a.ada: <input>:40:21-36: error: expression is not static
-ad7101a.ada: <input>:41:26-40: error: expression is not static
-ad7101c.ada: <input>:39:28-36: error: expression is not static
-ad7101c.ada: <input>:39:39-46: error: expression is not static
-ad7101c.ada: <input>:40:28-36: error: expression is not static
-ad7101c.ada: <input>:40:39-46: error: expression is not static
-ad7102a.ada: <input>:40:34-51: error: expression is not static
+c332001.a: /home/wohl/src/uada80/tests/acats/tests/c3/c332001.a:171:26-43: error: incompatible types for arithmetic: 'Modular_Type' and 'Integer_Type'
+c354004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c354004.a:83:14-70: error: incompatible types for arithmetic: 'Address_Type' and 'Integer'
+c354004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c354004.a:113:7-114:7: error: type mismatch in assignment: cannot assign 'Integer' to 'Addr_Type'
+c354004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c354004.a:154:7-155:7: error: type mismatch in assignment: cannot assign 'Integer' to 'Addr_Type'
+c354004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c354004.a:194:7-195:7: error: type mismatch in assignment: cannot assign 'Integer' to 'Addr_Type'
+c354004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c354004.a:233:7-234:7: error: type mismatch in assignment: cannot assign 'Integer' to 'Addr_Type'
+c354004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c354004.a:275:7-276:7: error: type mismatch in assignment: cannot assign 'Integer' to 'Addr_Type'
+c354004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c354004.a:319:7-320:7: error: type mismatch in assignment: cannot assign 'Integer' to 'Addr_Type'
+c354004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c354004.a:365:7-366:7: error: type mismatch in assignment: cannot assign 'Integer' to 'Addr_Type'
+c390004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c390004.a:319:3-320:3: error: type mismatch in assignment: cannot assign 'access_Vehicle' to 'V_Reference'
+c390004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c390004.a:323:3-324:3: error: type mismatch in assignment: cannot assign 'access_Car' to 'V_Reference'
+c390004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c390004.a:327:3-328:3: error: type mismatch in assignment: cannot assign 'access_Convertible' to 'V_Reference'
+c390004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c390004.a:331:3-332:3: error: type mismatch in assignment: cannot assign 'access_Jeep' to 'V_Reference'
+c390004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c390004.a:347:3-348:3: error: type mismatch in assignment: cannot assign 'access_Vehicle' to 'V_Reference'
+c390004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c390004.a:351:3-352:3: error: type mismatch in assignment: cannot assign 'access_Car' to 'V_Reference'
 
-### other (283 errors)
+### expected X (278 errors)
 
-a54b01a.ada: <input>:108:17-21: error: 'Integer' is not an array
-a54b02a.ada: <input>:127:17-20: error: 'Integer' is not an array
-ad7203b.ada: <input>:167:35-45: error: record 'DISCR_REC' has no component 'C1_I'
-c32001c.ada: <input>:86:19-24: error: record 'REC' has no component 'D1'
-c32001c.ada: <input>:87:24-29: error: record 'REC' has no component 'D2'
-c32001c.ada: <input>:96:22-27: error: record 'REC' has no component 'D1'
-c32001c.ada: <input>:97:24-29: error: record 'REC' has no component 'D2'
-c32001d.ada: <input>:79:19-26: error: record 'CELL' has no component 'SIZE'
-c324002.a: <input>:69:4-71:4: error: constant declaration must have initialization
-c34001d.ada: <input>:87:9-16: error: 'Boolean' is not an array
-c34001d.ada: <input>:87:31-38: error: 'Boolean' is not an array
-c354002.a: <input>:70:31-56: error: modulus must be positive, got 0
-c354002.a: <input>:71:31-59: error: modulus must be positive, got 0
-c354002.a: <input>:72:31-52: error: modulus must be positive, got 0
-c37305a.ada: <input>:72:14-21: error: record 'REC' has no component 'DISC'
+a99006a.ada: /home/wohl/src/uada80/tests/acats/tests/a/a99006a.ada:48:30-38: error: type mismatch in initialization: expected 'Y', got 'Integer'
+c324002.a: /home/wohl/src/uada80/tests/acats/tests/c3/c324002.a:196:7-197:4: error: wrong number of arguments: expected 0, got 1
+c36205j.ada: /home/wohl/src/uada80/tests/acats/tests/c3/c36205j.ada:175:20-34: error: type mismatch for parameter 'S': expected 'STR', got 'STR(5..9)'
+c390004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c390004.a:368:36-67: error: type mismatch in initialization: expected 'V_Reference', got 'access_Vehicle'
+c390004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c390004.a:369:36-59: error: type mismatch in initialization: expected 'C_Reference', got 'access_Car'
+c390004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c390004.a:370:36-75: error: type mismatch in initialization: expected 'C_Reference', got 'access_Convertible'
+c390004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c390004.a:371:36-61: error: type mismatch in initialization: expected 'C_Reference', got 'access_Jeep'
+c392004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c392004.a:163:11-17: error: type mismatch for parameter 'The_Vehicle': expected 'Vehicle', got 'Car'
+c392004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c392004.a:170:10-17: error: type mismatch for parameter 'The_Vehicle': expected 'Vehicle', got 'Car'
+c392004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c392004.a:184:10-17: error: type mismatch for parameter 'The_Vehicle': expected 'Vehicle', got 'Car'
+c392010.a: /home/wohl/src/uada80/tests/acats/tests/c3/c392010.a:280:12-281:3: error: return type mismatch: expected 'Access_Tagtype_Level_1', got 'access_Tagtype_Level_1'
+c392010.a: /home/wohl/src/uada80/tests/acats/tests/c3/c392010.a:381:12-382:3: error: return type mismatch: expected 'Access_Tagtype_Level_1', got 'access_Tagtype_Level_2'
+c393010.a: /home/wohl/src/uada80/tests/acats/tests/c3/c393010.a:73:12-30: error: type mismatch for parameter 'T': expected 'Ticket', got 'Integer'
+c3a0013.a: /home/wohl/src/uada80/tests/acats/tests/c3/c3a0013.a:169:28-47: error: type mismatch in initialization: expected 'Vehicle_ID', got 'access_Vehicle'
+c3a0015.a: /home/wohl/src/uada80/tests/acats/tests/c3/c3a0015.a:167:2-168:2: error: wrong number of arguments: expected 0, got 1
 
-### expected X (208 errors)
+### static (170 errors)
 
-a85013b.ada: <input>:53:21-54:16: error: wrong number of arguments: expected 1, got 0
-c39006d.ada: <input>:84:16-86:16: error: wrong number of generic parameters for 'P': expected 1, got 0
-c39006d.ada: <input>:119:21-120:21: error: wrong number of arguments: expected 1, got 0
-c392c07.a: <input>:128:3-129:3: error: wrong number of arguments: expected 2, got 1
-c392c07.a: <input>:129:3-130:3: error: wrong number of arguments: expected 2, got 1
-c392c07.a: <input>:130:3-131:3: error: wrong number of arguments: expected 2, got 1
-c3a0020.a: <input>:444:13-445:10: error: wrong number of generic parameters for 'GPack': expected 1, got 0
-c3a0021.a: <input>:468:13-469:10: error: wrong number of generic parameters for 'GPack': expected 1, got 0
-c3a0023.a: <input>:440:13-441:10: error: wrong number of generic parameters for 'GPack': expected 1, got 0
-c3a0024.a: <input>:430:13-431:10: error: wrong number of generic parameters for 'GPack': expected 1, got 0
-c490001.a: <input>:188:4-189:4: error: wrong number of arguments: expected 4, got 3
-c490001.a: <input>:189:4-195:4: error: wrong number of arguments: expected 4, got 3
-c490001.a: <input>:195:7-29: error: expected Boolean, got 'Integer'
-c490001.a: <input>:197:7-198:7: error: wrong number of arguments: expected 4, got 3
-c490001.a: <input>:198:7-200:7: error: wrong number of arguments: expected 4, got 3
+ad7103c.ada: /home/wohl/src/uada80/tests/acats/tests/a/ad7103c.ada:40:28-46: error: expression is not static
+c3a0015.a: /home/wohl/src/uada80/tests/acats/tests/c3/c3a0015.a:124:44-51: error: expression is not static
+c45252b.ada: /home/wohl/src/uada80/tests/acats/tests/c4/c45252b.ada:99:36-54: error: expression is not static
+c453001.a: /home/wohl/src/uada80/tests/acats/tests/c4/c453001.a:71:33-79: error: expression is not static
+c87b62b.ada: /home/wohl/src/uada80/tests/acats/tests/c8/c87b62b.ada:89:37-45: error: expression is not static
+cd10001.a: /home/wohl/src/uada80/tests/acats/tests/cd/cd10001.a:222:43-44: error: expression is not static
+cd10002.a: /home/wohl/src/uada80/tests/acats/tests/cd/cd10002.a:282:23-28: error: expression is not static
+cd10002.a: /home/wohl/src/uada80/tests/acats/tests/cd/cd10002.a:283:22-26: error: expression is not static
+cd10002.a: /home/wohl/src/uada80/tests/acats/tests/cd/cd10002.a:284:24-30: error: expression is not static
+cd10002.a: /home/wohl/src/uada80/tests/acats/tests/cd/cd10002.a:285:23-28: error: expression is not static
+cd10002.a: /home/wohl/src/uada80/tests/acats/tests/cd/cd10002.a:287:23-28: error: expression is not static
+cd10002.a: /home/wohl/src/uada80/tests/acats/tests/cd/cd10002.a:288:22-26: error: expression is not static
+cd10002.a: /home/wohl/src/uada80/tests/acats/tests/cd/cd10002.a:289:24-30: error: expression is not static
+cd10002.a: /home/wohl/src/uada80/tests/acats/tests/cd/cd10002.a:290:23-28: error: expression is not static
+cd10002.a: /home/wohl/src/uada80/tests/acats/tests/cd/cd10002.a:292:23-28: error: expression is not static
 
-### type mismatch (188 errors)
+### other (128 errors)
 
-a35801f.ada: <input>:48:19-29: error: type mismatch in initialization: expected 'Float', got 'Integer'
-a35801f.ada: <input>:49:19-28: error: type mismatch in initialization: expected 'Float', got 'Integer'
-a35801f.ada: <input>:51:20-31: error: type mismatch in initialization: expected 'Float', got 'Integer'
-a35801f.ada: <input>:52:20-30: error: type mismatch in initialization: expected 'Float', got 'Integer'
-a35801f.ada: <input>:54:20-31: error: type mismatch in initialization: expected 'Float', got 'Integer'
-a35801f.ada: <input>:55:20-30: error: type mismatch in initialization: expected 'Float', got 'Integer'
-a49027b.ada: <input>:97:44-45: error: type mismatch in initialization: expected 'NUMBER_TYPE', got 'Universal_Integer'
-a99006a.ada: <input>:48:30-38: error: type mismatch in initialization: expected 'Y', got 'Integer'
-c26006a.ada: <input>:44:17-45:17: error: type mismatch in assignment: cannot assign 'Integer' to 'Character'
-c26006a.ada: <input>:45:17-46:17: error: type mismatch in assignment: cannot assign 'Integer' to 'Character'
-c34001a.ada: <input>:59:18-60:6: error: return type mismatch: expected 'PARENT', got 'Integer'
-c34001d.ada: <input>:59:18-60:6: error: return type mismatch: expected 'Boolean', got 'Integer'
-c34002a.ada: <input>:65:18-66:6: error: return type mismatch: expected 'T', got 'Integer'
-c350001.a: <input>:86:17-87:7: error: return type mismatch: expected 'Enum', got 'Integer'
-c350001.a: <input>:152:20-153:10: error: return type mismatch: expected 'Tiny', got 'Integer'
+c3a0003.a: /home/wohl/src/uada80/tests/acats/tests/c3/c3a0003.a:118:9-20: error: dereference prefix must be an access type, got 'Sine_Function_Ptr'
+c3a0003.a: /home/wohl/src/uada80/tests/acats/tests/c3/c3a0003.a:127:9-20: error: dereference prefix must be an access type, got 'Sine_Function_Ptr'
+c3a0003.a: /home/wohl/src/uada80/tests/acats/tests/c3/c3a0003.a:136:9-20: error: dereference prefix must be an access type, got 'Sine_Function_Ptr'
+c3a0015.a: /home/wohl/src/uada80/tests/acats/tests/c3/c3a0015.a:162:5-6: error: dereference prefix must be an access type, got 'Derived_Acc'
+c3a0015.a: /home/wohl/src/uada80/tests/acats/tests/c3/c3a0015.a:188:5-6: error: dereference prefix must be an access type, got 'Acc'
+c410001.a: /home/wohl/src/uada80/tests/acats/tests/c4/c410001.a:205:37-49: error: dereference prefix must be an access type, got 'Func_Ref'
+c413001.a: /home/wohl/src/uada80/tests/acats/tests/c4/c413001.a:264:10-27: error: record 'TQ' has no component 'Base_Func'
+c413001.a: /home/wohl/src/uada80/tests/acats/tests/c4/c413001.a:275:10-27: error: record 'TQ' has no component 'Base_Func'
+c413001.a: /home/wohl/src/uada80/tests/acats/tests/c4/c413001.a:299:10-27: error: record 'TQ' has no component 'Prim_Func'
+c413001.a: /home/wohl/src/uada80/tests/acats/tests/c4/c413001.a:311:10-27: error: record 'TQ' has no component 'Prim_Func'
+c413001.a: /home/wohl/src/uada80/tests/acats/tests/c4/c413001.a:335:10-28: error: record 'TQ' has no component 'Base_Func'
+c413001.a: /home/wohl/src/uada80/tests/acats/tests/c4/c413001.a:346:10-28: error: record 'TQ' has no component 'Base_Func'
+c413001.a: /home/wohl/src/uada80/tests/acats/tests/c4/c413001.a:353:10-32: error: record 'TQ' has no component 'Prim_New_Func'
+c413001.a: /home/wohl/src/uada80/tests/acats/tests/c4/c413001.a:372:10-32: error: record 'TQ' has no component 'Class_Wide_Func'
+c413001.a: /home/wohl/src/uada80/tests/acats/tests/c4/c413001.a:383:10-32: error: record 'TQ' has no component 'Class_Wide_Func'
 
-### incompatible (159 errors)
+### cannot convert (49 errors)
 
-c3a0006.a: <input>:139:16-27: error: incompatible types for arithmetic: 'Float' and 'Universal_Real'
-c3a0017.a: <input>:71:14-21: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
-c3a0018.a: <input>:80:17-24: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
-c3a0026.a: <input>:59:14-21: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
-c3a0026.a: <input>:64:14-21: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
-c3a0027.a: <input>:59:17-24: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
-c3a0027.a: <input>:64:17-24: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
-c413001.a: <input>:200:18-29: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
-c413001.a: <input>:205:14-25: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
-c413002.a: <input>:203:18-29: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
-c413002.a: <input>:208:14-25: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
-c413003.a: <input>:202:18-29: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
-c413004.a: <input>:203:18-29: error: incompatible types for arithmetic: 'Universal_Real' and 'Float'
-c452002.a: error: incompatible types in range: 'Month' and 'Shape'
-c452002.a: error: incompatible types in range: 'Shape' and 'Radix'
+c390004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c390004.a:158:11-25: error: cannot convert from 'Car' to 'Vehicle'
+c390004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c390004.a:158:11-25: error: cannot convert from 'Car' to 'Vehicle'
+c390004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c390004.a:184:11-21: error: cannot convert from 'Convertible' to 'Car'
+c390004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c390004.a:184:11-21: error: cannot convert from 'Convertible' to 'Car'
+c390004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c390004.a:205:11-29: error: cannot convert from 'Jeep' to 'Convertible'
+c390004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c390004.a:205:11-29: error: cannot convert from 'Jeep' to 'Convertible'
+c390004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c390004.a:341:13-36: error: cannot convert from 'Jeep' to 'Vehicle'
+c390004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c390004.a:342:13-32: error: cannot convert from 'Jeep' to 'Car'
+c390004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c390004.a:343:13-40: error: cannot convert from 'Jeep' to 'Convertible'
+c392003.a: /home/wohl/src/uada80/tests/acats/tests/c3/c392003.a:285:20-38: error: cannot convert from 'Savings_Account' to 'Bank_Account'
+c392003.a: /home/wohl/src/uada80/tests/acats/tests/c3/c392003.a:285:20-38: error: cannot convert from 'Savings_Account' to 'Bank_Account'
+c392003.a: /home/wohl/src/uada80/tests/acats/tests/c3/c392003.a:308:23-44: error: cannot convert from 'Preferred_Account' to 'Savings_Account'
+c392003.a: /home/wohl/src/uada80/tests/acats/tests/c3/c392003.a:308:23-44: error: cannot convert from 'Preferred_Account' to 'Savings_Account'
+c392004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c392004.a:153:11-28: error: cannot convert from 'Car' to 'Vehicle'
+c392004.a: /home/wohl/src/uada80/tests/acats/tests/c3/c392004.a:160:11-28: error: cannot convert from 'Car' to 'Vehicle'
 
-### already defined (42 errors)
+### already defined (2 errors)
 
-c38102d.ada: <input>:36:11-39:11: error: task type 'T1' is already defined
-c452006.a: <input>:108:4-110:4: error: 'Null_Lim_Handle' is already defined in this scope
-c452006.a: <input>:112:4-114:1: error: 'Null_Nonlim_Handle' is already defined in this scope
-c480001.a: <input>:77:4-78:1: error: 'Root_Obj' is already defined in this scope
-c48006b.ada: <input>:172:16-173:16: error: 'CONS1_UP' is already defined in this scope
-c48006b.ada: <input>:173:16-175:16: error: 'CONS2_UP' is already defined in this scope
-c48006b.ada: <input>:175:16-176:16: error: 'CONS3_UP' is already defined in this scope
-c48006b.ada: <input>:176:16-178:11: error: 'CONS4_UP' is already defined in this scope
-c48009b.ada: <input>:113:16-114:11: error: 'CONS_PRIV' is already defined in this scope
-c54a03a.ada: <input>:44:6-45:6: error: 'I' is already defined in this scope
-c54a03a.ada: <input>:46:6-47:6: error: 'B' is already defined in this scope
-c54a03a.ada: <input>:49:6-50:6: error: 'E' is already defined in this scope
-c54a03a.ada: <input>:50:6-51:6: error: 'C' is already defined in this scope
-c62003b.ada: <input>:60:16-61:16: error: 'C0' is already defined in this scope
-c62003b.ada: <input>:61:16-62:16: error: 'C1' is already defined in this scope
-
-### cannot convert (4 errors)
-
-c552001.a: <input>:215:16-39: error: cannot convert from 'Null_Array' to 'One_D_Array'
-cxai017.a: <input>:96:6-52: error: cannot convert from 'My_Constrained_Array_Type' to 'My_Array_Type'
-cxai017.a: <input>:100:6-54: error: cannot convert from 'My_Constrained_Array_Type' to 'My_Array_Type'
-la140050.a: <input>:55:22-29: error: cannot convert from 'Integer' to 'flt'
+c34005g.ada: /home/wohl/src/uada80/tests/acats/tests/c3/c34005g.ada:70:6-72:6: error: 'N' is already defined in this scope
+c87b41a.ada: /home/wohl/src/uada80/tests/acats/tests/c8/c87b41a.ada:57:6-59:6: error: task type 'T' is already defined
 

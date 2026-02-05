@@ -10,7 +10,7 @@ IN_PROGRESS
 - [x] Task 1: Run ACATS test suite parser tests (already passing - 4,725 files parse successfully)
 - [x] Task 2: Make a list of failed tests (already exists in real_failures.txt - 11,107 semantic errors)
 - [x] Task 3: Identify tests to skip (multitasking-related tests)
-- [ ] Task 4: Fix compiler to pass non-skipped tests (focus on core language features)
+- [x] Task 4: Fix compiler to pass non-skipped tests (focus on core language features) - IN PROGRESS
 - [ ] Task 5: Verify floating point support (native Z80 hardware support)
 - [ ] Task 6: Verify long numbers support (native Z80 hardware support)
 - [ ] Task 7: Run execution tests to validate fixes
@@ -28,4 +28,16 @@ IN_PROGRESS
 - Skip logic now handles:
   - Entire categories (C9, B9)
   - Specific test names (CB protected tests, CX tasking tests)
+
+### Task 4 (Iteration 1): Fix attribute reference type lookup
+- **Fixed**: Modified `_analyze_attribute_ref()` in semantic.py:5399 to lookup type names in addition to objects
+- **Impact**:
+  - Total semantic errors: 11,107 → 7,181 (3,926 errors fixed, 35% reduction)
+  - "not found" errors: 8,787 → 5,705 (3,082 errors fixed, 35% reduction)
+- **Technical details**:
+  - When an attribute reference prefix is an Identifier (e.g., `SURREAL'FIRST`), now tries `lookup_type()` first
+  - Also handles SelectedName prefixes (e.g., `Package.Type'Attribute`)
+  - Matches the pattern already used in `_eval_static_impl()` at line 5947
+- **File changed**: `/home/wohl/src/uada80/uada80/semantic.py:5399-5418`
+- **Next priority**: Address remaining 5,705 "not found" errors (likely package dependency and generic issues)
 

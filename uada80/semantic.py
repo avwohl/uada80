@@ -5399,7 +5399,21 @@ class SemanticAnalyzer:
     def _analyze_attribute_ref(self, expr: AttributeReference) -> Optional[AdaType]:
         """Analyze an attribute reference."""
         # Analyze prefix and get its type
-        prefix_type = self._analyze_expr(expr.prefix)
+        # Special handling: prefix might be a type name (e.g., Integer'First)
+        prefix_type = None
+        if isinstance(expr.prefix, Identifier):
+            # Try type lookup first (for Type'Attribute)
+            prefix_type = self.symbols.lookup_type(expr.prefix.name)
+        elif isinstance(expr.prefix, SelectedName):
+            # Handle Package.Type'Attribute
+            if isinstance(expr.prefix.prefix, Identifier):
+                sym = self.symbols.lookup_selected(expr.prefix.prefix.name, expr.prefix.selector)
+                if sym and sym.ada_type:
+                    prefix_type = sym.ada_type
+
+        # If not a type, analyze as expression to get object's type
+        if prefix_type is None:
+            prefix_type = self._analyze_expr(expr.prefix)
 
         # Handle implicit dereference for access-to-array types
         # e.g., if V is access-to-array, V'Last implicitly dereferences
