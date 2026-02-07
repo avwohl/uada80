@@ -217,5 +217,7 @@ This project is licensed under the GNU General Public License v2.0 - see LICENSE
 - [uplm80](https://github.com/avwohl/uplm80) - PL/M-80 compiler targeting Intel 8080 and Zilog Z80 assembly language
 - [z80cpmw](https://github.com/avwohl/z80cpmw) - Z80 CP/M emulator for Windows (RomWBW)
 
-**Note**: This is an educational and hobbyist project. For production Ada development, please use [GNAT](https://www.adacore.com/gnatpro) or other mature Ada compilers.
+## See Also
+
+- [GNAT](https://www.adacore.com/gnatpro) - For production Ada development, use GNAT or other mature Ada compilers
 
