@@ -1,0 +1,1477 @@
+# ACATS C-Test Results
+# Generated: 2026-02-09 01:56:15
+# Total tests: 1460
+#
+# Format: TEST_NAME: STATUS [details]
+#
+
+c23001a: PASS
+c23006a: PASS
+c23006b: PASS
+c23006c: PASS
+c23006d: PASS
+c23006e: LINK_ERROR [Error: Undefined symbol: _P1 Error: Undefined symbol: _F1 Error: Undefined symbol: _P2]
+c23006f: PASS
+c23006g: LINK_ERROR [Error: Undefined symbol: _C23006G_INSTF Error: Undefined symbol: _C23006GINSTF Error: Undefined symbol: _C23006GINSTP Error: Undefined symbol: _C23006G_INSTP]
+c24002d: PASS
+c24003a: PASS
+c24003b: PASS
+c24003c: PASS
+c24106a: PASS
+c24202d: PASS
+c24203a: PASS
+c24203b: PASS
+c24207a: PASS
+c24211a: PASS
+c25001a: PASS
+c25001b: PASS
+c26006a: PASS
+c26008a: NO_RESULT [,.,. C26008A ---- C26008A Constraint_ErrorCPU mode: Z80 Loaded 8064 bytes from /tmp/tmp1un61d6d/test.com Program exit via JMP 0 ]
+c2a001a: PASS
+c2a001b: PASS
+c2a001c: PASS
+c2a002a: PASS
+c2a008a: PASS
+c2a021b: PASS
+c32001a: TIMEOUT
+c32001b: TIMEOUT
+c32001c: NO_RESULT [,.,. C32001C ---- C32001C CPU mode: Z80 Loaded 18816 bytes from /tmp/tmpasftv2zw/test.com Program exit via JMP 0 ]
+c32001d: NO_RESULT [,.,. C32001D ---- C32001D CPU mode: Z80 Loaded 14592 bytes from /tmp/tmpuu60yut8/test.com Program exit via JMP 0 ]
+c32001e: PASS
+c32107a: NO_RESULT [CPU mode: Z80 Loaded 34304 bytes from /tmp/tmp66kt7mb8/test.com Program exit via JMP 0 ]
+c32107c: LINK_ERROR [Error: Undefined symbol: _PROC]
+c32108a: PASS
+c32108b: PASS
+c32111a: NO_RESULT [,.,. C32111A ---- C32111A    *    * NO EXCEPTION RAISED FOR INITIALIZATION OF VARIABLE 'D'.    - VARIABLE 'D' INITIALIZED    *    * NO EXCEPTION RAISE]
+c32111b: NO_RESULT [,.,. C32111B ---- C32111B    *    * NO EXCEPTION RAISED FOR INITIALIZATION OF VARIABLE 'D'.    - VARIABLE 'D' INITIALIZED    *    * NO EXCEPTION RAISE]
+c32112b: NO_RESULT [,.,. C32112B ---- C32112B    *    * NO EXCEPTION RAISED FOR INITIALIZATION OF VARIABLE 'N1A'.    *    * NO EXCEPTION RAISED FOR INITIALIZATION OF CONS]
+c32113a: NO_RESULT [,.,. C32113A ---- C32113A    *    * NO EXCEPTION RAISED FOR INITIALIZATION OF CONSTANT 'PR1'.    - PREVENTING DEAD VARIABLE OPTIMIZATION    *    * NO ]
+c32115a: TIMEOUT
+c32115b: TIMEOUT
+c34001a: TIMEOUT
+c34001c: TIMEOUT
+c34001d: NO_RESULT [,.,. C34001D ---- C34001D    * INCORRECT QUALIFICATION    * INCORRECT CONVERSION TO PARENT    * INCORRECT ""NOT"" CPU mode: Z80 Loaded 14080 bytes fro]
+c34001f: PASS
+c34002a: TIMEOUT
+c34002c: NO_RESULT [,.,. C34002C ---- C34002C    * INCORRECT 'FIRST OR 'LAST    * CONSTRAINT_ERROR NOT RAISED -- X := -31 CPU mode: Z80 Loaded 12928 bytes from /tmp/tmpgt]
+c34003a: TIMEOUT
+c34003c: NO_RESULT [,.,. C34003C ---- C34003C    * INCORRECT 'BASE'DIGITS CPU mode: Z80 Loaded 23424 bytes from /tmp/tmpb0c7v98o/test.com System reset ]
+c34004a: NO_RESULT [,.,. C34004A ---- C34004A    * INCORRECT :=    * INCORRECT BINARY +    * INCORRECT BINARY -    * INCORRECT QUALIFICATION    * INCORRECT SELF CONVERSIO]
+c34004c: NO_RESULT [,.,. C34004C ---- C34004C    * INCORRECT 'BASE'DELTA CPU mode: Z80 Loaded 23424 bytes from /tmp/tmpykm8hth4/test.com Program exit via JMP 0 ]
+c34005a: LINK_ERROR [Error: Undefined symbol: _CONTAINER_LAST Error: Undefined symbol: _CONTAINER_FIRST]
+c34005c: NO_RESULT [CPU mode: Z80 Loaded 26368 bytes from /tmp/tmpb41ymlm6/test.com System reset ]
+c34005d: LINK_ERROR [Error: Undefined symbol: _CONTAINER_FIRST Error: Undefined symbol: _CONTAINER_LAST]
+c34005f: TIMEOUT
+c34005g: LINK_ERROR [Error: Undefined symbol: _CONTAINER_LAST Error: Undefined symbol: _CONTAINER_FIRST]
+c34005i: NO_RESULT [,.,. C34005I ---- C34005I    *    * CAN'T CREATE BASE TYPE VALUES OUTSIDE THE SUBTYPE.    * INCORRECT &    * INCORRECT 'FIRST OR 'LAST CPU mode: Z80 L]
+c34005j: LINK_ERROR [Error: Undefined symbol: _CONTAINER_LAST Error: Undefined symbol: _CONTAINER_FIRST]
+c34005l: NO_RESULT [,.,. C34005L ---- C34005L    *    * CAN'T CREATE BASE TYPE VALUES OUTSIDE THE SUBTYPE.    CPU mode: Z80 Loaded 16128 bytes from /tmp/tmpq9mznjx4/test.]
+c34005m: LINK_ERROR [Error: Undefined symbol: _CONTAINER_FIRST Error: Undefined symbol: _CONTAINER_LAST]
+c34005o: NO_RESULT [,.,. C34005O ---- C34005O CPU mode: Z80 Loaded 24448 bytes from /tmp/tmpbi3467ls/test.com Program exit via JMP 0 ]
+c34005p: LINK_ERROR [Error: Undefined symbol: _ASSIGN Error: Undefined symbol: _CONTAINER_LAST Error: Undefined symbol: _CONTAINER_FIRST]
+c34005r: NO_RESULT [,.,. C34005R ---- C34005R CPU mode: Z80 Loaded 20224 bytes from /tmp/tmpxh44_8rg/test.com Program exit via JMP 0 ]
+c34005s: LINK_ERROR [Error: Undefined symbol: _CONTAINER_LAST Error: Undefined symbol: _CONTAINER_FIRST Error: Undefined symbol: _ASSIGN]
+c34005u: NO_RESULT [,.,. C34005U ---- C34005U CPU mode: Z80 Loaded 27264 bytes from /tmp/tmpfna8m4_3/test.com Program exit via JMP 0 ]
+c34005v: LINK_ERROR [Error: Undefined symbol: _ASSIGN]
+c34006a: NO_RESULT [,.,. C34006A ---- C34006A    * INCORRECT :=    * INCORRECT QUALIFICATION    * INCORRECT SELF CONVERSION    * INCORRECT CONVERSION FROM PARENT    * INC]
+c34006d: NO_RESULT [,.,. C34006D ---- C34006D    * INCORRECT :=    * INCORRECT QUALIFICATION    * INCORRECT SELF CONVERSION    * INCORRECT CONVERSION FROM PARENT    * INC]
+c34006f: TIMEOUT
+c34006g: NO_RESULT [,.,. C34006G ---- C34006G CPU mode: Z80 Loaded 11392 bytes from /tmp/tmp0n50ta9f/test.com Program exit via JMP 0 ]
+c34006j: NO_RESULT [,.,. C34006J ---- C34006J    * INCORRECT QUALIFICATION    * INCORRECT SELF CONVERFON    *     * INCORRECT CONVERSION TO PARENT    * INCORRECT SELECTI]
+c34006l: NO_RESULT [,.,. C34006L ---- C34006L CPU mode: Z80 Loaded 18688 bytes from /tmp/tmp56f9z1ew/test.com System reset ]
+c34007a: TIMEOUT
+c34007d: LINK_ERROR [Error: Undefined symbol: _CONTAINER_FIRST Error: Undefined symbol: _CONTAINER_LAST]
+c34007f: PASS
+c34007g: LINK_ERROR [Error: Undefined symbol: _CONTAINER_LAST Error: Undefined symbol: _CONTAINER_FIRST]
+c34007i: NO_RESULT [,.,. C34007I ---- C34007I CPU mode: Z80 Loaded 20224 bytes from /tmp/tmpzca82zb1/test.com Program exit via JMP 0 ]
+c34007j: LINK_ERROR [Error: Undefined symbol: _E Error: Undefined symbol: _W Error: Undefined symbol: _R]
+c34007m: NO_RESULT [,.,. C34007M ---- C34007M    * INCORRECT INITIALIZATION    * INCORRECT :=    * INCORRECT QUALIFICATION    * INCORRECT SELF CONVERSION    * INCORRECT C]
+c34007p: TIMEOUT
+c34007r: TIMEOUT
+c34007s: TIMEOUT
+c34007u: NO_RESULT [,.,. C34007U ---- C34007U CPU mode: Z80 Loaded 21120 bytes from /tmp/tmpmvw39asc/test.com System reset ]
+c34007v: NO_RESULT [,.,. C34007V ---- C34007V    * INCORRECT CONVERSION TO PARENT - 2    * INCORRECT .ALL (VALUE) Constraint_ErrorCPU mode: Z80 Loaded 14336 bytes from /t]
+c34008a: COMPILE_ERROR [semantic: 'H' not found]
+c34009a: PASS
+c34009d: TIMEOUT
+c34009f: TIMEOUT
+c34009g: PASS
+c34009j: NO_RESULT [,.,. C34009J ---- C34009J    * INCORRECT QUALIFICATION    * INCORRECT SELF CONVERSION    * INCORRECT CONVERSION FROM PARENT    * INCORRECT CONVERSION ]
+c34009l: TIMEOUT
+c34011b: TIMEOUT
+c34012a: PASS
+c34014a: PASS
+c34014c: PASS
+c34014e: PASS
+c34014g: PASS
+c34014h: PASS
+c34014n: PASS
+c34014p: PASS
+c34014r: PASS
+c34014t: PASS
+c34014u: PASS
+c34018a: LINK_ERROR [Error: Undefined symbol: _G]
+c35003a: TIMEOUT
+c35003b: PASS
+c35003d: PASS
+c35102a: LINK_ERROR [Error: Undefined symbol: _E]
+c35502a: PASS
+c35502b: LINK_ERROR [Error: Undefined symbol: _PROC4 Error: Undefined symbol: _PROC1 Error: Undefined symbol: _PROC2 Error: Undefined symbol: _PROC3]
+c35502c: NO_RESULT [,.,. C35502C ---- C35502C    * INCORRECT LOWER BOUND FOR ABC IN ENUM    * INCORRECT LOWER BOUND FOR A_B_C IN ENUM    * INCORRECT SUBENUM'IMAGE FOR A_B]
+c35502e: LINK_ERROR [Error: Undefined symbol: _PN Error: Undefined symbol: _PE Error: Undefined symbol: _PS]
+c35502g: PASS
+c35502h: LINK_ERROR [Error: Undefined symbol: _PE Error: Undefined symbol: _PN]
+c35502i: NO_RESULT [,.,. C35502I ---- C35502I CPU mode: Z80 Loaded 10880 bytes from /tmp/tmpso1fd3tv/test.com Program exit via JMP 0 ]
+c35502j: LINK_ERROR [Error: Undefined symbol: _PN Error: Undefined symbol: _PE]
+c35502k: PASS
+c35502l: LINK_ERROR [Error: Undefined symbol: _PE Error: Undefined symbol: _PN]
+c35502m: NO_RESULT [,.,. C35502M ---- C35502M    *    * INCORRECT SUBENUM'POS (BC.    *    * INCORRECT SUBENUM'VAL (0.    *    * INCORRECT SUBENUM'POS (ABC.    *    * INC]
+c35502n: LINK_ERROR [Error: Undefined symbol: _PN Error: Undefined symbol: _PE]
+c35502o: PASS
+c35502p: LINK_ERROR [Error: Undefined symbol: _PROC3 Error: Undefined symbol: _PROC2 Error: Undefined symbol: _PROC1 Error: Undefined symbol: _PROC4]
+c35503a: PASS
+c35503b: LINK_ERROR [Error: Undefined symbol: _P_SINT1 Error: Undefined symbol: _P_INT Error: Undefined symbol: _P_INTEGER Error: Undefined symbol: _P_INT2 Error: Undefined symbol: _P_SINT2]
+c35503c: TIMEOUT
+c35503e: LINK_ERROR [Error: Undefined symbol: _PROC2 Error: Undefined symbol: _PROC1]
+c35503g: PASS
+c35503h: LINK_ERROR [Error: Undefined symbol: _PROC1 Error: Undefined symbol: _PROC2]
+c35503k: PASS
+c35503l: LINK_ERROR [Error: Undefined symbol: _P2 Error: Undefined symbol: _P1]
+c35503o: PASS
+c35503p: LINK_ERROR [Error: Undefined symbol: _P2 Error: Undefined symbol: _P1 Error: Undefined symbol: _Q1 Error: Undefined symbol: _R1]
+c35504a: PASS
+c35504b: PASS
+c35505c: LINK_ERROR [Error: Undefined symbol: _PC Error: Undefined symbol: _PB]
+c35505e: LINK_ERROR [Error: Undefined symbol: _PCHAR Error: Undefined symbol: _PNCHAR]
+c35505f: NO_RESULT [,.,. C35505F ---- C35505F    *    * NO EXCEPTION RAISED FOR CHAR'PRED (IDENT ('A')) - 2.    *    * NO EXCEPTION RAISED FOR CHAR'SUCC (IDENT (B)) - 2. ]
+c35507a: PASS
+c35507b: COMPILE_ERROR [semantic: 'P' is not a generic]
+c35507c: TIMEOUT
+c35507e: LINK_ERROR [Error: Undefined symbol: _PN Error: Undefined symbol: _PCHAR Error: Undefined symbol: _PCH Error: Undefined symbol: _PNCHAR]
+c35507g: PASS
+c35507h: LINK_ERROR [Error: Undefined symbol: _PCH Error: Undefined symbol: _PNCHAR Error: Undefined symbol: _PCHAR]
+c35507i: PASS
+c35507j: LINK_ERROR [Error: Undefined symbol: _PCHAR Error: Undefined symbol: _PNCHAR]
+c35507k: TIMEOUT
+c35507l: LINK_ERROR [Error: Undefined symbol: _PCHAR Error: Undefined symbol: _PCH Error: Undefined symbol: _PNCHAR]
+c35507m: PASS
+c35507n: LINK_ERROR [Error: Undefined symbol: _PCH Error: Undefined symbol: _PNCHAR Error: Undefined symbol: _PCHAR]
+c35507o: NO_RESULT [Constraint_ErrorCPU mode: Z80 Loaded 9728 bytes from /tmp/tmp_34kylhh/test.com Program exit via JMP 0 ]
+c35507p: LINK_ERROR [Error: Undefined symbol: _P4 Error: Undefined symbol: _P3 Error: Undefined symbol: _P1 Error: Undefined symbol: _P2]
+c35508a: PASS
+c35508b: LINK_ERROR [Error: Undefined symbol: _PROC4 Error: Undefined symbol: _PROC3 Error: Undefined symbol: _PROC2 Error: Undefined symbol: _PROC1]
+c35508c: PASS
+c35508e: LINK_ERROR [Error: Undefined symbol: _NP2 Error: Undefined symbol: _NP1 Error: Undefined symbol: _NP]
+c35508g: PASS
+c35508h: LINK_ERROR [Error: Undefined symbol: _NP1 Error: Undefined symbol: _NP2]
+c35508k: PASS
+c35508l: LINK_ERROR [Error: Undefined symbol: _NQ1 Error: Undefined symbol: _NP1 Error: Undefined symbol: _NP2 Error: Undefined symbol: _NQ2]
+c35508o: PASS
+c35508p: LINK_ERROR [Error: Undefined symbol: _P1 Error: Undefined symbol: _P4 Error: Undefined symbol: _Q1 Error: Undefined symbol: _P3 Error: Undefined symbol: _R1 Error: Undefined symbol: _P2]
+c35703a: PASS
+c35704a: PASS
+c35704b: PASS
+c35704c: PASS
+c35704d: PASS
+c35801d: PASS
+c35902d: PASS
+c35904a: PASS
+c35904b: PASS
+c35a02a: PASS
+c35a05a: NO_RESULT [,.,. C35A05A ---- C35A05A    *    * LEFT_OUT_M1'FORE =.    *    * LEFT_OUT_M1'AFT  =.    *    * LEFT_EDGE_M1'FORE =.    *    * LEFT_EDGE_M1'AFT  =.   ]
+c35a05d: TIMEOUT
+c35a05n: NO_RESULT [,.,. C35A05N ---- C35A05N    *    * GENERIC 'FORE FOR LEFT_OUT_M1.    *    * GENERIC 'AFT  FOR LEFT_OUT_M1.    *    * GENERIC 'FORE FOR LEFT_EDGE_M1. ]
+c35a05q: NO_RESULT [,.,. C35A05Q ---- C35A05Q    *    * GENERIC 'FORE FOR MICRO_ANGLE_ERROR_M15.    *    * GENERIC 'AFT  FOR MICRO_ANGLE_ERROR_M15.    *    * GENERIC 'FOR]
+c35a07a: TIMEOUT
+c35a07d: TIMEOUT
+c35a08b: LINK_ERROR [Error: Undefined symbol: _OP_DIV Error: Undefined symbol: _T1 Error: Undefined symbol: _OP_MUL]
+c36104a: NO_RESULT [,.,. C36104A ---- C36104A    *    * CONSTRAINT_ERROR NOT RAISED 1 656.    * CONSTRAINT_ERROR NOT RAISED 3    * CONSTRAINT_ERROR NOT RAISED 3    * CONS]
+c36104b: TIMEOUT
+c36172a: PASS
+c36172b: TIMEOUT
+c36172c: PASS
+c36174a: NO_RESULT [CPU mode: Z80 Loaded 11008 bytes from /tmp/tmpih_dhdgf/test.com Program exit via JMP 0 ]
+c36180a: NO_RESULT [,.,. C36180A ---- C36180A    * IMPROPER VALUE FOR B'FIRST OR B'LAST    * IMPROPER VALUE FOR C'FIRST OR C'LAST    * IMPROPER VALUE FOR E'FIRST OR E'LAS]
+c36202c: PASS
+c36203a: PASS
+c36204a: NO_RESULT [,.,. C36204A ---- C36204A    * INCORRECT 'FIRST OR 'LAST  - 1    * INCORRECT 'LENGTH - 1 CPU mode: Z80 Loaded 11648 bytes from /tmp/tmppwig97h_/test.c]
+c36204b: TIMEOUT
+c36204c: NO_RESULT [,.,. C36204C ---- C36204C    *    * INCORRECT RANGE VALUE FOR AN OBJECT DECLARATION 1.    *    * INCORRECT RANGE VALUE FOR AN OBJECT DECLARATION 2.   ]
+c36204d: TIMEOUT
+c36205a: TIMEOUT
+c36205b: PASS
+c36205c: PASS
+c36205d: TIMEOUT
+c36205e: PASS
+c36205f: PASS
+c36205g: PASS
+c36205h: PASS
+c36205i: PASS
+c36205j: COMPILE_ERROR [semantic: type mismatch for parameter 'S': expected 'STR', got 'STR(5..9)']
+c36205k: NO_RESULT [,.,. C36205K ---- C36205K Constraint_ErrorCPU mode: Z80 Loaded 13696 bytes from /tmp/tmpvts_4tdd/test.com Program exit via JMP 0 ]
+c36205l: TIMEOUT
+c36301a: PASS
+c36301b: PASS
+c36302a: PASS
+c36304a: NO_RESULT [,.,. C36304A ---- C36304A    *    * 'LAST IS 0.    *    * 'LENGTH IS 1. ,.,.  ----     *    * 'LENGTH IS 0. ,.,. C36304A ---- C36304A    *    * 0.   ]
+c36305a: NO_RESULT [,.,. C36305A ---- C36305A    * INCORRECT STRING ATTRIBUTE VALUES    * INCORRECT STRING RANGE ATTRIBUTE    *    * BAD I5 SUBRANGE 1 4.    *    * BAD I5]
+c37002a: PASS
+c37003a: NO_RESULT [,.,. C37003A ---- C37003A    *    * CONSTRAINT EXPRESSION NOT EVALUATED TWICE FOR ARRAYS.    *    * INITIALIZATION EXPRESSION NOT EVALUATED FOR EACH A]
+c37003b: PASS
+c37005a: PASS
+c37006a: PASS
+c37008a: LINK_ERROR [Error: Undefined symbol: _C6 Error: Undefined symbol: _C4 Error: Undefined symbol: _C11 Error: Undefined symbol: _C5 Error: Undefined symbol: _C10 Error: Undefined symbol: _C9 Error: Undefined symbol:]
+c37008b: PASS
+c37009a: TIMEOUT
+c37010a: PASS
+c37010b: TIMEOUT
+c37102b: PASS
+c37103a: PASS
+c37105a: PASS
+c37107a: PASS
+c37108b: LINK_ERROR [Error: Undefined symbol: _A]
+c37206a: PASS
+c37207a: TIMEOUT
+c37208a: TIMEOUT
+c37208b: LINK_ERROR [Error: Undefined symbol: _PROC_C Error: Undefined symbol: _PROC_U]
+c37209a: NO_RESULT [,.,. C37209A ---- C37209A    - NO EXCEPTION RAISED AT DECLARATION OF R1    -    - NO EXCEPTION RAISED AT DECLARATION OF R2. CPU mode: Z80 Loaded 12544]
+c37209b: TIMEOUT
+c37210a: PASS
+c37211a: NO_RESULT [,.,. C37211A ---- C37211A    *    * NO EXCEPTION RAISED AT THE ELABORATION OF SUBTYPE SUBREC .    *    * NO EXCEPTION RAISED AT THE ELABORATION OF TYP]
+c37211b: TIMEOUT
+c37211c: TIMEOUT
+c37211d: PASS
+c37211e: PASS
+c37213b: NO_RESULT [,.,. C37213B ---- C37213B    *    * F1 NOT EVALUATED: CONS IS .    *    * F1 EVALUATED: CONS IS .    * DISCRIMINANT VALUES NOT CORRECT    * DISCRIMINA]
+c37213d: NO_RESULT [,.,. C37213D ---- C37213D    *    * F1 NOT EVALUATED: CONS IS .    *    * F1 EVALUATED: CONS IS .    * INDEX BOUNDS NOT CORRECT    * INDEX CHECK NOT P]
+c37213f: TIMEOUT
+c37213h: TIMEOUT
+c37213j: LINK_ERROR [Error: Undefined symbol: _PROC6 Error: Undefined symbol: _PROC3 Error: Undefined symbol: _PROC8 Error: Undefined symbol: _PROC4 Error: Undefined symbol: _PROC2 Error: Undefined symbol: _PROC1 Error: U]
+c37213k: LINK_ERROR [Error: Undefined symbol: _PROC6 Error: Undefined symbol: _PROC1 Error: Undefined symbol: _PROC2 Error: Undefined symbol: _PROC8 Error: Undefined symbol: _PROC3 Error: Undefined symbol: _PROC7 Error: U]
+c37213l: LINK_ERROR [Error: Undefined symbol: _PROC4 Error: Undefined symbol: _PROC3 Error: Undefined symbol: _PROC2 Error: Undefined symbol: _PROC6 Error: Undefined symbol: _PROC5 Error: Undefined symbol: _PROC8 Error: U]
+c37215b: TIMEOUT
+c37215d: TIMEOUT
+c37215f: NO_RESULT [,.,. C37215F ---- C37215F    * DISCRIMINANT CHECK NOT PERFORMED - 1    - SHOULDN'T GET HERE    * DISCRIMINANT CHECK NOT PERFORMED - 2    - IRRELEVANT ]
+c37215h: PASS
+c37217a: LINK_ERROR [Error: Undefined symbol: _INT]
+c37217b: LINK_ERROR [Error: Undefined symbol: _INT]
+c37217c: PASS
+c37304a: PASS
+c37305a: PASS
+c37306a: PASS
+c37309a: PASS
+c37310a: PASS
+c37312a: PASS
+c37402a: LINK_ERROR [Error: Undefined symbol: _Q]
+c37403a: LINK_ERROR [Error: Undefined symbol: _Q]
+c37404a: NO_RESULT [,.,. C37404A ---- C37404A    * 'CONSTRAINED NOT TRUE FOR SUBTYPE1    * 'CONSTRAINED NOT TRUE FOR SUBTYPE2    * 'CONSTRAINED NOT TRUE FOR DEFAULT SUBTY]
+c37404b: NO_RESULT [,.,. C37404B ---- C37404B    * 'CONSTRAINED TRUE FOR RECORD COMPONENT    * 'CONSTRAINED TRUE FOR SUBTYPE    * 'CONSTRAINED TRUE FOR ARRAY TYPE    * 'C]
+c37405a: TIMEOUT
+c37411a: PASS
+c38002a: TIMEOUT
+c38002b: NO_RESULT [,.,. C38002B ---- C38002B    *    * INCOMPATIBLE CONSTRAINT ON ACCESS VALUE ACCEPTED BY GENERIC FUNCTION. CPU mode: Z80 Loaded 8704 bytes from /tmp/tm]
+c38005a: NO_RESULT [,.,. C38005A ---- C38005A    * INCORRECT ACCESS TYPE INITIALIZATION - 1    * INCORRECT ACCESS TYPE INITIALIZATION - 4    * INCORRECT ACCESS TYPE INITI]
+c38005b: LINK_ERROR [Error: Undefined symbol: _B]
+c38005c: PASS
+c38102a: LINK_ERROR [Error: Undefined symbol: _X7]
+c38102b: PASS
+c38102c: PASS
+c38102d: LINK_ERROR [Error: Undefined symbol: _E]
+c38102e: NO_RESULT [,.,. C38102E ---- C38102E    * INTEGER AND ENUMERATED TYPES NOT DERIVED Unhandled exception: 1 CPU mode: Z80 Loaded 11264 bytes from /tmp/tmpubj7z2bo/]
+c38104a: PASS
+c38107a: PASS
+c38107b: PASS
+c38108a: PASS
+c38108b: PASS
+c38108c0: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpvke0l4s7/test.com Program exit via JMP 0 ]
+c38108c1: COMPILE_ERROR [semantic: procedure 'ASSIGN' not found]
+c38108c2: COMPILE_ERROR [semantic: package specification for 'C38108C0' not found]
+c38108d0: COMPILE_ERROR [semantic: procedure 'ASSIGN' not found]
+c38108d1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmppm94x41n/test.com Program exit via JMP 0 ]
+c39006a: PASS
+c39006b: PASS
+c39006c0: PASS
+c39006c1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpgr3msry8/test.com Program exit via JMP 0 ]
+c39006d: COMPILE_ERROR [semantic: 'LENGTH' not found]
+c39006e: LINK_ERROR [Error: Undefined symbol: _INIT_2]
+c39006f0: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7424 bytes from /tmp/tmpdh8n7igv/test.com Program exit via JMP 0 ]
+c39006f1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmp26hgm4x1/test.com Program exit via JMP 0 ]
+c39006f2: COMPILE_ERROR [semantic: package specification for 'C39006F1' not found]
+c39006f3: PASS
+c39006g: NO_RESULT [CPU mode: Z80 Loaded 7424 bytes from /tmp/tmpq_f5b_7m/test.com Program exit via JMP 0 ]
+c39007a: PASS
+c39007b: PASS
+c39008a: PASS
+c39008b: PASS
+c39008c: PASS
+c41101d: TIMEOUT
+c41103a: TIMEOUT
+c41103b: NO_RESULT [,.,. C41103B ---- C41103B    * WRONG VALUE FOR EXPRESSION - N1    * WRONG TARGET FOR ASSIGNMENT - N1 CPU mode: Z80 Loaded 23168 bytes from /tmp/tmpno5]
+c41104a: LINK_ERROR [Error: Undefined symbol: _A]
+c41105a: PASS
+c41107a: NO_RESULT [,.,. C41107A ---- C41107A    * WRONG VALUE FOR EXPRESSION - A Constraint_ErrorCPU mode: Z80 Loaded 16896 bytes from /tmp/tmpwlug8jfb/test.com Program ]
+c41201d: TIMEOUT
+c41203a: NO_RESULT [,.,. C41203A ---- C41203A    * WRONG VALUE FOR EXPRESSION - N1 CPU mode: Z80 Loaded 21504 bytes from /tmp/tmpzwenzgyf/test.com Program exit via JMP 0 ]
+c41203b: NO_RESULT [,.,. C41203B ---- C41203B    * WRONG VALUE FOR EXPRESSION - N1 0]aI]eE]!  ]9]n]fjv7mR !jvjw~7(#w!jw]u]tjv]n]f	~7(#w]n]f~7(#w!jv]
+c41204a: NO_RESULT [,.,. C41204A ---- C41204A    *    * CONSTRAINT_ERROR NOT RAISED - 10. CPU mode: Z80 Loaded 11520 bytes from /tmp/tmp_9gk7a1r/test.com System reset ]
+c41205a: PASS
+c41206a: PASS
+c41207a: NO_RESULT [,.,. C41207A ---- C41207A Constraint_ErrorCPU mode: Z80 Loaded 11776 bytes from /tmp/tmpmv3ik25i/test.com Program exit via JMP 0 ]
+c41301a: NO_RESULT [,.,. C41301A ---- C41301A    * WRONG VALUE FOR EXPRESSION - X2    * WRONG TARGET FOR ASSIGNMENT - X2    *    * WRONG VALUE FOR IN PARAMETER - X2.    *]
+c41303a: PASS
+c41303b: PASS
+c41303c: PASS
+c41303e: PASS
+c41303f: PASS
+c41303g: PASS
+c41303i: PASS
+c41303j: PASS
+c41303k: PASS
+c41303m: PASS
+c41303n: PASS
+c41303o: PASS
+c41303q: PASS
+c41303r: PASS
+c41303s: PASS
+c41303u: PASS
+c41303v: PASS
+c41303w: PASS
+c41304a: PASS
+c41304b: PASS
+c41306b: LINK_ERROR [Error: Undefined symbol: _E]
+c41306c: LINK_ERROR [Error: Undefined symbol: _E]
+c41307d: COMPILE_ERROR [semantic: 'L' is not a record]
+c41309a: PASS
+c41320a: LINK_ERROR [Error: Undefined symbol: _OP_EQ Error: Undefined symbol: _OP_LE Error: Undefined symbol: _OP_LT Error: Undefined symbol: _OP_GT Error: Undefined symbol: _OP_NE Error: Undefined symbol: _OP_GE]
+c41321a: LINK_ERROR [Error: Undefined symbol: _OP_LE Error: Undefined symbol: _OP_NOT Error: Undefined symbol: _OP_OR Error: Undefined symbol: _OP_AND Error: Undefined symbol: _OP_NE Error: Undefined symbol: _OP_XOR Error]
+c41322a: LINK_ERROR [Error: Undefined symbol: _OP_REM Error: Undefined symbol: _OP_LT Error: Undefined symbol: _OP_LE Error: Undefined symbol: _OP_ADD Error: Undefined symbol: _OP_SUB Error: Undefined symbol: _OP_DIV Erro]
+c41323a: LINK_ERROR [Error: Undefined symbol: _OP_MUL Error: Undefined symbol: _OP_GT Error: Undefined symbol: _OP_LE Error: Undefined symbol: _OP_NE Error: Undefined symbol: _OP_EQ Error: Undefined symbol: _OP_DIV Error:]
+c41324a: LINK_ERROR [Error: Undefined symbol: _OP_NE Error: Undefined symbol: _OP_GT Error: Undefined symbol: _OP_MUL Error: Undefined symbol: _OP_SUB Error: Undefined symbol: _OP_DIV Error: Undefined symbol: _OP_GE Error]
+c41325a: LINK_ERROR [Error: Undefined symbol: _OP_GT Error: Undefined symbol: _OP_LT Error: Undefined symbol: _OP_EQ Error: Undefined symbol: _OP_NE Error: Undefined symbol: _OP_GE Error: Undefined symbol: _OP_NOT Error: ]
+c41326a: LINK_ERROR [Error: Undefined symbol: _OP_EQ Error: Undefined symbol: _OP_NE]
+c41327a: LINK_ERROR [Error: Undefined symbol: _OP_EQ Error: Undefined symbol: _INIT_KEY Error: Undefined symbol: _OP_NE Error: Undefined symbol: _INIT_CHAR]
+c41328a: LINK_ERROR [Error: Undefined symbol: _OP_EQ Error: Undefined symbol: _INIT Error: Undefined symbol: _SWAP Error: Undefined symbol: _OP_NE]
+c41401a: NO_RESULT [,.,. C41401A ---- C41401A    *    * CONSTRAINT_ERROR NOT RAISED - 1 TRUE.    *    * CONSTRAINT_ERROR NOT RAISED - 3 FALSE.    *    * CONSTRAINT_ERROR ]
+c41402a: PASS
+c41404a: NO_RESULT [,.,. C41404A ---- C41404A    * WRONG VALUE FOR LENGTH - ENUM    * WRONG VALUE FOR LENGTH - ENUM: 'C'    * WRONG VALUE FOR LENGTH - INTEGER: 56    * WR]
+c42006a: PASS
+c42007e: TIMEOUT
+c43003a: PASS
+c43004a: TIMEOUT
+c43004c: PASS
+c43103a: NO_RESULT [,.,. C43103A ---- C43103A    -    - CASE A : DISCRIMINANT THAT IS NOT USED INSIDE THE RECORD.    * CASE A : INCORRECT VALUES IN RECORD    -    - CASE ]
+c43103b: NO_RESULT [,.,. C43103B ---- C43103B    * 1.1 - INCORRECT BOUNDS    * 1.2 - INCORRECT BOUNDS    * 1.3 - INCORRECT BOUNDS    * 1.4 - INCORRECT ARRAY LENGTH CPU mo]
+c43104a: PASS
+c43105a: PASS
+c43105b: PASS
+c43106a: TIMEOUT
+c43107a: NO_RESULT [,.,. C43107A ---- C43107A    *    * CASE A : INCORRECT NUMBER OF EVALUATIONS OF RECORD ASSOCIATED COMPONENTS.    * CASE A : INCORRECT VALUES IN RECORD]
+c43108a: PASS
+c43204a: TIMEOUT
+c43204c: TIMEOUT
+c43204e: COMPILE_ERROR [lowering: unsupported operand type(s) for -: 'NoneType' and 'NoneType']
+c43204f: PASS
+c43204g: LINK_ERROR [Error: Undefined symbol: _E]
+c43204h: PASS
+c43204i: COMPILE_ERROR [lowering: unsupported operand type(s) for -: 'NoneType' and 'NoneType']
+c43205a: PASS
+c43205b: LINK_ERROR [Error: Undefined symbol: _PROC2]
+c43205c: PASS
+c43205d: PASS
+c43205e: COMPILE_ERROR [semantic: return type mismatch: expected 'TE', got 'String']
+c43205g: PASS
+c43205h: LINK_ERROR [Error: Undefined symbol: _PROC2]
+c43205i: PASS
+c43205j: LINK_ERROR [Error: Undefined symbol: _PROC2]
+c43205k: PASS
+c43206a: TIMEOUT
+c43207b: NO_RESULT [,.,. C43207B ---- C43207B    *    * CASE BCASE BCASE B---- C43207B : ARRAY NOT BOUNDED CORRECTLY : ARRAY NOT .    * CASE B1 : CONSTRAINT_ERROR NOT RAI]
+c43207d: NO_RESULT [,.,. C43207D ---- C43207D Constraint_ErrorCPU mode: Z80 Loaded 16128 bytes from /tmp/tmppgxi_emo/test.com Program exit via JMP 0 ]
+c43208a: NO_RESULT [,.,. C43208A ---- C43208A Constraint_ErrorCPU mode: Z80 Loaded 18560 bytes from /tmp/tmpzvev9loj/test.com Program exit via JMP 0 ]
+c43208b: NO_RESULT [,.,. C43208B ---- C43208B Constraint_ErrorCPU mode: Z80 Loaded 25728 bytes from /tmp/tmpqtq5nz7j/test.com Program exit via JMP 0 ]
+c43209a: TIMEOUT
+c43210a: NO_RESULT [,.,. C43210A ---- C43210A    *    * CASE A.    *    * CASE B.    *    * CASE C.    *    * CASE D. CPU mode: Z80 Loaded 13312 bytes from /tmp/tmpyjeyzu]
+c43211a: NO_RESULT [,.,. C43211A ---- C43211A    * CASE A : INCORRECT VALUES    * CASE B : INCORRECT VALUES Constraint_ErrorCPU mode: Z80 Loaded 16256 bytes from /tmp/tmp]
+c43212a: NO_RESULT [,.,. C43212A ---- C43212A Constraint_ErrorCPU mode: Z80 Loaded 14720 bytes from /tmp/tmp3jucthyc/test.com Program exit via JMP 0 ]
+c43212c: TIMEOUT
+c43214a: NO_RESULT [,.,. C43214A ---- C43214A    * CASE A : CONSTRAINT_ERROR NOT RAISED - 2    * CASE B : CONSTRAINT_ERROR NOT RAISED Constraint_ErrorCPU mode: Z80 Loaded]
+c43214b: PASS
+c43214c: LINK_ERROR [Error: Undefined symbol: _PROC2]
+c43214d: PASS
+c43214e: LINK_ERROR [Error: Undefined symbol: _PROC2]
+c43214f: NO_RESULT [,.,. C43214F ---- C43214F    * CASE 1 : INCORRECT BOUNDS    * CASE 2 : INCORRECT BOUNDS    * CASE 3 : INCORRECT BOUND    * CASE 4 : INCORRECT BOUNDS C]
+c43215a: PASS
+c43215b: PASS
+c43222a: PASS
+c43224a: PASS
+c44003d: TIMEOUT
+c44003f: COMPILE_ERROR [semantic: expected Boolean, got 'ENUM']
+c44003g: PASS
+c45112a: NO_RESULT [,.,. C45112A ---- C45112A CPU mode: Z80 Loaded 16256 bytes from /tmp/tmprgjqd916/test.com Program exit via JMP 0 ]
+c45112b: NO_RESULT [,.,. C45112B ---- C45112B CPU mode: Z80 Loaded 16256 bytes from /tmp/tmpoqn6aw2r/test.com System reset ]
+c45113a: PASS
+c45114b: PASS
+c45201a: NO_RESULT [,.,. C45201A ---- C45201A    * EQUALITY OF ENUMERATION VALUES - FAILURE1 CPU mode: Z80 Loaded 12160 bytes from /tmp/tmp7_qeeous/test.com System reset ]
+c45201b: TIMEOUT
+c45202b: PASS
+c45210a: TIMEOUT
+c45211a: PASS
+c45220a: NO_RESULT [,.,. C45220A ---- C45220A CPU mode: Z80 Loaded 9728 bytes from /tmp/tmpbrchs5b4/test.com System reset ]
+c45220b: NO_RESULT [,.,. C45220B ---- C45220B    * ORDERING OF BOOLEAN VALUES - FAILURE '<' CPU mode: Z80 Loaded 12160 bytes from /tmp/tmphw_nogjg/test.com System reset ]
+c45220c: NO_RESULT [,.,. C45220C ---- C45220C  CPU mode: Z80 Loaded 11136 bytes from /tmp/tmp2n8bvt3x/test.com System reset ]
+c45220d: NO_RESULT [,.,. C45220D ---- C45220D    * ORDERING OF N_BOOLEAN VALUES - FAILURE '<' CPU mode: Z80 Loaded 14848 bytes from /tmp/tmpprz70mrm/test.com System reset]
+c45220e: PASS
+c45220f: PASS
+c45231a: TIMEOUT
+c45232b: PASS
+c45242b: PASS
+c45251a: PASS
+c45252a: PASS
+c45252b: COMPILE_ERROR [semantic: expression is not static]
+c45253a: PASS
+c45262a: NO_RESULT [,.,. C45262A ---- C45262A    * NULL ARRAYS ARR1 AND ARR2 NOT EQUAL - <=    * NULL ARRAYS ARR1 AND ARR2 NOT EQUAL - >=    * NON-NULL ARRAY ARR3 LESS TH]
+c45262b: NO_RESULT [,.,. C45262B ---- C45262B    *    * NULL ARRAYS STRING1 AND STRING2 NOT EQUAL - <=.    *    * NULL ARRAYS STRING1 AND STRING2 NOT EQUAL - >=.    * NON]
+c45262c: NO_RESULT [,.,. C45262C ---- C45262C    * NULL ARRAYS ARR1 AND ARR2 NOT EQUAL - <=    * NULL ARRAYS ARR1 AND ARR2 NOT EQUAL - >=    * NON-NULL ARRAY ARR3 LESS TH]
+c45262d: LINK_ERROR [Error: Undefined symbol: _OP_GE Error: Undefined symbol: _OP_GT Error: Undefined symbol: _OP_LT Error: Undefined symbol: _OP_LE]
+c45264a: NO_RESULT [,.,. C45264A ---- C45264A    * A1 - ARRAYS NOT EQUAL    * A2 - ARRAYS NOT EQUAL CPU mode: Z80 Loaded 10496 bytes from /tmp/tmprm1w__3t/test.com Progra]
+c45264b: PASS
+c45264c: PASS
+c45265a: NO_RESULT [,.,. C45265A ---- C45265A CPU mode: Z80 Loaded 14208 bytes from /tmp/tmp8pvdz9y6/test.com Program exit via JMP 0 ]
+c45271a: TIMEOUT
+c45272a: TIMEOUT
+c45273a: TIMEOUT
+c45274a: PASS
+c45274b: PASS
+c45274c: PASS
+c45281a: PASS
+c45282a: NO_RESULT [,.,. C45282A ---- C45282A    * INCORRECT RESULTS FOR ACCESS TYPES - 2    * INCORRECT RESULTS FOR ACCESS TYPES - 8    * INCORRECT RESULTS FOR ACCESS TY]
+c45282b: LINK_ERROR [Error: Undefined symbol: _E]
+c45291a: LINK_ERROR [Error: Undefined symbol: _E Error: Undefined symbol: _INIT]
+c45303a: PASS
+c45304a: TIMEOUT
+c45322a: PASS
+c45323a: PASS
+c45331a: NO_RESULT [,.,. C45331A ---- C45331A    * F'SMALL - 0.0 /= F'SMALL    * F'LAST - 0.0 /= F'LAST    * F'SMALL - F'SMALL /= 0.0 CPU mode: Z80 Loaded 30976 bytes fro]
+c45342a: PASS
+c45343a: TIMEOUT
+c45344a: TIMEOUT
+c45345b: PASS
+c45347a: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'String' to 'A']
+c45347b: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'ARR' to 'A']
+c45347c: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'String' to 'A']
+c45347d: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'String' to 'A']
+c45411a: NO_RESULT [,.,. C45411A ---- C45411A CPU mode: Z80 Loaded 11392 bytes from /tmp/tmpob4mexji/test.com System reset ]
+c45411d: PASS
+c45413a: PASS
+c45431a: TIMEOUT
+c45503a: NO_RESULT [,.,. C45503A ---- C45503A CPU mode: Z80 Loaded 21376 bytes from /tmp/tmpfnt5_mm_/test.com Program exit via JMP 0 ]
+c45504a: TIMEOUT
+c45504d: PASS
+c45505a: PASS
+c45523a: NO_RESULT [,.,. C45523A ---- C45523A    * CONSTRAINT_ERROR WAS NOT RAISED FOR MULTIPLICATION    - DON'T OPTIMIZE F CPU mode: Z80 Loaded 11648 bytes from /tmp/tmp]
+c45531a: NO_RESULT [,.,. C45531A ---- C45531A    *    * RESULT OF ""*"" OUTSIDE RESULT MODEL INTERVAL FOR INTEGER * FIXED FOR NON-MODEL NUMBERS. CPU mode: Z80 Loaded 1036]
+c45531b: PASS
+c45531c: TIMEOUT
+c45531d: PASS
+c45531e: NO_RESULT [,.,. C45531E ---- C45531E    *    * RESULT OF ""*"" OUTSIDE RESULT MODEL INTERVAL FOR INTEGER * FIXED FOR NON-MODEL NUMBERS. CPU mode: Z80 Loaded 1036]
+c45531f: PASS
+c45531g: TIMEOUT
+c45531h: PASS
+c45531i: NO_RESULT [,.,. C45531I ---- C45531I    *    * RESULT OF ""*"" OUTSIDE RESULT MODEL INTERVAL FOR INTEGER * FIXED FOR NON-MODEL NUMBERS. CPU mode: Z80 Loaded 1036]
+c45531j: PASS
+c45531k: TIMEOUT
+c45531l: PASS
+c45532a: PASS
+c45532b: NO_RESULT [,.,. C45532B ---- C45532B CPU mode: Z80 Loaded 9472 bytes from /tmp/tmpz88m2xb3/test.com Program exit via JMP 0 ]
+c45532c: NO_RESULT [,.,. C45532C ---- C45532C CPU mode: Z80 Loaded 18816 bytes from /tmp/tmp6uitp2z8/test.com Program exit via JMP 0 ]
+c45532d: ASSEMBLE_ERROR [Error at line 2145: Undefined symbol '_a_third' Error at line 2413: Undefined symbol '_rng1' Error at line 2447: Undefined symbol '_rng1']
+c45532e: PASS
+c45532f: NO_RESULT [,.,. C45532F ---- C45532F CPU mode: Z80 Loaded 9344 bytes from /tmp/tmppsvb27y5/test.com Program exit via JMP 0 ]
+c45532g: NO_RESULT [,.,. C45532G ---- C45532G    *    * RESULT OF ""*"" OUTSIDE RESULT MODEL INTERVAL WHEN USING NO MODEL NUMBERS. CPU mode: Z80 Loaded 18688 bytes from /]
+c45532h: ASSEMBLE_ERROR [Error at line 2113: Undefined symbol '_a_third' Error at line 2381: Undefined symbol '_rng1' Error at line 2415: Undefined symbol '_rng1']
+c45532i: PASS
+c45532j: NO_RESULT [,.,. C45532J ---- C45532J CPU mode: Z80 Loaded 9344 bytes from /tmp/tmpw6nszs7o/test.com Program exit via JMP 0 ]
+c45532k: NO_RESULT [,.,. C45532K ---- C45532K    *    * RESULT OF ""*"" OUTSIDE RESULT MODEL INTERVAL WHEN USING NO MODEL NUMBERS. CPU mode: Z80 Loaded 18688 bytes from /]
+c45532l: ASSEMBLE_ERROR [Error at line 2113: Undefined symbol '_a_third' Error at line 2381: Undefined symbol '_rng1' Error at line 2415: Undefined symbol '_rng1']
+c45534b: NO_RESULT [,.,. C45534B ---- C45534B CPU mode: Z80 Loaded 9984 bytes from /tmp/tmpi7bvpw5g/test.com Program exit via JMP 0 ]
+c45611a: COMPILE_ERROR [codegen: '<' not supported between instances of 'IRType' and 'int']
+c45613a: PASS
+c45614a: PASS
+c45631a: PASS
+c45632a: TIMEOUT
+c45651a: NO_RESULT [,.,. C45651A ---- C45651A    * ABS 0.0 /= 0.0 -- (LIKE_DURATION_M23) CPU mode: Z80 Loaded 25600 bytes from /tmp/tmpkxrep8oa/test.com System reset ]
+c45662a: NO_RESULT [,.,. C45662A ---- C45662A Constraint_ErrorCPU mode: Z80 Loaded 8576 bytes from /tmp/tmpase4jy9k/test.com Program exit via JMP 0 ]
+c45662b: NO_RESULT [,.,. C45662B ---- C45662B Constraint_ErrorCPU mode: Z80 Loaded 10368 bytes from /tmp/tmpp1zrzpew/test.com Program exit via JMP 0 ]
+c45672a: TIMEOUT
+c46011a: PASS
+c46013a: NO_RESULT [,.,. C46013A ---- C46013A    * INCORRECT VALUE (1)    * INCORRECT VALUE (2)    * INCORRECT VALUE (3)    * INCORRECT VALUE (4)    * INCORRECT VALUE (5)]
+c46014a: TIMEOUT
+c46021a: NO_RESULT [,.,. C46021A ---- C46021A    * INCORRECT VALUE (1)    * INCORRECT VALUE (2)    * INCORRECT VALUE (3)    * INCORRECT VALUE (4)    * INCORRECT VALUE (5)]
+c46024a: NO_RESULT [,.,. C46024A ---- C46024A    * INCORRECT RESULT FROM CONVERSION (1)    * INCORRECT RESULT FROM CONVERSION (2)    * INCORRECT RESULT FROM CONVERSION (3]
+c46031a: PASS
+c46032a: NO_RESULT [,.,. C46032A ---- C46032A    * INCORRECT RESULT FROM CONVERSION (1)    * INCORRECT RESULT FROM CONVERSION (2)    * INCORRECT RESULT FROM CONVERSION (3]
+c46033a: NO_RESULT [,.,. C46033A ---- C46033A    * INCORRECT RESULT FROM CONVERSION (1)    * INCORRECT RESULT FROM CONVERSION (2)    * INCORRECT RESULT FROM CONVERSION (3]
+c46041a: PASS
+c46042a: PASS
+c46043b: PASS
+c46044b: NO_RESULT [,.,. C46044B ---- C46044B CPU mode: Z80 Loaded 15616 bytes from /tmp/tmpob4u11fk/test.com Program exit via JMP 0 ]
+c46051a: TIMEOUT
+c46051b: PASS
+c46051c: PASS
+c46052a: PASS
+c46053a: PASS
+c46054a: NO_RESULT [,.,. C46054A ---- C46054A    * NO EXCEPTION RAISED FOR 'ACREC3 (A)'    * NO EXCEPTION RAISED FOR 'ACREC13 (A)'    * NO EXCEPTION RAISED FOR 'ACARR02 (]
+c47002a: PASS
+c47002b: PASS
+c47002c: NO_RESULT [,.,. C47002C ---- C47002C    * INCORRECT RESULTS FOR SUBTYPE ARR1    * INCORRECT RESULTS FOR SUBTYPE ARR5    * INCORRECT RESULTS FOR SUBTYPE NARR2    ]
+c47002d: PASS
+c47003a: PASS
+c47004a: PASS
+c47005a: TIMEOUT
+c47006a: PASS
+c47007a: TIMEOUT
+c47008a: PASS
+c47009a: TIMEOUT
+c47009b: NO_RESULT [,.,. C47009B ---- C47009B CPU mode: Z80 Loaded 12800 bytes from /tmp/tmpo0a6qbmm/test.com Program exit via JMP 0 ]
+c48004a: PASS
+c48004b: LINK_ERROR [Error: Undefined symbol: _FUN]
+c48004c: PASS
+c48004d: LINK_ERROR [Error: Undefined symbol: _LRCHECK Error: Undefined symbol: _LCHECK Error: Undefined symbol: _CHECK]
+c48004e: LINK_ERROR [Error: Undefined symbol: _CHECK]
+c48004f: PASS
+c48005a: PASS
+c48005b: PASS
+c48006a: TIMEOUT
+c48006b: NO_RESULT [,.,. C48006B ---- C48006B    * WRONG VALUES  -  B1 1    * WRONG VALUES  -  B1 2 CPU mode: Z80 Loaded 17280 bytes from /tmp/tmpk1i0zfug/test.com BIOS W]
+c48007a: PASS
+c48007b: PASS
+c48007c: PASS
+c48008a: TIMEOUT
+c48008c: PASS
+c48009a: PASS
+c48009b: NO_RESULT [,.,. C48009B ---- C48009B    * NO EXCEPTION RAISED - CASE 1A    * NO EXCEPTION RAISED - CASE 1B    * NO EXCEPTION RAISED - CASE 2A    * NO EXCEPTION R]
+c48009c: PASS
+c48009d: PASS
+c48009e: TIMEOUT
+c48009f: PASS
+c48009g: NO_RESULT [,.,. C48009G ---- C48009G    - NO EXCEPTION RAISED - UR    - NO EXCEPTION RAISED - UA    - NO EXCEPTION RAISED - UP CPU mode: Z80 Loaded 11136 bytes f]
+c48009h: PASS
+c48009i: PASS
+c48009j: PASS
+c48010a: PASS
+c48011a: PASS
+c48012a: PASS
+c49020a: PASS
+c49021a: PASS
+c49022a: TIMEOUT
+c49022b: PASS
+c49022c: ASSEMBLE_ERROR [Error at line 1960: Undefined symbol '_add1' Error at line 1987: Undefined symbol '_add2' Error at line 2144: Undefined symbol '_sub1' Error at line 2171: Undefined symbol '_sub2' Error at line 2328: ]
+c49023a: PASS
+c49024a: COMPILE_ERROR [codegen: '<' not supported between instances of 'IRType' and 'int']
+c49025a: PASS
+c49026a: PASS
+c4a005b: NO_RESULT [,.,. C4A005B ---- C4A005B CPU mode: Z80 Loaded 9984 bytes from /tmp/tmpmzj23_k9/test.com Program exit via JMP 0 ]
+c4a006a: PASS
+c4a010a: ASSEMBLE_ERROR [Error at line 2786: Undefined symbol '_half']
+c4a010b: ASSEMBLE_ERROR [Error at line 2119: Undefined symbol '_x9' Error at line 2227: Undefined symbol '_y6']
+c4a011a: TIMEOUT
+c4a012b: NO_RESULT [,.,. C4A012B ---- C4A012B    *    * THE EXPRESSION '0.0 ** (-1)' DID NOT RAISE AN EXCEPTION. CPU mode: Z80 Loaded 24704 bytes from /tmp/tmpkxru2zi7/te]
+c4a013a: PASS
+c4a014a: PASS
+c51004a: PASS
+c52005a: PASS
+c52005b: PASS
+c52005c: PASS
+c52005d: PASS
+c52005e: PASS
+c52005f: PASS
+c52008a: PASS
+c52008b: NO_RESULT [,.,. C52008B ---- C52008B CPU mode: Z80 Loaded 9984 bytes from /tmp/tmp96j8fkst/test.com Program exit via JMP 0 ]
+c52009a: PASS
+c52009b: PASS
+c52010a: NO_RESULT [,.,. C52010A ---- C52010A    * WRONG VALUE  (1)    * WRONG VALUE  (2)    * WRONG VALUE  (3)    * WRONG VALUE  (4)    * WRONG VALUE  (5)    * WRONG VAL]
+c52011a: PASS
+c52011b: TIMEOUT
+c52101a: PASS
+c52102a: NO_RESULT [,.,. C52102A ---- C52102A    * WRONG VALUES  -  I1    * WRONG VALUES  -  I2 CPU mode: Z80 Loaded 20096 bytes from /tmp/tmpldapdqsz/test.com Program ex]
+c52102b: NO_RESULT [,.,. C52102B ---- C52102B Constraint_ErrorCPU mode: Z80 Loaded 21504 bytes from /tmp/tmpm_ifxovl/test.com Program exit via JMP 0 ]
+c52102c: TIMEOUT
+c52102d: NO_RESULT [,.,. C52102D ---- C52102D Constraint_ErrorCPU mode: Z80 Loaded 22272 bytes from /tmp/tmpbs1iccws/test.com Program exit via JMP 0 ]
+c52103a: NO_RESULT [,.,. C52103A ---- C52103A Constraint_ErrorCPU mode: Z80 Loaded 11776 bytes from /tmp/tmpak14ilqf/test.com Program exit via JMP 0 ]
+c52103b: TIMEOUT
+c52103c: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'String(1..5)' to 'String(5..9)']
+c52103f: TIMEOUT
+c52103g: NO_RESULT [,.,. C52103G ---- C52103G    * ARRAY ASSIGNMENT NOT CORRECT (5) CPU mode: Z80 Loaded 8192 bytes from /tmp/tmpkrlinxxh/test.com Program exit via JMP 0 ]
+c52103h: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'String(1..5)' to 'String(5..9)']
+c52103k: NO_RESULT [,.,. C52103K ---- C52103K Constraint_ErrorCPU mode: Z80 Loaded 12416 bytes from /tmp/tmpjps4cyzj/test.com Program exit via JMP 0 ]
+c52103l: PASS
+c52103m: TIMEOUT
+c52103p: NO_RESULT [,.,. C52103P ---- C52103P Constraint_ErrorCPU mode: Z80 Loaded 10752 bytes from /tmp/tmp20xjpg_t/test.com Program exit via JMP 0 ]
+c52103q: TIMEOUT
+c52103r: TIMEOUT
+c52103x: NO_RESULT [,.,. C52103X ---- C52103X    -    - NO CONSTRAINT_ERROR FOR TYPE WITH 'LENGTH = INTEGER'LAST + 3.    -    - NO STORAGE_ERROR OR CONSTRAINT_ERROR RAISE]
+c52104a: NO_RESULT [,.,. C52104A ---- C52104A Constraint_ErrorCPU mode: Z80 Loaded 12160 bytes from /tmp/tmpkya5bua3/test.com Program exit via JMP 0 ]
+c52104b: NO_RESULT [,.,. C52104B ---- C52104B    * NO EXCEPTION RAISED  (13) ]tc!]nEXCEPTION RAISED  (14) eM6]u\]t]! C~ feM6]uf]tg! z]f{eM6]ux]ty! feM6]uf]tg!]
+c52104c: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'String(1..7)' to 'String(5..9)']
+c52104f: NO_RESULT [,.,. C52104F ---- C52104F    * EXCEPTION NOT RAISED  -  SUBTEST 10    * EXCEPTION NOT RAISED  -  SUBTEST 11 CPU mode: Z80 Loaded 10880 bytes from /tmp]
+c52104g: TIMEOUT
+c52104h: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'String(1..5)' to 'String(5..9)']
+c52104k: NO_RESULT [,.,. C52104K ---- C52104K Constraint_ErrorCPU mode: Z80 Loaded 12928 bytes from /tmp/tmp7ttotvj8/test.com Program exit via JMP 0 ]
+c52104l: TIMEOUT
+c52104m: TIMEOUT
+c52104p: NO_RESULT [,.,. C52104P ---- C52104P    * EXCEPTION NOT RAISED  -  SUBTEST 10    * EXCEPTION NOT RAISED  -  SUBTEST 11 Constraint_ErrorCPU mode: Z80 Loaded 11136]
+c52104q: TIMEOUT
+c52104r: NO_RESULT [,.,. C52104R ---- C52104R    * EXCEPTION NOT RAISED  -  SUBTEST 7    * EXCEPTION NOT RAISED  -  SUBTEST 8 CPU mode: Z80 Loaded 10368 bytes from /tmp/t]
+c52104x: NO_RESULT [,.,. C52104X ---- C52104X    -    - NO CONSTRAINT_ERROR FOR TYPE WITH 'LENGTH = INTEGER'LAST + 3.    -    - NO STORAGE_ERROR OR CONSTRAINT_ERROR RAISE]
+c52104y: PASS
+c53007a: TIMEOUT
+c54a03a: PASS
+c54a04a: PASS
+c54a07a: PASS
+c54a13a: TIMEOUT
+c54a13b: PASS
+c54a13c: NO_RESULT [,.,. C54A13C ---- C54A13C    *    * INCORRECT CHOICE MADE FOR QUALIFIED EXPRESSION IN CASE.    * INCORRECT CHOICE MADE FOR TYPE CONVERSION IN CASE    ]
+c54a13d: NO_RESULT [,.,. C54A13D ---- C54A13D    *    * IMPROPER CHOICE FOR CASE EXPRESSION WHICH IS A FUNCTION INVOCATION - 1.    *    * IMPROPER CHOICE FOR CASE EXPRESS]
+c54a22a: PASS
+c54a23a: PASS
+c54a24a: PASS
+c54a24b: PASS
+c54a42a: NO_RESULT [,.,. C54A42A ---- C54A42A Constraint_ErrorCPU mode: Z80 Loaded 14976 bytes from /tmp/tmpd3jap3uq/test.com Program exit via JMP 0 ]
+c54a42b: NO_RESULT [,.,. C54A42B ---- C54A42B Constraint_ErrorCPU mode: Z80 Loaded 15616 bytes from /tmp/tmplvwk4ypp/test.com Program exit via JMP 0 ]
+c54a42c: PASS
+c54a42d: NO_RESULT [,.,. C54A42D ---- C54A42D    * WRONG ALTERNATIVE G2 CPU mode: Z80 Loaded 10752 bytes from /tmp/tmpkvskvcwa/test.com Program exit via JMP 0 ]
+c54a42e: TIMEOUT
+c54a42f: PASS
+c54a42g: NO_RESULT [,.,. C54A42G ---- C54A42G    * WRONG ALTERNATIVE H5 CPU mode: Z80 Loaded 11904 bytes from /tmp/tmptcajgq8u/test.com Program exit via JMP 0 ]
+c55b03a: PASS
+c55b04a: PASS
+c55b05a: NO_RESULT [,.,. C55B05A ---- C55B05A    * WRONG NULL RANGE LOOP EXECUTION    * NULL LOOP ERROR 3 CPU mode: Z80 Loaded 13184 bytes from /tmp/tmp54c_wa21/test.com ]
+c55b06a: COMPILE_ERROR [semantic: incompatible types in range: 'Character' and 'ENUM']
+c55b06b: COMPILE_ERROR [semantic: incompatible types in range: 'Boolean' and 'B3']
+c55b10a: COMPILE_ERROR [semantic: incompatible types in range: 'ALPHA' and 'BETA']
+c55b11a: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Integer' to 'ENUM']
+c55b11b: COMPILE_ERROR [semantic: type mismatch for parameter 'T': expected 'SI', got 'Integer']
+c55b15a: TIMEOUT
+c55b16a: COMPILE_ERROR [semantic: incompatible types in range: 'Character' and 'ENUM']
+c55c02a: PASS
+c55c02b: NO_RESULT [,.,. C55C02B ---- C55C02B Constraint_ErrorCPU mode: Z80 Loaded 8064 bytes from /tmp/tmptocnrutm/test.com Program exit via JMP 0 ]
+c56002a: TIMEOUT
+c57003a: TIMEOUT
+c57004a: TIMEOUT
+c57004b: NO_RESULT [,.,. C57004B ---- C57004B    - BEFORE 1    - INSIDE 1    - BEFORE 2    - INSIDE 2    - BEFORE 3 CPU mode: Z80 Loaded 11008 bytes from /tmp/tmpnseivzdv]
+c58004c: PASS
+c58004d: PASS
+c58004g: COMPILE_ERROR [semantic: 'FACTORIALP' is not a procedure]
+c58005a: PASS
+c58005b: PASS
+c58005h: PASS
+c58006a: PASS
+c58006b: PASS
+c59002a: ASSEMBLE_ERROR [Error at line 2044: Symbol 'BLOCK_END48' multiply defined Error at line 2173: Symbol 'HANDLER_051' multiply defined Error at line 2175: Symbol 'BLOCK_END50' multiply defined Error at line 2239: Symbol]
+c59002b: LINK_ERROR [Error: Undefined symbol: _USR_C59002B_L311 Error: Undefined symbol: _USR_C59002B_L331 Error: Undefined symbol: _USR_C59002B_L131 Error: Undefined symbol: _USR_C59002B_L231 Error: Undefined symbol: _US]
+c59002c: COMPILE_ERROR [semantic: 'E2' not found]
+c61008a: PASS
+c61009a: PASS
+c61010a: PASS
+c62002a: PASS
+c62003b: PASS
+c62004a: PASS
+c62006a: PASS
+c64002b: PASS
+c64004g: NO_RESULT [,.,. C64004G ---- C64004G CPU mode: Z80 Loaded 9856 bytes from /tmp/tmpe37jmpsu/test.com System reset ]
+c64005a: PASS
+c64005b: PASS
+c64005c: TIMEOUT
+c64005d0: COMPILE_ERROR [semantic: wrong number of arguments: expected 0, got 3]
+c64005da: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmp5upxbp4f/test.com Program exit via JMP 0 ]
+c64005db: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpn6ds3glp/test.com Program exit via JMP 0 ]
+c64005dc: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpkm3iha7x/test.com Program exit via JMP 0 ]
+c64103b: TIMEOUT
+c64103c: PASS
+c64103d: PASS
+c64103e: TIMEOUT
+c64103f: TIMEOUT
+c64104a: NO_RESULT [,.,. C64104A ---- C64104A    *    * EXCEPTION NOT RAISED BEFORE CALL - P1 10.    * CONSTRAINT_ERROR NOT RAISED FOR P1 (10)    *    * EXCEPTION NOT RAI]
+c64104b: PASS
+c64104c: PASS
+c64104d: PASS
+c64104e: PASS
+c64104f: PASS
+c64104g: PASS
+c64104h: PASS
+c64104i: PASS
+c64104j: PASS
+c64104k: PASS
+c64104l: PASS
+c64104m: PASS
+c64104n: LINK_ERROR [Error: Undefined symbol: _OP_EQ]
+c64104o: LINK_ERROR [Error: Undefined symbol: _OP_EQ]
+c64105a: PASS
+c64105b: PASS
+c64105c: PASS
+c64105d: PASS
+c64106a: LINK_ERROR [Error: Undefined symbol: _CHK_RECTYPE2 Error: Undefined symbol: _CHK_RECTYPE1]
+c64106b: LINK_ERROR [Error: Undefined symbol: _CHK_RECTYPE]
+c64106c: LINK_ERROR [Error: Undefined symbol: _P]
+c64106d: LINK_ERROR [Error: Undefined symbol: _P]
+c64107a: PASS
+c64108a: COMPILE_ERROR [semantic: dereference prefix must be an access type, got 'String(1..3)']
+c64109a: PASS
+c64109b: LINK_ERROR [Error: Undefined symbol: _A]
+c64109c: PASS
+c64109d: PASS
+c64109e: PASS
+c64109f: PASS
+c64109g: PASS
+c64109h: PASS
+c64109i: PASS
+c64109j: PASS
+c64109k: PASS
+c64109l: PASS
+c64201b: LINK_ERROR [Error: Undefined symbol: _E]
+c64201c: LINK_ERROR [Error: Undefined symbol: _E]
+c64202a: TIMEOUT
+c65003a: PASS
+c65003b: PASS
+c66002a: PASS
+c66002c: PASS
+c66002d: PASS
+c66002e: PASS
+c66002f: LINK_ERROR [Error: Undefined symbol: _P]
+c66002g: PASS
+c67002a: COMPILE_ERROR [semantic: expected Boolean, got 'Universal_Integer']
+c67002b: COMPILE_ERROR [semantic: expected Boolean, got 'Universal_Integer']
+c67002c: COMPILE_ERROR [semantic: expected Boolean, got 'Universal_Integer']
+c67002d: COMPILE_ERROR [semantic: expected Boolean, got 'Universal_Integer']
+c67002e: COMPILE_ERROR [semantic: expected Boolean, got 'Universal_Integer']
+c67003f: NO_RESULT [,.,. C67003F ---- C67003F    * REDEFINITION OF INTEGER ""*"" IS DEFECTIVE    * REDEFINITION OF INTEGER ""+"" IS DEFECTIVE Unhandled exception: 1 CPU m]
+c67005a: PASS
+c67005b: PASS
+c67005c: PASS
+c67005d: PASS
+c72001b: PASS
+c72002a: NO_RESULT [CPU mode: Z80 Loaded 27776 bytes from /tmp/tmp45pblo54/test.com Program exit via JMP 0 ]
+c73002a: PASS
+c74004a: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Integer' to 'PR']
+c74203a: TIMEOUT
+c74206a: PASS
+c74207b: PASS
+c74208a: NO_RESULT [Constraint_ErrorCPU mode: Z80 Loaded 8192 bytes from /tmp/tmp8chu1hjb/test.com Program exit via JMP 0 ]
+c74208b: PASS
+c74209a: PASS
+c74210a: PASS
+c74211a: PASS
+c74211b: PASS
+c74302a: PASS
+c74302b: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'access_Integer' to 'AC']
+c74305a: PASS
+c74305b: COMPILE_ERROR [semantic: wrong number of arguments: expected 1, got 0]
+c74306a: NO_RESULT [CPU mode: Z80 Loaded 7680 bytes from /tmp/tmpyry9wrza/test.com Program exit via JMP 0 ]
+c74307a: PASS
+c74401d: LINK_ERROR [Error: Undefined symbol: _P1 Error: Undefined symbol: _RENAMED Error: Undefined symbol: _EQ]
+c74401e: LINK_ERROR [Error: Undefined symbol: _P20 Error: Undefined symbol: _EQ Error: Undefined symbol: _RESET Error: Undefined symbol: _NEST1 Error: Undefined symbol: _P21]
+c74401k: LINK_ERROR [Error: Undefined symbol: _P21 Error: Undefined symbol: _EQ Error: Undefined symbol: _TNEST1 Error: Undefined symbol: _TP20 Error: Undefined symbol: _RESET]
+c74401q: COMPILE_ERROR [semantic: generic 'SelectedName(span=SourceSpan(filename='/home/wohl/src/uada80/tests/acats/tests/c7/c74401q.ada', start_line=90, start_column=35, end_line=90, end_column=51), prefix=SelectedName(span]
+c74402a: PASS
+c74402b: PASS
+c74406a: NO_RESULT [CPU mode: Z80 Loaded 7552 bytes from /tmp/tmpey_8yr2a/test.com Program exit via JMP 0 ]
+c74407b: NO_RESULT [CPU mode: Z80 Loaded 7808 bytes from /tmp/tmpep12z341/test.com Program exit via JMP 0 ]
+c74409b: PASS
+c83007a: LINK_ERROR [Error: Undefined symbol: _R]
+c83012d: PASS
+c83022a: COMPILE_ERROR [semantic: wrong number of arguments: expected 2, got 1]
+c83022g0: COMPILE_ERROR [semantic: wrong number of arguments: expected 0, got 1]
+c83022g1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmp697965y6/test.com Program exit via JMP 0 ]
+c83023a: LINK_ERROR [Error: Undefined symbol: _HERE]
+c83024a: PASS
+c83024e0: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7424 bytes from /tmp/tmpmkrq1czw/test.com Program exit via JMP 0 ]
+c83024e1: COMPILE_ERROR [semantic: package specification for 'C83024E_P1' not found]
+c83025a: COMPILE_ERROR [semantic: wrong number of arguments: expected 2, got 1]
+c83025c: COMPILE_ERROR [semantic: wrong number of arguments: expected 2, got 1]
+c83027a: PASS
+c83027c: COMPILE_ERROR [semantic: 'INNER3' is not a record]
+c83028a: TIMEOUT
+c83029a: PASS
+c83030a: COMPILE_ERROR [semantic: 'P' is not a procedure]
+c83030c: LINK_ERROR [Error: Undefined symbol: _PROC2 Error: Undefined symbol: _PROC1]
+c83031a: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'INT2' to 'INT']
+c83031c: PASS
+c83031e: PASS
+c83032a: COMPILE_ERROR [semantic: return type mismatch: expected 'PRIV1', got 'ENUM1']
+c83033a: COMPILE_ERROR [semantic: 'STMT2' is not an array]
+c83051a: COMPILE_ERROR [semantic: generic 'SelectedName(span=SourceSpan(filename='/home/wohl/src/uada80/tests/acats/tests/c8/c83051a.ada', start_line=104, start_column=38, end_line=104, end_column=60), prefix=SelectedName(sp]
+c83b02a: PASS
+c83b02b: PASS
+c83e02a: COMPILE_ERROR [lowering: unsupported operand type(s) for -: 'NoneType' and 'NoneType']
+c83e02b: PASS
+c83e03a: PASS
+c83f01a: PASS
+c83f01b: PASS
+c83f01c0: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmp97ujuq4v/test.com Program exit via JMP 0 ]
+c83f01c1: COMPILE_ERROR [semantic: package specification for 'C83F01C0' not found]
+c83f01c2: COMPILE_ERROR [semantic: 'P' not found]
+c83f01d0: PASS
+c83f01d1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpmhrbruqk/test.com Program exit via JMP 0 ]
+c83f03a: PASS
+c83f03b: PASS
+c83f03c0: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpc9h4ujee/test.com Program exit via JMP 0 ]
+c83f03c1: COMPILE_ERROR [semantic: package specification for 'C83F03C0' not found]
+c83f03c2: COMPILE_ERROR [semantic: 'FLOW_INDEX' not found]
+c83f03d0: PASS
+c83f03d1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmprmqv7a54/test.com Program exit via JMP 0 ]
+c84002a: PASS
+c84005a: PASS
+c84008a: LINK_ERROR [Error: Undefined symbol: _OP_NE Error: Undefined symbol: _PROC Error: Undefined symbol: _OP_SUB]
+c84009a: PASS
+c85004b: COMPILE_ERROR [semantic: constant declaration must have initialization]
+c85005a: LINK_ERROR [Error: Undefined symbol: _STOP Error: Undefined symbol: _ENTRY1 Error: Undefined symbol: _NEXT Error: Undefined symbol: _OP_NE Error: Undefined symbol: _IDENT Error: Undefined symbol: _VALU]
+c85005b: LINK_ERROR [Error: Undefined symbol: _STOP Error: Undefined symbol: _VALU Error: Undefined symbol: _IDENT Error: Undefined symbol: _NEXT Error: Undefined symbol: _OP_NE Error: Undefined symbol: _ENTRY1]
+c85005c: LINK_ERROR [Error: Undefined symbol: _START Error: Undefined symbol: _ENTRY1 Error: Undefined symbol: _NEXT Error: Undefined symbol: _OP_NE Error: Undefined symbol: _IDENT Error: Undefined symbol: _STOP Error: Un]
+c85005d: LINK_ERROR [Error: Undefined symbol: _NEXT Error: Undefined symbol: _STOP]
+c85005e: LINK_ERROR [Error: Undefined symbol: _ENTRY1 Error: Undefined symbol: _OP_NE Error: Undefined symbol: _STOP Error: Undefined symbol: _IDENT Error: Undefined symbol: _NEXT Error: Undefined symbol: _VALU]
+c85005f: PASS
+c85005g: TIMEOUT
+c85006a: LINK_ERROR [Error: Undefined symbol: _ENTRY1 Error: Undefined symbol: _RA1 Error: Undefined symbol: _IDENT Error: Undefined symbol: _NEXT Error: Undefined symbol: _VALU Error: Undefined symbol: _OP_NE Error: Unde]
+c85006b: LINK_ERROR [Error: Undefined symbol: _IDENT Error: Undefined symbol: _VALU Error: Undefined symbol: _OP_NE Error: Undefined symbol: _ENTRY1 Error: Undefined symbol: _RA1 Error: Undefined symbol: _STOP Error: Unde]
+c85006c: LINK_ERROR [Error: Undefined symbol: _STOP Error: Undefined symbol: _START Error: Undefined symbol: _RA1 Error: Undefined symbol: _NEXT Error: Undefined symbol: _OP_NE Error: Undefined symbol: _IDENT Error: Undef]
+c85006d: LINK_ERROR [Error: Undefined symbol: _NEXT Error: Undefined symbol: _STOP]
+c85006e: LINK_ERROR [Error: Undefined symbol: _ENTRY1 Error: Undefined symbol: _VALU Error: Undefined symbol: _NEXT Error: Undefined symbol: _IDENT Error: Undefined symbol: _RA1 Error: Undefined symbol: _OP_NE Error: Unde]
+c85006f: NO_RESULT [,.,. C85006F ---- C85006F CPU mode: Z80 Loaded 9600 bytes from /tmp/tmpf7y1rtbk/test.com Program exit via JMP 0 ]
+c85006g: COMPILE_ERROR [semantic: type mismatch in renaming: declared type 'String(1..10)' does not match renamed object type 'String(1..30)']
+c85007a: TIMEOUT
+c85007e: PASS
+c85009a: PASS
+c85011a: COMPILE_ERROR [semantic: 'PACK2.PACKB' is not a package]
+c85013a: LINK_ERROR [Error: Undefined symbol: _PROC2]
+c85014a: LINK_ERROR [Error: Undefined symbol: _STOP Error: Undefined symbol: _ENTRY2 Error: Undefined symbol: _PROC1 Error: Undefined symbol: _PROC2 Error: Undefined symbol: _ENTRY1]
+c85014b: LINK_ERROR [Error: Undefined symbol: _PROC2 Error: Undefined symbol: _ENTRY2 Error: Undefined symbol: _PROC1 Error: Undefined symbol: _ENTRY1 Error: Undefined symbol: _STOP]
+c85014c: LINK_ERROR [Error: Undefined symbol: _PROC1 Error: Undefined symbol: _FUNC1]
+c85017a: PASS
+c85018a: COMPILE_ERROR [semantic: type mismatch for parameter 'A': expected 'TA', got 'Universal_Integer']
+c85018b: LINK_ERROR [Error: Undefined symbol: _ENT2]
+c85019a: PASS
+c86003a: PASS
+c86004a: COMPILE_ERROR [semantic: generic 'STANDARD.C86004A_SWAP' not found]
+c86004b0: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7424 bytes from /tmp/tmpqut0o9wj/test.com Program exit via JMP 0 ]
+c86004b1: COMPILE_ERROR [semantic: procedure 'TEST' not found]
+c86004b2: COMPILE_ERROR [semantic: 'C86004B1' is not a procedure]
+c86004c0: LINK_ERROR [Error: Undefined symbol: _C86004C1 Error: Undefined symbol: _C86004C0]
+c86004c1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpb402s6jm/test.com Program exit via JMP 0 ]
+c86004c2: COMPILE_ERROR [semantic: 'C86004C01' is not a procedure]
+c86006i: LINK_ERROR [Error: Undefined symbol: _OP_MOD Error: Undefined symbol: _OP_GT Error: Undefined symbol: _OP_REM Error: Undefined symbol: _OP_NE Error: Undefined symbol: _OP_AND Error: Undefined symbol: _OP_SUB]
+c86007a: PASS
+c87a05a: PASS
+c87a05b: PASS
+c87b02a: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'CITRUS', got 'Universal_Integer']
+c87b02b: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'CITRUS', got 'Universal_Integer']
+c87b03a: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'Integer', got 'Float']
+c87b04a: PASS
+c87b04b: PASS
+c87b04c: PASS
+c87b05a: PASS
+c87b06a: PASS
+c87b07a: PASS
+c87b07b: PASS
+c87b07c: PASS
+c87b07d: PASS
+c87b07e: PASS
+c87b08a: PASS
+c87b09a: PASS
+c87b09c: PASS
+c87b10a: PASS
+c87b11a: PASS
+c87b11b: PASS
+c87b13a: PASS
+c87b14a: PASS
+c87b14b: PASS
+c87b14c: PASS
+c87b14d: PASS
+c87b15a: PASS
+c87b16a: PASS
+c87b17a: PASS
+c87b18a: PASS
+c87b18b: PASS
+c87b19a: PASS
+c87b23a: COMPILE_ERROR [lowering: unsupported operand type(s) for -: 'int' and 'NoneType']
+c87b24a: PASS
+c87b24b: PASS
+c87b26b: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Integer' to 'BIG_INT']
+c87b27a: PASS
+c87b28a: PASS
+c87b29a: PASS
+c87b30a: PASS
+c87b31a: NO_RESULT [,.,. C87B31A ---- C87B31A    *    * RESOLUTION INCORRECT FOR EXPRESSIONS IN ARRAY AGGREGATES.    *    * RESOLUTION INCORRECT FOR EXPRESSIONS IN ARRAY ]
+c87b32a: PASS
+c87b33a: PASS
+c87b34a: PASS
+c87b34b: PASS
+c87b34c: PASS
+c87b35c: PASS
+c87b38a: PASS
+c87b39a: PASS
+c87b40a: NO_RESULT [,.,. C87B40A ---- C87B40A CPU mode: Z80 Loaded 21760 bytes from /tmp/tmp6sgq8o61/test.com System reset ]
+c87b41a: PASS
+c87b42a: PASS
+c87b43a: PASS
+c87b44a: PASS
+c87b45a: NO_RESULT [,.,. C87B45A ---- C87B45A Unhandled exception: 1 CPU mode: Z80 Loaded 9472 bytes from /tmp/tmpxh_ss2pu/test.com Program exit via JMP 0 ]
+c87b45c: LINK_ERROR [Error: Undefined symbol: _E1]
+c87b47a: PASS
+c87b48a: COMPILE_ERROR [semantic: operator '-' not defined for type 'Boolean']
+c87b48b: PASS
+c87b50a: LINK_ERROR [Error: Undefined symbol: _GREEN Error: Undefined symbol: _RED]
+c87b54a: PASS
+c87b57a: PASS
+c87b62a: PASS
+c87b62b: COMPILE_ERROR [semantic: expression is not static]
+c87b62c: PASS
+c91004b: COMPILE_ERROR [semantic: 'SUB_TT1' not found]
+c91004c: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _BYE]
+c91006a: PASS
+c91007a: PASS
+c92002a: PASS
+c92003a: LINK_ERROR [Error: Undefined symbol: _E]
+c92005a: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Integer' to 'BIG_INT']
+c92005b: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'BIG_INT', got 'Integer']
+c92006a: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _E2]
+c93001a: PASS
+c93002a: PASS
+c93003a: PASS
+c93004a: LINK_ERROR [Error: Undefined symbol: _BYE]
+c93004b: LINK_ERROR [Error: Undefined symbol: _E]
+c93004c: LINK_ERROR [Error: Undefined symbol: _E]
+c93004d: LINK_ERROR [Error: Undefined symbol: _E]
+c93004f: LINK_ERROR [Error: Undefined symbol: _E]
+c93005a: LINK_ERROR [Error: Undefined symbol: _E]
+c93005b: LINK_ERROR [Error: Undefined symbol: _E]
+c93005c: LINK_ERROR [Error: Undefined symbol: _INCR]
+c93005d: LINK_ERROR [Error: Undefined symbol: _INCR]
+c93005e: LINK_ERROR [Error: Undefined symbol: _INCR]
+c93005f: LINK_ERROR [Error: Undefined symbol: _INCR]
+c93005g: LINK_ERROR [Error: Undefined symbol: _INCR]
+c93005h: LINK_ERROR [Error: Undefined symbol: _INCR]
+c93006a: LINK_ERROR [Error: Undefined symbol: _E]
+c93007a: PASS
+c93008a: PASS
+c93008b: PASS
+c94001a: LINK_ERROR [Error: Undefined symbol: _E]
+c94001b: COMPILE_ERROR [semantic: type mismatch for parameter 'A': expected 'TT', got '_unknown']
+c94001c: LINK_ERROR [Error: Undefined symbol: _E]
+c94001e: PASS
+c94001f: PASS
+c94001g: LINK_ERROR [Error: Undefined symbol: _WRITE Error: Undefined symbol: _READ]
+c94002a: COMPILE_ERROR [semantic: type mismatch for parameter 'A': expected 'T2', got '_unknown']
+c94002b: LINK_ERROR [Error: Undefined symbol: _ENT1 Error: Undefined symbol: _E]
+c94002d: LINK_ERROR [Error: Undefined symbol: _E2 Error: Undefined symbol: _E1]
+c94002e: LINK_ERROR [Error: Undefined symbol: _E Error: Undefined symbol: _ENT1]
+c94002f: LINK_ERROR [Error: Undefined symbol: _ENT1 Error: Undefined symbol: _E]
+c94002g: COMPILE_ERROR [semantic: abort requires a task object, got '_unknown']
+c94004a: LINK_ERROR [Error: Undefined symbol: _E]
+c94004b: LINK_ERROR [Error: Undefined symbol: _E]
+c94004c: LINK_ERROR [Error: Undefined symbol: _E]
+c94005a: LINK_ERROR [Error: Undefined symbol: _E]
+c94005b: LINK_ERROR [Error: Undefined symbol: _E]
+c94006a: LINK_ERROR [Error: Undefined symbol: _E]
+c94007a: LINK_ERROR [Error: Undefined symbol: _OUTER Error: Undefined symbol: _ID]
+c94007b: LINK_ERROR [Error: Undefined symbol: _ID Error: Undefined symbol: _OUTER]
+c94008a: PASS
+c94008b: PASS
+c94008c: LINK_ERROR [Error: Undefined symbol: _READ Error: Undefined symbol: _E2 Error: Undefined symbol: _SET Error: Undefined symbol: _E3 Error: Undefined symbol: _EVENT Error: Undefined symbol: _E1 Error: Undefined sym]
+c94008d: LINK_ERROR [Error: Undefined symbol: _EVENT Error: Undefined symbol: _READ]
+c94010a: NO_RESULT [,.,. C94010A ---- C94010A    * TASK NOT DEPENDENT ON MASTER - 1 CPU mode: Z80 Loaded 22528 bytes from /tmp/tmpx55ddzco/test.com Program exit via JMP 0]
+c94011a: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'access_T' to 'ACC_T']
+c94020a: PASS
+c95008a: LINK_ERROR [Error: Undefined symbol: _CONTINUE Error: Undefined symbol: _E]
+c95009a: LINK_ERROR [Error: Undefined symbol: _E1N Error: Undefined symbol: _E2P Error: Undefined symbol: _EF2N]
+c95010a: LINK_ERROR [Error: Undefined symbol: _E]
+c95011a: PASS
+c95012a: LINK_ERROR [Error: Undefined symbol: _E2 Error: Undefined symbol: _E1]
+c95021a: COMPILE_ERROR [semantic: 'E1' not found]
+c95022a: LINK_ERROR [Error: Undefined symbol: _E4 Error: Undefined symbol: _RESTART Error: Undefined symbol: _GET_ID Error: Undefined symbol: _E1 Error: Undefined symbol: _E2 Error: Undefined symbol: _E3]
+c95022b: COMPILE_ERROR [semantic: 'E1' is not a procedure]
+c95033a: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _BYE]
+c95033b: PASS
+c95034a: LINK_ERROR [Error: Undefined symbol: _E2 Error: Undefined symbol: _BYE Error: Undefined symbol: _E1]
+c95034b: LINK_ERROR [Error: Undefined symbol: _BYE Error: Undefined symbol: _E1]
+c95035a: LINK_ERROR [Error: Undefined symbol: _BYE Error: Undefined symbol: _E1]
+c95040a: LINK_ERROR [Error: Undefined symbol: _E1]
+c95040b: LINK_ERROR [Error: Undefined symbol: _E1]
+c95040c: LINK_ERROR [Error: Undefined symbol: _E]
+c95040d: LINK_ERROR [Error: Undefined symbol: _OUTER Error: Undefined symbol: _INNER]
+c95041a: PASS
+c95065a: LINK_ERROR [Error: Undefined symbol: _E1]
+c95065b: LINK_ERROR [Error: Undefined symbol: _E1]
+c95065c: LINK_ERROR [Error: Undefined symbol: _E1]
+c95065d: LINK_ERROR [Error: Undefined symbol: _E1]
+c95065e: LINK_ERROR [Error: Undefined symbol: _E1]
+c95065f: LINK_ERROR [Error: Undefined symbol: _E1]
+c95066a: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _E7 Error: Undefined symbol: _E4 Error: Undefined symbol: _E8 Error: Undefined symbol: _E6 Error: Undefined symbol: _E5 Error: Undefined symbol: _]
+c95067a: LINK_ERROR [Error: Undefined symbol: _CHECK_IN_I Error: Undefined symbol: _CHECK_IN_VR Error: Undefined symbol: _CHECK_IN_A Error: Undefined symbol: _CHECK_INOUT_R Error: Undefined symbol: _LOOK_INOUT_VR Error: U]
+c95071a: LINK_ERROR [Error: Undefined symbol: _EA1 Error: Undefined symbol: _EB2 Error: Undefined symbol: _EB4 Error: Undefined symbol: _EC2 Error: Undefined symbol: _EA Error: Undefined symbol: _EA2 Error: Undefined symb]
+c95072b: LINK_ERROR [Error: Undefined symbol: _EA Error: Undefined symbol: _EB]
+c95073a: LINK_ERROR [Error: Undefined symbol: _MAT_ADD]
+c95074c: LINK_ERROR [Error: Undefined symbol: _E]
+c95076a: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _E2]
+c95078a: LINK_ERROR [Error: Undefined symbol: _START Error: Undefined symbol: _STOP]
+c95080b: LINK_ERROR [Error: Undefined symbol: _EF Error: Undefined symbol: _E]
+c95082g: LINK_ERROR [Error: Undefined symbol: _E]
+c95085a: LINK_ERROR [Error: Undefined symbol: _E3 Error: Undefined symbol: _E4 Error: Undefined symbol: _E1 Error: Undefined symbol: _E2]
+c95085b: LINK_ERROR [Error: Undefined symbol: _E]
+c95085c: LINK_ERROR [Error: Undefined symbol: _E]
+c95085d: LINK_ERROR [Error: Undefined symbol: _E]
+c95085e: LINK_ERROR [Error: Undefined symbol: _E]
+c95085f: LINK_ERROR [Error: Undefined symbol: _E]
+c95085g: LINK_ERROR [Error: Undefined symbol: _E]
+c95085h: LINK_ERROR [Error: Undefined symbol: _E]
+c95085i: LINK_ERROR [Error: Undefined symbol: _E]
+c95085j: LINK_ERROR [Error: Undefined symbol: _E]
+c95085k: LINK_ERROR [Error: Undefined symbol: _E]
+c95085l: LINK_ERROR [Error: Undefined symbol: _E]
+c95085m: LINK_ERROR [Error: Undefined symbol: _E]
+c95085n: PASS
+c95085o: PASS
+c95086a: LINK_ERROR [Error: Undefined symbol: _E1]
+c95086b: LINK_ERROR [Error: Undefined symbol: _P]
+c95086c: LINK_ERROR [Error: Undefined symbol: _P]
+c95086d: LINK_ERROR [Error: Undefined symbol: _P]
+c95086e: LINK_ERROR [Error: Undefined symbol: _E]
+c95086f: LINK_ERROR [Error: Undefined symbol: _E]
+c95087a: LINK_ERROR [Error: Undefined symbol: _E2 Error: Undefined symbol: _E3 Error: Undefined symbol: _E1]
+c95087b: LINK_ERROR [Error: Undefined symbol: _E]
+c95087c: LINK_ERROR [Error: Undefined symbol: _E]
+c95087d: LINK_ERROR [Error: Undefined symbol: _E]
+c95088a: LINK_ERROR [Error: Undefined symbol: _E2 Error: Undefined symbol: _E1]
+c95089a: LINK_ERROR [Error: Undefined symbol: _E2 Error: Undefined symbol: _E1]
+c95090a: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _E3 Error: Undefined symbol: _E2]
+c95092a: LINK_ERROR [Error: Undefined symbol: _ARRY Error: Undefined symbol: _INTEGR Error: Undefined symbol: _ENUMERAT Error: Undefined symbol: _RECD Error: Undefined symbol: _FIXED Error: Undefined symbol: _BOOL Error: ]
+c95093a: LINK_ERROR [Error: Undefined symbol: _E1]
+c95095a: LINK_ERROR [Error: Undefined symbol: _E2 Error: Undefined symbol: _E1]
+c95095b: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _E2]
+c95095c: LINK_ERROR [Error: Undefined symbol: _E]
+c95095d: COMPILE_ERROR [semantic: type mismatch for parameter 'I1': expected 'Integer', got 'Boolean']
+c95095e: LINK_ERROR [Error: Undefined symbol: _E]
+c96001a: COMPILE_ERROR [semantic: 'TICK' not found]
+c96004a: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Universal_Real' to 'Integer']
+c96005a: COMPILE_ERROR [semantic: incompatible types for arithmetic: 'Time' and 'Duration']
+c96005d: COMPILE_ERROR [semantic: incompatible types for arithmetic: 'Time' and 'Duration']
+c96005f: LINK_ERROR [Error: Undefined symbol: _TIME_OF]
+c96006a: COMPILE_ERROR [semantic: incompatible types for arithmetic: 'Time' and 'Duration']
+c96007a: LINK_ERROR [Error: Undefined symbol: _TIME_OF]
+c96008a: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Universal_Real' to 'Integer']
+c96008b: LINK_ERROR [Error: Undefined symbol: _TIME_OF Error: Undefined symbol: _SECONDS Error: Undefined symbol: _SPLIT Error: Undefined symbol: _DAY]
+c97112a: COMPILE_ERROR [semantic: 'E' not found]
+c97113a: COMPILE_ERROR [semantic: 'E1' not found]
+c97114a: COMPILE_ERROR [semantic: 'E1' not found]
+c97115a: COMPILE_ERROR [semantic: 'E1' not found]
+c97116a: PASS
+c97117a: PASS
+c97117b: COMPILE_ERROR [semantic: 'NO_GO' not found]
+c97117c: COMPILE_ERROR [semantic: 'E' not found]
+c97118a: COMPILE_ERROR [semantic: 'E' not found]
+c97120a: COMPILE_ERROR [semantic: 'SYNCH' not found]
+c97120b: COMPILE_ERROR [semantic: 'E' not found]
+c97201a: COMPILE_ERROR [semantic: procedure 'DO_IT_NOW_ORELSE' not found]
+c97201b: COMPILE_ERROR [semantic: 'E' not found]
+c97201c: COMPILE_ERROR [semantic: 'E' not found]
+c97201d: LINK_ERROR [Error: Undefined symbol: _KEEP_ALIVE Error: Undefined symbol: _DO_IT_NOW_ORELSE]
+c97201e: LINK_ERROR [Error: Undefined symbol: _DO_IT_NOW_ORELSE]
+c97201g: COMPILE_ERROR [semantic: 'DO_IT_NOW_ORELSE' not found]
+c97201h: COMPILE_ERROR [semantic: 'DO_IT_NOW_ORELSE' not found]
+c97201x: COMPILE_ERROR [semantic: 'DO_IT_NOW_ORELSE' not found]
+c97202a: LINK_ERROR [Error: Undefined symbol: _KEEP_ALIVE]
+c97203a: COMPILE_ERROR [semantic: procedure 'A' not found]
+c97203b: COMPILE_ERROR [semantic: procedure 'A' not found]
+c97203c: LINK_ERROR [Error: Undefined symbol: _SYNCH Error: Undefined symbol: _E]
+c97204a: LINK_ERROR [Error: Undefined symbol: _E]
+c97204b: LINK_ERROR [Error: Undefined symbol: _E]
+c97205a: LINK_ERROR [Error: Undefined symbol: _E]
+c97205b: NO_RESULT [,.,. C97205B ---- C97205B CPU mode: Z80 Loaded 10496 bytes from /tmp/tmpunmim5th/test.com Program exit via JMP 0 ]
+c97301a: COMPILE_ERROR [semantic: procedure 'DO_IT_NOW_OR_WAIT' not found]
+c97301b: COMPILE_ERROR [semantic: incompatible types for arithmetic: 'Duration' and 'Time']
+c97301c: COMPILE_ERROR [semantic: incompatible types for arithmetic: 'Duration' and 'Time']
+c97301d: COMPILE_ERROR [semantic: incompatible types for arithmetic: 'Duration' and 'Time']
+c97301e: COMPILE_ERROR [semantic: incompatible types for arithmetic: 'Duration' and 'Time']
+c97302a: LINK_ERROR [Error: Undefined symbol: _KEEP_ALIVE]
+c97303a: COMPILE_ERROR [semantic: procedure 'A' not found]
+c97303b: COMPILE_ERROR [semantic: procedure 'A' not found]
+c97303c: LINK_ERROR [Error: Undefined symbol: _E Error: Undefined symbol: _SYNCH]
+c97304a: LINK_ERROR [Error: Undefined symbol: _E]
+c97304b: LINK_ERROR [Error: Undefined symbol: _E]
+c97305a: LINK_ERROR [Error: Undefined symbol: _E]
+c97305b: NO_RESULT [,.,. C97305B ---- C97305B CPU mode: Z80 Loaded 10624 bytes from /tmp/tmpiqbnxh1_/test.com Program exit via JMP 0 ]
+c97305c: LINK_ERROR [Error: Undefined symbol: _E]
+c97305d: NO_RESULT [,.,. C97305D ---- C97305D CPU mode: Z80 Loaded 19840 bytes from /tmp/tmp90k2sht1/test.com Program exit via JMP 0 ]
+c97307a: COMPILE_ERROR [semantic: 'E' not found]
+c99005a: COMPILE_ERROR [semantic: 'E1' not found]
+c9a003a: NO_RESULT [,.,. C9A003A ---- C9A003A CPU mode: Z80 Loaded 9472 bytes from /tmp/tmptkjnyase/test.com Program exit via JMP 0 ]
+c9a004a: PASS
+c9a007a: COMPILE_ERROR [semantic: procedure 'SYNC1' not found]
+c9a009a: LINK_ERROR [Error: Undefined symbol: _GET Error: Undefined symbol: _PUT Error: Undefined symbol: _E1]
+c9a009c: LINK_ERROR [Error: Undefined symbol: _E1]
+c9a009f: LINK_ERROR [Error: Undefined symbol: _START Error: Undefined symbol: _STOP Error: Undefined symbol: _RESTART]
+c9a009g: LINK_ERROR [Error: Undefined symbol: _RESTART Error: Undefined symbol: _NO_CALL Error: Undefined symbol: _STOP Error: Undefined symbol: _START]
+c9a009h: LINK_ERROR [Error: Undefined symbol: _E1]
+c9a010a: LINK_ERROR [Error: Undefined symbol: _E2 Error: Undefined symbol: _E1]
+c9a011a: LINK_ERROR [Error: Undefined symbol: _E1]
+c9a011b: COMPILE_ERROR [semantic: 'SELF_ABORT' not found]
+ca1003a: PASS
+ca1004a: PASS
+ca1005a: PASS
+ca1006a: COMPILE_ERROR [semantic: wrong number of arguments: expected 0, got 1]
+ca1011a0: NO_RESULT [   * DID NOT REPLACE CA1011A0 CPU mode: Z80 Loaded 7552 bytes from /tmp/tmplntxp2ua/test.com Program exit via JMP 0 ]
+ca1011a1: NO_RESULT [CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpa1g9gvn9/test.com Program exit via JMP 0 ]
+ca1011a2: NO_RESULT [   * DID NOT REPLACE CA1011A2 CPU mode: Z80 Loaded 7552 bytes from /tmp/tmpnd6fk9nj/test.com Program exit via JMP 0 ]
+ca1011a3: NO_RESULT [CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpg78p7fyp/test.com Program exit via JMP 0 ]
+ca1011a4: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7424 bytes from /tmp/tmp2ynkce_d/test.com Program exit via JMP 0 ]
+ca1011a5: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmphplfq7su/test.com Program exit via JMP 0 ]
+ca1011a6: COMPILE_ERROR [semantic: 'CA1011A0' is not a procedure]
+ca1012a0: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpl3scze87/test.com Program exit via JMP 0 ]
+ca1012a1: NO_RESULT [CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpez6ueb4j/test.com Program exit via JMP 0 ]
+ca1012a2: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmp1p90hrgp/test.com Program exit via JMP 0 ]
+ca1012a3: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpo4i4n7_v/test.com Program exit via JMP 0 ]
+ca1012a4: COMPILE_ERROR [semantic: 'CA1012A0' is not a generic]
+ca1012b0: NO_RESULT [CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpvmwqsub1/test.com Program exit via JMP 0 ]
+ca1012b2: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmp2gzhsr8q/test.com Program exit via JMP 0 ]
+ca1012b4: COMPILE_ERROR [semantic: 'CA1012B0' is not a generic]
+ca1013a0: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmp4200i5sd/test.com Program exit via JMP 0 ]
+ca1013a1: NO_RESULT [CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpz5s4xyjd/test.com Program exit via JMP 0 ]
+ca1013a2: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpgjscgpgh/test.com Program exit via JMP 0 ]
+ca1013a3: COMPILE_ERROR [semantic: 'CA1013A0' is not a generic]
+ca1013a4: COMPILE_ERROR [semantic: 'CA1013A1' is not a generic]
+ca1013a5: COMPILE_ERROR [semantic: 'CA1013A2' is not a generic]
+ca1013a6: COMPILE_ERROR [semantic: 'CA1013A4' is not a procedure]
+ca1014a0: COMPILE_ERROR [semantic: wrong number of arguments: expected 0, got 1]
+ca1014a1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmp78cvi4sz/test.com Program exit via JMP 0 ]
+ca1014a2: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpegoeebyh/test.com Program exit via JMP 0 ]
+ca1014a3: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpztgwem_d/test.com Program exit via JMP 0 ]
+ca1020e0: NO_RESULT [CPU mode: Z80 Loaded 7424 bytes from /tmp/tmp3_1hnrl9/test.com Program exit via JMP 0 ]
+ca1020e1: NO_RESULT [CPU mode: Z80 Loaded 7552 bytes from /tmp/tmpa3f3jj21/test.com Program exit via JMP 0 ]
+ca1020e2: COMPILE_ERROR [semantic: 'GENPROC_CA1020E' is not a generic]
+ca1020e3: COMPILE_ERROR [semantic: 'CA1020E_PROC1' is not a procedure]
+ca1022a0: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpadjk0gzf/test.com Program exit via JMP 0 ]
+ca1022a1: LINK_ERROR [Error: Undefined symbol: _P0]
+ca1022a2: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmptn929r9k/test.com Program exit via JMP 0 ]
+ca1022a3: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpr0asd_li/test.com Program exit via JMP 0 ]
+ca1022a4: LINK_ERROR [Error: Undefined symbol: _P0]
+ca1022a5: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmp5k61nx74/test.com Program exit via JMP 0 ]
+ca1022a6: COMPILE_ERROR [semantic: 'CA1022A1' is not a procedure]
+ca1102a0: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmprdlooitt/test.com Program exit via JMP 0 ]
+ca1102a1: COMPILE_ERROR [semantic: package specification for 'CA1102A0' not found]
+ca1102a2: COMPILE_ERROR [semantic: procedure 'P' not found]
+ca1106a: PASS
+ca1108a: COMPILE_ERROR [semantic: wrong number of arguments: expected 0, got 2]
+ca1108b: COMPILE_ERROR [semantic: wrong number of arguments: expected 0, got 2]
+ca2001h0: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmp2r00xiso/test.com Program exit via JMP 0 ]
+ca2001h1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmp_8wno0kp/test.com Program exit via JMP 0 ]
+ca2001h2: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmptckoip_c/test.com Program exit via JMP 0 ]
+ca2001h3: PASS
+ca2002a0: LINK_ERROR [Error: Undefined symbol: _PKG_PROC Error: Undefined symbol: _PROC]
+ca2002a1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpgmq92lwa/test.com Program exit via JMP 0 ]
+ca2002a2: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmptdtfziw5/test.com Program exit via JMP 0 ]
+ca2003a0: LINK_ERROR [Error: Undefined symbol: _CA2003A1]
+ca2003a1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpvwxho_wm/test.com Program exit via JMP 0 ]
+ca2004a0: LINK_ERROR [Error: Undefined symbol: _CA2004A3 Error: Undefined symbol: _CA2004A2]
+ca2004a1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpgmuc3042/test.com Program exit via JMP 0 ]
+ca2004a2: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpe7_7biph/test.com Program exit via JMP 0 ]
+ca2004a3: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpjcjqzaaf/test.com Program exit via JMP 0 ]
+ca2004a4: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmppbklqi8c/test.com Program exit via JMP 0 ]
+ca2007a0: PASS
+ca2007a1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpt2th4oee/test.com Program exit via JMP 0 ]
+ca2007a2: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpdl0e82t8/test.com Program exit via JMP 0 ]
+ca2007a3: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpraeezbop/test.com Program exit via JMP 0 ]
+ca2008a0: COMPILE_ERROR [semantic: wrong number of arguments: expected 0, got 1]
+ca2008a1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpygrbbxo0/test.com Program exit via JMP 0 ]
+ca2008a2: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmptroc3_s_/test.com Program exit via JMP 0 ]
+ca2009a: COMPILE_ERROR [semantic: 'PKG1' is not a generic]
+ca2009c0: COMPILE_ERROR [semantic: 'PKG1' is not a generic]
+ca2009c1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpepe1mmwk/test.com Program exit via JMP 0 ]
+ca2009d: COMPILE_ERROR [semantic: 'PROC1' is not a generic]
+ca2009f0: COMPILE_ERROR [semantic: 'PROC1' is not a generic]
+ca2009f1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpk5tlc011/test.com Program exit via JMP 0 ]
+ca2009f2: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpfpyj4p3c/test.com Program exit via JMP 0 ]
+ca2011b: LINK_ERROR [Error: Undefined symbol: _P2 Error: Undefined symbol: _P1]
+ca3011a0: COMPILE_ERROR [semantic: wrong number of arguments: expected 0, got 1]
+ca3011a1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpl3sqino2/test.com Program exit via JMP 0 ]
+ca3011a2: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpy0w3drt4/test.com Program exit via JMP 0 ]
+ca3011a3: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmp47b0ev1v/test.com Program exit via JMP 0 ]
+ca3011a4: COMPILE_ERROR [semantic: 'CA3011A0' is not a generic]
+ca5003a0: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7424 bytes from /tmp/tmpmfztcir_/test.com Program exit via JMP 0 ]
+ca5003a1: COMPILE_ERROR [semantic: 'SHOW_ELAB' not found]
+ca5003a2: COMPILE_ERROR [semantic: 'SHOW_ELAB' not found]
+ca5003a3: COMPILE_ERROR [semantic: 'SHOW_ELAB' not found]
+ca5003a4: COMPILE_ERROR [semantic: 'SHOW_ELAB' not found]
+ca5003a5: COMPILE_ERROR [semantic: 'SHOW_ELAB' not found]
+ca5003a6: COMPILE_ERROR [semantic: 'ORDER' not found]
+ca5003b0: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmppthkmrkm/test.com Program exit via JMP 0 ]
+ca5003b1: COMPILE_ERROR [semantic: 'SHOW_ELAB' not found]
+ca5003b2: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpz9r70wng/test.com Program exit via JMP 0 ]
+ca5003b3: COMPILE_ERROR [semantic: 'SHOW_ELAB' not found]
+ca5003b4: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpzgq63blu/test.com Program exit via JMP 0 ]
+ca5003b5: COMPILE_ERROR [semantic: 'ORDER' not found]
+ca5004a: LINK_ERROR [Error: Undefined symbol: _E]
+ca5004b0: NO_RESULT [,.,. CA5004B ---- CA5004B ,.,. C~ ---- C~ CPU mode: Z80 Loaded 8448 bytes from /tmp/tmpzlsn6qkj/test.com Program exit via JMP 0 ]
+ca5004b1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpj4qgsz7b/test.com Program exit via JMP 0 ]
+ca5004b2: COMPILE_ERROR [semantic: procedure 'WRONG' not found]
+ca5006a: PASS
+cb1001a: PASS
+cb1004a: PASS
+cb1005a: LINK_ERROR [Error: Undefined symbol: _PROP Error: Undefined symbol: _PROC2]
+cb1010a: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _E3A Error: Undefined symbol: _E2 Error: Undefined symbol: _E3B]
+cb1010c: NO_RESULT [,.,. CB1010C ---- CB1010C Constraint_ErrorCPU mode: Z80 Loaded 8960 bytes from /tmp/tmp0oo5mthl/test.com Program exit via JMP 0 ]
+cb1010d: PASS
+cb2004a: PASS
+cb2005a: PASS
+cb2006a: PASS
+cb2007a: PASS
+cb3003a: NO_RESULT [,.,. CB3003A ---- CB3003A    * WRONG EXCEPTION RAISED (CASE 1)    * WRONG EXCEPTION RAISED (OTHERS) CPU mode: Z80 Loaded 11392 bytes from /tmp/tmpsp5q]
+cb3003b: NO_RESULT [,.,. CB3003B ---- CB3003B CPU mode: Z80 Loaded 10496 bytes from /tmp/tmpo7fcc4cf/test.com Program exit via JMP 0 ]
+cb3004a: NO_RESULT [,.,. CB3004A ---- CB3004A    *    * P1.E1 EXCEPTION RAISED WHEN (P2)E1 EXPECTED.    *    * STANDARD.CONSTRAINT_ERROR EXCEPTION RAISED WHEN . CPU mode:]
+cb4001a: LINK_ERROR [Error: Undefined symbol: _CALLEE1 Error: Undefined symbol: _S Error: Undefined symbol: _R Error: Undefined symbol: _CALLEE3 Error: Undefined symbol: _CALLEE2]
+cb4002a: PASS
+cb4003a: PASS
+cb4004a: PASS
+cb4005a: PASS
+cb4006a: PASS
+cb4007a: PASS
+cb4008a: LINK_ERROR [Error: Undefined symbol: _F2 Error: Undefined symbol: _F]
+cb4009a: LINK_ERROR [Error: Undefined symbol: _P3]
+cb4013a: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _STOP]
+cb5001a: LINK_ERROR [Error: Undefined symbol: _E2]
+cb5001b: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _E2]
+cb5002a: LINK_ERROR [Error: Undefined symbol: _C Error: Undefined symbol: _B Error: Undefined symbol: _STOP Error: Undefined symbol: _E Error: Undefined symbol: _D Error: Undefined symbol: _A]
+cc1004a: LINK_ERROR [Error: Undefined symbol: _P]
+cc1005b: PASS
+cc1010a: COMPILE_ERROR [semantic: wrong number of arguments: expected 1, got 0]
+cc1010b: PASS
+cc1018a: LINK_ERROR [Error: Undefined symbol: _P]
+cc1104c: LINK_ERROR [Error: Undefined symbol: _E]
+cc1107b: PASS
+cc1111a: PASS
+cc1204a: COMPILE_ERROR [semantic: 'R1' is not a record]
+cc1207b: PASS
+cc1220a: COMPILE_ERROR [semantic: 'P2' not found]
+cc1221a: LINK_ERROR [Error: Undefined symbol: _NP3 Error: Undefined symbol: _NP4 Error: Undefined symbol: _NP2 Error: Undefined symbol: _NP1]
+cc1221b: LINK_ERROR [Error: Undefined symbol: _P6 Error: Undefined symbol: _P5 Error: Undefined symbol: _P3 Error: Undefined symbol: _P2 Error: Undefined symbol: _Q1 Error: Undefined symbol: _P4 Error: Undefined symbol: _]
+cc1221c: LINK_ERROR [Error: Undefined symbol: _P2 Error: Undefined symbol: _P1 Error: Undefined symbol: _P3]
+cc1221d: LINK_ERROR [Error: Undefined symbol: _P2 Error: Undefined symbol: _P3 Error: Undefined symbol: _P1]
+cc1222a: LINK_ERROR [Error: Undefined symbol: _P1 Error: Undefined symbol: _P2]
+cc1223a: LINK_ERROR [Error: Undefined symbol: _P1 Error: Undefined symbol: _P2]
+cc1224a: TIMEOUT
+cc1226b: COMPILE_ERROR [semantic: 'NLPDISC' is not a record]
+cc1227a: NO_RESULT [CPU mode: Z80 Loaded 7552 bytes from /tmp/tmpi2hj1v8c/test.com Program exit via JMP 0 ]
+cc1301a: COMPILE_ERROR [semantic: wrong number of generic parameters for 'PKG': expected 5 to 12, got 1]
+cc1302a: COMPILE_ERROR [semantic: wrong number of generic parameters for 'PK2': expected 5, got 2]
+cc1304a: LINK_ERROR [Error: Undefined symbol: _P]
+cc1304b: LINK_ERROR [Error: Undefined symbol: _P Error: Undefined symbol: _S]
+cc1307a: COMPILE_ERROR [semantic: wrong number of generic parameters for 'PK': expected 1 to 2, got 0]
+cc1307b: COMPILE_ERROR [semantic: wrong number of generic parameters for 'P': expected 2 to 4, got 0]
+cc1308a: COMPILE_ERROR [semantic: enumeration literal 'F1' conflicts with existing declaration]
+cc1310a: COMPILE_ERROR [semantic: wrong number of generic parameters for 'PKG': expected 2 to 4, got 0]
+cc1311a: LINK_ERROR [Error: Undefined symbol: _PROC Error: Undefined symbol: _P]
+cc1311b: COMPILE_ERROR [semantic: wrong number of generic parameters for 'FUNC': expected 1, got 0]
+cc2002a: PASS
+cc3004a: COMPILE_ERROR [semantic: dereference prefix must be an access type, got 'AD']
+cc3007a: COMPILE_ERROR [semantic: wrong number of generic parameters for 'F1': expected 2 to 3, got 1]
+cc3007b: COMPILE_ERROR [semantic: dereference prefix must be an access type, got 'RECORD_POINTER']
+cc3011a: LINK_ERROR [Error: Undefined symbol: _P1]
+cc3011d: PASS
+cc3012a: COMPILE_ERROR [semantic: incompatible types for arithmetic: 'DC' and 'Character']
+cc3015a: PASS
+cc3016b: COMPILE_ERROR [semantic: 'FIRST' not found]
+cc3016c: PASS
+cc3016f: COMPILE_ERROR [semantic: 'T5' is not a record]
+cc3016i: COMPILE_ERROR [semantic: 'T5A' is not a record]
+cc3017b: LINK_ERROR [Error: Undefined symbol: _NEW_PA Error: Undefined symbol: _NEW_P1D Error: Undefined symbol: _NEW_P2D Error: Undefined symbol: _NEW_PB Error: Undefined symbol: _NEW_PE Error: Undefined symbol: _NEW_PC]
+cc3019a: COMPILE_ERROR [semantic: type mismatch for parameter 'VALUE': expected 'String(1..6)', got 'Universal_Integer']
+cc3019b0: LINK_ERROR [Error: Undefined symbol: _ASSIGN Error: Undefined symbol: _ACTUAL_LIST Error: Undefined symbol: _PROCESS]
+cc3019b1: COMPILE_ERROR [semantic: 'CC3019B0_LIST_CLASS' is not a generic]
+cc3019b2: COMPILE_ERROR [semantic: 'CC3019B1_STACK_CLASS' is not a generic]
+cc3019c0: LINK_ERROR [Error: Undefined symbol: _PROCESS Error: Undefined symbol: _ACTUAL_LIST Error: Undefined symbol: _ASSIGN]
+cc3019c1: COMPILE_ERROR [semantic: 'CC3019C0_LIST_CLASS' is not a generic]
+cc3019c2: COMPILE_ERROR [semantic: 'CC3019C1_NESTED_GENERICS' is not a generic]
+cc3106b: LINK_ERROR [Error: Undefined symbol: _ENT_3 Error: Undefined symbol: _ENT_2 Error: Undefined symbol: _GEN_PROC1 Error: Undefined symbol: _ENT_1 Error: Undefined symbol: _GEN_PROC3 Error: Undefined symbol: _ARRAY_]
+cc3120a: COMPILE_ERROR [semantic: type mismatch for parameter 'P': expected 'PRIV', got 'REC']
+cc3120b: COMPILE_ERROR [semantic: 'T1' is not a record]
+cc3121a: LINK_ERROR [Error: Undefined symbol: _PROC1 Error: Undefined symbol: _PROC2]
+cc3123a: COMPILE_ERROR [semantic: 'GEN_INT' not found]
+cc3125a: COMPILE_ERROR [semantic: wrong number of generic parameters for 'PKG': expected 1 to 2, got 0]
+cc3125b: PASS
+cc3125c: PASS
+cc3125d: PASS
+cc3126a: LINK_ERROR [Error: Undefined symbol: _NARR Error: Undefined symbol: _NVAR]
+cc3127a: PASS
+cc3128a: TIMEOUT
+cc3203a: PASS
+cc3207b: LINK_ERROR [Error: Undefined symbol: _ENT]
+cc3220a: NO_RESULT [,.,. CC3220A ---- CC3220A    * INCORRECT RESULTS - 1    * INCORRECT RESULTS - 4    * INCORRECT RESULTS - 6    * INCORRECT RESULTS - 13 CPU mode: Z80 L]
+cc3221a: PASS
+cc3222a: TIMEOUT
+cc3223a: TIMEOUT
+cc3224a: FAIL [* 'LAST(N) ATTRIBUTE REPORT.FAILED]
+cc3225a: LINK_ERROR [Error: Undefined symbol: _ONE]
+cc3230a: PASS
+cc3231a: PASS
+cc3232a: TIMEOUT
+cc3233a: TIMEOUT
+cc3234a: NO_RESULT [,.,. CC3234A ---- CC3234A    * INCORRECT RESULTS - 1    * INCORRECT RESULTS - 4 CPU mode: Z80 Loaded 13952 bytes from /tmp/tmp_9d76_k9/test.com System]
+cc3235a: NO_RESULT [,.,. CC3235A ---- CC3235A Constraint_ErrorCPU mode: Z80 Loaded 11392 bytes from /tmp/tmpjj1jo3oy/test.com Program exit via JMP 0 ]
+cc3236a: PASS
+cc3240a: COMPILE_ERROR [semantic: 'T' is not a record]
+cc3305a: PASS
+cc3305b: PASS
+cc3305c: PASS
+cc3305d: PASS
+cc3601a: COMPILE_ERROR [semantic: 'F1' not found]
+cc3601c: PASS
+cc3602a: COMPILE_ERROR [semantic: wrong number of generic parameters for 'GP_DEF1': expected 1, got 0]
+cc3603a: LINK_ERROR [Error: Undefined symbol: _NP1 Error: Undefined symbol: _NP3 Error: Undefined symbol: _NP2]
+cc3605a: LINK_ERROR [Error: Undefined symbol: _INST_PROC Error: Undefined symbol: _PASSED_PROC]
+cc3606a: PASS
+cc3606b: PASS
+cc3607b: LINK_ERROR [Error: Undefined symbol: _DO_PROC]
+cd1009d: PASS
+cd1009e: PASS
+cd1009f: PASS
+cd1009g: PASS
+cd1009h: PASS
+cd1009i: COMPILE_ERROR [semantic: 'LENGTH_CHECK' is not a generic]
+cd1009j: PASS
+cd1009n: PASS
+cd1009o: PASS
+cd1009p: PASS
+cd1009q: PASS
+cd1009r: PASS
+cd1009s: PASS
+cd1009v: COMPILE_ERROR [semantic: 'ENUM_CHECK' is not a generic]
+cd1009w: COMPILE_ERROR [semantic: 'ENUM_CHECK' is not a generic]
+cd1009x: PASS
+cd1009y: PASS
+cd1009z: PASS
+cd1c03a: COMPILE_ERROR [semantic: 'LENGTH_CHECK' is not a generic]
+cd1c03b: TIMEOUT
+cd1c03c: PASS
+cd1c03f: PASS
+cd1c03g: PASS
+cd1c03h: PASS
+cd1c03i: LINK_ERROR [Error: Undefined symbol: _SHR16]
+cd1c04a: NO_RESULT [,.,. CD1C04A ---- CD1C04A    *    * PARENT_TYPE'SIZE SHOULD BE 16. CPU mode: Z80 Loaded 14976 bytes from /tmp/tmpxvzli2j5/test.com Program exit via JM]
+cd1c04d: COMPILE_ERROR [semantic: 'ENUM_CHECK' is not a generic]
+cd1c04e: PASS
+cd2a21a: COMPILE_ERROR [semantic: 'LENGTH_CHECK' is not a generic]
+cd2a21e: COMPILE_ERROR [semantic: 'LENGTH_CHECK' is not a generic]
+cd2a22a: TIMEOUT
+cd2a22e: TIMEOUT
+cd2a22i: LINK_ERROR [Error: Undefined symbol: _NEWPROC]
+cd2a22j: COMPILE_ERROR [semantic: 'LENGTH_CHECK' is not a generic]
+cd2a23a: COMPILE_ERROR [semantic: 'LENGTH_CHECK' is not a generic]
+cd2a23e: COMPILE_ERROR [semantic: 'LENGTH_CHECK' is not a generic]
+cd2a24a: COMPILE_ERROR [semantic: 'LENGTH_CHECK' is not a generic]
+cd2a24e: TIMEOUT
+cd2a24i: LINK_ERROR [Error: Undefined symbol: _NEWPROC]
+cd2a24j: LINK_ERROR [Error: Undefined symbol: _NEWPROC]
+cd2a31a: COMPILE_ERROR [semantic: 'LENGTH_CHECK' is not a generic]
+cd2a31e: LINK_ERROR [Error: Undefined symbol: _NEWPROC]
+cd2a32a: COMPILE_ERROR [semantic: 'LENGTH_CHECK' is not a generic]
+cd2a32c: NO_RESULT [,.,. CD2A32C ---- CD2A32C    *    * DERIVED_INT'SIZE MUST BE EQUAL TO7. CPU mode: Z80 Loaded 13696 bytes from /tmp/tmpsn8k48kr/test.com System reset ]
+cd2a32e: NO_RESULT [,.,. CD2A32E ---- CD2A32E    *    * INCORRECT RESULTS FOR RELATIONAL OPERATORS - 1.    *    * INCORRECT RESULTS FOR BINARY ARITHMETIC OPERATORS - 1.  ]
+cd2a32g: TIMEOUT
+cd2a32i: LINK_ERROR [Error: Undefined symbol: _NEWPROC]
+cd2a32j: LINK_ERROR [Error: Undefined symbol: _NEWPROC]
+cd2a51a: TIMEOUT
+cd2a53a: NO_RESULT [,.,. CD2A53A ---- CD2A53A    *    * INCORRECT RESULTS FOR BINARY ADDING OPERATORS - 1.    *    * INCORRECT RESULTS FOR MULTIPLYING OPERATORS - 1.    *]
+cd2a53e: PASS
+cd2b11b: PASS
+cd2b11d: COMPILE_ERROR [semantic: expression is not static]
+cd2b11e: COMPILE_ERROR [semantic: expression is not static]
+cd2b11f: PASS
+cd2b16a: PASS
+cd2d11a: TIMEOUT
+cd2d13a: PASS
+cd3014a: PASS
+cd3014c: COMPILE_ERROR [semantic: 'ENUM_CHECK' is not a generic]
+cd3014d: PASS
+cd3014f: COMPILE_ERROR [semantic: 'ENUM_CHECK' is not a generic]
+cd3015a: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'MAIN' to 'HUE']
+cd3015c: COMPILE_ERROR [semantic: 'ENUM_CHECK' is not a generic]
+cd3015e: COMPILE_ERROR [semantic: 'ENUM_CHECK' is not a generic]
+cd3015f: COMPILE_ERROR [semantic: 'ENUM_CHECK' is not a generic]
+cd3015g: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'MAIN' to 'HUE']
+cd3015h: COMPILE_ERROR [semantic: 'ENUM_CHECK' is not a generic]
+cd3015i: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'MAIN' to 'HUE']
+cd3015k: COMPILE_ERROR [semantic: 'ENUM_CHECK' is not a generic]
+cd3021a: PASS
+cd4031a: COMPILE_ERROR [semantic: 'DISC' is not a component of 'TEST_CLAUSE']
+cd4051a: PASS
+cd4051b: PASS
+cd4051c: COMPILE_ERROR [semantic: 'DISC' is not a component of 'CHECK_CLAUSE']
+cd4051d: COMPILE_ERROR [semantic: 'DISC' is not a component of 'CHECK_CLAUSE']
+cd5003a: PASS
+cd5003b: PASS
+cd5003c: PASS
+cd5003d: LINK_ERROR [Error: Undefined symbol: _CD5003D_PROC2]
+cd5003e: LINK_ERROR [Error: Undefined symbol: _TST]
+cd5003f: PASS
+cd5003g: LINK_ERROR [Error: Undefined symbol: _PROC3]
+cd5003h: PASS
+cd5003i: LINK_ERROR [Error: Undefined symbol: _PROC3]
+cd5011a: PASS
+cd5011c: PASS
+cd5011e: PASS
+cd5011g: PASS
+cd5011i: PASS
+cd5011k: PASS
+cd5011m: PASS
+cd5011q: PASS
+cd5011s: PASS
+cd5012a: LINK_ERROR [Error: Undefined symbol: _PROC]
+cd5012b: PASS
+cd5012e: LINK_ERROR [Error: Undefined symbol: _PROC]
+cd5012f: PASS
+cd5012i: LINK_ERROR [Error: Undefined symbol: _PROC]
+cd5012m: LINK_ERROR [Error: Undefined symbol: _PROC]
+cd5013a: PASS
+cd5013c: PASS
+cd5013e: PASS
+cd5013g: PASS
+cd5013i: PASS
+cd5013k: PASS
+cd5013m: NO_RESULT [,.,. CD5013M ---- CD5013M Constraint_ErrorCPU mode: Z80 Loaded 9088 bytes from /tmp/tmpk6x6e9di/test.com Program exit via JMP 0 ]
+cd5013o: PASS
+cd5014a: PASS
+cd5014c: PASS
+cd5014e: PASS
+cd5014g: PASS
+cd5014i: PASS
+cd5014k: PASS
+cd5014m: PASS
+cd5014o: PASS
+cd5014t: PASS
+cd5014v: PASS
+cd5014x: PASS
+cd5014y: PASS
+cd5014z: PASS
+cd7002a: PASS
+cd7007b: PASS
+cd7101d: PASS
+cd7103d: PASS
+cd7202a: PASS
+cd7204b: PASS
+cd7204c: PASS
+cd7305a: PASS
+cda201a: COMPILE_ERROR [lowering: unsupported operand type(s) for -: 'NoneType' and 'int']
+cda201b: COMPILE_ERROR [lowering: unsupported operand type(s) for -: 'NoneType' and 'int']
+cda201c: PASS
+cda201e: TIMEOUT
+cz1101a: PASS
+cz1102a: TIMEOUT
+cz1103a: COMPILE_ERROR [semantic: 'CHECK_FILE' is not a procedure]
+
+# Summary
+# PASS: 579
+# LINK_ERROR: 290
+# NO_RESULT: 246
+# COMPILE_ERROR: 212
+# TIMEOUT: 125
+# ASSEMBLE_ERROR: 7
+# FAIL: 1
+# Total: 1460
