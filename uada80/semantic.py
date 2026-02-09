@@ -425,21 +425,61 @@ class SemanticAnalyzer:
         - Ada.Text_IO -> ada-text_io.ads
         - My_Package -> my_package.ads
 
+        Also searches for ACATS-style naming (e.g., lencheck.ada for LENGTH_CHECK).
+
         Returns the full path if found, None otherwise.
         """
         # Convert package name to file name (GNAT convention)
         file_base = pkg_name.lower().replace(".", "-")
-        file_name = f"{file_base}.ads"
+
+        # File name patterns to try:
+        # 1. Standard GNAT: name.ads, name.ada
+        # 2. ACATS style: 8-char truncation with variations
+        candidates = [
+            f"{file_base}.ads",
+            f"{file_base}.ada",
+        ]
+
+        # ACATS naming pattern: remove underscores, truncate to 8 chars
+        acats_base = pkg_name.lower().replace("_", "")[:8]
+        if acats_base != file_base:
+            candidates.append(f"{acats_base}.ads")
+            candidates.append(f"{acats_base}.ada")
 
         # Search in all configured paths
         for search_path in self.search_paths:
-            file_path = os.path.join(search_path, file_name)
-            if os.path.isfile(file_path):
-                return file_path
+            for file_name in candidates:
+                file_path = os.path.join(search_path, file_name)
+                if os.path.isfile(file_path):
+                    return file_path
+
+            # Also try to find any file in the search path containing the
+            # lowercase name (ACATS support files have unusual naming)
+            # E.g., LENGTH_CHECK -> lencheck.ada, ENUM_CHECK -> enumchek.ada
+            try:
+                for entry in os.listdir(search_path):
+                    if entry.endswith(('.ada', '.ads', '.a')):
+                        entry_base = os.path.splitext(entry)[0].lower()
+                        # Try to match ACATS abbreviated names:
+                        # Build a regex-like check: entry should match significant
+                        # parts of the package name
+                        pkg_parts = pkg_name.lower().split("_")
+                        # Check if all significant parts appear in filename
+                        all_match = True
+                        for part in pkg_parts:
+                            if len(part) >= 3 and part[:3] not in entry_base:
+                                all_match = False
+                                break
+                        if all_match and len(pkg_parts) >= 2:
+                            file_path = os.path.join(search_path, entry)
+                            return file_path
+            except OSError:
+                pass
 
         # Also search current directory
-        if os.path.isfile(file_name):
-            return file_name
+        for file_name in candidates:
+            if os.path.isfile(file_name):
+                return file_name
 
         return None
 
@@ -474,8 +514,9 @@ class SemanticAnalyzer:
             except Exception:
                 return None
 
-            # Find the package declaration in the parsed AST
+            # Find the package declaration or generic subprogram in the parsed AST
             pkg_decl = None
+            gen_subprog = None
             for unit in program.units:
                 if isinstance(unit.unit, PackageDecl):
                     # Match by name (case-insensitive)
@@ -487,6 +528,49 @@ class SemanticAnalyzer:
                         if unit.unit.name.lower().endswith(pkg_name.lower().split(".")[-1]):
                             pkg_decl = unit.unit
                             break
+                elif isinstance(unit.unit, GenericSubprogramUnit):
+                    # Match generic procedure/function by name (case-insensitive)
+                    if unit.unit.name.lower() == pkg_name.lower():
+                        gen_subprog = unit.unit
+                        break
+
+            # Handle generic subprogram (e.g., LENGTH_CHECK, ENUM_CHECK)
+            if gen_subprog is not None:
+                is_function = gen_subprog.is_function
+                kind = SymbolKind.GENERIC_FUNCTION if is_function else SymbolKind.GENERIC_PROCEDURE
+                gen_symbol = Symbol(
+                    name=pkg_name,
+                    kind=kind,
+                )
+                gen_symbol.is_withed = True
+                gen_symbol.generic_decl = gen_subprog
+
+                # Extract parameters from the subprogram declaration
+                # This is needed for instantiation to copy parameters
+                subprog = gen_subprog.subprogram
+                if isinstance(subprog, SubprogramBody):
+                    spec = subprog.spec
+                else:
+                    spec = subprog
+                for param_spec in spec.parameters:
+                    param_type = self._resolve_type(param_spec.type_mark)
+                    for param_name in param_spec.names:
+                        param_symbol = Symbol(
+                            name=param_name,
+                            kind=SymbolKind.PARAMETER,
+                            ada_type=param_type,
+                            mode=param_spec.mode,
+                        )
+                        param_symbol.default_value = param_spec.default_value
+                        gen_symbol.parameters.append(param_symbol)
+
+                # Extract return type for functions
+                if is_function and spec.return_type:
+                    gen_symbol.return_type = self._resolve_type(spec.return_type)
+
+                # Cache and return the generic subprogram symbol
+                self._loaded_packages[pkg_key] = gen_symbol
+                return gen_symbol
 
             if not pkg_decl:
                 return None
