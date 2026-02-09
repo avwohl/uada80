@@ -3198,6 +3198,23 @@ class Z80CodeGen:
         self._emit("    EXTRN _fdelete     ; Delete file")
         self._emit("")
 
+        # Tasking operations (from tasking.mac / mpm_task.mac)
+        self._emit("; Tasking operations")
+        self._emit("    EXTRN _TASK_INI    ; Initialize tasking system")
+        self._emit("    EXTRN _TASK_CRE    ; Create a new task")
+        self._emit("    EXTRN _TASK_YLD    ; Yield to scheduler")
+        self._emit("    EXTRN _TASK_TRM    ; Terminate current task")
+        self._emit("    EXTRN _TASK_DLY    ; Delay for ticks")
+        self._emit("    EXTRN _TASK_DLU    ; Delay until time")
+        self._emit("    EXTRN _TASK_ABT    ; Abort a task")
+        self._emit("    EXTRN _ENTRY_CL    ; Call a task entry")
+        self._emit("    EXTRN _ENTRY_AC    ; Accept an entry call")
+        self._emit("    EXTRN _ENTRY_AE    ; Accept end")
+        self._emit("    EXTRN _SELC_ST     ; Select start")
+        self._emit("    EXTRN _SELC_WT     ; Select wait")
+        self._emit("    EXTRN _SELC_EN     ; Select end")
+        self._emit("")
+
     def _generate_tasking_runtime(self) -> None:
         """Generate preemptive multitasking runtime.
 
@@ -7752,34 +7769,34 @@ class Z80CodeGen:
             self._emit_instr("ld", "hl", instr.src1.name)
         else:
             self._load_to_hl(instr.src1)
-        # Call task creation runtime
-        self._emit_instr("call", "_TASK_CREATE")
+        # Call task creation runtime (8-char safe name)
+        self._emit_instr("call", "_TASK_CRE")
         # Result (task ID) in hl
         self._store_from_hl(instr.dst)
 
     def _gen_task_yield(self, instr: IRInstr) -> None:
         """Generate TASK_YIELD instruction."""
         self._emit("    ; yield to scheduler")
-        self._emit_instr("call", "_TASK_YIELD")
+        self._emit_instr("call", "_TASK_YLD")
 
     def _gen_task_terminate(self, instr: IRInstr) -> None:
         """Generate TASK_TERMINATE instruction."""
         self._emit("    ; terminate current task")
-        self._emit_instr("call", "_TASK_TERMINATE")
+        self._emit_instr("call", "_TASK_TRM")
 
     def _gen_task_delay(self, instr: IRInstr) -> None:
         """Generate TASK_DELAY instruction."""
         self._emit("    ; delay for ticks")
         # Load delay count to hl
         self._load_to_hl(instr.src1)
-        self._emit_instr("call", "_TASK_DELAY")
+        self._emit_instr("call", "_TASK_DLY")
 
     def _gen_task_delay_until(self, instr: IRInstr) -> None:
         """Generate TASK_DELAY_UNTIL instruction."""
         self._emit("    ; delay until time")
         # Load target time to hl
         self._load_to_hl(instr.src1)
-        self._emit_instr("call", "_TASK_DELAY_UNTIL")
+        self._emit_instr("call", "_TASK_DLU")
 
     def _gen_entry_call(self, instr: IRInstr) -> None:
         """Generate ENTRY_CALL instruction."""
@@ -7791,7 +7808,7 @@ class Z80CodeGen:
         self._load_to_hl(instr.src1)
         self._emit_instr("push", "hl")
         # Call entry
-        self._emit_instr("call", "_ENTRY_CALL")
+        self._emit_instr("call", "_ENTRY_CL")
         # Clean up stack
         self._emit_instr("pop", "hl")
         self._emit_instr("pop", "hl")
@@ -7801,7 +7818,7 @@ class Z80CodeGen:
         self._emit("    ; accept entry call")
         # Load entry ID
         self._load_to_hl(instr.src1)
-        self._emit_instr("call", "_ENTRY_ACCEPT")
+        self._emit_instr("call", "_ENTRY_AC")
 
 
 def generate_z80(module: IRModule, emit_inline_runtime: bool = False) -> str:

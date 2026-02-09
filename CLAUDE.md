@@ -103,6 +103,44 @@ MP/M provides real tasking via BDOS calls (P_CREATE, Q_MAKE, etc.).
 0xFC00+        BDOS/BIOS
 ```
 
+## External Tools — Do Not Modify
+
+**Do not modify cpmemu without permission.** It lives at `../cpmemu/` and is a separate project. If you need different end-of-line or text/binary handling for test output, use a `.cfg` file instead of changing the emulator.
+
+### cpmemu .cfg Files
+
+cpmemu accepts a `.cfg` configuration file that controls file mode handling, EOL conversion, drive mappings, and more. Use this to get the output behavior you need for tests:
+
+```cfg
+# Program to run
+program = test.com
+
+# Working directory
+cd = /tmp/test_output
+
+# EOL handling
+default_mode = auto      # auto, text, or binary
+eol_convert = true       # Convert Unix \n <-> CP/M \r\n
+
+# File type mappings
+*.ADA = text
+*.ASM = text
+*.COM = binary
+*.REL = binary
+*.LIB = binary
+
+# Drive mappings
+drive_A = .
+drive_B = /path/to/source
+
+# Verbosity: 0=quiet, 1=load/exit, 2=files, 3=FCB, 5=all
+verbose = 0
+```
+
+Run with: `cpmemu examples/mytest.cfg`
+
+See `../cpmemu/examples/` for more examples: `example.cfg`, `compiler.cfg`, `simple_test.cfg`.
+
 ## Common Issues
 
 1. **um80 not found**: Install with `pip install um80`

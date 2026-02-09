@@ -76,7 +76,7 @@ def get_legal_acats_files():
     if not ACATS_PATH.exists():
         return []
     files = []
-    for ext in ("*.ada", "*.a"):
+    for ext in ("*.ada", "*.a", "*.am"):
         files.extend(ACATS_PATH.rglob(ext))
     # Only include valid Ada tests
     legal_prefixes = {'a', 'c', 'd', 'e', 'l'}

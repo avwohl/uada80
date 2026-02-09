@@ -14,16 +14,17 @@ TARGET ?= cpm
 UM80 = um80
 ULIB80 = ulib80
 
-# Common source files (non-tasking)
-# NOTE: protlock.mac MUST be before tasking.mac to provide _PROT_LCK/_PROT_ULK
-COMMON_SOURCES = runtime.mac containers.mac vectors.mac lists.mac fileio.mac float48.mac float64.mac timer.mac protlock.mac
+# Common source files (non-tasking, non-lock)
+COMMON_SOURCES = runtime.mac containers.mac vectors.mac lists.mac fileio.mac float48.mac float64.mac timer.mac
 
-# Tasking source - depends on target
+# Tasking and lock sources - depend on target
+# CP/M: protlock.mac provides _PROT_LCK/_PROT_ULK, tasking.mac provides the rest
+# MP/M: mpm_task.mac provides everything including _PROT_LCK/_PROT_ULK (MX queues)
 ifeq ($(TARGET),mpm)
 TASKING_SOURCE = mpm_task.mac
 LIBRARY = libada_mpm.lib
 else
-TASKING_SOURCE = tasking.mac
+TASKING_SOURCE = protlock.mac tasking.mac
 LIBRARY = libada.lib
 endif
 

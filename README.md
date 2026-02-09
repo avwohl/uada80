@@ -13,9 +13,10 @@ An Ada compiler targeting the Z80 processor and CP/M 2.2 operating system, aimin
 
 uada80 is a compiler for the Ada programming language that generates code for the Z80 8-bit microprocessor running CP/M 2.2. The project aims to support a substantial subset of Ada 2012 and pass the ACATS conformance tests.
 
-**Target Platform**: CP/M 2.2 on Z80
-- Programs load at 0x0100
-- Access to CP/M BDOS for file I/O and console operations
+**Target Platforms**: CP/M 2.2 and MP/M II on Z80
+- CP/M 2.2: `.com` executables, single-threaded, programs load at 0x0100
+- MP/M II: `.prl` relocatable executables, preemptive multitasking via OS primitives
+- Access to BDOS for file I/O and console operations
 - Approximately 57K TPA on typical 64K system
 
 ### Goals
@@ -28,7 +29,7 @@ uada80 is a compiler for the Ada programming language that generates code for th
 
 ### Inspiration
 
-This project builds on experience from [uplm80](https://github.com/yourusername/uplm80), a PL/M-80 compiler for Z80, reusing proven optimization techniques.
+This project builds on experience from [uplm80](https://github.com/avwohl/uplm80), a PL/M-80 compiler for Z80, reusing proven optimization techniques.
 
 ## Features
 
@@ -63,48 +64,52 @@ This project builds on experience from [uplm80](https://github.com/yourusername/
 Ada Source → Lexer → Parser → AST → Semantic Analysis → Optimizer → Code Gen → Z80 Assembly
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed design documentation.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed design documentation.
 
 ## Building
 
 ### Requirements
 
 - Python 3.10 or later
-- Optional: Z80 assembler (z80asm, sjasmplus, or similar)
-- Optional: Z80 emulator for testing (e.g., MAME, z80emu)
+- [um80_and_friends](https://github.com/avwohl/um80_and_friends) - Z80 assembler and linker (`um80`, `ul80`)
+- [cpmemu](https://github.com/avwohl/cpmemu) - CP/M emulator for running compiled programs
 
 ### Installation
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/uada80.git
+git clone https://github.com/avwohl/uada80.git
 cd uada80
 
 # Create virtual environment
 python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate
 
 # Install in development mode
 pip install -e ".[dev]"
+
+# Install assembler/linker
+pip install um80
 ```
 
 ### Running Tests
 
 ```bash
-pytest
+pytest tests/ -v -o addopts=""
 ```
 
 ## Usage
 
 ```bash
-# Compile an Ada source file
-uada80 hello.ada -o hello.asm
+# Compile Ada to Z80 assembly
+python -m uada80 hello.ada -o hello.asm
 
-# With optimization
-uada80 hello.ada -o hello.asm -O2
+# Assemble and link
+um80 -o hello.rel hello.asm
+ul80 -o hello.com hello.rel -L runtime/ -l libada.lib
 
-# Generate listing
-uada80 hello.ada -o hello.asm --listing
+# Run on CP/M emulator
+cpmemu --z80 hello.com
 ```
 
 ## Example Programs
@@ -138,7 +143,69 @@ begin
 end Fibonacci;
 ```
 
-See [examples/](examples/) for more examples.
+See [learn-ada-z80](https://github.com/avwohl/learn-ada-z80) for 99 example programs covering basics through tasking, generics, and applications.
+
+## Ada Tasking on MP/M II
+
+Ada tasking (tasks, entries, rendezvous, protected types) runs on [MP/M II](https://github.com/avwohl/mpm2) using OS-native primitives for preemptive multitasking. On CP/M 2.2 (single-user), the runtime provides cooperative tasking stubs.
+
+### How It Works
+
+Ada tasks become MP/M II subprocesses sharing one memory bank. The OS handles preemptive scheduling, and all inter-task communication uses BDOS queue operations:
+
+| Ada Construct | MP/M II Primitive |
+|---|---|
+| Task creation | P_CREATE (BDOS 144) |
+| Entry call | Q_WRITE (BDOS 139) - blocking send to queue |
+| Accept statement | Q_READ (BDOS 137) - blocking receive from queue |
+| Select/else | Q_CREAD (BDOS 138) - conditional (non-blocking) read |
+| Protected object | MX queue (mutual exclusion) |
+| Delay | P_DELAY (BDOS 141) |
+| Abort | P_ABORT (BDOS 157) |
+
+### Building for MP/M II
+
+```bash
+# Compile Ada to assembly
+python -m uada80 program.ada -o program.asm
+
+# Assemble
+um80 -o program.rel program.asm
+
+# Link as PRL (relocatable for MP/M II)
+ul80 --prl -p 0 -o program.prl program.rel -L runtime/ -l libada_mpm.lib
+
+# Or link as COM (also works under MP/M)
+ul80 -o program.com program.rel -L runtime/ -l libada_mpm.lib
+```
+
+### Running on the MP/M II Emulator
+
+The [mpm2](https://github.com/avwohl/mpm2) emulator provides a full MP/M II environment with SSH terminal access:
+
+```bash
+# Start the emulator (up to 4 concurrent consoles)
+mpm2_emu --no-auth -p 127.0.0.1:2222 -d A:disks/mpm2_system_work.img
+
+# Connect via SSH
+ssh -p 2222 user@localhost
+
+# Upload and run
+sftp -P 2222 user@localhost
+put program.prl /A.0/PROGRAM.PRL
+```
+
+### Runtime Libraries
+
+Two runtime libraries are provided:
+
+- **`libada.lib`** - CP/M 2.2 runtime with cooperative tasking stubs
+- **`libada_mpm.lib`** - MP/M II runtime with OS-native preemptive tasking
+
+Rebuild after changes:
+```bash
+cd runtime && make clean && make
+```
 
 ## Documentation
 
@@ -158,23 +225,54 @@ See [examples/](examples/) for more examples.
 ### Ada Language Specifications
 - [specs/](specs/) - Ada language specifications and ACATS tests
 
-## ACATS Testing
+## Testing
 
-The Ada Conformity Assessment Test Suite is included in [acats/](acats/).
+### ACATS End-to-End Execution
+
+The [ACATS 4.2](http://www.ada-auth.org/acats.html) test suite is included in [tests/acats/](tests/acats/). Tests are compiled to Z80 assembly, assembled with um80, linked with ul80, and executed on [cpmemu](https://github.com/avwohl/cpmemu).
+
+**579 ACATS tests pass end-to-end** (compile + assemble + link + execute on cpmemu):
+
+```
+$ pytest tests/test_acats_execution.py -o addopts=""
+===== 257 failed, 579 passed, 624 skipped in 5197s =====
+```
+
+| Result | Count | Description |
+|---|---:|---|
+| Passed | 579 | Compiled, ran on cpmemu, output contains PASSED |
+| Failed | 257 | Compiled and ran but produced wrong results (codegen bugs) |
+| Skipped | 624 | Compile/link/timeout failures (multi-file deps, missing features) |
+
+### ACATS Front-End
+
+All 5,787 legal ACATS files pass parsing and semantic analysis:
+
+```
+$ pytest tests/test_acats.py -o addopts=""
+======================= 5,787 passed in 248s =======================
+```
+
+### learn-ada-z80 Programs
+
+The [learn-ada-z80](https://github.com/avwohl/learn-ada-z80) companion project has 99 example programs. **98 of 99 compile to Z80 assembly** (full pipeline: parse, semantic analysis, lowering, code generation). One program fails due to a codegen bug with negative array bounds.
+
+### Execution Tests
+
+End-to-end execution tests (compile + assemble + link + run on cpmemu) are in `tests/test_execution.py`:
 
 ```bash
-# Run ACATS tests (when implemented)
-python tests/run_acats.py
+pytest tests/test_execution.py -v -o addopts=""
 ```
 
 ## Limitations
 
 Due to the Z80's 8-bit architecture and limited resources:
 
-- No floating-point arithmetic (unless software implementation)
-- Integer sizes limited to 8-bit and 16-bit
+- Integer sizes limited to 8-bit and 16-bit (32-bit via library)
+- Software floating-point only (IEEE 754 double via `float64.mac`)
 - Reduced standard library
-- Tasking support limited or unavailable
+- Tasking requires MP/M II (CP/M 2.2 provides stubs only)
 - Limited heap (small memory space)
 
 ## Contributing
@@ -196,7 +294,7 @@ This project is licensed under the GNU General Public License v2.0 - see LICENSE
 - [Ada Reference Manual (Ada 2012)](https://www.adaic.org/resources/add_content/standards/12rm/RM-Final.pdf)
 - [ACATS Test Suite](http://www.ada-auth.org/acats.html)
 - [Z80 CPU User Manual](http://www.z80.info/zip/z80cpu_um.pdf)
-- [uplm80 - PL/M Compiler](https://github.com/yourusername/uplm80)
+- [uplm80 - PL/M Compiler](https://github.com/avwohl/uplm80)
 ## Related Projects
 
 - [80un](https://github.com/avwohl/80un) - Unpacker for CP/M compression and archive formats (LBR, ARC, squeeze, crunch, CrLZH)

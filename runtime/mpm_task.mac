@@ -5,25 +5,22 @@
 ;
 ; This runtime implements Ada tasking by mapping:
 ; - Ada tasks to MP/M II subprocesses (P_CREATE)
-; - Task entries to MP/M II message queues (Q_MAKE/Q_READ/Q_WRITE)
+; - Task entries to MP/M II linked message queues (Q_MAKE/Q_READ/Q_WRITE)
 ; - Delay statements to P_DELAY
-; - Protected types to system flags (DEV_WAITFLAG/DEV_SETFLAG)
+; - Protected types to MX queues (mutual exclusion via Q_READ/Q_WRITE)
 ;
 ; MP/M II BDOS Functions Used:
-; 131 DEV_POLL     - Poll I/O device
-; 132 DEV_WAITFLAG - Wait on system flag (for protected types)
-; 133 DEV_SETFLAG  - Set system flag
-; 134 Q_MAKE       - Create message queue
-; 135 Q_OPEN       - Open message queue
+; 134 Q_MAKE       - Create message queue (takes QCB address)
+; 135 Q_OPEN       - Open message queue (takes UQCB address)
 ; 136 Q_DELETE     - Delete message queue
-; 137 Q_READ       - Read from queue (blocking)
-; 138 Q_CREAD      - Conditional read (non-blocking)
-; 139 Q_WRITE      - Write to queue (blocking)
-; 140 Q_CWRITE     - Conditional write (non-blocking)
+; 137 Q_READ       - Read from queue, blocking (takes UQCB address)
+; 138 Q_CREAD      - Conditional read, non-blocking (takes UQCB address)
+; 139 Q_WRITE      - Write to queue, blocking (takes UQCB address)
+; 140 Q_CWRITE     - Conditional write, non-blocking (takes UQCB address)
 ; 141 P_DELAY      - Delay process
 ; 142 P_DISPATCH   - Yield to scheduler
 ; 143 P_TERM       - Terminate process
-; 144 P_CREATE     - Create subprocess
+; 144 P_CREATE     - Create subprocess (takes PD address)
 ; 145 P_PRIORITY   - Set process priority
 ; 156 P_PDADR      - Get process descriptor address
 ; 157 P_ABORT      - Abort a process
@@ -46,8 +43,8 @@
     PUBLIC _SELC_ST         ; Select start
     PUBLIC _SELC_WT         ; Select wait
     PUBLIC _SELC_EN         ; Select end
-    PUBLIC _PROT_LCK        ; Protected type lock
-    PUBLIC _PROT_ULK        ; Protected type unlock
+    PUBLIC _PROT_LCK        ; Protected type lock (MX queue read)
+    PUBLIC _PROT_ULK        ; Protected type unlock (MX queue write)
     PUBLIC _PROT_ENQ        ; Protected entry queue
     PUBLIC _PROT_REB        ; Protected re-evaluate barriers
     PUBLIC _REQUEUE         ; Requeue statement
@@ -69,9 +66,6 @@
 BDOS        EQU 5           ; BDOS entry point
 
 ; MP/M II specific functions
-B_DEVPOLL   EQU 131         ; Poll I/O device
-B_WAITFLAG  EQU 132         ; Wait on system flag
-B_SETFLAG   EQU 133         ; Set system flag
 B_QMAKE     EQU 134         ; Create message queue
 B_QOPEN     EQU 135         ; Open message queue
 B_QDELETE   EQU 136         ; Delete message queue
@@ -93,9 +87,66 @@ B_PABORT    EQU 157         ; Abort a process
 
 MAX_TASKS       EQU 8       ; Maximum concurrent tasks
 MAX_ENTRIES     EQU 32      ; Maximum entry queues
-ENTRY_MSG_SIZE  EQU 16      ; Size of entry call message
 DEFAULT_PRIO    EQU 128     ; Default task priority (mid-range)
 TASK_STACK_SIZE EQU 256     ; Default task stack size
+NMBMSGS         EQU 4       ; Entry queue message slot count
+
+; =========================================
+; MP/M II Process Descriptor (from PROCES.LIT)
+; =========================================
+; Total: 52 bytes
+;   process_header:
+;     PL(2), STATUS(1), PRIORITY(1), STKPTR(2)
+;   then:
+;     NAME(8), CONSOLE(1), MEMSEG(1), B(2), THREAD(2)
+;   bdos_save:
+;     DISKDMA(2), DISKSLCT(1), DCNT(2), SEARCHL(1), SEARCHA(2),
+;     DRVACT(2), REGISTERS(20), SCRATCH(2)
+
+PD_SIZE         EQU 52
+PD_PL           EQU 0       ; 2 bytes - process link
+PD_STATUS       EQU 2       ; 1 byte
+PD_PRIORITY     EQU 3       ; 1 byte
+PD_STKPTR       EQU 4       ; 2 bytes - stack pointer
+PD_NAME         EQU 6       ; 8 bytes
+PD_CONSOLE      EQU 14      ; 1 byte
+PD_MEMSEG       EQU 15      ; 1 byte
+PD_B            EQU 16      ; 2 bytes
+PD_THREAD       EQU 18      ; 2 bytes
+PD_DISKDMA      EQU 20      ; 2 bytes
+PD_DISKSLCT     EQU 22      ; 1 byte
+PD_DCNT         EQU 23      ; 2 bytes
+PD_SEARCHL      EQU 25      ; 1 byte
+PD_SEARCHA      EQU 26      ; 2 bytes
+PD_DRVACT       EQU 28      ; 2 bytes
+PD_REGISTERS    EQU 30      ; 20 bytes
+PD_SCRATCH      EQU 50      ; 2 bytes
+
+; =========================================
+; MP/M II Queue Control Block (from QUEUE.LIT)
+; =========================================
+; Linked queue format (used when MSGLEN >= 3):
+;   QL(2), NAME(8), MSGLEN(2), NMBMSGS(2),
+;   DQPH(2), NQPH(2), MH(2), MT(2), BH(2),
+;   BUFFER((MSGLEN+2)*NMBMSGS bytes)
+
+QCB_QL          EQU 0       ; 2 bytes - queue link
+QCB_NAME        EQU 2       ; 8 bytes - queue name
+QCB_MSGLEN      EQU 10      ; 2 bytes - message length
+QCB_NMBMSGS     EQU 12      ; 2 bytes - number of message slots
+QCB_DQPH        EQU 14      ; 2 bytes - dequeue process head
+QCB_NQPH        EQU 16      ; 2 bytes - enqueue process head
+QCB_MH          EQU 18      ; 2 bytes - message head
+QCB_MT          EQU 20      ; 2 bytes - message tail
+QCB_BH          EQU 22      ; 2 bytes - buffer (free list) head
+QCB_BUF         EQU 24      ; buffer starts here
+QCB_HDR_SIZE    EQU 24      ; header size before buffer
+
+; User Queue Control Block (UQCB) for Q_OPEN/Q_READ/Q_WRITE
+UQCB_PTR        EQU 0       ; 2 bytes - QCB pointer (filled by Q_OPEN)
+UQCB_MSGADR     EQU 2       ; 2 bytes - user message buffer address
+UQCB_NAME       EQU 4       ; 8 bytes - queue name
+UQCB_SIZE       EQU 12
 
 ; =========================================
 ; Data Structures
@@ -103,23 +154,24 @@ TASK_STACK_SIZE EQU 256     ; Default task stack size
 ;
 ; Task Descriptor (TD) - 32 bytes per task
 ; Used to track Ada task state and map to MP/M process
-;   +0:  process_id (2 bytes) - MP/M process ID
+;   +0:  pd_addr (2 bytes) - address of this task's PD
 ;   +2:  entry_queue (2 bytes) - pointer to entry queue descriptor
 ;   +4:  state (1 byte) - Ada task state
 ;   +5:  priority (1 byte) - task priority
 ;   +6:  parent_id (2 bytes) - parent task ID
 ;   +8:  task_name (8 bytes) - name for debugging
-;   +16: reserved (16 bytes)
+;   +16: stack_base (2 bytes) - base of allocated stack
+;   +18: reserved (14 bytes)
 ;
 ; Entry Queue Descriptor (EQD) - 20 bytes per entry
 ; Maps an Ada entry to an MP/M message queue
-;   +0:  queue_id (2 bytes) - MP/M queue ID (from Q_MAKE)
+;   +0:  qcb_addr (2 bytes) - address of heap-allocated QCB
 ;   +2:  entry_id (2 bytes) - Ada entry identifier
 ;   +4:  task_id (2 bytes) - owning task ID
 ;   +6:  msg_count (1 byte) - number of buffered messages
 ;   +7:  msg_size (1 byte) - size of each message
 ;   +8:  queue_name (8 bytes) - MP/M queue name
-;   +16: qpb (4 bytes) - Queue Parameter Block for MP/M
+;   +16: reserved (4 bytes)
 ;
 ; Entry Message (EM) - 16 bytes
 ; Message sent through queue for entry call
@@ -140,22 +192,22 @@ TS_COMPLETED    EQU 5       ; Task finished
 TS_TERMINATED   EQU 6       ; Task aborted
 
 ; Task descriptor offsets
-TD_PROCESS_ID   EQU 0
+TD_PD_ADDR      EQU 0
 TD_ENTRY_QUEUE  EQU 2
 TD_STATE        EQU 4
 TD_PRIORITY     EQU 5
 TD_PARENT_ID    EQU 6
 TD_TASK_NAME    EQU 8
+TD_STACK_BASE   EQU 16
 TD_SIZE         EQU 32
 
 ; Entry queue descriptor offsets
-EQD_QUEUE_ID    EQU 0
+EQD_QCB_ADDR    EQU 0
 EQD_ENTRY_ID    EQU 2
 EQD_TASK_ID     EQU 4
 EQD_MSG_COUNT   EQU 6
 EQD_MSG_SIZE    EQU 7
 EQD_QUEUE_NAME  EQU 8
-EQD_QPB         EQU 16
 EQD_SIZE        EQU 20
 
 ; Entry message offsets
@@ -165,6 +217,9 @@ EM_PARAMS_PTR   EQU 4
 EM_RESULT_PTR   EQU 6
 EM_STATUS       EQU 8
 EM_SIZE         EQU 16
+
+; Slot size in linked queue buffer: message + 2-byte link
+EM_SLOT_SIZE    EQU EM_SIZE + 2
 
 ; =========================================
 ; Data Section
@@ -187,6 +242,10 @@ _next_entry_id:
 _task_array:
     DS MAX_TASKS * TD_SIZE
 
+; Per-task Process Descriptors (each task needs its own PD)
+_pd_array:
+    DS MAX_TASKS * PD_SIZE
+
 ; Entry queue descriptor array
 _entry_array:
     DS MAX_ENTRIES * EQD_SIZE
@@ -195,37 +254,22 @@ _entry_array:
 _entry_msg:
     DS EM_SIZE
 
-; Process Descriptor template for P_CREATE
-; See MP/M II Programmer's Guide for PD structure
-_pd_template:
-    DS 2                    ; +0: PD link (set by system)
-    DS 1                    ; +2: Status
-    DS 1                    ; +3: Priority
-    DS 2                    ; +4: Flags
-    DS 8                    ; +6: Process name (8 chars)
-    DS 2                    ; +14: UDA segment
-    DS 2                    ; +16: Disk set mask
-    DS 2                    ; +18: Starting address
-_pd_template_size EQU 20
-
-; Queue Parameter Block for Q_xxx calls
-_qpb:
-    DS 2                    ; +0: Queue ID (filled by Q_OPEN/Q_MAKE)
-    DS 8                    ; +2: Queue name (8 chars)
-    DS 2                    ; +10: Message length
-    DS 2                    ; +12: Number of messages
-    DS 2                    ; +14: Buffer address (for Q_MAKE)
-_qpb_size EQU 16
+; Shared UQCB for queue operations
+_uqcb:
+    DS UQCB_SIZE
 
 ; Abort Parameter Block for P_ABORT
 _apb:
     DS 2                    ; +0: Process ID (console << 8 | process)
     DS 2                    ; +2: Termination code
-_apb_size EQU 4
 
-; Queue message buffer (shared)
+; Queue message buffer (shared, for reading)
 _qmsg_buf:
     DS EM_SIZE
+
+; MX queue message buffer (2 bytes for lock token)
+_mx_msg_buf:
+    DS 2
 
 ; =========================================
 ; Code Section
@@ -249,6 +293,13 @@ _TASK_INI:
     ld (HL), 0
     ldir
 
+    ; Clear PD array
+    ld HL, _pd_array
+    ld DE, _pd_array + 1
+    ld BC, MAX_TASKS * PD_SIZE - 1
+    ld (HL), 0
+    ldir
+
     ; Clear entry queue array
     ld HL, _entry_array
     ld DE, _entry_array + 1
@@ -260,8 +311,10 @@ _TASK_INI:
     ld IX, _task_array
     ld (IX+TD_STATE), TS_RUNNING
     ld (IX+TD_PRIORITY), DEFAULT_PRIO
-    ld (IX+TD_PROCESS_ID), 0     ; Main process ID = 0
-    ld (IX+TD_PROCESS_ID+1), 0
+    ; Store PD address for main task (slot 0 of PD array)
+    ld HL, _pd_array
+    ld (IX+TD_PD_ADDR), L
+    ld (IX+TD_PD_ADDR+1), H
 
     ; Initialize counters
     ld A, 1
@@ -336,6 +389,7 @@ _tc_found:
     push IX
     pop IY              ; IY = task descriptor
     push HL             ; save entry point
+    push BC             ; save slot index in C
     ld HL, TD_TASK_NAME
     push IY
     pop BC              ; BC = task descriptor base
@@ -343,11 +397,12 @@ _tc_found:
     ex DE, HL           ; DE = dest, HL = source (task name)
     ld BC, 8
     ldir
+    pop BC              ; restore C = slot index
     pop HL              ; restore entry point
-    jr _tc_create_proc
+    jr _tc_setup_pd
 
 _tc_no_name:
-    ; Default name "TASK_nn"
+    ; Default name "TASK_nn "
     push IX
     pop IY
     push HL             ; save entry point
@@ -363,56 +418,180 @@ _tc_no_name:
     ld (IY+TD_TASK_NAME+7), ' '
     pop HL              ; restore entry point
 
-_tc_create_proc:
-    ; Build process descriptor for MP/M P_CREATE
-    ; HL = entry point
+_tc_setup_pd:
+    ; HL = entry point, IX = task descriptor, C = slot index
+    ; Calculate PD address: _pd_array + C * PD_SIZE
+    push HL             ; save entry point
     push IX             ; save task descriptor
+    ld A, C
+    ld H, 0
+    ld L, A
+    ; PD_SIZE = 52, multiply: L * 52
+    ; 52 = 32 + 16 + 4
+    push HL             ; save L
+    add HL, HL          ; *2
+    add HL, HL          ; *4
+    push HL             ; save *4
+    add HL, HL          ; *8
+    add HL, HL          ; *16
+    push HL             ; save *16
+    add HL, HL          ; *32
+    pop DE              ; DE = *16
+    add HL, DE          ; *48
+    pop DE              ; DE = *4
+    add HL, DE          ; *52
+    pop DE              ; discard saved L
+    ld DE, _pd_array
+    add HL, DE          ; HL = PD address for this slot
 
-    ; Set up PD template
-    ld IX, _pd_template
-    ld (IX+0), 0        ; Link (system sets)
-    ld (IX+1), 0
-    ld (IX+2), 0        ; Status
-    ld (IX+3), DEFAULT_PRIO  ; Priority
-    ld (IX+4), 0        ; Flags low
-    ld (IX+5), 0        ; Flags high
+    ; Save PD address in task descriptor
+    pop IX              ; IX = task descriptor
+    ld (IX+TD_PD_ADDR), L
+    ld (IX+TD_PD_ADDR+1), H
 
-    ; Copy process name from task name
-    pop IY              ; IY = task descriptor
-    push IY
-    ld DE, _pd_template + 6
-    push IY
+    push IX             ; save task descriptor again
+    push HL
+    pop IY              ; IY = PD address
+
+    ; Clear the PD
+    push HL
+    pop DE
+    inc DE              ; DE = PD + 1
+    push HL             ; save PD base
+    ld BC, PD_SIZE - 1
+    ld (HL), 0
+    ldir
+    pop HL              ; HL = PD base
+    push HL
+    pop IY              ; IY = PD base
+
+    ; Set PD.PL = 0 (not linked, single process)
+    ld (IY+PD_PL), 0
+    ld (IY+PD_PL+1), 0
+
+    ; Set PD.STATUS = 0 (ready to run)
+    ld (IY+PD_STATUS), 0
+
+    ; Set PD.PRIORITY
+    ld (IY+PD_PRIORITY), DEFAULT_PRIO
+
+    ; Copy process name from task descriptor
+    pop IX              ; IX = task descriptor
+    push IX
+    push IY             ; save PD
+    push IX
     pop HL
-    ld BC, TD_TASK_NAME
-    add HL, BC          ; HL = &task_name
+    ld DE, TD_TASK_NAME
+    add HL, DE          ; HL = source (task name in TD)
+    pop IY              ; IY = PD
+    push IY
+    pop DE
+    push HL             ; save source
+    ld HL, PD_NAME
+    add HL, DE          ; HL = dest (PD name field)
+    ex DE, HL           ; DE = dest
+    pop HL              ; HL = source
     ld BC, 8
     ldir
 
-    ; Set starting address
-    pop IX              ; IX = task descriptor
-    pop HL              ; HL = entry point (was saved)
-    push IX
-    push HL             ; save entry point again
-    ld IX, _pd_template
-    ld (IX+18), L       ; Starting address low
-    ld (IX+19), H       ; Starting address high
+    ; Set NAME(2) bit 7 to disable BDOS stack swap (shared segment)
+    push IY
+    pop HL
+    ld DE, PD_NAME + 2
+    add HL, DE          ; HL = &PD.NAME[2]
+    ld A, (HL)
+    or 80H              ; Set bit 7
+    ld (HL), A
 
-    ; Call MP/M P_CREATE (BDOS 144)
+    ; Get parent's MEMSEG and CONSOLE via BDOS 156 (P_PDADR)
+    push IY             ; save child PD
+    ld C, B_PPDADR
+    call BDOS           ; HL = parent PD address
+    push HL
+    pop IX              ; IX = parent PD
+    pop IY              ; IY = child PD
+
+    ; Copy CONSOLE from parent
+    ld A, (IX+PD_CONSOLE)
+    ld (IY+PD_CONSOLE), A
+
+    ; Copy MEMSEG from parent (same memory bank)
+    ld A, (IX+PD_MEMSEG)
+    ld (IY+PD_MEMSEG), A
+
+    ; Now allocate stack for the new task
+    pop IX              ; IX = task descriptor
+    pop HL              ; HL = entry point
+    push HL
+    push IX
+
+    ld HL, TASK_STACK_SIZE
+    call _heap_alloc
+    ld A, H
+    or L
+    jp Z, _tc_fail
+
+    ; HL = stack base address
+    ; Save stack base in task descriptor
+    pop IX              ; IX = task descriptor
+    push IX
+    ld (IX+TD_STACK_BASE), L
+    ld (IX+TD_STACK_BASE+1), H
+
+    ; Calculate stack top = base + TASK_STACK_SIZE
+    ld DE, TASK_STACK_SIZE
+    add HL, DE          ; HL = stack top
+
+    ; Fill stack with debug pattern 0xC7C7
+    push HL             ; save stack top
+    ld L, (IX+TD_STACK_BASE)
+    ld H, (IX+TD_STACK_BASE+1)
+    ld D, H
+    ld E, L
+    inc DE
+    ld BC, TASK_STACK_SIZE - 1
+    ld (HL), 0C7H
+    ldir
+    pop HL              ; HL = stack top
+
+    ; Place entry point address at top of stack (CLOCK.ASM pattern)
+    ; Stack grows downward, so entry point goes at (stack_top - 2)
+    dec HL
+    dec HL              ; HL = stack_top - 2
+    pop IX              ; IX = task descriptor
+    push IX
+    pop IY              ; IY = task descriptor (need IX for PD)
+    pop DE              ; DE = entry point
+
+    ; Store entry point at stack_top - 2
+    ld (HL), E          ; low byte of entry point
+    inc HL
+    ld (HL), D          ; high byte of entry point
+    dec HL              ; HL = stack_top - 2 (where STKPTR should point)
+
+    ; Set PD.STKPTR = stack_top - 2
+    push HL             ; save STKPTR value
+    ld L, (IY+TD_PD_ADDR)
+    ld H, (IY+TD_PD_ADDR+1)
+    push HL
+    pop IX              ; IX = PD address
+    pop HL              ; HL = STKPTR value
+    ld (IX+PD_STKPTR), L
+    ld (IX+PD_STKPTR+1), H
+
+    ; Call MP/M P_CREATE (BDOS 144) with DE = PD address
+    push IX
+    pop DE              ; DE = PD address
+    push IY             ; save task descriptor
     ld C, B_PCREATE
-    ld DE, _pd_template
     call BDOS
 
     ; A = 0 on success, non-zero on error
     or A
-    jr NZ, _tc_fail
+    jr NZ, _tc_fail2
 
-    ; Success - HL contains new process ID
-    pop DE              ; discard entry point
+    ; Success
     pop IX              ; IX = task descriptor
-
-    ; Store process ID
-    ld (IX+TD_PROCESS_ID), L
-    ld (IX+TD_PROCESS_ID+1), H
     ld (IX+TD_STATE), TS_READY
 
     ; Increment task count
@@ -421,13 +600,13 @@ _tc_create_proc:
     ld (_task_count), A
 
     ; Return task ID (slot index in HL)
+    ; Calculate: (IX - _task_array) / TD_SIZE
     push IX
     pop HL
     ld DE, _task_array
     or A
     sbc HL, DE
-    ; HL = offset, divide by TD_SIZE to get index
-    ; TD_SIZE = 32 = 2^5, so shift right 5 times
+    ; HL = offset, divide by TD_SIZE (32 = 2^5)
     srl H
     rr L
     srl H
@@ -445,9 +624,19 @@ _tc_create_proc:
     pop IX
     ret
 
-_tc_fail:
-    pop HL              ; discard entry point
+_tc_fail2:
     pop IX              ; IX = task descriptor
+    ld (IX+TD_STATE), TS_INACTIVE
+    ld HL, 0
+    pop BC
+    pop IY
+    pop IX
+    ret
+
+_tc_fail:
+    ; Stack: entry_point, task_descriptor
+    pop IX              ; discard task descriptor
+    pop HL              ; discard entry point
     ld (IX+TD_STATE), TS_INACTIVE
     ld HL, 0
     pop BC
@@ -465,7 +654,7 @@ _TASK_YLD:
 
 ; -----------------------------------------
 ; _TASK_TRM: Terminate current task
-; Calls MP/M P_TERM
+; Calls MP/M P_TERM with D=FFH to preserve shared memory
 ; -----------------------------------------
 _TASK_TRM:
     ; Mark task as completed
@@ -485,8 +674,11 @@ _TASK_TRM:
 
 _tt_do_term:
     ; Call MP/M P_TERM
+    ; D=FFH: don't free shared memory segment
+    ; E=FFH: unconditional termination
     ld C, B_PTERM
-    ld E, 0             ; Termination code 0 = normal
+    ld D, 0FFH
+    ld E, 0FFH
     jp BDOS             ; Does not return
 
 ; -----------------------------------------
@@ -544,14 +736,14 @@ _TASK_ABT:
     cp TS_INACTIVE
     jr Z, _ta_done
 
-    ; Get process ID for abort
-    ld L, (IX+TD_PROCESS_ID)
-    ld H, (IX+TD_PROCESS_ID+1)
-
     ; Set up abort parameter block
+    ; APB+0 = pdadr, APB+2 = term code
+    ld L, (IX+TD_PD_ADDR)
+    ld H, (IX+TD_PD_ADDR+1)
+
     ld IX, _apb
-    ld (IX+0), L        ; Process ID low
-    ld (IX+1), H        ; Process ID high
+    ld (IX+0), L        ; PD address low
+    ld (IX+1), H        ; PD address high
     ld (IX+2), 1        ; Termination code (abort)
     ld (IX+3), 0
 
@@ -582,6 +774,7 @@ _ta_done:
 ; _ENTRY_CL: Call a task entry
 ; Stack: [ret] entry_id, task_id, params_ptr
 ; Blocks caller until entry is accepted
+; Uses UQCB for Q_OPEN and Q_WRITE
 ; -----------------------------------------
 _ENTRY_CL:
     push IX
@@ -649,33 +842,30 @@ _ENTRY_CL:
     xor A
     ld (IX+EM_STATUS), A
 
-    ; Open the queue and write message
-    ; Set up QPB with queue name from EQD
-    ld IX, _qpb
+    ; Set up UQCB for queue operations
+    ld IX, _uqcb
+
+    ; Copy queue name from EQD to UQCB
     push IY
     pop HL
     ld DE, EQD_QUEUE_NAME
     add HL, DE          ; HL = queue name in EQD
-    ld DE, _qpb + 2     ; DE = queue name in QPB
+    ld DE, _uqcb + UQCB_NAME
     ld BC, 8
     ldir
 
-    ; Open queue (if not already open)
+    ; Set message address to our entry message
+    ld HL, _entry_msg
+    ld (_uqcb + UQCB_MSGADR), HL
+
+    ; Open queue (fills in UQCB_PTR)
     ld C, B_QOPEN
-    ld DE, _qpb
+    ld DE, _uqcb
     call BDOS
-    ; Queue ID now at _qpb+0
 
     ; Write message to queue (blocking)
-    ld IX, _qpb
-    ld (IX+10), LOW EM_SIZE    ; Message length
-    ld (IX+11), HIGH EM_SIZE
-    ld HL, _entry_msg
-    ld (IX+14), L       ; Buffer address
-    ld (IX+15), H
-
     ld C, B_QWRITE
-    ld DE, _qpb
+    ld DE, _uqcb
     call BDOS
 
     ; Entry call complete
@@ -697,13 +887,14 @@ _ec_error:
 ; Input: HL = entry_id to accept
 ; Output: HL = params_ptr from caller (0 if none)
 ; Blocks until a matching entry call arrives
+; Uses UQCB for Q_OPEN and Q_READ
 ; -----------------------------------------
 _ENTRY_AC:
     push IX
     push IY
     push HL             ; save entry_id
 
-    ; Find entry queue for this entry
+    ; Find entry queue for this entry on current task
     ld DE, (_task_cur)  ; task_id = current task
     call _find_entry_queue
     ld A, H
@@ -713,31 +904,30 @@ _ENTRY_AC:
     push HL
     pop IY              ; IY = EQD
 
-    ; Set up QPB from EQD
-    ld IX, _qpb
+    ; Set up UQCB
+    ld IX, _uqcb
+
+    ; Copy queue name from EQD to UQCB
     push IY
     pop HL
     ld DE, EQD_QUEUE_NAME
     add HL, DE
-    ld DE, _qpb + 2
+    ld DE, _uqcb + UQCB_NAME
     ld BC, 8
     ldir
 
-    ; Open queue
+    ; Set message address to our receive buffer
+    ld HL, _qmsg_buf
+    ld (_uqcb + UQCB_MSGADR), HL
+
+    ; Open queue (fills in UQCB_PTR)
     ld C, B_QOPEN
-    ld DE, _qpb
+    ld DE, _uqcb
     call BDOS
 
     ; Read message from queue (blocking)
-    ld IX, _qpb
-    ld (IX+10), LOW EM_SIZE
-    ld (IX+11), HIGH EM_SIZE
-    ld HL, _qmsg_buf
-    ld (IX+14), L
-    ld (IX+15), H
-
-    ld C, B_QREAD       ; Blocking read
-    ld DE, _qpb
+    ld C, B_QREAD
+    ld DE, _uqcb
     call BDOS
 
     ; Message received, return params pointer
@@ -751,7 +941,7 @@ _ENTRY_AC:
     ret
 
 _ea_no_queue:
-    ; No queue - create one
+    ; No queue - create one, then retry
     pop HL              ; entry_id
     ld DE, (_task_cur)  ; task_id
     call _create_entry_queue
@@ -775,29 +965,85 @@ _ENTRY_AE:
 
 ; _SELC_ST: Begin a select statement
 _SELC_ST:
-    ; In MP/M, we use conditional queue reads to check alternatives
     ret
 
 ; _SELC_WT: Wait for one of the registered alternatives
+; Polls each entry queue for current task using Q_CREAD.
+; Returns index of first queue with a pending message.
 ; Input: Stack contains array of entry_ids and count
 ; Output: HL = index of selected alternative
 _SELC_WT:
     push IX
     push IY
+    push BC
 
-    ; For now, implement simple round-robin check
-    ; In full implementation, would use conditional reads
+_sw_poll:
+    ; Scan all entry queues belonging to current task
+    ld IX, _entry_array
+    ld B, MAX_ENTRIES
+    ld C, 0             ; C = alternative index
 
-    ; Check each alternative's queue
-_sw_loop:
-    ; Call dispatcher to yield while waiting
-    ld C, B_PDISPATCH
+_sw_check:
+    ; Check if this EQD belongs to current task
+    ld HL, (_task_cur)
+    ld A, (IX+EQD_TASK_ID)
+    cp L
+    jr NZ, _sw_next
+    ld A, (IX+EQD_TASK_ID+1)
+    cp H
+    jr NZ, _sw_next
+
+    ; This entry belongs to current task - try conditional read
+    push BC             ; save loop counter and index
+    push IX             ; save EQD pointer
+
+    ; Set up UQCB with this queue's name
+    push IX
+    pop HL
+    ld DE, EQD_QUEUE_NAME
+    add HL, DE          ; HL = queue name
+    ld DE, _uqcb + UQCB_NAME
+    ld BC, 8
+    ldir
+
+    ; Set message address
+    ld HL, _qmsg_buf
+    ld (_uqcb + UQCB_MSGADR), HL
+
+    ; Open queue
+    ld C, B_QOPEN
+    ld DE, _uqcb
     call BDOS
 
-    ; TODO: Check each queue with Q_CREAD
-    ; For now, just return first alternative
-    ld HL, 0
+    ; Conditional read (non-blocking)
+    ld C, B_QCREAD
+    ld DE, _uqcb
+    call BDOS
 
+    pop IX              ; restore EQD pointer
+    pop BC              ; restore loop counter and index
+
+    ; A = 0 means message was read successfully
+    or A
+    jr Z, _sw_found
+
+_sw_next:
+    ld DE, EQD_SIZE
+    add IX, DE
+    inc C               ; next alternative index
+    djnz _sw_check
+
+    ; No queues had pending messages - yield and retry
+    ld C, B_PDISPATCH
+    call BDOS
+    jr _sw_poll
+
+_sw_found:
+    ; C = index of the alternative with a pending message
+    ld H, 0
+    ld L, C
+
+    pop BC
     pop IY
     pop IX
     ret
@@ -807,40 +1053,72 @@ _SELC_EN:
     ret
 
 ; -----------------------------------------
-; Protected Object Support (using system flags)
+; Protected Object Support (using MX queues)
 ; -----------------------------------------
+; Protected objects use MX (mutual exclusion) queues.
+; A protected object has a UQCB pointer at offset 0 (2 bytes).
+; Acquiring the lock = Q_READ from the MX queue (blocks if held).
+; Releasing the lock = Q_WRITE to the MX queue (unblocks waiters).
+; The MX queue is pre-loaded with one 2-byte message so the first
+; reader succeeds immediately.
 
 ; _PROT_LCK: Acquire protected object lock
-; Input: HL = protected object address (contains flag number at offset 0)
+; Protected object address is on the stack (matching protlock.mac API)
 ; -----------------------------------------
 _PROT_LCK:
+    pop DE              ; return address
+    pop HL              ; protected object address
+    push DE             ; restore return address
+
     push IX
-    push HL
-    pop IX
 
-    ; Get flag number from protected object
-    ld E, (IX+0)        ; Flag number
+    ; HL = protected object, offset 0 has UQCB address
+    ld E, (HL)
+    inc HL
+    ld D, (HL)          ; DE = UQCB address
 
-    ; Wait on flag (BDOS 132)
-    ld C, B_WAITFLAG
+    ; Set UQCB message address to our MX buffer
+    push DE
+    pop IX              ; IX = UQCB
+    ld HL, _mx_msg_buf
+    ld (IX+UQCB_MSGADR), L
+    ld (IX+UQCB_MSGADR+1), H
+
+    ; Blocking read from MX queue = acquire lock
+    push IX
+    pop DE              ; DE = UQCB address
+    ld C, B_QREAD
     call BDOS
 
     pop IX
     ret
 
 ; _PROT_ULK: Release protected object lock
-; Input: HL = protected object address
+; Protected object address is on the stack (matching protlock.mac API)
 ; -----------------------------------------
 _PROT_ULK:
+    pop DE              ; return address
+    pop HL              ; protected object address
+    push DE             ; restore return address
+
     push IX
-    push HL
-    pop IX
 
-    ; Get flag number from protected object
-    ld E, (IX+0)        ; Flag number
+    ; HL = protected object, offset 0 has UQCB address
+    ld E, (HL)
+    inc HL
+    ld D, (HL)          ; DE = UQCB address
 
-    ; Set flag to signal waiting processes (BDOS 133)
-    ld C, B_SETFLAG
+    ; Set UQCB message address to our MX buffer
+    push DE
+    pop IX              ; IX = UQCB
+    ld HL, _mx_msg_buf
+    ld (IX+UQCB_MSGADR), L
+    ld (IX+UQCB_MSGADR+1), H
+
+    ; Write to MX queue = release lock
+    push IX
+    pop DE              ; DE = UQCB address
+    ld C, B_QWRITE
     call BDOS
 
     pop IX
@@ -883,7 +1161,6 @@ _gtd_invalid:
 ; -----------------------------------------
 ; _get_ticks: Get current tick count
 ; Output: HL = tick count
-; Uses MP/M get time of day if available
 ; -----------------------------------------
 _get_ticks:
     ld HL, (_tick_cnt)
@@ -959,6 +1236,9 @@ _feq_next:
 ; _create_entry_queue: Create new entry queue
 ; Input: HL = task_id, DE = entry_id
 ; Output: HL = EQD address (0 on failure)
+;
+; Allocates a QCB with linked queue buffer from heap,
+; initializes the free list, and calls Q_MAKE.
 ; -----------------------------------------
 _create_entry_queue:
     push IX
@@ -1001,7 +1281,7 @@ _ceq_found:
     ld (IX+EQD_ENTRY_ID+1), D
 
     ; Set message parameters
-    ld (IX+EQD_MSG_COUNT), 4    ; Buffer 4 messages
+    ld (IX+EQD_MSG_COUNT), NMBMSGS
     ld (IX+EQD_MSG_SIZE), EM_SIZE
 
     ; Generate unique queue name "QnnEmm  "
@@ -1022,61 +1302,116 @@ _ceq_found:
     ld (IX+EQD_QUEUE_NAME+6), ' '
     ld (IX+EQD_QUEUE_NAME+7), ' '
 
-    ; Create MP/M queue using Q_MAKE
-    ; First, allocate buffer for queue messages
-    ld H, 0
-    ld L, EM_SIZE
-    ld A, 4             ; 4 messages
-_ceq_mul:
-    add HL, HL
-    dec A
-    jr NZ, _ceq_mul
-    ; HL = buffer size (EM_SIZE * 4)
-    push IX
+    ; Allocate QCB + buffer from heap
+    ; Total = QCB_HDR_SIZE + (EM_SIZE + 2) * NMBMSGS
+    ;       = 24 + 18 * 4 = 24 + 72 = 96 bytes
+    push IX             ; save EQD pointer
+    ld HL, QCB_HDR_SIZE + (EM_SLOT_SIZE * NMBMSGS)
     call _heap_alloc
-    pop IX
+    pop IX              ; restore EQD pointer
     ld A, H
     or L
     jr Z, _ceq_fail
 
-    ; HL = buffer address
-    push HL             ; save buffer
+    ; HL = QCB address (heap-allocated)
+    ; Store QCB address in EQD
+    ld (IX+EQD_QCB_ADDR), L
+    ld (IX+EQD_QCB_ADDR+1), H
 
-    ; Set up QPB for Q_MAKE
-    ld IY, _qpb
+    push HL
+    pop IY              ; IY = QCB address
 
-    ; Copy queue name
+    ; Clear QCB header
+    push IY
+    pop HL
+    push HL
+    pop DE
+    inc DE
+    ld BC, QCB_HDR_SIZE - 1
+    ld (HL), 0
+    ldir
+
+    ; Fill in QCB fields
+    ; QL = 0 (already zeroed)
+    ; Copy queue name from EQD
     push IX
     pop HL
     ld DE, EQD_QUEUE_NAME
-    add HL, DE          ; HL = queue name
-    ld DE, _qpb + 2
+    add HL, DE          ; HL = source (queue name)
+    push IY
+    pop DE
+    push DE             ; save QCB base
+    ld DE, QCB_NAME
+    pop BC              ; BC = QCB base
+    push BC
+    push HL             ; save source
+    ld HL, 0
+    add HL, BC
+    ld DE, QCB_NAME
+    add HL, DE          ; HL = &QCB.NAME
+    ex DE, HL           ; DE = dest
+    pop HL              ; HL = source
     ld BC, 8
     ldir
 
-    ; Set message parameters
-    ld (IY+10), EM_SIZE ; Message length
-    ld (IY+11), 0
-    ld (IY+12), 4       ; Number of messages
-    ld (IY+13), 0
+    pop HL              ; HL = QCB base (was saved as BC above)
+    push HL
+    pop IY              ; IY = QCB
 
-    pop HL              ; buffer address
-    ld (IY+14), L
-    ld (IY+15), H
+    ; MSGLEN = EM_SIZE
+    ld (IY+QCB_MSGLEN), EM_SIZE
+    ld (IY+QCB_MSGLEN+1), 0
 
-    ; Call Q_MAKE
+    ; NMBMSGS
+    ld (IY+QCB_NMBMSGS), NMBMSGS
+    ld (IY+QCB_NMBMSGS+1), 0
+
+    ; DQPH, NQPH, MH, MT = 0 (already zeroed)
+
+    ; Initialize buffer free list at QCB+24
+    ; Each slot is EM_SLOT_SIZE (18) bytes: 2-byte link + EM_SIZE data
+    ; Link each slot to the next; last slot link = 0
+    push IY
+    pop HL
+    ld DE, QCB_BUF
+    add HL, DE          ; HL = first slot address
+
+    ; Set BH (buffer head) to first slot
+    ld (IY+QCB_BH), L
+    ld (IY+QCB_BH+1), H
+
+    ; Link NMBMSGS slots together
+    ld B, NMBMSGS - 1   ; link first N-1 slots
+_ceq_link:
+    ; Current slot at HL, next slot at HL + EM_SLOT_SIZE
+    push HL             ; save current slot
+    ld DE, EM_SLOT_SIZE
+    add HL, DE          ; HL = next slot
+    ex DE, HL           ; DE = next slot
+    pop HL              ; HL = current slot
+    ; Store link: (current_slot + 0) = next_slot
+    ld (HL), E
+    inc HL
+    ld (HL), D
+    dec HL
+    ; Move to next slot
+    ex DE, HL           ; HL = next slot
+    djnz _ceq_link
+
+    ; Terminate last slot's link with 0
+    ld (HL), 0
+    inc HL
+    ld (HL), 0
+
+    ; Call Q_MAKE (BDOS 134) with DE = QCB address
+    push IY
+    pop DE              ; DE = QCB address
     ld C, B_QMAKE
-    ld DE, _qpb
     call BDOS
 
     ; A = 0 on success
     or A
     jr NZ, _ceq_fail
-
-    ; Store queue ID in EQD
-    ld HL, (_qpb)       ; Queue ID
-    ld (IX+EQD_QUEUE_ID), L
-    ld (IX+EQD_QUEUE_ID+1), H
 
     ; Return EQD address
     push IX
@@ -1150,24 +1485,20 @@ _REQUEUE:
 ; _PAR_STR: Start parallel block
 ; Input: Stack = [ret] num_sequences
 _PAR_STR:
-    ; For now, do nothing - sequences executed sequentially
     ret
 
 ; _PAR_SST: Parallel sequence start
 ; Input: Stack = [ret] sequence_index
 _PAR_SST:
-    ; For now, do nothing
     ret
 
 ; _PAR_SEN: Parallel sequence end
 ; Input: Stack = [ret] sequence_index
 _PAR_SEN:
-    ; For now, do nothing
     ret
 
 ; _PAR_END: End parallel block (wait for all)
 _PAR_END:
-    ; For now, do nothing - all sequences already complete
     ret
 
     END

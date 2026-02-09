@@ -122,6 +122,7 @@ from uada80.type_system import (
     ProtectedType,
     ProtectedOperation,
     EntryInfo,
+    TaskType,
 )
 from uada80.semantic import SemanticResult
 
@@ -176,6 +177,8 @@ class LoweringContext:
     subprogram_name: str = ""
     # Protected types declared in this scope: name -> ProtectedType
     protected_types: dict[str, "ProtectedType"] = field(default_factory=dict)
+    # Task objects declared in this scope: name -> task_id VReg
+    task_objects: dict[str, VReg] = field(default_factory=dict)
     # For protected operation bodies: pointer to protected object (for component access)
     protected_obj_ptr: Optional[VReg] = None
     # For protected operation bodies: the protected type (for component offset calculation)
@@ -255,6 +258,8 @@ class ASTLowering:
         self.globals: dict[str, Any] = {}
         # Stack of package prefixes for resolving package-level variables
         self._package_prefix_stack: list[str] = []
+        # Whether the program uses tasking (need _TASK_INI at startup)
+        self._uses_tasking: bool = False
 
     def _make_memory_location(
         self,
@@ -314,6 +319,10 @@ class ASTLowering:
 
         # Generate vtables for tagged types
         self._generate_vtables()
+
+        # If program uses tasking, prepend _TASK_INI to init functions
+        if self._uses_tasking and self.builder.module:
+            self.builder.module.init_functions.insert(0, "_TASK_INI")
 
         return module
 
@@ -2597,8 +2606,10 @@ class ASTLowering:
         2. Task body statements
         3. Implicit task termination at end
         """
-        # Save current context
+        # Save current context and builder state
         old_ctx = self.ctx
+        old_function = self.builder.function
+        old_block = self.builder.block
 
         # Create the task body procedure name with scope uniqueification
         base_name = decl.name.lower()
@@ -2657,8 +2668,20 @@ class ASTLowering:
         # Return (though task terminate doesn't return)
         self.builder.ret()
 
-        # Restore context
+        # Restore context and builder state
         self.ctx = old_ctx
+        self.builder.function = old_function
+        self.builder.block = old_block
+
+        # For single tasks, emit TASK_CREATE in enclosing scope
+        if self.ctx:
+            task_sym = self.symbols.lookup(decl.name) if self.symbols else None
+            if task_sym and hasattr(task_sym, 'ada_type') and getattr(task_sym.ada_type, 'is_single_task', False):
+                self._uses_tasking = True
+                task_id_vreg = self.builder.new_vreg(IRType.WORD, f"_{decl.name.lower()}_tid")
+                self.builder.task_create(task_id_vreg, Label(task_name),
+                                         comment=f"create single task {decl.name}")
+                self.ctx.task_objects[decl.name.lower()] = task_id_vreg
 
         # Generate entry stub functions for each entry in this task
         # The stubs call the entry queue mechanism
@@ -2893,13 +2916,11 @@ class ASTLowering:
         if self.ctx is None:
             return
 
-        # Push entry name for the runtime
-        entry_label = self.builder.new_string_label()
-        if self.builder.module:
-            self.builder.module.add_string(entry_label, stmt.entry_name)
-        entry_reg = self.builder.new_vreg(IRType.PTR, "_entry_name")
-        self.builder.mov(entry_reg, Label(entry_label))
-        self.builder.push(entry_reg)
+        # Push numeric entry ID for the runtime (must match caller's hash)
+        entry_id = hash(stmt.entry_name) & 0xFFFF
+        entry_id_vreg = self.builder.new_vreg(IRType.WORD, "_entry_id")
+        self.builder.mov(entry_id_vreg, Immediate(entry_id, IRType.WORD))
+        self.builder.push(entry_id_vreg)
 
         # Call runtime to wait for entry call
         self.builder.call(Label("_ENTRY_AC"), comment=f"accept {stmt.entry_name}")
@@ -4258,8 +4279,9 @@ class ASTLowering:
             else:
                 low, high = 0, 9  # Default
             element_size = 2  # Default element size
-            if array_type.element_type and hasattr(array_type.element_type, 'size_bits'):
-                element_size = (array_type.element_type.size_bits + 7) // 8
+            comp_type = getattr(array_type, 'component_type', None)
+            if comp_type and hasattr(comp_type, 'size_bits'):
+                element_size = (comp_type.size_bits + 7) // 8
         else:
             low, high = 0, 9
             element_size = 2
@@ -4611,6 +4633,61 @@ class ASTLowering:
                     # Clean up stack
                     num_args = (len(stmt.args) if stmt.args else 0) + 1  # +1 for protected object
                     for _ in range(num_args):
+                        temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                        self.builder.pop(temp)
+                    return
+
+        # Check if this is a task entry call (T.E style)
+        if isinstance(stmt.name, SelectedName):
+            prefix = stmt.name.prefix
+            selector = stmt.name.selector
+
+            if isinstance(prefix, Identifier):
+                prefix_name = prefix.name.lower()
+
+                # Check if prefix is a task with a known task_id
+                task_id_vreg = None
+                if self.ctx and prefix_name in self.ctx.task_objects:
+                    task_id_vreg = self.ctx.task_objects[prefix_name]
+                else:
+                    # Fallback: check symbol table for TaskType
+                    task_sym = self.symbols.lookup(prefix_name) if self.symbols else None
+                    if task_sym and hasattr(task_sym, 'ada_type'):
+                        if isinstance(task_sym.ada_type, TaskType):
+                            # Task exists but no task_id tracked — load from local var
+                            if self.ctx and prefix_name in self.ctx.locals:
+                                local = self.ctx.locals[prefix_name]
+                                task_id_vreg = local.vreg
+
+                if task_id_vreg is not None:
+                    # This is a task entry call — emit _ENTRY_CL
+                    entry_id = hash(selector) & 0xFFFF
+
+                    # Push args (right to left) if any
+                    if stmt.args:
+                        for arg in reversed(stmt.args):
+                            val = self._lower_expr(arg)
+                            self.builder.push(val)
+
+                    # Push null params_ptr (or actual if args present)
+                    params_ptr = self.builder.new_vreg(IRType.PTR, "_params_ptr")
+                    self.builder.mov(params_ptr, Immediate(0, IRType.PTR))
+                    self.builder.push(params_ptr)
+
+                    # Push task_id
+                    self.builder.push(task_id_vreg)
+
+                    # Push entry_id
+                    entry_id_vreg = self.builder.new_vreg(IRType.WORD, "_entry_id")
+                    self.builder.mov(entry_id_vreg, Immediate(entry_id, IRType.WORD))
+                    self.builder.push(entry_id_vreg)
+
+                    # Call entry
+                    self.builder.call(Label("_ENTRY_CL"), comment=f"entry call {prefix_name}.{selector}")
+
+                    # Clean up stack (3 words + any args)
+                    num_cleanup = 3 + (len(stmt.args) if stmt.args else 0)
+                    for _ in range(num_cleanup):
                         temp = self.builder.new_vreg(IRType.WORD, "_discard")
                         self.builder.pop(temp)
                     return
