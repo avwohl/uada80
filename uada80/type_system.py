@@ -1254,13 +1254,33 @@ def types_compatible(t1: AdaType, t2: AdaType) -> bool:
     if is_subtype_of(t1, t2) or is_subtype_of(t2, t1):
         return True
 
+    # Anonymous array compatibility: anonymous array types from concatenation are
+    # compatible with named array types if their component types match.
+    if isinstance(t1, ArrayType) and isinstance(t2, ArrayType):
+        if (t1.name.startswith("<anonymous_array_of_") or
+                t2.name.startswith("<anonymous_array_of_")):
+            anon = t1 if t1.name.startswith("<anonymous_array_of_") else t2
+            named = t2 if anon is t1 else t1
+            if (anon.component_type and named.component_type and
+                    types_compatible(anon.component_type, named.component_type)):
+                return True
+
     # String literal compatibility: String is compatible with array-of-character types
     # In Ada, a string literal can be assigned to any array whose component type
     # is Character or a type derived from Character.
     if isinstance(t1, ArrayType) and isinstance(t2, ArrayType):
-        if t1.name == "String" or t2.name == "String":
+        # Check if either type is String or a constrained subtype of String
+        def _is_string_type(t: ArrayType) -> bool:
+            if t.name == "String" or t.name.startswith("String("):
+                return True
+            if t.base_type and _is_string_type(t.base_type):
+                return True
+            return False
+        if _is_string_type(t1) or _is_string_type(t2):
             # Check if the other type's component is Character or derived from Character
-            other = t2 if t1.name == "String" else t1
+            other = t2 if _is_string_type(t1) else t1
+            if _is_string_type(other):
+                return True  # Both are String types (possibly different constraints)
             comp = other.component_type
             if comp:
                 # Direct Character type

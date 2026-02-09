@@ -1426,23 +1426,28 @@ class ASTLowering:
                     elif isinstance(type_def, ArrayTypeDef):
                         # Build a simple ArrayType from the AST ArrayTypeDef
                         bounds = []
+                        has_dynamic_bounds = False
                         if type_def.index_subtypes:
                             # Handle all dimensions for multi-dimensional arrays
                             for idx_range in type_def.index_subtypes:
                                 if isinstance(idx_range, RangeExpr):
                                     low = self._eval_static_expr(idx_range.low)
                                     high = self._eval_static_expr(idx_range.high)
-                                    bounds.append((low, high))
+                                    if low is None or high is None:
+                                        has_dynamic_bounds = True
+                                    else:
+                                        bounds.append((low, high))
                         # Resolve component type - may be record, array, or scalar
                         comp_type = self._resolve_local_type(type_def.component_type)
                         if comp_type is None:
                             comp_type = IntegerType(name="Integer", size_bits=16)
-                        ada_type = ArrayType(
-                            name=type_name,
-                            component_type=comp_type,
-                            bounds=bounds,
-                            is_constrained=True,
-                        )
+                        if not has_dynamic_bounds and bounds:
+                            ada_type = ArrayType(
+                                name=type_name,
+                                component_type=comp_type,
+                                bounds=bounds,
+                                is_constrained=True,
+                            )
                     break
 
         # Process initialization
@@ -2770,7 +2775,7 @@ class ASTLowering:
             total_param_size = sum(2 for _ in entry.parameters)  # Assume 2 bytes each
             # Use SP as parameter block pointer
             self.builder.emit(IRInstr(
-                OpCode.MOV, params_ptr, VReg(0, IRType.PTR, "SP"),
+                OpCode.MOV, params_ptr, self.builder.new_vreg(IRType.PTR, "SP"),
                 comment="params at current SP"
             ))
         else:
@@ -4654,10 +4659,16 @@ class ASTLowering:
                     task_sym = self.symbols.lookup(prefix_name) if self.symbols else None
                     if task_sym and hasattr(task_sym, 'ada_type'):
                         if isinstance(task_sym.ada_type, TaskType):
-                            # Task exists but no task_id tracked — load from local var
+                            # Task exists but no task_id tracked — load from variable
                             if self.ctx and prefix_name in self.ctx.locals:
                                 local = self.ctx.locals[prefix_name]
                                 task_id_vreg = local.vreg
+                            else:
+                                # Try to lower the prefix expression to get the task_id
+                                try:
+                                    task_id_vreg = self._lower_expr(prefix)
+                                except Exception:
+                                    pass
 
                 if task_id_vreg is not None:
                     # This is a task entry call — emit _ENTRY_CL
@@ -11227,12 +11238,16 @@ class ASTLowering:
                             from uada80.type_system import ArrayType, IntegerType
                             bounds = []
                             is_unconstrained = False
+                            has_dynamic_bounds = False
                             if type_def.index_subtypes:
                                 idx_range = type_def.index_subtypes[0]
                                 if isinstance(idx_range, RangeExpr):
                                     low = self._eval_static_expr(idx_range.low)
                                     high = self._eval_static_expr(idx_range.high)
-                                    bounds.append((low, high))
+                                    if low is None or high is None:
+                                        has_dynamic_bounds = True
+                                    else:
+                                        bounds.append((low, high))
                                 elif isinstance(idx_range, SubtypeIndication):
                                     # Check if it's an unconstrained array (has BoxConstraint)
                                     from uada80.ast_nodes import BoxConstraint
@@ -11248,8 +11263,8 @@ class ASTLowering:
                             return ArrayType(
                                 name=type_name,
                                 component_type=comp_type,
-                                bounds=bounds if bounds else None,
-                                is_constrained=not is_unconstrained and bool(bounds),
+                                bounds=bounds if bounds and not has_dynamic_bounds else None,
+                                is_constrained=not is_unconstrained and bool(bounds) and not has_dynamic_bounds,
                             )
         # If it's a SubtypeIndication, get the type_mark and apply constraints
         if isinstance(type_node, SubtypeIndication):
@@ -15603,7 +15618,7 @@ class ASTLowering:
                 # Check if arg looks like a container (not an integer dimension)
                 container = self._lower_expr(expr.args[0])
                 self.builder.push(container)
-                self.builder.call(Label("_container_first"), comment="First")
+                self.builder.call(Label("_cont_first"), comment="First")
                 temp = self.builder.new_vreg(IRType.WORD, "_discard")
                 self.builder.pop(temp)
                 self.builder.emit(IRInstr(
@@ -15623,7 +15638,7 @@ class ASTLowering:
                 # Check if arg looks like a container (not an integer dimension)
                 container = self._lower_expr(expr.args[0])
                 self.builder.push(container)
-                self.builder.call(Label("_container_last"), comment="Last")
+                self.builder.call(Label("_cont_last"), comment="Last")
                 temp = self.builder.new_vreg(IRType.WORD, "_discard")
                 self.builder.pop(temp)
                 self.builder.emit(IRInstr(
@@ -16364,7 +16379,7 @@ class ASTLowering:
                     self.builder.emit(IRInstr(OpCode.CALL, None, Label("_exp16"), None))
                     self.builder.emit(IRInstr(OpCode.POP, None, None, None))  # cleanup
                     self.builder.emit(IRInstr(OpCode.POP, None, None, None))
-                    self.builder.emit(IRInstr(OpCode.MOV, result, VReg("hl", IRType.WORD), None))
+                    self.builder.emit(IRInstr(OpCode.MOV, result, self.builder.new_vreg(IRType.WORD, "hl"), None))
                 elif op_name == '&':
                     self.builder.emit(IRInstr(OpCode.AND, result, left, right))
                 elif op_name == 'AND':

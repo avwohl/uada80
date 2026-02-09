@@ -49,10 +49,10 @@ package Ada.Calendar is
       Seconds : Day_Duration := 0) return Time;
 
    -- Arithmetic operations
-   function "+" (Left : Time; Right : Integer) return Time;
-   function "+" (Left : Integer; Right : Time) return Time;
-   function "-" (Left : Time; Right : Integer) return Time;
-   function "-" (Left : Time; Right : Time) return Integer;
+   function "+" (Left : Time; Right : Duration) return Time;
+   function "+" (Left : Duration; Right : Time) return Time;
+   function "-" (Left : Time; Right : Duration) return Time;
+   function "-" (Left : Time; Right : Time) return Duration;
 
    -- Comparison
    function "<"  (Left, Right : Time) return Boolean;

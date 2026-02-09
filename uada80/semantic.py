@@ -1607,8 +1607,15 @@ class SemanticAnalyzer:
         # Look up the package declaration
         pkg_symbol = self.symbols.lookup(body.name)
         if pkg_symbol is None:
-            self.error(f"package specification for '{body.name}' not found")
-            return
+            # Try to auto-load the package spec from the file system
+            # In Ada, a package body implicitly depends on its own spec
+            loaded_pkg = self._load_external_package(body.name)
+            if loaded_pkg:
+                self.symbols.define(loaded_pkg)
+                pkg_symbol = loaded_pkg
+            else:
+                self.error(f"package specification for '{body.name}' not found")
+                return
         if pkg_symbol.kind not in (SymbolKind.PACKAGE, SymbolKind.GENERIC_PACKAGE):
             self.error(f"'{body.name}' is not a package")
             return
@@ -2730,32 +2737,39 @@ class SemanticAnalyzer:
         We define the symbol here so it can be referenced before the body is seen.
         """
         if stub.kind == "procedure":
-            # Define a procedure symbol
-            symbol = Symbol(
-                name=stub.name,
-                kind=SymbolKind.PROCEDURE,
-                parameters=[],  # No parameters available from stub
-                definition=stub,
-            )
-            self.symbols.define(symbol)
+            # Don't overwrite an existing symbol (e.g., generic procedure spec)
+            existing = self.symbols.lookup(stub.name)
+            if existing is None:
+                symbol = Symbol(
+                    name=stub.name,
+                    kind=SymbolKind.PROCEDURE,
+                    parameters=[],  # No parameters available from stub
+                    definition=stub,
+                )
+                self.symbols.define(symbol)
         elif stub.kind == "function":
-            # Define a function symbol
-            symbol = Symbol(
-                name=stub.name,
-                kind=SymbolKind.FUNCTION,
-                parameters=[],  # No parameters available from stub
-                return_type=None,
-                definition=stub,
-            )
-            self.symbols.define(symbol)
+            # Don't overwrite an existing symbol (e.g., generic function spec)
+            existing = self.symbols.lookup(stub.name)
+            if existing is None:
+                symbol = Symbol(
+                    name=stub.name,
+                    kind=SymbolKind.FUNCTION,
+                    parameters=[],  # No parameters available from stub
+                    return_type=None,
+                    definition=stub,
+                )
+                self.symbols.define(symbol)
         elif stub.kind == "package":
-            # Define a package symbol
-            symbol = Symbol(
-                name=stub.name,
-                kind=SymbolKind.PACKAGE,
-                definition=stub,
-            )
-            self.symbols.define(symbol)
+            # Check if the package spec is already defined (e.g., generic package)
+            # Don't overwrite a GENERIC_PACKAGE with a plain PACKAGE
+            existing = self.symbols.lookup(stub.name)
+            if existing is None:
+                symbol = Symbol(
+                    name=stub.name,
+                    kind=SymbolKind.PACKAGE,
+                    definition=stub,
+                )
+                self.symbols.define(symbol)
         elif stub.kind == "task":
             # Define a task symbol
             task_type = TaskType(name=stub.name, is_single_task=True)
@@ -4810,14 +4824,17 @@ class SemanticAnalyzer:
         # Analyze the range expression
         self._analyze_expr(expr.range_expr)
 
-        # Slice of an array returns same array type (unconstrained)
-        # Use the same type name so slices are compatible with the base type
+        # Slice of an array returns the unconstrained base type
+        # Follow base_type chain to get the root unconstrained array type
+        result_type = prefix_type
+        while isinstance(result_type, ArrayType) and result_type.base_type and not result_type.is_derived:
+            result_type = result_type.base_type
         return ArrayType(
-            name=prefix_type.name,  # Same type name - slice of String is String
-            kind=prefix_type.kind,
+            name=result_type.name,
+            kind=result_type.kind,
             size_bits=0,  # Size depends on range at runtime
-            index_types=prefix_type.index_types,
-            component_type=prefix_type.component_type,
+            index_types=result_type.index_types,
+            component_type=result_type.component_type,
             is_constrained=False,
         )
 
@@ -5073,6 +5090,20 @@ class SemanticAnalyzer:
                 return left_type
             if right_type and right_type.kind == TypeKind.ARRAY:
                 return right_type
+            # For character/string literals, default to String
+            if (left_type and left_type.kind in (TypeKind.ENUMERATION, TypeKind.UNIVERSAL_INTEGER) and
+                getattr(left_type, 'name', '') == 'Character'):
+                return PREDEFINED_TYPES["String"]
+            if (right_type and right_type.kind in (TypeKind.ENUMERATION, TypeKind.UNIVERSAL_INTEGER) and
+                getattr(right_type, 'name', '') == 'Character'):
+                return PREDEFINED_TYPES["String"]
+            # For element & element (e.g., record concatenation), build anonymous array
+            if left_type and right_type and types_compatible(left_type, right_type):
+                return ArrayType(
+                    name=f"<anonymous_array_of_{left_type.name}>",
+                    component_type=left_type,
+                    is_constrained=False,
+                )
             # Default to String for string literals
             return PREDEFINED_TYPES["String"]
 
@@ -5262,16 +5293,37 @@ class SemanticAnalyzer:
                         )
                 return target_type
 
-            # Check if prefix is a function with a single aggregate argument
-            # This handles cases like IDENT((TRUE, FALSE, TRUE)) where the parser
-            # creates IndexedComponent instead of FunctionCall
-            if (symbol and symbol.kind == SymbolKind.FUNCTION and
-                len(expr.indices) == 1 and
-                isinstance(expr.indices[0], Aggregate)):
-                # This is a function call with an aggregate argument
+            # Check if prefix is a function call
+            # The parser creates IndexedComponent for F(X) which could be
+            # a function call rather than array indexing
+            if symbol and symbol.kind == SymbolKind.FUNCTION:
+                # Collect all overloads and find a matching one
+                args = [ActualParameter(span=None, name=None, value=idx) for idx in expr.indices]
+                arg_types = [self._analyze_expr(idx) for idx in expr.indices]
+                overloads = self.symbols.all_overloads(expr.prefix.name)
+                best_match = None
+                for candidate in overloads:
+                    if candidate.kind != SymbolKind.FUNCTION:
+                        continue
+                    cand_params = candidate.parameters if candidate.parameters else []
+                    if len(cand_params) != len(args):
+                        continue
+                    # Check if argument types are compatible
+                    all_match = True
+                    for i, param in enumerate(cand_params):
+                        if arg_types[i] and param.ada_type:
+                            if not types_compatible(param.ada_type, arg_types[i]):
+                                all_match = False
+                                break
+                    if all_match:
+                        best_match = candidate
+                        break
+                if best_match:
+                    return best_match.return_type
+                # No matching overload found - try with first overload anyway
+                # (could be an array result being indexed)
                 func_params = symbol.parameters if symbol.parameters else []
-                if len(func_params) == 1:
-                    args = [ActualParameter(span=None, name=None, value=expr.indices[0])]
+                if len(func_params) == len(args):
                     self._check_call_arguments(symbol, args, expr)
                     return symbol.return_type
 

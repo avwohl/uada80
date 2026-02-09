@@ -137,8 +137,13 @@ class Compiler:
             return result
 
         # Phase 2: Semantic analysis
+        # Pass source file directory as search path so external packages can be found
+        source_dirs = []
+        if filename and filename != "<input>":
+            source_dir = str(Path(filename).parent.resolve())
+            source_dirs = [source_dir]
         try:
-            semantic_result = analyze(ast)
+            semantic_result = analyze(ast, search_paths=source_dirs)
         except Exception as e:
             result.errors.append(
                 CompilerError(
@@ -321,8 +326,10 @@ class Compiler:
             return result
 
         # Phase 2: Semantic analysis on combined AST
+        # Pass source file directories as search paths so external packages can be found
+        source_dirs = list({str(Path(p).parent.resolve()) for p in paths})
         try:
-            semantic_result = analyze(combined_ast)
+            semantic_result = analyze(combined_ast, search_paths=source_dirs)
         except Exception as e:
             result.errors.append(
                 CompilerError(
