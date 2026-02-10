@@ -92,6 +92,7 @@ class Compiler:
         optimize: bool = True,
         optimization_level: int = 2,
         emit_inline_runtime: bool = False,
+        search_paths: Optional[list[str]] = None,
     ):
         self.output_format = output_format
         self.debug = debug
@@ -99,6 +100,7 @@ class Compiler:
         self.optimization_level = optimization_level
         self.peephole_optimize = optimize and HAS_PEEPHOLE
         self.emit_inline_runtime = emit_inline_runtime  # False = use libada.lib
+        self.search_paths: list[str] = search_paths or []
 
     def compile(
         self,
@@ -328,6 +330,11 @@ class Compiler:
         # Phase 2: Semantic analysis on combined AST
         # Pass source file directories as search paths so external packages can be found
         source_dirs = list({str(Path(p).parent.resolve()) for p in paths})
+        # Add any extra search paths from the compiler configuration
+        for sp in self.search_paths:
+            resolved = str(Path(sp).resolve())
+            if resolved not in source_dirs:
+                source_dirs.append(resolved)
         try:
             semantic_result = analyze(combined_ast, search_paths=source_dirs)
         except Exception as e:

@@ -301,7 +301,7 @@ class TestGenericLowering:
 
             # Look for the instantiated procedure with prefixed name
             func_names = [f.name for f in module.functions]
-            assert any("Int_Stack" in name for name in func_names) or len(func_names) == 0
+            assert any("int_stack" in name.lower() for name in func_names) or len(func_names) == 0
 
 
 class TestGenericSubprograms:

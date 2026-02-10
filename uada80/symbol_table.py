@@ -1114,6 +1114,7 @@ class SymbolTable:
 
     def _init_calendar(self) -> None:
         """Add Ada.Calendar package for time handling."""
+        from uada80.type_system import FixedType
         ada_pkg = self.lookup("Ada")
         if ada_pkg is None:
             return
@@ -1128,8 +1129,17 @@ class SymbolTable:
         # Add Time type (private type representing calendar time)
         time_type = IntegerType(name="Time", low=0, high=2**63-1)
 
-        # Add Day_Duration subtype of Duration
-        day_duration_type = IntegerType(name="Day_Duration", low=0, high=86_400_000_000_000)
+        # Add Day_Duration subtype of Duration (fixed point, not integer)
+        duration_type = PREDEFINED_TYPES["Duration"]
+        day_duration_type = FixedType(
+            name="Day_Duration",
+            kind=TypeKind.FIXED,
+            size_bits=32,
+            delta=duration_type.delta,
+            range_first=0.0,
+            range_last=86400.0,
+            base_type=duration_type,
+        )
 
         # Add Year_Number, Month_Number, Day_Number subtypes
         year_type = IntegerType(name="Year_Number", low=1901, high=2399)
@@ -1212,6 +1222,13 @@ class SymbolTable:
             return_type=time_type,
             scope_level=0,
         )
+        time_of_func.parameters = [
+            Symbol(name="Year", kind=SymbolKind.PARAMETER, ada_type=year_type, mode="in"),
+            Symbol(name="Month", kind=SymbolKind.PARAMETER, ada_type=month_type, mode="in"),
+            Symbol(name="Day", kind=SymbolKind.PARAMETER, ada_type=day_type, mode="in"),
+            Symbol(name="Seconds", kind=SymbolKind.PARAMETER, ada_type=day_duration_type, mode="in",
+                   default_value=True),
+        ]
         calendar_pkg.public_symbols["time_of"] = time_of_func
 
         # Add Split procedure: split Time into components
@@ -1220,17 +1237,42 @@ class SymbolTable:
             kind=SymbolKind.PROCEDURE,
             scope_level=0,
         )
+        split_proc.parameters = [
+            Symbol(name="Date", kind=SymbolKind.PARAMETER, ada_type=time_type, mode="in"),
+            Symbol(name="Year", kind=SymbolKind.PARAMETER, ada_type=year_type, mode="out"),
+            Symbol(name="Month", kind=SymbolKind.PARAMETER, ada_type=month_type, mode="out"),
+            Symbol(name="Day", kind=SymbolKind.PARAMETER, ada_type=day_type, mode="out"),
+            Symbol(name="Seconds", kind=SymbolKind.PARAMETER, ada_type=day_duration_type, mode="out"),
+        ]
         calendar_pkg.public_symbols["split"] = split_proc
 
         # Add "+" and "-" operators for Time arithmetic
-        for op_name in ["+", "-"]:
-            op_sym = Symbol(
-                name=op_name,
-                kind=SymbolKind.FUNCTION,
-                return_type=time_type,
-                scope_level=0,
-            )
-            calendar_pkg.public_symbols[op_name] = op_sym
+        # Time + Duration -> Time
+        duration_std = PREDEFINED_TYPES["Duration"]
+        plus_sym = Symbol(
+            name="+",
+            kind=SymbolKind.FUNCTION,
+            return_type=time_type,
+            scope_level=0,
+        )
+        plus_sym.parameters = [
+            Symbol(name="Left", kind=SymbolKind.PARAMETER, ada_type=time_type, mode="in"),
+            Symbol(name="Right", kind=SymbolKind.PARAMETER, ada_type=duration_std, mode="in"),
+        ]
+        calendar_pkg.public_symbols["+"] = plus_sym
+
+        # Time - Time -> Duration, Time - Duration -> Time
+        minus_sym = Symbol(
+            name="-",
+            kind=SymbolKind.FUNCTION,
+            return_type=time_type,
+            scope_level=0,
+        )
+        minus_sym.parameters = [
+            Symbol(name="Left", kind=SymbolKind.PARAMETER, ada_type=time_type, mode="in"),
+            Symbol(name="Right", kind=SymbolKind.PARAMETER, ada_type=duration_std, mode="in"),
+        ]
+        calendar_pkg.public_symbols["-"] = minus_sym
 
         # Add comparison operators
         bool_type = PREDEFINED_TYPES.get("Boolean")
@@ -4186,6 +4228,39 @@ class SymbolTable:
             ada_type=int_type,
             is_constant=True,
             value=-32768,  # 16-bit signed min
+            scope_level=0,
+        )
+
+        # Fine_Delta (smallest delta for fixed-point types)
+        # On Z80 with 16-bit, fine delta is 2**-15
+        float_type = PREDEFINED_TYPES["Float"]
+        system_pkg.public_symbols["fine_delta"] = Symbol(
+            name="Fine_Delta",
+            kind=SymbolKind.VARIABLE,
+            ada_type=float_type,
+            is_constant=True,
+            value=2**-15,  # Smallest representable delta on Z80
+            scope_level=0,
+        )
+
+        # Tick (duration of a clock tick, in seconds)
+        duration_type = PREDEFINED_TYPES["Duration"]
+        system_pkg.public_symbols["tick"] = Symbol(
+            name="Tick",
+            kind=SymbolKind.VARIABLE,
+            ada_type=duration_type,
+            is_constant=True,
+            value=0.02,  # 50Hz tick = 20ms
+            scope_level=0,
+        )
+
+        # Max_Mantissa (maximum binary mantissa for fixed-point)
+        system_pkg.public_symbols["max_mantissa"] = Symbol(
+            name="Max_Mantissa",
+            kind=SymbolKind.VARIABLE,
+            ada_type=int_type,
+            is_constant=True,
+            value=15,  # 16-bit - 1 sign bit
             scope_level=0,
         )
 

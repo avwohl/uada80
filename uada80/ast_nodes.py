@@ -1412,6 +1412,14 @@ class ComponentClause(ASTNode):
 
 
 @dataclass
+class AddressClause(RepresentationClause):
+    """Address clause (for X use at Address;)."""
+
+    object_name: Expr
+    address: Expr
+
+
+@dataclass
 class EnumerationRepresentationClause(RepresentationClause):
     """Enumeration representation clause."""
 

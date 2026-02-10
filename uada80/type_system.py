@@ -1489,6 +1489,24 @@ def common_type(t1: AdaType, t2: AdaType) -> Optional[AdaType]:
     if same_base_type(t1, t2):
         return get_root_type(t1)
 
+    # Derived type compatibility: if one type is derived from the other,
+    # or both share a common ancestor through derivation, use the more specific type
+    if is_derived_from(t1, t2.name):
+        return t1
+    if is_derived_from(t2, t1.name):
+        return t2
+
+    # Check if both derive from a common ancestor
+    def _get_derivation_root(t: AdaType) -> AdaType:
+        current = t
+        while hasattr(current, 'is_derived') and current.is_derived and hasattr(current, 'base_type') and current.base_type:
+            current = current.base_type
+        return current
+    root1 = _get_derivation_root(t1)
+    root2 = _get_derivation_root(t2)
+    if same_type(root1, root2):
+        return t1  # Both derive from same root
+
     return None
 
 

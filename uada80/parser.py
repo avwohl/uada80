@@ -2332,6 +2332,17 @@ class Parser:
 
         self.expect(TokenType.USE)
 
+        # Check for address clause (for X use at Address;)
+        if self.match(TokenType.AT):
+            address = self.parse_expression()
+            self.expect(TokenType.SEMICOLON)
+            from uada80.ast_nodes import AddressClause
+            return AddressClause(
+                object_name=name,
+                address=address,
+                span=self.make_span(start)
+            )
+
         # Check for record representation clause
         if self.match(TokenType.RECORD):
             component_clauses = []

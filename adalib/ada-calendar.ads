@@ -11,12 +11,11 @@ package Ada.Calendar is
    -- Stored as ticks (system dependent resolution)
    type Time is private;
 
-   -- Duration in seconds (simplified fixed-point for Z80)
-   -- Using 16-bit integer for simplicity
+   -- Subtypes for date components
    subtype Year_Number  is Integer range 1901 .. 2099;
    subtype Month_Number is Integer range 1 .. 12;
    subtype Day_Number   is Integer range 1 .. 31;
-   subtype Day_Duration is Integer range 0 .. 86400;
+   subtype Day_Duration is Duration range 0.0 .. 86_400.0;
 
    -- Days in each month (non-leap year)
    type Month_Days is array (Month_Number) of Day_Number;

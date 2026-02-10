@@ -22,6 +22,7 @@ from uada80.compiler import Compiler, OutputFormat
 
 # Paths
 ACATS_PATH = Path(__file__).parent / "acats" / "tests"
+ACATS_SUPPORT = Path(__file__).parent / "acats" / "support"
 Z80_SUPPORT = Path(__file__).parent / "z80_support"
 REPORT_FILE = Z80_SUPPORT / "report.ada"
 RUNTIME_PATH = Path(__file__).parent.parent / "runtime"
@@ -33,10 +34,6 @@ CPMEMU_CMD = shutil.which("cpmemu")
 
 # Categories to skip entirely (file I/O not implemented)
 SKIP_CATEGORIES = {'ce'}
-
-# Individual tests known to timeout (infinite loops from codegen bugs)
-KNOWN_TIMEOUTS = set()
-
 
 def have_tools():
     """Check if all execution tools are available."""
@@ -74,7 +71,9 @@ def compile_and_run_acats(test_files, timeout=5.0):
     Returns:
         (stage, success, output) where stage is the phase that completed last
     """
-    compiler = Compiler(output_format=OutputFormat.ASM, optimize=True)
+    # Include ACATS support directory for external generic loading (LENGTH_CHECK, ENUM_CHECK)
+    extra_paths = [str(ACATS_SUPPORT)] if ACATS_SUPPORT.exists() else []
+    compiler = Compiler(output_format=OutputFormat.ASM, optimize=True, search_paths=extra_paths)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir = Path(tmpdir)
@@ -133,20 +132,15 @@ class TestACATSExecution:
                              ids=lambda f: f.stem)
     def test_acats_execute(self, test_file):
         """Compile and run a single ACATS C-test on cpmemu."""
-        name = test_file.stem
-
-        if name in KNOWN_TIMEOUTS:
-            pytest.skip(f"{name} known to timeout")
-
         stage, success, output = compile_and_run_acats([test_file])
 
         if not success:
             if stage == "compile":
-                pytest.skip(f"compile: {output[:100]}")
+                pytest.fail(f"compile: {output[:100]}")
             elif stage == "link":
-                pytest.skip(f"link: {output[:100]}")
+                pytest.fail(f"link: {output[:100]}")
             elif output == "TIMEOUT":
-                pytest.skip(f"timeout (>5s)")
+                pytest.fail(f"timeout (>5s)")
             else:
                 pytest.fail(f"{stage} failed: {output[:200]}")
 

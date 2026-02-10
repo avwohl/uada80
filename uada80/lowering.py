@@ -470,10 +470,24 @@ class ASTLowering:
         return outer_vars
 
     def _new_label(self, prefix: str = "L") -> str:
-        """Generate a unique label."""
-        name = f"{prefix}{self._label_counter}"
+        """Generate a unique label.
+
+        Ensures labels are unique within um80's 8-character limit by putting
+        the counter first: L{counter}_{prefix_hint}. The counter alone
+        guarantees uniqueness; the prefix is a truncated readability hint.
+        """
+        c = self._label_counter
         self._label_counter += 1
-        return name
+        counter_str = str(c)
+        # Format: L{counter}_{hint} — "L" + counter digits + "_" + hint
+        # Must fit in 8 chars total for um80
+        overhead = 1 + len(counter_str) + 1  # "L" + digits + "_"
+        max_hint = 8 - overhead
+        if max_hint > 0:
+            hint = prefix[:max_hint].rstrip("_")
+            return f"L{counter_str}_{hint}"
+        else:
+            return f"L{counter_str}"
 
     def _emit_constraint_check(
         self, value, low: int, high: int, comment: str = ""
@@ -1106,7 +1120,7 @@ class ASTLowering:
             return
 
         # Get the generic package's AST definition
-        generic_pkg = generic_sym.definition
+        generic_pkg = getattr(generic_sym, 'generic_decl', None) or getattr(generic_sym, 'definition', None)
         if not isinstance(generic_pkg, PackageDecl):
             return
 
@@ -1165,8 +1179,12 @@ class ASTLowering:
         self._generic_prefix = inst.name
 
         # Get the body to lower
+        # The semantic analyzer stores the body on generic_sym.generic_body
+        # when it sees the body that completes a generic spec.
         if isinstance(subprogram, SubprogramBody):
             body = subprogram
+        elif hasattr(generic_sym, 'generic_body') and generic_sym.generic_body is not None:
+            body = generic_sym.generic_body
         elif hasattr(subprogram, 'body'):
             body = subprogram.body
         else:
@@ -2706,11 +2724,16 @@ class ASTLowering:
             return
 
         task_sym = self.symbols.lookup(task_body.name)
-        if not task_sym or not hasattr(task_sym, 'entries'):
+        if not task_sym:
+            return
+
+        # Entries are stored on the task's ada_type (TaskType), not directly on the symbol
+        task_type = getattr(task_sym, 'ada_type', None)
+        entries = getattr(task_type, 'entries', None) or getattr(task_sym, 'entries', None)
+        if not entries:
             return
 
         # For each entry, generate a callable stub
-        entries = getattr(task_sym, 'entries', [])
         for entry in entries:
             if isinstance(entry, EntryDecl):
                 self._generate_entry_stub(task_body.name, entry)
@@ -4407,6 +4430,10 @@ class ASTLowering:
                     self.ctx.locals_size += size
 
         # Process declarations (initializations)
+        # Save/restore _current_body_declarations so local generic instantiations
+        # can find their generic definitions within this block's scope
+        saved_body_decls = getattr(self, '_current_body_declarations', None)
+        self._current_body_declarations = stmt.declarations
         for decl in stmt.declarations:
             self._lower_declaration(decl)
 
@@ -4419,6 +4446,9 @@ class ASTLowering:
             # No handlers - just lower statements directly
             for s in stmt.statements:
                 self._lower_statement(s)
+
+        # Restore _current_body_declarations after block
+        self._current_body_declarations = saved_body_decls
 
         # Restore shadowed locals after block exits
         for name_lower, saved_local in shadowed_locals.items():
@@ -4646,62 +4676,76 @@ class ASTLowering:
         if isinstance(stmt.name, SelectedName):
             prefix = stmt.name.prefix
             selector = stmt.name.selector
+            # Determine if prefix is a task object (supports Identifier, indexed, etc.)
+            task_id_vreg = None
+            prefix_name = None
 
             if isinstance(prefix, Identifier):
                 prefix_name = prefix.name.lower()
-
-                # Check if prefix is a task with a known task_id
-                task_id_vreg = None
+                # Check tracked single tasks first
                 if self.ctx and prefix_name in self.ctx.task_objects:
                     task_id_vreg = self.ctx.task_objects[prefix_name]
                 else:
-                    # Fallback: check symbol table for TaskType
+                    # Check symbol table for any task-typed variable
                     task_sym = self.symbols.lookup(prefix_name) if self.symbols else None
-                    if task_sym and hasattr(task_sym, 'ada_type'):
-                        if isinstance(task_sym.ada_type, TaskType):
-                            # Task exists but no task_id tracked — load from variable
-                            if self.ctx and prefix_name in self.ctx.locals:
-                                local = self.ctx.locals[prefix_name]
-                                task_id_vreg = local.vreg
-                            else:
-                                # Try to lower the prefix expression to get the task_id
-                                try:
-                                    task_id_vreg = self._lower_expr(prefix)
-                                except Exception:
-                                    pass
+                    if task_sym and hasattr(task_sym, 'ada_type') and isinstance(task_sym.ada_type, TaskType):
+                        if self.ctx and prefix_name in self.ctx.locals:
+                            task_id_vreg = self.ctx.locals[prefix_name].vreg
+                        else:
+                            try:
+                                task_id_vreg = self._lower_expr(prefix)
+                            except Exception:
+                                pass
+                    # Also check for task type kind on the symbol itself
+                    elif task_sym and task_sym.kind in (SymbolKind.TASK, SymbolKind.TASK_TYPE):
+                        try:
+                            task_id_vreg = self._lower_expr(prefix)
+                        except Exception:
+                            pass
+            else:
+                # Non-identifier prefix (indexed component, dereference, etc.)
+                # Try to determine the type of the prefix expression
+                prefix_type = self._get_expr_type(prefix)
+                if prefix_type and isinstance(prefix_type, TaskType):
+                    prefix_name = "task"
+                    try:
+                        task_id_vreg = self._lower_expr(prefix)
+                    except Exception:
+                        pass
 
-                if task_id_vreg is not None:
-                    # This is a task entry call — emit _ENTRY_CL
-                    entry_id = hash(selector) & 0xFFFF
+            if task_id_vreg is not None:
+                # This is a task entry call — emit _ENTRY_CL
+                entry_id = hash(selector) & 0xFFFF
 
-                    # Push args (right to left) if any
-                    if stmt.args:
-                        for arg in reversed(stmt.args):
-                            val = self._lower_expr(arg)
-                            self.builder.push(val)
+                # Push args (right to left) if any
+                if stmt.args:
+                    for arg in reversed(stmt.args):
+                        val = self._lower_expr(arg)
+                        self.builder.push(val)
 
-                    # Push null params_ptr (or actual if args present)
-                    params_ptr = self.builder.new_vreg(IRType.PTR, "_params_ptr")
-                    self.builder.mov(params_ptr, Immediate(0, IRType.PTR))
-                    self.builder.push(params_ptr)
+                # Push null params_ptr (or actual if args present)
+                params_ptr = self.builder.new_vreg(IRType.PTR, "_params_ptr")
+                self.builder.mov(params_ptr, Immediate(0, IRType.PTR))
+                self.builder.push(params_ptr)
 
-                    # Push task_id
-                    self.builder.push(task_id_vreg)
+                # Push task_id
+                self.builder.push(task_id_vreg)
 
-                    # Push entry_id
-                    entry_id_vreg = self.builder.new_vreg(IRType.WORD, "_entry_id")
-                    self.builder.mov(entry_id_vreg, Immediate(entry_id, IRType.WORD))
-                    self.builder.push(entry_id_vreg)
+                # Push entry_id
+                entry_id_vreg = self.builder.new_vreg(IRType.WORD, "_entry_id")
+                self.builder.mov(entry_id_vreg, Immediate(entry_id, IRType.WORD))
+                self.builder.push(entry_id_vreg)
 
-                    # Call entry
-                    self.builder.call(Label("_ENTRY_CL"), comment=f"entry call {prefix_name}.{selector}")
+                # Call entry
+                self.builder.call(Label("_ENTRY_CL"),
+                                  comment=f"entry call {prefix_name or '?'}.{selector}")
 
-                    # Clean up stack (3 words + any args)
-                    num_cleanup = 3 + (len(stmt.args) if stmt.args else 0)
-                    for _ in range(num_cleanup):
-                        temp = self.builder.new_vreg(IRType.WORD, "_discard")
-                        self.builder.pop(temp)
-                    return
+                # Clean up stack (3 words + any args)
+                num_cleanup = 3 + (len(stmt.args) if stmt.args else 0)
+                for _ in range(num_cleanup):
+                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                    self.builder.pop(temp)
+                return
 
         # Handle SelectedName procedure calls (Ada.Text_IO.Put_Line, etc.)
         if isinstance(stmt.name, SelectedName):
@@ -10296,9 +10340,28 @@ class ASTLowering:
         if left_type is None or right_type is None:
             return None
 
-        # Don't look up operators for predefined types - use built-ins
-        predefined_type_names = {'integer', 'boolean', 'character', 'natural', 'positive'}
-        if hasattr(left_type, 'name') and left_type.name.lower() in predefined_type_names:
+        # Don't look up operators for predefined types or scalar derived types - use built-ins
+        predefined_type_names = {'integer', 'boolean', 'character', 'natural', 'positive',
+                                 'float', 'duration', 'long_integer', 'short_integer'}
+
+        def _is_scalar_type(t):
+            """Check if type is a scalar type (or derived from one)."""
+            if t is None:
+                return False
+            if hasattr(t, 'name') and t.name.lower() in predefined_type_names:
+                return True
+            if hasattr(t, 'kind') and t.kind in (TypeKind.INTEGER, TypeKind.MODULAR,
+                                                   TypeKind.ENUMERATION, TypeKind.FLOAT,
+                                                   TypeKind.FIXED):
+                return True
+            # Check base type chain for derived types
+            base = getattr(t, 'base_type', None)
+            if base is not None and base is not t:
+                return _is_scalar_type(base)
+            return False
+
+        from uada80.type_system import TypeKind
+        if _is_scalar_type(left_type):
             # For equality operators, still check for user overloads on composite types
             if op not in (BinaryOp.EQ, BinaryOp.NE):
                 return None
@@ -10318,7 +10381,6 @@ class ASTLowering:
             alt_name = op_name.strip('"')
             if alt_name in self._subprogram_param_names:
                 # Found a locally-defined operator - create a minimal symbol to represent it
-                from uada80.symbol_table import Symbol, SymbolKind
                 local_sym = Symbol(
                     name=alt_name,
                     kind=SymbolKind.FUNCTION,
@@ -10350,6 +10412,22 @@ class ASTLowering:
                            types_compatible(param2_type, right_type))
 
             if left_match and right_match:
+                # Skip intrinsic/inherited operators that have no body.
+                # These are predefined operators (=, /=, <, etc.) inherited by
+                # derived types — they should use the built-in inline code,
+                # not generate a call to a non-existent function.
+                if getattr(sym, 'is_intrinsic', False):
+                    return None
+                # Check if the operator has a real body (SubprogramBody definition)
+                # Inherited operators from _inherit_primitive_operations have
+                # definition pointing to the parent's spec, not a body.
+                sym_def = getattr(sym, 'definition', None)
+                if sym_def is not None and not isinstance(sym_def, SubprogramBody):
+                    # Check if there's a corresponding body in nested labels
+                    mangled = self._mangle_operator_name(sym.name.lower())
+                    if mangled not in self._nested_subprogram_labels:
+                        # No body exists for this operator — use built-in
+                        return None
                 return sym
 
         return None
@@ -11518,6 +11596,68 @@ class ASTLowering:
                     return result
                 else:
                     # Not a protected type - this is a package-qualified function call
+                    # Check if this is a predefined operator that should use inline code
+                    # (e.g., P."="(X, Y) for scalar types)
+                    # Map of predefined binary operators
+                    _predefined_binary_map = {
+                        '"="': BinaryOp.EQ, '=': BinaryOp.EQ,
+                        '"/="': BinaryOp.NE, '/=': BinaryOp.NE,
+                        '"<"': BinaryOp.LT, '<': BinaryOp.LT,
+                        '"<="': BinaryOp.LE, '<=': BinaryOp.LE,
+                        '">"': BinaryOp.GT, '>': BinaryOp.GT,
+                        '">="': BinaryOp.GE, '>=': BinaryOp.GE,
+                        '"+"': BinaryOp.ADD, '+': BinaryOp.ADD,
+                        '"-"': BinaryOp.SUB, '-': BinaryOp.SUB,
+                        '"*"': BinaryOp.MUL, '*': BinaryOp.MUL,
+                        '"/"': BinaryOp.DIV, '/': BinaryOp.DIV,
+                        '"mod"': BinaryOp.MOD, 'mod': BinaryOp.MOD,
+                        '"rem"': BinaryOp.REM, 'rem': BinaryOp.REM,
+                        '"**"': BinaryOp.EXP, '**': BinaryOp.EXP,
+                        '"and"': BinaryOp.AND, 'and': BinaryOp.AND,
+                        '"or"': BinaryOp.OR, 'or': BinaryOp.OR,
+                        '"xor"': BinaryOp.XOR, 'xor': BinaryOp.XOR,
+                        '"&"': BinaryOp.CONCAT, '&': BinaryOp.CONCAT,
+                    }
+                    # Map of predefined unary operators
+                    _predefined_unary_map = {
+                        '"not"': UnaryOp.NOT, 'not': UnaryOp.NOT,
+                        '"abs"': UnaryOp.ABS, 'abs': UnaryOp.ABS,
+                        '"+"': UnaryOp.PLUS, '+': UnaryOp.PLUS,
+                        '"-"': UnaryOp.MINUS, '-': UnaryOp.MINUS,
+                    }
+                    sel_lower = selector.lower()
+
+                    def _has_operator_body(sel, args):
+                        """Check if there's a real user-defined body for this operator."""
+                        sym = self._resolve_overload(sel, args)
+                        if sym:
+                            sym_def = getattr(sym, 'definition', None)
+                            if isinstance(sym_def, SubprogramBody):
+                                return True
+                            mangled = self._mangle_operator_name(sym.name.lower())
+                            if mangled in self._nested_subprogram_labels:
+                                return True
+                        return False
+
+                    # Handle binary operators (2 args)
+                    binary_op = _predefined_binary_map.get(sel_lower)
+                    if binary_op is not None and expr.args and len(expr.args) == 2:
+                        if not _has_operator_body(selector, expr.args):
+                            left_arg = expr.args[0].value if hasattr(expr.args[0], 'value') else expr.args[0]
+                            right_arg = expr.args[1].value if hasattr(expr.args[1], 'value') else expr.args[1]
+                            synth_expr = BinaryExpr(op=binary_op, left=left_arg, right=right_arg,
+                                                     span=getattr(expr, 'span', None))
+                            return self._lower_binary(synth_expr)
+
+                    # Handle unary operators (1 arg)
+                    unary_op = _predefined_unary_map.get(sel_lower)
+                    if unary_op is not None and expr.args and len(expr.args) == 1:
+                        if not _has_operator_body(selector, expr.args):
+                            operand = expr.args[0].value if hasattr(expr.args[0], 'value') else expr.args[0]
+                            synth_expr = UnaryExpr(op=unary_op, operand=operand,
+                                                    span=getattr(expr, 'span', None))
+                            return self._lower_unary(synth_expr)
+
                     # Use the selector as the function name and generate a regular call
                     # Ada is case-insensitive, so normalize to lowercase
                     call_target = self._mangle_operator_name(selector.lower())
@@ -11771,6 +11911,7 @@ class ASTLowering:
     def _lower_attribute(self, expr: AttributeReference):
         """Lower an attribute reference."""
         attr = expr.attribute.lower()
+
 
         if isinstance(expr.prefix, Identifier):
             # First check local variables (higher priority)

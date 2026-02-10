@@ -120,6 +120,7 @@ from uada80.ast_nodes import (
     AttributeDefinitionClause,
     RecordRepresentationClause,
     EnumerationRepresentationClause,
+    AddressClause,
 )
 from uada80.symbol_table import SymbolTable, Symbol, SymbolKind
 from uada80.type_system import (
@@ -517,6 +518,7 @@ class SemanticAnalyzer:
             # Find the package declaration or generic subprogram in the parsed AST
             pkg_decl = None
             gen_subprog = None
+            gen_body = None
             for unit in program.units:
                 if isinstance(unit.unit, PackageDecl):
                     # Match by name (case-insensitive)
@@ -532,7 +534,11 @@ class SemanticAnalyzer:
                     # Match generic procedure/function by name (case-insensitive)
                     if unit.unit.name.lower() == pkg_name.lower():
                         gen_subprog = unit.unit
-                        break
+                        # Don't break - continue looking for a separate body
+                elif isinstance(unit.unit, SubprogramBody):
+                    # Check if this is the body for a previously found generic spec
+                    if gen_subprog is not None and unit.unit.spec.name.lower() == pkg_name.lower():
+                        gen_body = unit.unit
 
             # Handle generic subprogram (e.g., LENGTH_CHECK, ENUM_CHECK)
             if gen_subprog is not None:
@@ -544,6 +550,9 @@ class SemanticAnalyzer:
                 )
                 gen_symbol.is_withed = True
                 gen_symbol.generic_decl = gen_subprog
+                # Store the separate body if found (for instantiation)
+                if gen_body is not None:
+                    gen_symbol.generic_body = gen_body
 
                 # Extract parameters from the subprogram declaration
                 # This is needed for instantiation to copy parameters
@@ -1578,6 +1587,29 @@ class SemanticAnalyzer:
                     inst
                 )
 
+        # Build type mapping from formal type parameters to actual types
+        type_map: dict[str, AdaType] = {}
+        if not is_builtin and generic_decl:
+            from uada80.ast_nodes import GenericTypeDecl
+            formal_idx = 0
+            for formal in generic_decl.formals:
+                if isinstance(formal, GenericTypeDecl) and formal_idx < len(inst.actual_parameters):
+                    actual = inst.actual_parameters[formal_idx]
+                    # Get the actual type name
+                    actual_name = None
+                    if hasattr(actual, 'value') and hasattr(actual.value, 'name'):
+                        actual_name = actual.value.name
+                    elif hasattr(actual, 'name'):
+                        actual_name = actual.name
+                    elif isinstance(actual, Identifier):
+                        actual_name = actual.name
+                    if actual_name:
+                        actual_type = self._resolve_type(actual if isinstance(actual, (Identifier, SelectedName)) else
+                                                         (actual.value if hasattr(actual, 'value') else actual))
+                        if actual_type:
+                            type_map[formal.name.lower()] = actual_type
+                formal_idx += 1
+
         # Create the instantiated subprogram
         is_function = generic_sym.kind == SymbolKind.GENERIC_FUNCTION
         inst_symbol = Symbol(
@@ -1587,9 +1619,27 @@ class SemanticAnalyzer:
         # Store mapping from formals to actuals for code generation
         inst_symbol.generic_instance_of = generic_sym
         inst_symbol.generic_actuals = inst.actual_parameters
-        inst_symbol.return_type = generic_sym.return_type
-        # Copy parameters from the original generic subprogram
-        inst_symbol.parameters = generic_sym.parameters.copy() if generic_sym.parameters else []
+
+        # Substitute return type: replace formal type names with actual types
+        ret_type = generic_sym.return_type
+        if ret_type and hasattr(ret_type, 'name') and ret_type.name.lower() in type_map:
+            ret_type = type_map[ret_type.name.lower()]
+        inst_symbol.return_type = ret_type
+
+        # Copy parameters with type substitution
+        inst_symbol.parameters = []
+        for param in (generic_sym.parameters or []):
+            new_param = Symbol(
+                name=param.name,
+                kind=param.kind,
+                ada_type=param.ada_type,
+                mode=param.mode,
+                default_value=param.default_value,
+            )
+            if new_param.ada_type and hasattr(new_param.ada_type, 'name'):
+                if new_param.ada_type.name.lower() in type_map:
+                    new_param.ada_type = type_map[new_param.ada_type.name.lower()]
+            inst_symbol.parameters.append(new_param)
 
         # Check if this is Ada.Unchecked_Deallocation instantiation
         generic_name_lower = generic_name.lower()
@@ -2052,8 +2102,13 @@ class SemanticAnalyzer:
         # In Ada, when TYPE T IS NEW Parent_Enum, the literals work with both types
         # through overload resolution. We need to register the literals with the
         # derived type so that they can be used in contexts expecting the derived type.
+        # Skip character literals (single chars) — they would shadow identifiers
+        # from outer scopes. Character literals are resolved through type context.
         if isinstance(ada_type, EnumerationType) and isinstance(decl.type_def, DerivedTypeDef):
             for literal in ada_type.literals:
+                # Skip character literals — only register identifier-form literals
+                if len(literal) == 1:
+                    continue
                 literal_symbol = Symbol(
                     name=literal,
                     kind=SymbolKind.VARIABLE,
@@ -2215,7 +2270,9 @@ class SemanticAnalyzer:
         - for Type use record ... end record; (record rep)
         - for Type use (...); (enumeration rep)
         """
-        if isinstance(decl, AttributeDefinitionClause):
+        if isinstance(decl, AddressClause):
+            pass  # Address clauses are accepted but don't affect semantic analysis
+        elif isinstance(decl, AttributeDefinitionClause):
             self._analyze_attribute_definition_clause(decl)
         elif isinstance(decl, RecordRepresentationClause):
             self._analyze_record_representation_clause(decl)
@@ -4150,13 +4207,17 @@ class SemanticAnalyzer:
                     self.error(f"'{stmt.name.name}' is not a procedure", stmt)
                     return
 
-            if symbol.kind not in (SymbolKind.PROCEDURE, SymbolKind.FUNCTION):
+            if symbol.kind not in (SymbolKind.PROCEDURE, SymbolKind.FUNCTION,
+                                    SymbolKind.GENERIC_PROCEDURE, SymbolKind.GENERIC_FUNCTION,
+                                    SymbolKind.ENTRY):
                 self.error(f"'{stmt.name.name}' is not a procedure", stmt)
                 return
 
             # Try to resolve overloaded call
             overloads = self.symbols.all_overloads(stmt.name.name)
-            overloads = [o for o in overloads if o.kind in (SymbolKind.PROCEDURE, SymbolKind.FUNCTION)]
+            overloads = [o for o in overloads if o.kind in (SymbolKind.PROCEDURE, SymbolKind.FUNCTION,
+                                                             SymbolKind.GENERIC_PROCEDURE, SymbolKind.GENERIC_FUNCTION,
+                                                             SymbolKind.ENTRY)]
 
             if len(overloads) > 1:
                 # Multiple overloads - find the best match
@@ -5627,12 +5688,16 @@ class SemanticAnalyzer:
                 return prefix_type
             return None
 
-        # Integer-valued attributes
-        # 'Length and 'Size return Universal_Integer (implicitly convertible to any integer)
-        if attr_lower in ("length", "size"):
-            return PREDEFINED_TYPES["Universal_Integer"]
-        # 'Pos returns Universal_Integer
-        if attr_lower == "pos":
+        # Integer-valued attributes that return Universal_Integer
+        # (implicitly convertible to any integer type per Ada RM)
+        if attr_lower in ("length", "size", "pos", "storage_size",
+                          "alignment", "width", "count", "component_size",
+                          "modulus", "fore", "aft", "max_size_in_storage_elements",
+                          "digits", "machine_emax", "machine_emin",
+                          "machine_mantissa", "machine_radix",
+                          "model_emin", "model_mantissa",
+                          "safe_emax", "safe_large", "mantissa",
+                          "bit_order", "word_size", "max_alignment_for_allocation"):
             return PREDEFINED_TYPES["Universal_Integer"]
 
         # Val returns the enumeration type
@@ -5688,9 +5753,7 @@ class SemanticAnalyzer:
         if attr_lower in ("succ", "pred"):
             return prefix_type
 
-        # Modulus for modular types
-        if attr_lower == "modulus":
-            return PREDEFINED_TYPES["Integer"]
+        # (Modulus already handled above as Universal_Integer)
 
         # Boolean attributes
         if attr_lower in ("valid", "constrained", "terminated", "callable",
@@ -5773,9 +5836,7 @@ class SemanticAnalyzer:
             # Fall back to Universal_Real for compatibility
             return PREDEFINED_TYPES.get("Universal_Real", PREDEFINED_TYPES["Integer"])
 
-        # Fixed-point display attributes (return integers)
-        if attr_lower in ("fore", "aft"):
-            return PREDEFINED_TYPES["Integer"]
+        # (fore, aft already handled above as Universal_Integer)
 
         # Default: return Integer for unknown attributes
         return PREDEFINED_TYPES["Integer"]
