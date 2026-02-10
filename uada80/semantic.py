@@ -403,7 +403,14 @@ class SemanticAnalyzer:
         if isinstance(name, Identifier):
             return self.symbols.lookup(name.name)
         elif hasattr(name, 'prefix') and hasattr(name, 'selector'):
-            # Recursively resolve the prefix
+            # First try flat name lookup — loaded packages (e.g., "Ada.Text_IO")
+            # may be registered under their full dotted name and should take
+            # precedence over builtin placeholders in parent public_symbols
+            flat_name = self._get_hierarchical_name(name)
+            flat_sym = self.symbols.lookup(flat_name)
+            if flat_sym is not None:
+                return flat_sym
+            # Fall back to step-by-step resolution
             prefix_sym = self._resolve_hierarchical_package(name.prefix)
             if prefix_sym is None:
                 return None
