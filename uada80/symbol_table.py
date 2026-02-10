@@ -987,6 +987,68 @@ class SymbolTable:
         flat_bounded.public_symbols = bounded_pkg.public_symbols
         self.current_scope.define(flat_bounded)
 
+        # =====================================================================
+        # Ada.Strings.Wide_Bounded — same as Bounded on Z80 (Wide_Character = Character)
+        # =====================================================================
+        wide_bounded_pkg = Symbol(
+            name="Wide_Bounded",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        wide_gbl_pkg = Symbol(
+            name="Generic_Bounded_Length",
+            kind=SymbolKind.GENERIC_PACKAGE,
+            scope_level=0,
+        )
+        wide_gbl_pkg.is_builtin_generic = True
+        wide_gbl_pkg.public_symbols = dict(gbl_pkg.public_symbols)
+
+        wide_bounded_pkg.public_symbols = {
+            "generic_bounded_length": wide_gbl_pkg,
+        }
+
+        strings_pkg.public_symbols["wide_bounded"] = wide_bounded_pkg
+
+        flat_wide_bounded = Symbol(
+            name="Ada.Strings.Wide_Bounded",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+        flat_wide_bounded.public_symbols = wide_bounded_pkg.public_symbols
+        self.current_scope.define(flat_wide_bounded)
+
+        # =====================================================================
+        # Ada.Strings.Wide_Wide_Bounded — same as Bounded on Z80
+        # =====================================================================
+        wide_wide_bounded_pkg = Symbol(
+            name="Wide_Wide_Bounded",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+
+        wide_wide_gbl_pkg = Symbol(
+            name="Generic_Bounded_Length",
+            kind=SymbolKind.GENERIC_PACKAGE,
+            scope_level=0,
+        )
+        wide_wide_gbl_pkg.is_builtin_generic = True
+        wide_wide_gbl_pkg.public_symbols = dict(gbl_pkg.public_symbols)
+
+        wide_wide_bounded_pkg.public_symbols = {
+            "generic_bounded_length": wide_wide_gbl_pkg,
+        }
+
+        strings_pkg.public_symbols["wide_wide_bounded"] = wide_wide_bounded_pkg
+
+        flat_wide_wide_bounded = Symbol(
+            name="Ada.Strings.Wide_Wide_Bounded",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+        flat_wide_wide_bounded.public_symbols = wide_wide_bounded_pkg.public_symbols
+        self.current_scope.define(flat_wide_wide_bounded)
+
         # Add Strings to Ada package
         ada_pkg.public_symbols["strings"] = strings_pkg
 
@@ -1496,7 +1558,7 @@ class SymbolTable:
 
         # Vector type (opaque - pointer to runtime structure)
         from uada80.type_system import AccessType, RecordType
-        vector_record = RecordType(name="Vector", components=[], is_tagged=False)
+        vector_record = RecordType(name="Vector", components=[], is_tagged=True)
         vector_type = AccessType(name="Vector", designated_type=vector_record)
 
         # Cursor type (index into vector, 0xFFFF = No_Element)
@@ -1797,7 +1859,7 @@ class SymbolTable:
         lists_pkg.container_kind = "list"
 
         # List type (opaque - pointer to runtime structure)
-        list_record = RecordType(name="List", components=[], is_tagged=False)
+        list_record = RecordType(name="List", components=[], is_tagged=True)
         list_type = AccessType(name="List", designated_type=list_record)
 
         # Cursor type (pointer to list node, 0xFFFF = No_Element)
