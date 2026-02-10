@@ -121,6 +121,7 @@ from uada80.ast_nodes import (
     RecordRepresentationClause,
     EnumerationRepresentationClause,
     AddressClause,
+    RangeConstraint,
 )
 from uada80.symbol_table import SymbolTable, Symbol, SymbolKind
 from uada80.type_system import (
@@ -1336,8 +1337,8 @@ class SemanticAnalyzer:
                 )
                 generic_name = f"{inst.generic_name.prefix.name}.{inst.generic_name.selector}"
             else:
-                generic_name = str(inst.generic_name)
-                generic_sym = self.symbols.lookup(generic_name)
+                generic_name = self._get_hierarchical_name(inst.generic_name)
+                generic_sym = self._resolve_hierarchical_package(inst.generic_name)
         else:
             generic_name = str(inst.generic_name)
             generic_sym = self.symbols.lookup(generic_name)
@@ -1544,8 +1545,8 @@ class SemanticAnalyzer:
                 )
                 generic_name = f"{inst.generic_name.prefix.name}.{inst.generic_name.selector}"
             else:
-                generic_name = str(inst.generic_name)
-                generic_sym = self.symbols.lookup(generic_name)
+                generic_name = self._get_hierarchical_name(inst.generic_name)
+                generic_sym = self._resolve_hierarchical_package(inst.generic_name)
         else:
             generic_name = str(inst.generic_name)
             generic_sym = self.symbols.lookup(generic_name)
@@ -2129,8 +2130,9 @@ class SemanticAnalyzer:
         if base_type is None:
             return
 
-        # For now, just use the base type with a different name
-        # Full implementation would apply constraints
+        # Store resolved type on AST node for use during lowering
+        decl.ada_type = base_type
+
         symbol = Symbol(
             name=decl.name,
             kind=SymbolKind.SUBTYPE,
@@ -2302,27 +2304,28 @@ class SemanticAnalyzer:
             self.error(f"unknown identifier '{obj_name}'", decl)
             return
 
-        # Evaluate the value expression
-        value = self._eval_static_expr(decl.value)
-
         # Apply the attribute based on what it is and what kind of entity
         attr = decl.attribute.lower()
 
         if attr == "size":
+            value = self._eval_static_expr(decl.value)
             if sym.kind == SymbolKind.TYPE and sym.ada_type:
                 sym.ada_type.size_bits = value
             elif sym.kind == SymbolKind.VARIABLE:
                 sym.explicit_size = value
         elif attr == "alignment":
+            value = self._eval_static_expr(decl.value)
             if sym.kind == SymbolKind.TYPE and sym.ada_type:
                 sym.ada_type.alignment = value
         elif attr == "address":
+            value = self._eval_static_expr(decl.value)
             # for Object'Address use N; - place object at specific address
             if sym.kind == SymbolKind.VARIABLE:
                 sym.explicit_address = value
             else:
                 self.error(f"Address clause only applies to variables", decl)
         elif attr == "component_size":
+            value = self._eval_static_expr(decl.value)
             # for Array_Type'Component_Size use N;
             if sym.kind == SymbolKind.TYPE and sym.ada_type:
                 from uada80.type_system import ArrayType
@@ -2332,7 +2335,12 @@ class SemanticAnalyzer:
         elif attr == "storage_size":
             # for Access_Type'Storage_Size use N;
             # for Task_Type'Storage_Size use N;
-            pass  # Handled in access type or task type declaration
+            # Expression need not be static per Ada RM 13.11(3)
+            pass
+        elif attr == "machine_radix":
+            # for Decimal_Type'Machine_Radix use N;
+            # Accept non-static expressions
+            pass
         elif attr == "":
             # Direct value clause (for Type use value)
             pass
@@ -2377,6 +2385,27 @@ class SemanticAnalyzer:
                     comp.size_bits = last_bit - first_bit + 1
                     found = True
                     break
+
+            # Search discriminants
+            if not found and hasattr(sym.ada_type, 'discriminants') and sym.ada_type.discriminants:
+                for disc in sym.ada_type.discriminants:
+                    if disc.name.lower() == comp_clause.name.lower():
+                        disc.offset_bits = position * 8 + first_bit
+                        disc.size_bits = last_bit - first_bit + 1
+                        found = True
+                        break
+
+            # Search variant part components
+            if not found and hasattr(sym.ada_type, 'variant_part') and sym.ada_type.variant_part:
+                for variant in sym.ada_type.variant_part.variants:
+                    if found:
+                        break
+                    for comp in variant.components:
+                        if comp.name.lower() == comp_clause.name.lower():
+                            comp.offset_bits = position * 8 + first_bit
+                            comp.size_bits = last_bit - first_bit + 1
+                            found = True
+                            break
 
             if not found:
                 self.error(
@@ -3087,20 +3116,32 @@ class SemanticAnalyzer:
         self, name: str, type_def: DerivedTypeDef
     ) -> Optional[AdaType]:
         """Build a derived type."""
+        # Check for array index constraint in parent expression
+        # e.g., type T is new String(1..10) parses parent_type as Slice
+        array_constraint = None
+        if isinstance(type_def.parent_type, Slice):
+            array_constraint = type_def.parent_type.range_expr
+
         parent = self._resolve_type(type_def.parent_type)
         if parent is None:
             return None
 
-        # For now, just copy the parent type with new name
-        # Full implementation would handle record extensions
+        # Handle derivation from integer type
         if isinstance(parent, IntegerType):
+            low, high = parent.low, parent.high
+            # Apply explicit RANGE constraint if present
+            if type_def.constraint and isinstance(type_def.constraint, RangeExpr):
+                clow = self._try_eval_static(type_def.constraint.low)
+                chigh = self._try_eval_static(type_def.constraint.high)
+                if isinstance(clow, int) and isinstance(chigh, int):
+                    low, high = clow, chigh
             return IntegerType(
                 name=name,
                 size_bits=parent.size_bits,
-                low=parent.low,
-                high=parent.high,
-                base_type=parent,  # Link to parent for type info (e.g., operations)
-                is_derived=True,  # Mark as derived type - distinct from parent
+                low=low,
+                high=high,
+                base_type=parent,
+                is_derived=True,
             )
 
         # Handle derivation from enumeration type (e.g., type MyBool is new Boolean)
@@ -3190,6 +3231,21 @@ class SemanticAnalyzer:
 
         # Handle derivation from array type
         if isinstance(parent, ArrayType):
+            # Apply index constraint if present (e.g., type T is new String(1..10))
+            if array_constraint and isinstance(array_constraint, RangeExpr) and not parent.is_constrained:
+                low = self._try_eval_static(array_constraint.low)
+                high = self._try_eval_static(array_constraint.high)
+                if isinstance(low, int) and isinstance(high, int):
+                    comp_size = parent.component_type.size_bits if parent.component_type else 8
+                    return ArrayType(
+                        name=name,
+                        size_bits=(high - low + 1) * comp_size,
+                        index_types=parent.index_types,
+                        component_type=parent.component_type,
+                        is_constrained=True,
+                        bounds=[(low, high)],
+                        base_type=parent,
+                    )
             return ArrayType(
                 name=name,
                 size_bits=parent.size_bits,
@@ -3197,7 +3253,7 @@ class SemanticAnalyzer:
                 component_type=parent.component_type,
                 is_constrained=parent.is_constrained,
                 bounds=parent.bounds,
-                base_type=parent,  # Link to parent for derived type compatibility
+                base_type=parent,
             )
 
         return parent
@@ -3463,7 +3519,35 @@ class SemanticAnalyzer:
                             )
             return base_type
 
-        return self._resolve_type(type_mark)
+        base_type = self._resolve_type(type_mark)
+        if base_type is None:
+            return None
+
+        # Apply range constraint if present (e.g., Integer range -100 .. 100)
+        if subtype_ind.constraint and isinstance(subtype_ind.constraint, RangeConstraint):
+            range_expr = subtype_ind.constraint.range_expr
+            if isinstance(range_expr, RangeExpr):
+                low = self._try_eval_static(range_expr.low)
+                high = self._try_eval_static(range_expr.high)
+                if isinstance(low, int) and isinstance(high, int):
+                    if isinstance(base_type, IntegerType):
+                        return IntegerType(
+                            name=base_type.name,
+                            size_bits=base_type.size_bits,
+                            low=low,
+                            high=high,
+                            base_type=base_type,
+                        )
+                    elif isinstance(base_type, EnumerationType):
+                        return EnumerationType(
+                            name=base_type.name,
+                            size_bits=base_type.size_bits,
+                            literals=base_type.literals.copy(),
+                            positions=base_type.positions.copy(),
+                            base_type=base_type,
+                        )
+
+        return base_type
 
     def _get_identifier_name(self, expr: Expr) -> Optional[str]:
         """Get the name from an identifier expression."""
@@ -6312,6 +6396,20 @@ class SemanticAnalyzer:
             if attr == "val" and expr.args:
                 arg_val = self._eval_static_impl(expr.args[0], report_errors)
                 return arg_val
+
+            # 'Min and 'Max attribute functions: Type'Min(X, Y)
+            if attr == "min" and len(expr.args) == 2:
+                left = self._eval_static_impl(expr.args[0], report_errors)
+                right = self._eval_static_impl(expr.args[1], report_errors)
+                if left is not None and right is not None:
+                    return min(left, right)
+                return None
+            if attr == "max" and len(expr.args) == 2:
+                left = self._eval_static_impl(expr.args[0], report_errors)
+                right = self._eval_static_impl(expr.args[1], report_errors)
+                if left is not None and right is not None:
+                    return max(left, right)
+                return None
 
         # Default/fallback
         if report_errors:

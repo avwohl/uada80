@@ -1,10 +1,84 @@
 # ACATS C-Test Results
-# Generated: 2026-02-10 02:41:13
-# Total tests: 1460
+# Generated: 2026-02-10 11:23:47
+# Total tests: 2220
 #
 # Format: TEST_NAME: STATUS [details]
 #
 
+c3900011: LINK_ERROR [Error: Undefined symbol: _LOW_ALERT_TYPE Error: Undefined symbol: _ALERT_TYPE]
+c3900053: COMPILE_ERROR [semantic: package specification for 'C3900051' not found]
+c3900063: COMPILE_ERROR [semantic: package specification for 'C3900061' not found]
+c390a011: ASSEMBLE_ERROR [Error at line 1813: Undefined symbol '_display_count_for' Error at line 1901: Undefined symbol '_display_count_for' Error at line 2483: Undefined symbol '_display_count_for' Error at line 2564: Undefi]
+c390a022: COMPILE_ERROR [semantic: package specification for 'C390A021' not found]
+c390a031: COMPILE_ERROR [semantic: package specification for 'C390A030' not found]
+c3a00122: COMPILE_ERROR [semantic: 'LA' is not a procedure]
+c3a10032: COMPILE_ERROR [semantic: 'Current_Department' not found]
+c3a10042: COMPILE_ERROR [semantic: 'Current_Department' not found]
+c611a022: COMPILE_ERROR [semantic: package specification for 'C611A020.Child' not found]
+c611a032: COMPILE_ERROR [semantic: package specification for 'C611A030.Child' not found]
+c611a043: COMPILE_ERROR [semantic: package specification for 'C611A040.Child' not found]
+c611b012: COMPILE_ERROR [semantic: package specification for 'C611B010.Child' not found]
+c611b022: COMPILE_ERROR [semantic: package specification for 'C611B020.Child' not found]
+c611b033: COMPILE_ERROR [semantic: package specification for 'C611B030.Child' not found]
+c7320012: COMPILE_ERROR [semantic: package specification for 'C7320011' not found]
+ca110042: COMPILE_ERROR [semantic: package specification for 'CA110040.CA110041' not found]
+ca110051: COMPILE_ERROR [semantic: package specification for 'CA110050_0.CA110050_1.CA110050_2' not found]
+ca110232: COMPILE_ERROR [semantic: procedure 'Assign_Employee' not found]
+ca11d013: COMPILE_ERROR [semantic: 'Zero' not found]
+ca120012: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'access_Window_Type'Class' to 'Any_Window_Access_Type']
+ca140232: COMPILE_ERROR [semantic: 'Any_rec' is not a record]
+ca140283: PASS
+ca200022: PASS
+ca200031: PASS
+cb40a021: COMPILE_ERROR [semantic: 'AlphaNumeric_Count' not found]
+cb40a031: COMPILE_ERROR [semantic: procedure 'Increment_AlphaNumeric_Count' not found]
+cc510103: COMPILE_ERROR [semantic: 'CC51010_0.Incomplete_Map' is not a generic]
+cd300050: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxb30041: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxb30061: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxb30132: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxb30172: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxb30182: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxb30231: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Float_IO' has no declaration]
+cxb30241: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Float_IO' has no declaration]
+cxb40093: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxb50042: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxb50052: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxh30031: COMPILE_ERROR [semantic: 'Global_Variable' not found]
+c38108c2: PASS
+c38108d1: LINK_ERROR [Error: Undefined symbol: _ASSIGN]
+c39006c1: PASS
+c39006f3: PASS
+c83022g1: COMPILE_ERROR [semantic: wrong number of arguments: expected 0, got 1]
+c83024e1: LINK_ERROR [Error: Undefined symbol: _F]
+c83f01c2: PASS
+c83f01d1: PASS
+c83f03c2: ASSEMBLE_ERROR [Error at line 1948: Symbol '_C83F03C0_INIT' multiply defined Error at line 1949: Symbol '_C83F03C0_INIT_ENTRY' multiply defined Error at line 1955: Symbol '_C83F03C2M' multiply defined Error at line 1]
+c83f03d1: PASS
+c86004b2: PASS
+c86004c2: LINK_ERROR [Error: Undefined symbol: _C86004C1]
+ca1011a6: COMPILE_ERROR [semantic: type mismatch for parameter 'X': expected 'Boolean', got 'Float']
+ca1012a4: PASS
+ca1012b4: PASS
+ca1013a6: PASS
+ca1014a3: COMPILE_ERROR [semantic: wrong number of arguments: expected 0, got 1]
+ca1020e3: PASS
+ca1022a6: PASS
+ca1102a2: PASS
+ca2001h3: PASS
+ca2002a2: LINK_ERROR [Error: Undefined symbol: _PKG_PROC Error: Undefined symbol: _PROC]
+ca2003a1: LINK_ERROR [Error: Undefined symbol: _CA2003A1]
+ca2004a4: LINK_ERROR [Error: Undefined symbol: _CA2004A3 Error: Undefined symbol: _CA2004A2]
+ca2007a3: PASS
+ca2008a2: COMPILE_ERROR [semantic: type mismatch for parameter 'I': expected 'Integer', got 'Boolean']
+ca2009c1: PASS
+ca2009f2: LINK_ERROR [Error: Undefined symbol: _NI_PROC1 Error: Undefined symbol: _NI_PROC2]
+ca3011a4: COMPILE_ERROR [semantic: wrong number of arguments: expected 0, got 1]
+ca5003a6: ASSEMBLE_ERROR [Error at line 1918: Undefined symbol '_order']
+ca5003b5: ASSEMBLE_ERROR [Error at line 1908: Undefined symbol '_order']
+ca5004b2: PASS
+cc3019b2: LINK_ERROR [Error: Undefined symbol: _STACK_ITERATE Error: Undefined symbol: _LIST Error: Undefined symbol: _STORE_DATE_ITERATE Error: Undefined symbol: _ACTUAL_LIST Error: Undefined symbol: _ASSIGN Error: Undefi]
+cc3019c2: LINK_ERROR [Error: Undefined symbol: _PROCESS Error: Undefined symbol: _STORE Error: Undefined symbol: _GET Error: Undefined symbol: _SHOW_PERSON_ITERATE Error: Undefined symbol: _ACTUAL_LIST Error: Undefined sym]
 c23001a: PASS
 c23006a: PASS
 c23006b: PASS
@@ -26,77 +100,77 @@ c24211a: PASS
 c25001a: PASS
 c25001b: PASS
 c26006a: PASS
-c26008a: NO_RESULT [,.,. C26008A ---- C26008A Constraint_ErrorCPU mode: Z80 Loaded 8064 bytes from /tmp/tmphnse_jmq/test.com Program exit via JMP 0 ]
+c26008a: NO_RESULT [,.,. C26008A ---- C26008A Constraint_ErrorCPU mode: Z80 Loaded 8064 bytes from /tmp/tmp2wovt3_3/test.com Program exit via JMP 0 ]
 c2a001a: PASS
 c2a001b: PASS
 c2a001c: PASS
 c2a002a: PASS
 c2a008a: PASS
 c2a021b: PASS
-c32001a: TIMEOUT
+c32001a: NO_RESULT [,.,. C32001A ---- C32001A CPU mode: Z80 Loaded 23552 bytes from /tmp/tmprt0e0fqd/test.com Program exit via JMP 0 ]
 c32001b: TIMEOUT
-c32001c: NO_RESULT [,.,. C32001C ---- C32001C CPU mode: Z80 Loaded 18816 bytes from /tmp/tmpzsl8mq9l/test.com Program exit via JMP 0 ]
-c32001d: NO_RESULT [,.,. C32001D ---- C32001D CPU mode: Z80 Loaded 14592 bytes from /tmp/tmpwym3u_kp/test.com Program exit via JMP 0 ]
+c32001c: TIMEOUT
+c32001d: NO_RESULT [,.,. C32001D ---- C32001D CPU mode: Z80 Loaded 14592 bytes from /tmp/tmpnm7zs0mt/test.com Program exit via JMP 0 ]
 c32001e: PASS
-c32107a: NO_RESULT [CPU mode: Z80 Loaded 34304 bytes from /tmp/tmpwq5rmj3s/test.com Program exit via JMP 0 ]
-c32107c: LINK_ERROR [Error: Undefined symbol: _PROC]
+c32107a: TIMEOUT
+c32107c: PASS
 c32108a: PASS
 c32108b: PASS
-c32111a: NO_RESULT [,.,. C32111A ---- C32111A    *    * NO EXCEPTION RAISED FOR INITIALIZATION OF VARIABLE 'D'.    - VARIABLE 'D' INITIALIZED    *    * NO EXCEPTION RAISE]
-c32111b: NO_RESULT [,.,. C32111B ---- C32111B    *    * NO EXCEPTION RAISED FOR INITIALIZATION OF VARIABLE 'D'.    - VARIABLE 'D' INITIALIZED    *    * NO EXCEPTION RAISE]
-c32112b: NO_RESULT [,.,. C32112B ---- C32112B    *    * NO EXCEPTION RAISED FOR INITIALIZATION OF VARIABLE 'N1A'.    *    * NO EXCEPTION RAISED FOR INITIALIZATION OF CONS]
+c32111a: TIMEOUT
+c32111b: NO_RESULT [,.,. C32111B ---- C32111B    *    * NO EXCEPTION RAISED FOR INITIALIZATION OF VARIABLE 'D'.    *    * NO EXCEPTION RAISED FOR INITIALIZATION OF CONSTA]
+c32112b: TIMEOUT
 c32113a: NO_RESULT [,.,. C32113A ---- C32113A    *    * NO EXCEPTION RAISED FOR INITIALIZATION OF CONSTANT 'PR1'.    - PREVENTING DEAD VARIABLE OPTIMIZATION    *    * NO ]
 c32115a: TIMEOUT
 c32115b: TIMEOUT
 c34001a: TIMEOUT
-c34001c: TIMEOUT
-c34001d: NO_RESULT [,.,. C34001D ---- C34001D    * INCORRECT QUALIFICATION    * INCORRECT CONVERSION TO PARENT    * INCORRECT ""NOT"" CPU mode: Z80 Loaded 14080 bytes fro]
-c34001f: PASS
-c34002a: NO_RESULT [,.,. C34002A ---- C34002A    * INCORRECT QUALIFICATION    * INCORRECT CONVERSION TO FLOAT CPU mode: Z80 Loaded 25472 bytes from /tmp/tmpcaabt1t5/test.]
-c34002c: NO_RESULT [,.,. C34002C ---- C34002C    * INCORRECT 'FIRST OR 'LAST    * CONSTRAINT_ERROR NOT RAISED -- X := -31 CPU mode: Z80 Loaded 12928 bytes from /tmp/tmpwu]
+c34001c: PASS
+c34001d: NO_RESULT [,.,. C34001D ---- C34001D    * INCORRECT QUALIFICATION    * INCORRECT CONVERSION TO PARENT    * INCORRECT ""NOT"" CPU mode: Z80 Loaded 14336 bytes fro]
+c34001f: TIMEOUT
+c34002a: NO_RESULT [,.,. C34002A ---- C34002A    * INCORRECT QUALIFICATION CPU mode: Z80 Loaded 25728 bytes from /tmp/tmpp3zsn6i3/test.com System reset ]
+c34002c: NO_RESULT [,.,. C34002C ---- C34002C    * INCORRECT 'FIRST OR 'LAST    * CONSTRAINT_ERROR NOT RAISED -- X := -31    - X ALTERED -- X := -31 CPU mode: Z80 Loaded ]
 c34003a: TIMEOUT
-c34003c: NO_RESULT [,.,. C34003C ---- C34003C    * INCORRECT 'BASE'DIGITS CPU mode: Z80 Loaded 23424 bytes from /tmp/tmpain_fxbw/test.com System reset ]
+c34003c: NO_RESULT [,.,. C34003C ---- C34003C    * INCORRECT 'BASE'DIGITS CPU mode: Z80 Loaded 23424 bytes from /tmp/tmpxrzhef4z/test.com System reset ]
 c34004a: NO_RESULT [,.,. C34004A ---- C34004A    * INCORRECT :=    * INCORRECT BINARY +    * INCORRECT BINARY -    * INCORRECT QUALIFICATION    * INCORRECT SELF CONVERSIO]
-c34004c: NO_RESULT [,.,. C34004C ---- C34004C    * INCORRECT 'BASE'DELTA CPU mode: Z80 Loaded 23424 bytes from /tmp/tmpfl285qjg/test.com Unimplemented BDOS function 253 U]
+c34004c: NO_RESULT [,.,. C34004C ---- C34004C    * INCORRECT 'BASE'DELTA CPU mode: Z80 Loaded 23424 bytes from /tmp/tmp6ayoald3/test.com Unimplemented BDOS function 253 U]
 c34005a: LINK_ERROR [Error: Undefined symbol: _CONT_LAST]
-c34005c: NO_RESULT [CPU mode: Z80 Loaded 26368 bytes from /tmp/tmpnahxa8vq/test.com System reset ]
+c34005c: NO_RESULT [CPU mode: Z80 Loaded 26368 bytes from /tmp/tmpzaahz735/test.com System reset ]
 c34005d: LINK_ERROR [Error: Undefined symbol: _CONT_LAST]
 c34005f: TIMEOUT
 c34005g: LINK_ERROR [Error: Undefined symbol: _CONT_LAST]
 c34005i: NO_RESULT [,.,. C34005I ---- C34005I    *    * CAN'T CREATE BASE TYPE VALUES OUTSIDE THE SUBTYPE.    * INCORRECT &    * INCORRECT 'FIRST OR 'LAST CPU mode: Z80 L]
 c34005j: LINK_ERROR [Error: Undefined symbol: _CONT_LAST]
-c34005l: NO_RESULT [,.,. C34005L ---- C34005L    *    * CAN'T CREATE BASE TYPE VALUES OUTSIDE THE SUBTYPE.    CPU mode: Z80 Loaded 16128 bytes from /tmp/tmppybu_3sl/test.]
+c34005l: NO_RESULT [,.,. C34005L ---- C34005L    *    * CAN'T CREATE BASE TYPE VALUES OUTSIDE THE SUBTYPE.    CPU mode: Z80 Loaded 16128 bytes from /tmp/tmp8_u3omjy/test.]
 c34005m: LINK_ERROR [Error: Undefined symbol: _CONT_LAST]
-c34005o: NO_RESULT [,.,. C34005O ---- C34005O CPU mode: Z80 Loaded 24448 bytes from /tmp/tmpwbnc_6vm/test.com Program exit via JMP 0 ]
+c34005o: NO_RESULT [,.,. C34005O ---- C34005O CPU mode: Z80 Loaded 24448 bytes from /tmp/tmp58zynfqk/test.com Program exit via JMP 0 ]
 c34005p: COMPILE_ERROR [semantic: type mismatch for parameter 'X': expected 'LP', got 'T']
 c34005r: COMPILE_ERROR [semantic: type mismatch for parameter 'Y': expected 'LP', got 'PARENT']
 c34005s: LINK_ERROR [Error: Undefined symbol: _CONT_LAST Error: Undefined symbol: _ASSIGN]
 c34005u: COMPILE_ERROR [semantic: type mismatch for parameter 'Y': expected 'LP', got 'PARENT']
 c34005v: COMPILE_ERROR [semantic: type mismatch for parameter 'X': expected 'LP', got 'T']
 c34006a: NO_RESULT [,.,. C34006A ---- C34006A    * INCORRECT :=    * INCORRECT QUALIFICATION    * INCORRECT SELF CONVERSION    * INCORRECT CONVERSION FROM PARENT    * INC]
-c34006d: NO_RESULT [,.,. C34006D ---- C34006D    * INCORRECT :=    * INCORRECT QUALIFICATION    * INCORRECT SELF CONVERSION    * INCORRECT CONVERSION FROM PARENT    * INC]
+c34006d: TIMEOUT
 c34006f: TIMEOUT
-c34006g: NO_RESULT [,.,. C34006G ---- C34006G CPU mode: Z80 Loaded 11392 bytes from /tmp/tmpnidgetjg/test.com Program exit via JMP 0 ]
+c34006g: NO_RESULT [,.,. C34006G ---- C34006G CPU mode: Z80 Loaded 11520 bytes from /tmp/tmpd4h3e1hm/test.com Program exit via JMP 0 ]
 c34006j: COMPILE_ERROR [semantic: type mismatch for parameter 'X': expected 'LP', got 'PARENT']
 c34006l: COMPILE_ERROR [semantic: type mismatch for parameter 'Y': expected 'LP', got 'PARENT']
 c34007a: TIMEOUT
 c34007d: LINK_ERROR [Error: Undefined symbol: _CONT_LAST]
 c34007f: PASS
 c34007g: LINK_ERROR [Error: Undefined symbol: _CONT_LAST]
-c34007i: NO_RESULT [,.,. C34007I ---- C34007I CPU mode: Z80 Loaded 20224 bytes from /tmp/tmpj5oceaf1/test.com Program exit via JMP 0 ]
+c34007i: NO_RESULT [,.,. C34007I ---- C34007I CPU mode: Z80 Loaded 20224 bytes from /tmp/tmprznay68i/test.com Program exit via JMP 0 ]
 c34007j: LINK_ERROR [Error: Undefined symbol: _E Error: Undefined symbol: _W Error: Undefined symbol: _R]
 c34007m: NO_RESULT [,.,. C34007M ---- C34007M    * INCORRECT INITIALIZATION    * INCORRECT :=    * INCORRECT QUALIFICATION    * INCORRECT SELF CONVERSION    * INCORRECT C]
 c34007p: TIMEOUT
 c34007r: TIMEOUT
-c34007s: NO_RESULT [,.,. C34007S ---- C34007S Dr ]            CPU mode: Z80 Loaded 27392 bytes from /tmp/tmpgkiyrcqi/test.com BIOS WBOOT called - exiting ]
-c34007u: NO_RESULT [,.,. C34007U ---- C34007U CPU mode: Z80 Loaded 21120 bytes from /tmp/tmp_i7f3dxi/test.com System reset ]
+c34007s: TIMEOUT
+c34007u: NO_RESULT [,.,. C34007U ---- C34007U CPU mode: Z80 Loaded 21120 bytes from /tmp/tmpabg_iumh/test.com System reset ]
 c34007v: NO_RESULT [,.,. C34007V ---- C34007V    * INCORRECT CONVERSION TO PARENT - 2    * INCORRECT .ALL (VALUE) Constraint_ErrorCPU mode: Z80 Loaded 14336 bytes from /t]
 c34008a: COMPILE_ERROR [semantic: 'H' not found]
 c34009a: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'T' to 'PARENT']
 c34009d: TIMEOUT
 c34009f: TIMEOUT
 c34009g: COMPILE_ERROR [semantic: type mismatch for parameter 'X': expected 'T', got 'PARENT']
-c34009j: NO_RESULT [,.,. C34009J ---- C34009J    * INCORRECT QUALIFICATION    * INCORRECT SELF CONVERSION    * INCORRECT CONVERSION FROM PARENT    * INCORRECT CONVERSION ]
+c34009j: TIMEOUT
 c34009l: TIMEOUT
 c34011b: TIMEOUT
 c34012a: PASS
@@ -111,63 +185,63 @@ c34014r: PASS
 c34014t: PASS
 c34014u: PASS
 c34018a: LINK_ERROR [Error: Undefined symbol: _G]
-c35003a: TIMEOUT
+c35003a: NO_RESULT [,.,. C35003A ---- C35003A    * NO EXCEPTION RAISED (E1)    - DON'T OPTIMIZE Z    * NO EXCEPTION RAISED (E2) Constraint_ErrorCPU mode: Z80 Loaded 13440]
 c35003b: PASS
 c35003d: PASS
 c35102a: LINK_ERROR [Error: Undefined symbol: _E]
 c35502a: PASS
-c35502b: LINK_ERROR [Error: Undefined symbol: _PROC1 Error: Undefined symbol: _PROC3 Error: Undefined symbol: _PROC2 Error: Undefined symbol: _PROC4]
-c35502c: NO_RESULT [,.,. C35502C ---- C35502C    * INCORRECT LOWER BOUND FOR ABC IN ENUM    * INCORRECT LOWER BOUND FOR A_B_C IN ENUM    * INCORRECT SUBENUM'IMAGE FOR A_B]
-c35502e: LINK_ERROR [Error: Undefined symbol: _PE Error: Undefined symbol: _PS Error: Undefined symbol: _PN]
+c35502b: PASS
+c35502c: TIMEOUT
+c35502e: NO_RESULT [,.,. C35502E ---- C35502E    *    * INCORRECT SE'IMAGE FOR ABC.    *    * INCORRECT LOWER BOUND FOR ABC.    *    * INCORRECT SE'IMAGE FOR A_B_C.    * ]
 c35502g: PASS
-c35502h: LINK_ERROR [Error: Undefined symbol: _PE Error: Undefined symbol: _PN]
-c35502i: NO_RESULT [,.,. C35502I ---- C35502I CPU mode: Z80 Loaded 10880 bytes from /tmp/tmprxbg30vl/test.com Program exit via JMP 0 ]
-c35502j: LINK_ERROR [Error: Undefined symbol: _PE Error: Undefined symbol: _PN]
-c35502k: PASS
-c35502l: LINK_ERROR [Error: Undefined symbol: _PN Error: Undefined symbol: _PE]
-c35502m: NO_RESULT [,.,. C35502M ---- C35502M    *    * INCORRECT SUBENUM'POS (BC.    *    * INCORRECT SUBENUM'VAL (0.    *    * INCORRECT SUBENUM'POS (ABC.    *    * INC]
-c35502n: LINK_ERROR [Error: Undefined symbol: _PE Error: Undefined symbol: _PN]
+c35502h: PASS
+c35502i: NO_RESULT [,.,. C35502I ---- C35502I CPU mode: Z80 Loaded 10496 bytes from /tmp/tmpg1n1aciu/test.com Program exit via JMP 0 ]
+c35502j: PASS
+c35502k: TIMEOUT
+c35502l: PASS
+c35502m: TIMEOUT
+c35502n: PASS
 c35502o: PASS
-c35502p: LINK_ERROR [Error: Undefined symbol: _PROC2 Error: Undefined symbol: _PROC4 Error: Undefined symbol: _PROC3 Error: Undefined symbol: _PROC1]
+c35502p: PASS
 c35503a: PASS
-c35503b: LINK_ERROR [Error: Undefined symbol: _P_INT2 Error: Undefined symbol: _P_INTEGER Error: Undefined symbol: _P_SINT1 Error: Undefined symbol: _P_INT Error: Undefined symbol: _P_SINT2]
+c35503b: PASS
 c35503c: TIMEOUT
-c35503e: LINK_ERROR [Error: Undefined symbol: _PROC2 Error: Undefined symbol: _PROC1]
+c35503e: TIMEOUT
 c35503g: PASS
-c35503h: LINK_ERROR [Error: Undefined symbol: _PROC2 Error: Undefined symbol: _PROC1]
+c35503h: PASS
 c35503k: PASS
-c35503l: LINK_ERROR [Error: Undefined symbol: _P1 Error: Undefined symbol: _P2]
+c35503l: PASS
 c35503o: PASS
-c35503p: LINK_ERROR [Error: Undefined symbol: _P2 Error: Undefined symbol: _R1 Error: Undefined symbol: _P1 Error: Undefined symbol: _Q1]
+c35503p: PASS
 c35504a: PASS
 c35504b: PASS
-c35505c: LINK_ERROR [Error: Undefined symbol: _PB Error: Undefined symbol: _PC]
-c35505e: LINK_ERROR [Error: Undefined symbol: _PNCHAR Error: Undefined symbol: _PCHAR]
+c35505c: PASS
+c35505e: TIMEOUT
 c35505f: NO_RESULT [,.,. C35505F ---- C35505F    *    * NO EXCEPTION RAISED FOR CHAR'PRED (IDENT ('A')) - 2.    *    * NO EXCEPTION RAISED FOR CHAR'SUCC (IDENT (B)) - 2. ]
 c35507a: PASS
-c35507b: PASS
+c35507b: LINK_ERROR [Error: Undefined symbol: _P1 Error: Undefined symbol: _P2 Error: Undefined symbol: _P3 Error: Undefined symbol: _PN]
 c35507c: TIMEOUT
-c35507e: LINK_ERROR [Error: Undefined symbol: _PN Error: Undefined symbol: _PCHAR Error: Undefined symbol: _PNCHAR Error: Undefined symbol: _PCH]
+c35507e: TIMEOUT
 c35507g: PASS
-c35507h: LINK_ERROR [Error: Undefined symbol: _PNCHAR Error: Undefined symbol: _PCHAR Error: Undefined symbol: _PCH]
+c35507h: PASS
 c35507i: PASS
-c35507j: LINK_ERROR [Error: Undefined symbol: _PCHAR Error: Undefined symbol: _PNCHAR]
-c35507k: TIMEOUT
-c35507l: LINK_ERROR [Error: Undefined symbol: _PCHAR Error: Undefined symbol: _PCH Error: Undefined symbol: _PNCHAR]
+c35507j: PASS
+c35507k: NO_RESULT [CPU mode: Z80 Loaded 15616 bytes from /tmp/tmpj4890umx/test.com Program exit via JMP 0 ]
+c35507l: TIMEOUT
 c35507m: PASS
-c35507n: LINK_ERROR [Error: Undefined symbol: _PNCHAR Error: Undefined symbol: _PCHAR Error: Undefined symbol: _PCH]
-c35507o: NO_RESULT [Constraint_ErrorCPU mode: Z80 Loaded 9728 bytes from /tmp/tmp6g2ovuk6/test.com Program exit via JMP 0 ]
-c35507p: LINK_ERROR [Error: Undefined symbol: _P1 Error: Undefined symbol: _P2 Error: Undefined symbol: _P3 Error: Undefined symbol: _P4]
+c35507n: NO_RESULT [,.,. C35507N ---- C35507N    *    * INCORRECT VALUE FOR C~.    *    * INCORRECT VALUE FOR C~.    *    * INCORRECT VALUE FOR C~.    *    * INCORRECT]
+c35507o: NO_RESULT [Constraint_ErrorCPU mode: Z80 Loaded 9728 bytes from /tmp/tmppio69_d7/test.com Program exit via JMP 0 ]
+c35507p: PASS
 c35508a: PASS
-c35508b: LINK_ERROR [Error: Undefined symbol: _PROC2 Error: Undefined symbol: _PROC1 Error: Undefined symbol: _PROC3 Error: Undefined symbol: _PROC4]
+c35508b: PASS
 c35508c: PASS
-c35508e: LINK_ERROR [Error: Undefined symbol: _NP2 Error: Undefined symbol: _NP Error: Undefined symbol: _NP1]
+c35508e: PASS
 c35508g: PASS
-c35508h: LINK_ERROR [Error: Undefined symbol: _NP1 Error: Undefined symbol: _NP2]
+c35508h: NO_RESULT [,.,. C35508H ---- C35508H    *    * INCORRECT VALUE FOR BOOLEAN.    *    * INCORRECT VALUE FOR BOOLEAN.    *    * INCORRECT VALUE FOR SBOOL'PRED OF T ]
 c35508k: PASS
-c35508l: LINK_ERROR [Error: Undefined symbol: _NQ2 Error: Undefined symbol: _NP1 Error: Undefined symbol: _NP2 Error: Undefined symbol: _NQ1]
+c35508l: NO_RESULT [,.,. C35508L ---- C35508L    *    * NO EXCEPTION RAISED FOR BOOLEAN.    *    * NO EXCEPTION RAISED FOR VAL OF 3496. ,.,. NO EXCEPTION RAISED FOR VAL O]
 c35508o: PASS
-c35508p: LINK_ERROR [Error: Undefined symbol: _R1 Error: Undefined symbol: _P3 Error: Undefined symbol: _P2 Error: Undefined symbol: _Q1 Error: Undefined symbol: _P4 Error: Undefined symbol: _P1]
+c35508p: PASS
 c35703a: PASS
 c35704a: PASS
 c35704b: PASS
@@ -176,28 +250,28 @@ c35704d: PASS
 c35801d: PASS
 c35902d: PASS
 c35904a: PASS
-c35904b: PASS
+c35904b: LINK_ERROR [Error: Undefined symbol: _NPROC]
 c35a02a: PASS
 c35a05a: NO_RESULT [,.,. C35A05A ---- C35A05A    *    * LEFT_OUT_M1'FORE =.    *    * LEFT_OUT_M1'AFT  =.    *    * LEFT_EDGE_M1'FORE =.    *    * LEFT_EDGE_M1'AFT  =.   ]
 c35a05d: TIMEOUT
 c35a05n: NO_RESULT [,.,. C35A05N ---- C35A05N    *    * GENERIC 'FORE FOR LEFT_OUT_M1.    *    * GENERIC 'AFT  FOR LEFT_OUT_M1.    *    * GENERIC 'FORE FOR LEFT_EDGE_M1. ]
 c35a05q: NO_RESULT [,.,. C35A05Q ---- C35A05Q    *    * GENERIC 'FORE FOR MICRO_ANGLE_ERROR_M15.    *    * GENERIC 'AFT  FOR MICRO_ANGLE_ERROR_M15.    *    * GENERIC 'FOR]
-c35a07a: TIMEOUT
-c35a07d: TIMEOUT
+c35a07a: NO_RESULT [,.,. C35A07A ---- C35A07A    * MIDDLE_M3'FIRST /= 0.0    * MIDDLE_M3'LAST /= 2.5    * LIKE_DURATION_M23'FIRST /= -86_400.0    * LIKE_DURATION_M23'LAST]
+c35a07d: NO_RESULT [,.,. C35A07D ---- C35A07D    * PIXEL_M10'FIRST /= 0.0    * RULER_M8'FIRST /= 0.0    * RULER_M8'LAST /= 12.0    * HOURS_M16'FIRST /= 0.0    * HOURS_M16]
 c35a08b: LINK_ERROR [Error: Undefined symbol: _T1]
-c36104a: NO_RESULT [,.,. C36104A ---- C36104A    *    * CONSTRAINT_ERROR NOT RAISED 1 656.    * CONSTRAINT_ERROR NOT RAISED 3    * CONSTRAINT_ERROR NOT RAISED 3    * CONS]
-c36104b: TIMEOUT
+c36104a: TIMEOUT
+c36104b: NO_RESULT [,.,. C36104B ---- C36104B    *    * CONSTRAINT_ERROR NOT RAISED 1 0.    * CONSTRAINT_ERROR NOT RAISED 3 CPU mode: Z80 Loaded 21504 bytes from /tmp/t]
 c36172a: PASS
 c36172b: TIMEOUT
 c36172c: PASS
-c36174a: NO_RESULT [CPU mode: Z80 Loaded 11136 bytes from /tmp/tmpwnh8kicq/test.com Program exit via JMP 0 ]
+c36174a: NO_RESULT [CPU mode: Z80 Loaded 11136 bytes from /tmp/tmp6vbsftc4/test.com Program exit via JMP 0 ]
 c36180a: NO_RESULT [,.,. C36180A ---- C36180A    * IMPROPER VALUE FOR B'FIRST OR B'LAST    * IMPROPER VALUE FOR C'FIRST OR C'LAST    * IMPROPER VALUE FOR E'FIRST OR E'LAS]
 c36202c: PASS
 c36203a: PASS
-c36204a: NO_RESULT [,.,. C36204A ---- C36204A    * INCORRECT 'FIRST OR 'LAST  - 1    * INCORRECT 'LENGTH - 1 CPU mode: Z80 Loaded 11648 bytes from /tmp/tmp70e4e81e/test.c]
+c36204a: NO_RESULT [,.,. C36204A ---- C36204A    * INCORRECT 'FIRST OR 'LAST  - 1    * INCORRECT 'LENGTH - 1 CPU mode: Z80 Loaded 11776 bytes from /tmp/tmpw0qw26qn/test.c]
 c36204b: TIMEOUT
 c36204c: NO_RESULT [,.,. C36204C ---- C36204C    *    * INCORRECT RANGE VALUE FOR AN OBJECT DECLARATION 1.    *    * INCORRECT RANGE VALUE FOR AN OBJECT DECLARATION 2.   ]
-c36204d: NO_RESULT [,.,. C36204D ---- C36204D CPU mode: Z80 Loaded 31360 bytes from /tmp/tmp58dw28ru/test.com Program exit via JMP 0 ]
+c36204d: LINK_ERROR [Error: Undefined symbol: _NEW_PROC_ARRAY_ATT_TEST]
 c36205a: TIMEOUT
 c36205b: PASS
 c36205c: PASS
@@ -208,7 +282,7 @@ c36205g: PASS
 c36205h: PASS
 c36205i: PASS
 c36205j: TIMEOUT
-c36205k: NO_RESULT [,.,. C36205K ---- C36205K Constraint_ErrorCPU mode: Z80 Loaded 13696 bytes from /tmp/tmpn8a2u10g/test.com Program exit via JMP 0 ]
+c36205k: NO_RESULT [,.,. C36205K ---- C36205K Constraint_ErrorCPU mode: Z80 Loaded 13696 bytes from /tmp/tmppdlz37jt/test.com Program exit via JMP 0 ]
 c36205l: TIMEOUT
 c36301a: PASS
 c36301b: PASS
@@ -218,9 +292,9 @@ c36305a: NO_RESULT [,.,. C36305A ---- C36305A    * INCORRECT STRING ATTRIBUTE VA
 c37002a: PASS
 c37003a: NO_RESULT [,.,. C37003A ---- C37003A    *    * CONSTRAINT EXPRESSION NOT EVALUATED TWICE FOR ARRAYS.    *    * INITIALIZATION EXPRESSION NOT EVALUATED FOR EACH A]
 c37003b: PASS
-c37005a: PASS
-c37006a: PASS
-c37008a: LINK_ERROR [Error: Undefined symbol: _C6 Error: Undefined symbol: _C11 Error: Undefined symbol: _C9 Error: Undefined symbol: _C4 Error: Undefined symbol: _C10 Error: Undefined symbol: _C5 Error: Undefined symbol:]
+c37005a: TIMEOUT
+c37006a: NO_RESULT [,.,. C37006A ---- C37006A    *    * INCORRECT VALUE FOR DISCRIMINANTS OF RECORD TYPE COMPONENT.    *    * INCORRECT VALUE FOR DISCRIMINANTS OF ACCESS ]
+c37008a: LINK_ERROR [Error: Undefined symbol: _C6 Error: Undefined symbol: _C11 Error: Undefined symbol: _C10 Error: Undefined symbol: _C5]
 c37008b: PASS
 c37009a: TIMEOUT
 c37010a: PASS
@@ -233,22 +307,22 @@ c37108b: LINK_ERROR [Error: Undefined symbol: _A]
 c37206a: PASS
 c37207a: TIMEOUT
 c37208a: TIMEOUT
-c37208b: LINK_ERROR [Error: Undefined symbol: _PROC_C Error: Undefined symbol: _PROC_U]
+c37208b: LINK_ERROR [Error: Undefined symbol: _PROC_U Error: Undefined symbol: _PROC_C]
 c37209a: NO_RESULT [,.,. C37209A ---- C37209A    - NO EXCEPTION RAISED AT DECLARATION OF R1    -    - NO EXCEPTION RAISED AT DECLARATION OF R2. CPU mode: Z80 Loaded 12544]
 c37209b: TIMEOUT
 c37210a: PASS
 c37211a: NO_RESULT [,.,. C37211A ---- C37211A    *    * NO EXCEPTION RAISED AT THE ELABORATION OF SUBTYPE SUBREC .    *    * NO EXCEPTION RAISED AT THE ELABORATION OF TYP]
 c37211b: TIMEOUT
-c37211c: TIMEOUT
+c37211c: NO_RESULT [,.,. C37211C ---- C37211C    *    * NO EXCEPTION RAISED AT THE ELABORATION OF SUBTYPE SUBPRIV .    *    * NO EXCEPTION RAISED AT THE ELABORATION OF SU]
 c37211d: PASS
 c37211e: PASS
-c37213b: NO_RESULT [,.,. C37213B ---- C37213B    *    * F1 NOT EVALUATED: CONS IS .    *    * F1 EVALUATED: CONS IS .    * DISCRIMINANT VALUES NOT CORRECT    * DISCRIMINA]
-c37213d: NO_RESULT [,.,. C37213D ---- C37213D    *    * F1 NOT EVALUATED: CONS IS .    *    * F1 EVALUATED: CONS IS .    * INDEX BOUNDS NOT CORRECT    * INDEX CHECK NOT P]
+c37213b: PASS
+c37213d: PASS
 c37213f: TIMEOUT
 c37213h: TIMEOUT
-c37213j: LINK_ERROR [Error: Undefined symbol: _PROC8 Error: Undefined symbol: _PROC7 Error: Undefined symbol: _PROC2 Error: Undefined symbol: _PROC4 Error: Undefined symbol: _PROC6 Error: Undefined symbol: _PROC1 Error: U]
-c37213k: LINK_ERROR [Error: Undefined symbol: _PROC3 Error: Undefined symbol: _PROC5 Error: Undefined symbol: _PROC7 Error: Undefined symbol: _PROC6 Error: Undefined symbol: _PROC8 Error: Undefined symbol: _PROC1 Error: U]
-c37213l: LINK_ERROR [Error: Undefined symbol: _PROC7 Error: Undefined symbol: _PROC4 Error: Undefined symbol: _PROC6 Error: Undefined symbol: _PROC1 Error: Undefined symbol: _PROC8 Error: Undefined symbol: _PROC5 Error: U]
+c37213j: LINK_ERROR [Error: Undefined symbol: _PROC5 Error: Undefined symbol: _PROC3 Error: Undefined symbol: _PROC4 Error: Undefined symbol: _PROC6 Error: Undefined symbol: _PROC8 Error: Undefined symbol: _PROC7 Error: U]
+c37213k: LINK_ERROR [Error: Undefined symbol: _PROC5 Error: Undefined symbol: _PROC3 Error: Undefined symbol: _PROC4 Error: Undefined symbol: _PROC6 Error: Undefined symbol: _PROC1 Error: Undefined symbol: _PROC8 Error: U]
+c37213l: LINK_ERROR [Error: Undefined symbol: _PROC3 Error: Undefined symbol: _PROC5 Error: Undefined symbol: _PROC6 Error: Undefined symbol: _PROC7 Error: Undefined symbol: _PROC2 Error: Undefined symbol: _PROC8 Error: U]
 c37215b: TIMEOUT
 c37215d: TIMEOUT
 c37215f: NO_RESULT [,.,. C37215F ---- C37215F    * DISCRIMINANT CHECK NOT PERFORMED - 1    - SHOULDN'T GET HERE    * DISCRIMINANT CHECK NOT PERFORMED - 2    - IRRELEVANT ]
@@ -266,58 +340,47 @@ c37402a: LINK_ERROR [Error: Undefined symbol: _Q]
 c37403a: LINK_ERROR [Error: Undefined symbol: _Q]
 c37404a: NO_RESULT [,.,. C37404A ---- C37404A    * 'CONSTRAINED NOT TRUE FOR SUBTYPE1    * 'CONSTRAINED NOT TRUE FOR SUBTYPE2    * 'CONSTRAINED NOT TRUE FOR DEFAULT SUBTY]
 c37404b: NO_RESULT [,.,. C37404B ---- C37404B    * 'CONSTRAINED TRUE FOR RECORD COMPONENT    * 'CONSTRAINED TRUE FOR SUBTYPE    * 'CONSTRAINED TRUE FOR ARRAY TYPE    * 'C]
-c37405a: TIMEOUT
+c37405a: NO_RESULT [,.,. C37405A ---- C37405A    * 'CONSTRAINED ATTRIBUTE CHANGED BY ASSIGNMENT - 4    * 'CONSTRAINED ATTRIBUTE CHANGED BY ASSIGNMENT - 5    * 'CONSTRAINE]
 c37411a: PASS
 c38002a: TIMEOUT
 c38002b: NO_RESULT [,.,. C38002B ---- C38002B    *    * INCOMPATIBLE CONSTRAINT ON ACCESS VALUE ACCEPTED BY GENERIC FUNCTION. CPU mode: Z80 Loaded 8704 bytes from /tmp/tm]
-c38005a: NO_RESULT [,.,. C38005A ---- C38005A    * INCORRECT ACCESS TYPE INITIALIZATION - 1    * INCORRECT ACCESS TYPE INITIALIZATION - 4    * INCORRECT ACCESS TYPE INITI]
+c38005a: TIMEOUT
 c38005b: LINK_ERROR [Error: Undefined symbol: _B]
 c38005c: PASS
 c38102a: LINK_ERROR [Error: Undefined symbol: _X7]
 c38102b: PASS
 c38102c: PASS
-c38102d: LINK_ERROR [Error: Undefined symbol: _E]
-c38102e: NO_RESULT [,.,. C38102E ---- C38102E    * INTEGER AND ENUMERATED TYPES NOT DERIVED Unhandled exception: 1 CPU mode: Z80 Loaded 11264 bytes from /tmp/tmpm_bef7xf/]
+c38102d: NO_RESULT [,.,. C38102D ---- C38102D Tasking_ErrorCPU mode: Z80 Loaded 9088 bytes from /tmp/tmp6iz4lgzu/test.com Program exit via JMP 0 ]
+c38102e: NO_RESULT [,.,. C38102E ---- C38102E    * INTEGER AND ENUMERATED TYPES NOT DERIVED Unhandled exception: 1 CPU mode: Z80 Loaded 11520 bytes from /tmp/tmpo5c1bbe_/]
 c38104a: PASS
 c38107a: PASS
 c38107b: PASS
 c38108a: PASS
 c38108b: PASS
-c38108c0: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmp0m0hc1t7/test.com Program exit via JMP 0 ]
-c38108c1: LINK_ERROR [Error: Undefined symbol: _ASSIGN]
-c38108c2: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'access_INC' to 'L']
-c38108d0: LINK_ERROR [Error: Undefined symbol: _ASSIGN]
-c38108d1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmproqsg_od/test.com Program exit via JMP 0 ]
 c39006a: PASS
 c39006b: PASS
-c39006c0: PASS
-c39006c1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpp41nh5gw/test.com Program exit via JMP 0 ]
 c39006d: COMPILE_ERROR [semantic: 'LENGTH' not found]
 c39006e: LINK_ERROR [Error: Undefined symbol: _INIT_2]
-c39006f0: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7424 bytes from /tmp/tmp228s050g/test.com Program exit via JMP 0 ]
-c39006f1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpq2m6nble/test.com Program exit via JMP 0 ]
-c39006f2: NO_RESULT [,.,. C39006F ---- C39006F    * INCORRECT RESULTS - 1    * INCORRECT RESULTS - 2    * INCORRECT RESULTS - 4 ,.,. C~ ---- C~ CPU mode: Z80 Loaded 9728]
-c39006f3: PASS
-c39006g: NO_RESULT [CPU mode: Z80 Loaded 7424 bytes from /tmp/tmplis8zb_i/test.com Program exit via JMP 0 ]
+c39006g: NO_RESULT [CPU mode: Z80 Loaded 7424 bytes from /tmp/tmpb7vbtmpe/test.com Program exit via JMP 0 ]
 c39007a: PASS
 c39007b: PASS
 c39008a: PASS
 c39008b: PASS
 c39008c: PASS
 c41101d: TIMEOUT
-c41103a: TIMEOUT
-c41103b: TIMEOUT
+c41103a: LINK_ERROR [Error: Undefined symbol: _N1]
+c41103b: LINK_ERROR [Error: Undefined symbol: _N1]
 c41104a: LINK_ERROR [Error: Undefined symbol: _A]
 c41105a: PASS
-c41107a: NO_RESULT [,.,. C41107A ---- C41107A    * WRONG VALUE FOR EXPRESSION - A Constraint_ErrorCPU mode: Z80 Loaded 16896 bytes from /tmp/tmpkx1u1scg/test.com Program ]
+c41107a: NO_RESULT [,.,. C41107A ---- C41107A    * WRONG VALUE FOR EXPRESSION - A Constraint_ErrorCPU mode: Z80 Loaded 16896 bytes from /tmp/tmprfo59_7_/test.com Program ]
 c41201d: TIMEOUT
-c41203a: NO_RESULT [,.,. C41203A ---- C41203A    * WRONG VALUE FOR EXPRESSION - N1 CPU mode: Z80 Loaded 21504 bytes from /tmp/tmp6w6cwlpc/test.com Program exit via JMP 0 ]
-c41203b: NO_RESULT [,.,. C41203B ---- C41203B    * WRONG VALUE FOR EXPRESSION - N1 0]aI]eE]!  ]9]n]fjv7mR !jvjw~7(#w!jw]u]tjv]n]f	~7(#w]n]f~7(#w!jv]
-c41204a: NO_RESULT [,.,. C41204A ---- C41204A    *    * CONSTRAINT_ERROR NOT RAISED - 10. CPU mode: Z80 Loaded 11520 bytes from /tmp/tmpgb79qd72/test.com System reset ]
+c41203a: NO_RESULT [,.,. C41203A ---- C41203A    * WRONG VALUE FOR EXPRESSION - N1 CPU mode: Z80 Loaded 21632 bytes from /tmp/tmp2iwftluv/test.com BIOS WBOOT called - exi]
+c41203b: NO_RESULT [,.,. C41203B ---- C41203B    * WRONG VALUE FOR EXPRESSION - N1 CPU mode: Z80 Loaded 30848 bytes from /tmp/tmpannwugti/test.com Unimplemented BDOS func]
+c41204a: NO_RESULT [,.,. C41204A ---- C41204A    *    * CONSTRAINT_ERROR NOT RAISED - 10. CPU mode: Z80 Loaded 11520 bytes from /tmp/tmpe0yqu482/test.com System reset ]
 c41205a: PASS
 c41206a: PASS
-c41207a: NO_RESULT [,.,. C41207A ---- C41207A Constraint_ErrorCPU mode: Z80 Loaded 11776 bytes from /tmp/tmpvq7lbtdv/test.com Program exit via JMP 0 ]
-c41301a: NO_RESULT [,.,. C41301A ---- C41301A    * WRONG VALUE FOR EXPRESSION - X2    * WRONG TARGET FOR ASSIGNMENT - X2    *    * WRONG VALUE FOR IN PARAMETER - X2.    *]
+c41207a: NO_RESULT [,.,. C41207A ---- C41207A Constraint_ErrorCPU mode: Z80 Loaded 11776 bytes from /tmp/tmpl6dp0cef/test.com Program exit via JMP 0 ]
+c41301a: TIMEOUT
 c41303a: PASS
 c41303b: PASS
 c41303c: PASS
@@ -348,83 +411,83 @@ c41322a: TIMEOUT
 c41323a: NO_RESULT [,.,. C41323A ---- C41323A    * INCORRECT RESULTS FROM EXPANDED NAME - 2    * INCORRECT RESULTS FROM EXPANDED NAME - 3 CPU mode: Z80 Loaded 20864 bytes]
 c41324a: TIMEOUT
 c41325a: TIMEOUT
-c41326a: NO_RESULT [,.,. C41326A ---- C41326A Constraint_ErrorCPU mode: Z80 Loaded 9216 bytes from /tmp/tmp2753hjfu/test.com Program exit via JMP 0 ]
+c41326a: NO_RESULT [,.,. C41326A ---- C41326A Constraint_ErrorCPU mode: Z80 Loaded 9216 bytes from /tmp/tmprkw8i3od/test.com Program exit via JMP 0 ]
 c41327a: LINK_ERROR [Error: Undefined symbol: _INIT_CHAR Error: Undefined symbol: _INIT_KEY]
 c41328a: LINK_ERROR [Error: Undefined symbol: _INIT Error: Undefined symbol: _SWAP]
-c41401a: NO_RESULT [,.,. C41401A ---- C41401A    *    * CONSTRAINT_ERROR NOT RAISED - 1 TRUE.    *    * CONSTRAINT_ERROR NOT RAISED - 3 FALSE.    *    * CONSTRAINT_ERROR ]
+c41401a: TIMEOUT
 c41402a: PASS
 c41404a: NO_RESULT [,.,. C41404A ---- C41404A    * WRONG VALUE FOR LENGTH - ENUM    * WRONG VALUE FOR LENGTH - ENUM: 'C'    * WRONG VALUE FOR LENGTH - INTEGER: 56    * WR]
-c42006a: PASS
+c42006a: NO_RESULT [,.,. C42006A ---- C42006A    *    * CONSTRAINT_ERROR NOT RAISED - 1 702.    *    * CONSTRAINT_ERROR NOT RAISED - 2 702.    *    * CONSTRAINT_ERROR NOT]
 c42007e: TIMEOUT
 c43003a: PASS
 c43004a: TIMEOUT
 c43004c: PASS
-c43103a: NO_RESULT [,.,. C43103A ---- C43103A    -    - CASE A : DISCRIMINANT THAT IS NOT USED INSIDE THE RECORD.    * CASE A : INCORRECT VALUES IN RECORD    -    - CASE ]
-c43103b: NO_RESULT [,.,. C43103B ---- C43103B    * 1.1 - INCORRECT BOUNDS    * 1.2 - INCORRECT BOUNDS    * 1.3 - INCORRECT BOUNDS    * 1.4 - INCORRECT ARRAY LENGTH CPU mo]
+c43103a: TIMEOUT
+c43103b: TIMEOUT
 c43104a: PASS
 c43105a: PASS
 c43105b: PASS
 c43106a: TIMEOUT
-c43107a: NO_RESULT [,.,. C43107A ---- C43107A    *    * CASE A : INCORRECT NUMBER OF EVALUATIONS OF RECORD ASSOCIATED COMPONENTS.    * CASE A : INCORRECT VALUES IN RECORD]
+c43107a: NO_RESULT [,.,. C43107A ---- C43107A CPU mode: Z80 Loaded 10496 bytes from /tmp/tmps_yd_rg_/test.com Program exit via JMP 0 ]
 c43108a: PASS
 c43204a: TIMEOUT
 c43204c: TIMEOUT
-c43204e: NO_RESULT [CPU mode: Z80 Loaded 16640 bytes from /tmp/tmp0nfaoc4s/test.com System reset ]
+c43204e: NO_RESULT [CPU mode: Z80 Loaded 16640 bytes from /tmp/tmp3_ybsluh/test.com System reset ]
 c43204f: PASS
 c43204g: LINK_ERROR [Error: Undefined symbol: _E]
 c43204h: PASS
 c43204i: PASS
 c43205a: PASS
-c43205b: LINK_ERROR [Error: Undefined symbol: _PROC2]
+c43205b: PASS
 c43205c: PASS
 c43205d: PASS
 c43205e: COMPILE_ERROR [semantic: return type mismatch: expected 'TE', got 'String']
 c43205g: PASS
-c43205h: LINK_ERROR [Error: Undefined symbol: _PROC2]
+c43205h: PASS
 c43205i: PASS
-c43205j: LINK_ERROR [Error: Undefined symbol: _PROC2]
+c43205j: PASS
 c43205k: PASS
 c43206a: TIMEOUT
 c43207b: NO_RESULT [,.,. C43207B ---- C43207B    *    * CASE BCASE BCASE B---- C43207B : ARRAY NOT BOUNDED CORRECTLY : ARRAY NOT .    * CASE B1 : CONSTRAINT_ERROR NOT RAI]
-c43207d: NO_RESULT [,.,. C43207D ---- C43207D Constraint_ErrorCPU mode: Z80 Loaded 16128 bytes from /tmp/tmp3h6igznu/test.com Program exit via JMP 0 ]
-c43208a: NO_RESULT [,.,. C43208A ---- C43208A Constraint_ErrorCPU mode: Z80 Loaded 18560 bytes from /tmp/tmp9f30dg5v/test.com Program exit via JMP 0 ]
-c43208b: NO_RESULT [,.,. C43208B ---- C43208B Constraint_ErrorCPU mode: Z80 Loaded 25728 bytes from /tmp/tmp0ddjzkkm/test.com Program exit via JMP 0 ]
+c43207d: NO_RESULT [,.,. C43207D ---- C43207D Constraint_ErrorCPU mode: Z80 Loaded 16128 bytes from /tmp/tmptdlrxjv2/test.com Program exit via JMP 0 ]
+c43208a: NO_RESULT [,.,. C43208A ---- C43208A Constraint_ErrorCPU mode: Z80 Loaded 18560 bytes from /tmp/tmpov73cw_q/test.com Program exit via JMP 0 ]
+c43208b: NO_RESULT [,.,. C43208B ---- C43208B Constraint_ErrorCPU mode: Z80 Loaded 25728 bytes from /tmp/tmpo_1knrtr/test.com Program exit via JMP 0 ]
 c43209a: TIMEOUT
-c43210a: NO_RESULT [,.,. C43210A ---- C43210A    *    * CASE A.    *    * CASE B.    *    * CASE C.    *    * CASE D. CPU mode: Z80 Loaded 13312 bytes from /tmp/tmpvaw2mg]
+c43210a: NO_RESULT [,.,. C43210A ---- C43210A    *    * CASE A.    *    * CASE B.    *    * CASE C.    *    * CASE D. CPU mode: Z80 Loaded 13312 bytes from /tmp/tmpz2n8_4]
 c43211a: NO_RESULT [,.,. C43211A ---- C43211A    * CASE A : INCORRECT VALUES    * CASE B : INCORRECT VALUES Constraint_ErrorCPU mode: Z80 Loaded 16256 bytes from /tmp/tmp]
-c43212a: NO_RESULT [,.,. C43212A ---- C43212A Constraint_ErrorCPU mode: Z80 Loaded 14720 bytes from /tmp/tmp3k2i006q/test.com Program exit via JMP 0 ]
+c43212a: NO_RESULT [,.,. C43212A ---- C43212A Constraint_ErrorCPU mode: Z80 Loaded 14720 bytes from /tmp/tmpock104vy/test.com Program exit via JMP 0 ]
 c43212c: TIMEOUT
 c43214a: NO_RESULT [,.,. C43214A ---- C43214A    * CASE A : CONSTRAINT_ERROR NOT RAISED - 2    * CASE B : CONSTRAINT_ERROR NOT RAISED Constraint_ErrorCPU mode: Z80 Loaded]
 c43214b: PASS
-c43214c: LINK_ERROR [Error: Undefined symbol: _PROC2]
+c43214c: PASS
 c43214d: PASS
-c43214e: LINK_ERROR [Error: Undefined symbol: _PROC2]
-c43214f: NO_RESULT [,.,. C43214F ---- C43214F    * CASE 1 : INCORRECT BOUNDS    * CASE 2 : INCORRECT BOUNDS    * CASE 3 : INCORRECT BOUND    * CASE 4 : INCORRECT BOUNDS C]
+c43214e: PASS
+c43214f: NO_RESULT [,.,. C43214F ---- C43214F    * CASE 1 : INCORRECT BOUNDS    * CASE 2 : INCORRECT BOUNDS    * CASE 3 : INCORRECT BOUND CPU mode: Z80 Loaded 10240 bytes]
 c43215a: PASS
 c43215b: PASS
 c43222a: PASS
 c43224a: PASS
-c44003d: NO_RESULT [,.,. C44003D ---- C44003D    * INCORRECT RESULT - 1    * INCORRECT RESULT - 2 CPU mode: Z80 Loaded 22272 bytes from /tmp/tmpjxnd4eht/test.com System r]
+c44003d: TIMEOUT
 c44003f: COMPILE_ERROR [semantic: expected Boolean, got 'ENUM']
-c44003g: PASS
-c45112a: NO_RESULT [,.,. C45112A ---- C45112A CPU mode: Z80 Loaded 16256 bytes from /tmp/tmp44yv_di6/test.com Program exit via JMP 0 ]
-c45112b: NO_RESULT [,.,. C45112B ---- C45112B CPU mode: Z80 Loaded 16256 bytes from /tmp/tmpba8t4b32/test.com System reset ]
+c44003g: TIMEOUT
+c45112a: NO_RESULT [,.,. C45112A ---- C45112A CPU mode: Z80 Loaded 16640 bytes from /tmp/tmppsllz0nu/test.com Program exit via JMP 0 ]
+c45112b: NO_RESULT [,.,. C45112B ---- C45112B CPU mode: Z80 Loaded 16512 bytes from /tmp/tmp16sjhrkv/test.com System reset ]
 c45113a: PASS
-c45114b: PASS
-c45201a: NO_RESULT [,.,. C45201A ---- C45201A    * EQUALITY OF ENUMERATION VALUES - FAILURE1 CPU mode: Z80 Loaded 12160 bytes from /tmp/tmpp4rhtjml/test.com System reset ]
-c45201b: TIMEOUT
+c45114b: TIMEOUT
+c45201a: NO_RESULT [Constraint_ErrorCPU mode: Z80 Loaded 12544 bytes from /tmp/tmpjqcmh55v/test.com Program exit via JMP 0 ]
+c45201b: NO_RESULT [Constraint_ErrorCPU mode: Z80 Loaded 13184 bytes from /tmp/tmp02akwaz8/test.com Program exit via JMP 0 ]
 c45202b: PASS
-c45210a: TIMEOUT
-c45211a: PASS
-c45220a: NO_RESULT [,.,. C45220A ---- C45220A CPU mode: Z80 Loaded 9728 bytes from /tmp/tmpd5wizp1s/test.com System reset ]
-c45220b: NO_RESULT [,.,. C45220B ---- C45220B    * ORDERING OF BOOLEAN VALUES - FAILURE '<' CPU mode: Z80 Loaded 12160 bytes from /tmp/tmp36h6b4vs/test.com System reset ]
-c45220c: NO_RESULT [,.,. C45220C ---- C45220C  CPU mode: Z80 Loaded 11136 bytes from /tmp/tmp1bzqdvww/test.com System reset ]
-c45220d: NO_RESULT [,.,. C45220D ---- C45220D    * ORDERING OF N_BOOLEAN VALUES - FAILURE '<' CPU mode: Z80 Loaded 14848 bytes from /tmp/tmpjkf33qaz/test.com System reset]
+c45210a: NO_RESULT [Constraint_ErrorCPU mode: Z80 Loaded 12160 bytes from /tmp/tmp1gnb7xy2/test.com Program exit via JMP 0 ]
+c45211a: NO_RESULT [Constraint_ErrorCPU mode: Z80 Loaded 9088 bytes from /tmp/tmpqurq29tb/test.com Program exit via JMP 0 ]
+c45220a: NO_RESULT [,.,. C45220A ---- C45220A CPU mode: Z80 Loaded 10240 bytes from /tmp/tmpj4kbhoc2/test.com System reset ]
+c45220b: NO_RESULT [,.,. C45220B ---- C45220B    * ORDERING OF BOOLEAN VALUES - FAILURE '<' CPU mode: Z80 Loaded 12672 bytes from /tmp/tmpwqigs29l/test.com Program exit v]
+c45220c: NO_RESULT [Constraint_ErrorCPU mode: Z80 Loaded 11776 bytes from /tmp/tmp98z2d3qm/test.com Program exit via JMP 0 ]
+c45220d: NO_RESULT [Constraint_ErrorCPU mode: Z80 Loaded 15488 bytes from /tmp/tmpjv0x7nzq/test.com Program exit via JMP 0 ]
 c45220e: PASS
 c45220f: PASS
 c45231a: TIMEOUT
 c45232b: PASS
-c45242b: PASS
+c45242b: TIMEOUT
 c45251a: PASS
 c45252a: PASS
 c45252b: PASS
@@ -432,11 +495,11 @@ c45253a: PASS
 c45262a: NO_RESULT [,.,. C45262A ---- C45262A    * NULL ARRAYS ARR1 AND ARR2 NOT EQUAL - <=    * NULL ARRAYS ARR1 AND ARR2 NOT EQUAL - >=    * NON-NULL ARRAY ARR3 LESS TH]
 c45262b: NO_RESULT [,.,. C45262B ---- C45262B    *    * NULL ARRAYS STRING1 AND STRING2 NOT EQUAL - <=.    *    * NULL ARRAYS STRING1 AND STRING2 NOT EQUAL - >=.    * NON]
 c45262c: NO_RESULT [,.,. C45262C ---- C45262C    * NULL ARRAYS ARR1 AND ARR2 NOT EQUAL - <=    * NULL ARRAYS ARR1 AND ARR2 NOT EQUAL - >=    * NON-NULL ARRAY ARR3 LESS TH]
-c45262d: NO_RESULT [,.,. C45262D ---- C45262D    *    * NON-NULL ARRAY ARR3 LESS THAN EQUAL NULL ARR1.    *    * DIFFERENT BOUNDS, SAME NUMBER OF COMPONENTS, COMPONENTS E]
-c45264a: NO_RESULT [,.,. C45264A ---- C45264A    * A1 - ARRAYS NOT EQUAL    * A2 - ARRAYS NOT EQUAL CPU mode: Z80 Loaded 10496 bytes from /tmp/tmp65hiejja/test.com Progra]
+c45262d: NO_RESULT [,.,. C45262D ---- C45262D    * NULL ARRAYS ARR1 AND ARR2 NOT EQUAL - < Constraint_ErrorCPU mode: Z80 Loaded 10368 bytes from /tmp/tmpwpiwqo5g/test.com]
+c45264a: NO_RESULT [,.,. C45264A ---- C45264A    * A1 - ARRAYS NOT EQUAL    * A2 - ARRAYS NOT EQUAL CPU mode: Z80 Loaded 10496 bytes from /tmp/tmpf7kndq7o/test.com Progra]
 c45264b: PASS
 c45264c: PASS
-c45265a: NO_RESULT [,.,. C45265A ---- C45265A CPU mode: Z80 Loaded 14208 bytes from /tmp/tmp87ev7hou/test.com Program exit via JMP 0 ]
+c45265a: NO_RESULT [,.,. C45265A ---- C45265A CPU mode: Z80 Loaded 14208 bytes from /tmp/tmpoxykk9sw/test.com Program exit via JMP 0 ]
 c45271a: TIMEOUT
 c45272a: TIMEOUT
 c45273a: TIMEOUT
@@ -460,11 +523,11 @@ c45347a: PASS
 c45347b: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'ARR' to 'A']
 c45347c: PASS
 c45347d: PASS
-c45411a: NO_RESULT [,.,. C45411A ---- C45411A CPU mode: Z80 Loaded 11392 bytes from /tmp/tmpx6uv3p5z/test.com System reset ]
+c45411a: NO_RESULT [,.,. C45411A ---- C45411A CPU mode: Z80 Loaded 11520 bytes from /tmp/tmpwekww12k/test.com System reset ]
 c45411d: PASS
 c45413a: PASS
 c45431a: TIMEOUT
-c45503a: NO_RESULT [,.,. C45503A ---- C45503A CPU mode: Z80 Loaded 21376 bytes from /tmp/tmpxr3llmgx/test.com Program exit via JMP 0 ]
+c45503a: NO_RESULT [,.,. C45503A ---- C45503A CPU mode: Z80 Loaded 21376 bytes from /tmp/tmpex16ymhq/test.com Program exit via JMP 0 ]
 c45504a: TIMEOUT
 c45504d: PASS
 c45505a: PASS
@@ -475,48 +538,48 @@ c45531c: NO_RESULT [,.,. C45531C ---- C45531C    *    * RESULT OF ""*"" OUTSIDE 
 c45531d: PASS
 c45531e: NO_RESULT [,.,. C45531E ---- C45531E    *    * RESULT OF ""*"" OUTSIDE RESULT MODEL INTERVAL FOR INTEGER * FIXED FOR NON-MODEL NUMBERS. CPU mode: Z80 Loaded 1036]
 c45531f: PASS
-c45531g: NO_RESULT [,.,. C45531G ---- C45531G    *    * RESULT OF ""*"" OUTSIDE RESULT MODEL INTERVAL FOR INTEGER * FIXED .    *    * RESULT OF ""*"" OUTSIDE RESULT MODEL]
+c45531g: TIMEOUT
 c45531h: PASS
 c45531i: NO_RESULT [,.,. C45531I ---- C45531I    *    * RESULT OF ""*"" OUTSIDE RESULT MODEL INTERVAL FOR INTEGER * FIXED FOR NON-MODEL NUMBERS. CPU mode: Z80 Loaded 1036]
 c45531j: PASS
 c45531k: TIMEOUT
 c45531l: PASS
 c45532a: PASS
-c45532b: NO_RESULT [,.,. C45532B ---- C45532B CPU mode: Z80 Loaded 9472 bytes from /tmp/tmpw98p6i5w/test.com Program exit via JMP 0 ]
-c45532c: NO_RESULT [,.,. C45532C ---- C45532C CPU mode: Z80 Loaded 18816 bytes from /tmp/tmpasdg6txs/test.com Program exit via JMP 0 ]
+c45532b: NO_RESULT [,.,. C45532B ---- C45532B CPU mode: Z80 Loaded 9472 bytes from /tmp/tmp8o5v0lhx/test.com Program exit via JMP 0 ]
+c45532c: NO_RESULT [,.,. C45532C ---- C45532C CPU mode: Z80 Loaded 18816 bytes from /tmp/tmpgmj1jdrn/test.com Program exit via JMP 0 ]
 c45532d: ASSEMBLE_ERROR [Error at line 2145: Undefined symbol '_a_third' Error at line 2413: Undefined symbol '_rng1' Error at line 2447: Undefined symbol '_rng1']
 c45532e: PASS
-c45532f: NO_RESULT [,.,. C45532F ---- C45532F CPU mode: Z80 Loaded 9344 bytes from /tmp/tmp8zb0zra6/test.com Program exit via JMP 0 ]
+c45532f: NO_RESULT [,.,. C45532F ---- C45532F CPU mode: Z80 Loaded 9344 bytes from /tmp/tmpe4_f56l6/test.com Program exit via JMP 0 ]
 c45532g: NO_RESULT [,.,. C45532G ---- C45532G    *    * RESULT OF ""*"" OUTSIDE RESULT MODEL INTERVAL WHEN USING NO MODEL NUMBERS. CPU mode: Z80 Loaded 18688 bytes from /]
 c45532h: ASSEMBLE_ERROR [Error at line 2113: Undefined symbol '_a_third' Error at line 2381: Undefined symbol '_rng1' Error at line 2415: Undefined symbol '_rng1']
 c45532i: PASS
-c45532j: NO_RESULT [,.,. C45532J ---- C45532J CPU mode: Z80 Loaded 9344 bytes from /tmp/tmppkifzxl1/test.com Program exit via JMP 0 ]
+c45532j: NO_RESULT [,.,. C45532J ---- C45532J CPU mode: Z80 Loaded 9344 bytes from /tmp/tmpd3s5gt62/test.com Program exit via JMP 0 ]
 c45532k: NO_RESULT [,.,. C45532K ---- C45532K    *    * RESULT OF ""*"" OUTSIDE RESULT MODEL INTERVAL WHEN USING NO MODEL NUMBERS. CPU mode: Z80 Loaded 18688 bytes from /]
 c45532l: ASSEMBLE_ERROR [Error at line 2113: Undefined symbol '_a_third' Error at line 2381: Undefined symbol '_rng1' Error at line 2415: Undefined symbol '_rng1']
-c45534b: NO_RESULT [,.,. C45534B ---- C45534B CPU mode: Z80 Loaded 9984 bytes from /tmp/tmprwimjdzs/test.com Program exit via JMP 0 ]
+c45534b: NO_RESULT [,.,. C45534B ---- C45534B CPU mode: Z80 Loaded 9984 bytes from /tmp/tmpibzrfl89/test.com Program exit via JMP 0 ]
 c45611a: TIMEOUT
 c45613a: PASS
 c45614a: PASS
 c45631a: PASS
 c45632a: TIMEOUT
-c45651a: NO_RESULT [,.,. C45651A ---- C45651A    * ABS 0.0 /= 0.0 -- (LIKE_DURATION_M23) CPU mode: Z80 Loaded 25600 bytes from /tmp/tmp4p390q6i/test.com System reset ]
-c45662a: NO_RESULT [,.,. C45662A ---- C45662A Constraint_ErrorCPU mode: Z80 Loaded 8576 bytes from /tmp/tmpxwtlwo8q/test.com Program exit via JMP 0 ]
-c45662b: NO_RESULT [,.,. C45662B ---- C45662B Constraint_ErrorCPU mode: Z80 Loaded 10368 bytes from /tmp/tmp_uk3bebp/test.com Program exit via JMP 0 ]
+c45651a: NO_RESULT [,.,. C45651A ---- C45651A    * ABS 0.0 /= 0.0 -- (LIKE_DURATION_M23) CPU mode: Z80 Loaded 25600 bytes from /tmp/tmp27yi3elg/test.com System reset ]
+c45662a: NO_RESULT [,.,. C45662A ---- C45662A Constraint_ErrorCPU mode: Z80 Loaded 8832 bytes from /tmp/tmpo0zd76gt/test.com Program exit via JMP 0 ]
+c45662b: NO_RESULT [Constraint_ErrorCPU mode: Z80 Loaded 10624 bytes from /tmp/tmpzju2ixuk/test.com Program exit via JMP 0 ]
 c45672a: TIMEOUT
-c46011a: PASS
+c46011a: NO_RESULT [,.,. C46011A ---- C46011A CPU mode: Z80 Loaded 11776 bytes from /tmp/tmpd2v7jyd0/test.com Program exit via JMP 0 ]
 c46013a: NO_RESULT [,.,. C46013A ---- C46013A    * INCORRECT VALUE (1)    * INCORRECT VALUE (2)    * INCORRECT VALUE (3)    * INCORRECT VALUE (4)    * INCORRECT VALUE (5)]
 c46014a: COMPILE_ERROR [semantic: incompatible types for arithmetic: 'INT' and 'NEWINTEGER']
 c46021a: NO_RESULT [,.,. C46021A ---- C46021A    * INCORRECT VALUE (1)    * INCORRECT VALUE (2)    * INCORRECT VALUE (3)    * INCORRECT VALUE (4)    * INCORRECT VALUE (5)]
 c46024a: NO_RESULT [,.,. C46024A ---- C46024A    * INCORRECT RESULT FROM CONVERSION (1)    * INCORRECT RESULT FROM CONVERSION (2)    * INCORRECT RESULT FROM CONVERSION (3]
 c46031a: PASS
-c46032a: TIMEOUT
+c46032a: NO_RESULT [,.,. C46032A ---- C46032A    * INCORRECT RESULT FROM CONVERSION (1)    * INCORRECT RESULT FROM CONVERSION (2)    * INCORRECT RESULT FROM CONVERSION (3]
 c46033a: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'FIX3' to 'FIX1']
 c46041a: PASS
 c46042a: PASS
 c46043b: PASS
-c46044b: NO_RESULT [,.,. C46044B ---- C46044B CPU mode: Z80 Loaded 15616 bytes from /tmp/tmpl4r1uokj/test.com Program exit via JMP 0 ]
+c46044b: NO_RESULT [,.,. C46044B ---- C46044B CPU mode: Z80 Loaded 15616 bytes from /tmp/tmpivb51_pr/test.com Program exit via JMP 0 ]
 c46051a: COMPILE_ERROR [semantic: 'TK' is not an array]
-c46051b: PASS
+c46051b: NO_RESULT [Constraint_ErrorCPU mode: Z80 Loaded 10368 bytes from /tmp/tmpy_fa5xxl/test.com Program exit via JMP 0 ]
 c46051c: PASS
 c46052a: PASS
 c46053a: PASS
@@ -530,23 +593,23 @@ c47004a: PASS
 c47005a: NO_RESULT [,.,. C47005A ---- C47005A    *    * NO EXCEPTION RAISED FOR VALUE OUTSIDE OF SUBTYPE SFLOAT - 2.    *    * NO EXCEPTION RAISED FOR VALUE OUTSIDE OF SU]
 c47006a: PASS
 c47007a: TIMEOUT
-c47008a: PASS
+c47008a: NO_RESULT [,.,. C47008A ---- C47008A    *    * NO EXCEPTION RAISED FOR OPERAND WITH DISC NOT EQUAL TO THOSE OF SUBTYPE WOMAN - 2.    *    * NO EXCEPTION RAISED F]
 c47009a: TIMEOUT
-c47009b: NO_RESULT [,.,. C47009B ---- C47009B CPU mode: Z80 Loaded 12800 bytes from /tmp/tmp6p4r56oi/test.com Program exit via JMP 0 ]
+c47009b: NO_RESULT [,.,. C47009B ---- C47009B CPU mode: Z80 Loaded 12800 bytes from /tmp/tmpk0323cnt/test.com Program exit via JMP 0 ]
 c48004a: PASS
 c48004b: LINK_ERROR [Error: Undefined symbol: _FUN]
 c48004c: PASS
-c48004d: LINK_ERROR [Error: Undefined symbol: _CHECK Error: Undefined symbol: _LRCHECK Error: Undefined symbol: _LCHECK]
+c48004d: LINK_ERROR [Error: Undefined symbol: _CHECK Error: Undefined symbol: _LCHECK Error: Undefined symbol: _LRCHECK]
 c48004e: LINK_ERROR [Error: Undefined symbol: _CHECK]
 c48004f: PASS
 c48005a: PASS
 c48005b: PASS
 c48006a: TIMEOUT
-c48006b: NO_RESULT [,.,. C48006B ---- C48006B    * WRONG VALUES  -  B1 1    * WRONG VALUES  -  B1 2 CPU mode: Z80 Loaded 17280 bytes from /tmp/tmpuvjffvs7/test.com BIOS W]
+c48006b: NO_RESULT [,.,. C48006B ---- C48006B    * WRONG VALUES  -  B1 1    * WRONG VALUES  -  B1 2 CPU mode: Z80 Loaded 17280 bytes from /tmp/tmpilmx3qkg/test.com BIOS W]
 c48007a: PASS
 c48007b: PASS
 c48007c: PASS
-c48008a: TIMEOUT
+c48008a: PASS
 c48008c: PASS
 c48009a: PASS
 c48009b: NO_RESULT [,.,. C48009B ---- C48009B    * NO EXCEPTION RAISED - CASE 1A    * NO EXCEPTION RAISED - CASE 1B    * NO EXCEPTION RAISED - CASE 2A    * NO EXCEPTION R]
@@ -554,7 +617,7 @@ c48009c: PASS
 c48009d: PASS
 c48009e: TIMEOUT
 c48009f: PASS
-c48009g: NO_RESULT [,.,. C48009G ---- C48009G    - NO EXCEPTION RAISED - UR    - NO EXCEPTION RAISED - UA    - NO EXCEPTION RAISED - UP CPU mode: Z80 Loaded 11136 bytes f]
+c48009g: TIMEOUT
 c48009h: PASS
 c48009i: PASS
 c48009j: PASS
@@ -567,61 +630,61 @@ c49022a: TIMEOUT
 c49022b: PASS
 c49022c: ASSEMBLE_ERROR [Error at line 1960: Undefined symbol '_add1' Error at line 1987: Undefined symbol '_add2' Error at line 2144: Undefined symbol '_sub1' Error at line 2171: Undefined symbol '_sub2' Error at line 2328: ]
 c49023a: PASS
-c49024a: TIMEOUT
+c49024a: PASS
 c49025a: PASS
 c49026a: PASS
-c4a005b: NO_RESULT [,.,. C4A005B ---- C4A005B CPU mode: Z80 Loaded 9984 bytes from /tmp/tmpyfe5ezhj/test.com Program exit via JMP 0 ]
+c4a005b: NO_RESULT [,.,. C4A005B ---- C4A005B CPU mode: Z80 Loaded 10240 bytes from /tmp/tmprenabbz5/test.com Program exit via JMP 0 ]
 c4a006a: PASS
 c4a010a: ASSEMBLE_ERROR [Error at line 2786: Undefined symbol '_half']
 c4a010b: ASSEMBLE_ERROR [Error at line 2119: Undefined symbol '_x9' Error at line 2227: Undefined symbol '_y6']
 c4a011a: TIMEOUT
-c4a012b: NO_RESULT [,.,. C4A012B ---- C4A012B    *    * THE EXPRESSION '0.0 ** (-1)' DID NOT RAISE AN EXCEPTION. CPU mode: Z80 Loaded 24704 bytes from /tmp/tmpo6c80ewb/te]
+c4a012b: NO_RESULT [,.,. C4A012B ---- C4A012B    *    * THE EXPRESSION '0.0 ** (-1)' DID NOT RAISE AN EXCEPTION. Constraint_ErrorCPU mode: Z80 Loaded 24704 bytes from /tm]
 c4a013a: PASS
 c4a014a: PASS
 c51004a: PASS
 c52005a: PASS
 c52005b: PASS
 c52005c: PASS
-c52005d: PASS
+c52005d: TIMEOUT
 c52005e: PASS
 c52005f: PASS
 c52008a: PASS
-c52008b: NO_RESULT [,.,. C52008B ---- C52008B CPU mode: Z80 Loaded 9984 bytes from /tmp/tmpvhjoea5t/test.com Program exit via JMP 0 ]
+c52008b: TIMEOUT
 c52009a: PASS
 c52009b: PASS
-c52010a: NO_RESULT [,.,. C52010A ---- C52010A    * WRONG VALUE  (1)    * WRONG VALUE  (2)    * WRONG VALUE  (3)    * WRONG VALUE  (4)    * WRONG VALUE  (5)    * WRONG VAL]
+c52010a: TIMEOUT
 c52011a: PASS
 c52011b: TIMEOUT
 c52101a: PASS
-c52102a: NO_RESULT [,.,. C52102A ---- C52102A    * WRONG VALUES  -  I1    * WRONG VALUES  -  I2 CPU mode: Z80 Loaded 20096 bytes from /tmp/tmpukxc0u17/test.com Program ex]
-c52102b: NO_RESULT [,.,. C52102B ---- C52102B Constraint_ErrorCPU mode: Z80 Loaded 21504 bytes from /tmp/tmpos95aguk/test.com Program exit via JMP 0 ]
+c52102a: TIMEOUT
+c52102b: NO_RESULT [,.,. C52102B ---- C52102B Constraint_ErrorCPU mode: Z80 Loaded 21504 bytes from /tmp/tmpkgfgqu6s/test.com Program exit via JMP 0 ]
 c52102c: TIMEOUT
-c52102d: NO_RESULT [,.,. C52102D ---- C52102D Constraint_ErrorCPU mode: Z80 Loaded 22272 bytes from /tmp/tmp9lq3ugy9/test.com Program exit via JMP 0 ]
-c52103a: NO_RESULT [,.,. C52103A ---- C52103A Constraint_ErrorCPU mode: Z80 Loaded 11776 bytes from /tmp/tmpgojw1l5m/test.com Program exit via JMP 0 ]
-c52103b: TIMEOUT
+c52102d: NO_RESULT [,.,. C52102D ---- C52102D Constraint_ErrorCPU mode: Z80 Loaded 22272 bytes from /tmp/tmp13ydxc89/test.com Program exit via JMP 0 ]
+c52103a: NO_RESULT [,.,. C52103A ---- C52103A Constraint_ErrorCPU mode: Z80 Loaded 11776 bytes from /tmp/tmpunrzkqly/test.com Program exit via JMP 0 ]
+c52103b: NO_RESULT [,.,. C52103B ---- C52103B    * ARRAY ASSIGNMENT NOT CORRECT (13) CPU mode: Z80 Loaded 8448 bytes from /tmp/tmptvqccjjz/test.com Program exit via JMP 0]
 c52103c: TIMEOUT
-c52103f: TIMEOUT
-c52103g: NO_RESULT [,.,. C52103G ---- C52103G    * ARRAY ASSIGNMENT NOT CORRECT (5) CPU mode: Z80 Loaded 8192 bytes from /tmp/tmp5adout2g/test.com Program exit via JMP 0 ]
-c52103h: TIMEOUT
-c52103k: NO_RESULT [,.,. C52103K ---- C52103K Constraint_ErrorCPU mode: Z80 Loaded 12416 bytes from /tmp/tmp4m9vj_0m/test.com Program exit via JMP 0 ]
+c52103f: NO_RESULT [,.,. C52103F ---- C52103F CPU mode: Z80 Loaded 10368 bytes from /tmp/tmpih12ikp1/test.com Program exit via JMP 0 ]
+c52103g: TIMEOUT
+c52103h: NO_RESULT [,.,. C52103H ---- C52103H CPU mode: Z80 Loaded 9216 bytes from /tmp/tmpvocgymp6/test.com Program exit via JMP 0 ]
+c52103k: NO_RESULT [,.,. C52103K ---- C52103K Constraint_ErrorCPU mode: Z80 Loaded 12288 bytes from /tmp/tmpsc3s72m5/test.com Program exit via JMP 0 ]
 c52103l: PASS
 c52103m: TIMEOUT
-c52103p: NO_RESULT [,.,. C52103P ---- C52103P Constraint_ErrorCPU mode: Z80 Loaded 10752 bytes from /tmp/tmp0zb2q0nz/test.com Program exit via JMP 0 ]
-c52103q: TIMEOUT
+c52103p: NO_RESULT [,.,. C52103P ---- C52103P Constraint_ErrorCPU mode: Z80 Loaded 10752 bytes from /tmp/tmpnc71um15/test.com Program exit via JMP 0 ]
+c52103q: NO_RESULT [,.,. C52103Q ---- C52103Q CPU mode: Z80 Loaded 8448 bytes from /tmp/tmpwsxtoxhb/test.com Program exit via JMP 0 ]
 c52103r: TIMEOUT
 c52103x: NO_RESULT [,.,. C52103X ---- C52103X    -    - NO CONSTRAINT_ERROR FOR TYPE WITH 'LENGTH = INTEGER'LAST + 3.    -    - NO STORAGE_ERROR OR CONSTRAINT_ERROR RAISE]
-c52104a: NO_RESULT [,.,. C52104A ---- C52104A Constraint_ErrorCPU mode: Z80 Loaded 12160 bytes from /tmp/tmp9a9i8_ek/test.com Program exit via JMP 0 ]
-c52104b: NO_RESULT [,.,. C52104B ---- C52104B    * NO EXCEPTION RAISED  (13) ]tc!]nEXCEPTION RAISED  (14) eM6]u\]t]! C~ feM6]uf]tg! z]f{eM6]ux]ty! feM6]uf]tg!]
+c52104a: NO_RESULT [,.,. C52104A ---- C52104A Constraint_ErrorCPU mode: Z80 Loaded 12160 bytes from /tmp/tmpc0q4mpta/test.com Program exit via JMP 0 ]
+c52104b: NO_RESULT [,.,. C52104B ---- C52104B    * NO EXCEPTION RAISED  (13) ]tc!]nEXCEPTION RAISED  (14) eM>]u\]t]! C~ feM>]uf]tg! z]f{eM>]ux]ty! feM>]uf]tg!]
 c52104c: NO_RESULT [,.,. C52104C ---- C52104C    * EXCEPTION NOT RAISED  -  SUBTEST 7 !]ur]ts!$]up]tq!nv]fwe]n]feMRAISED  -  SUBTEST 8 !]ur]ts!$]up]tq!EXCEPTION]
 c52104f: NO_RESULT [,.,. C52104F ---- C52104F    * EXCEPTION NOT RAISED  -  SUBTEST 10    * EXCEPTION NOT RAISED  -  SUBTEST 11 CPU mode: Z80 Loaded 10880 bytes from /tmp]
 c52104g: TIMEOUT
-c52104h: TIMEOUT
-c52104k: NO_RESULT [,.,. C52104K ---- C52104K Constraint_ErrorCPU mode: Z80 Loaded 12928 bytes from /tmp/tmptf7q5qsp/test.com Program exit via JMP 0 ]
+c52104h: NO_RESULT [,.,. C52104H ---- C52104H    * EXCEPTION NOT RAISED  -  SUBTEST 7 CPU mode: Z80 Loaded 9600 bytes from /tmp/tmp0m8aj7q0/test.com System reset ]
+c52104k: NO_RESULT [,.,. C52104K ---- C52104K Constraint_ErrorCPU mode: Z80 Loaded 12928 bytes from /tmp/tmpclavhb24/test.com Program exit via JMP 0 ]
 c52104l: TIMEOUT
 c52104m: TIMEOUT
 c52104p: NO_RESULT [,.,. C52104P ---- C52104P    * EXCEPTION NOT RAISED  -  SUBTEST 10    * EXCEPTION NOT RAISED  -  SUBTEST 11 Constraint_ErrorCPU mode: Z80 Loaded 11136]
 c52104q: TIMEOUT
-c52104r: NO_RESULT [,.,. C52104R ---- C52104R    * EXCEPTION NOT RAISED  -  SUBTEST 7    * EXCEPTION NOT RAISED  -  SUBTEST 8 CPU mode: Z80 Loaded 10368 bytes from /tmp/t]
+c52104r: TIMEOUT
 c52104x: NO_RESULT [,.,. C52104X ---- C52104X    -    - NO CONSTRAINT_ERROR FOR TYPE WITH 'LENGTH = INTEGER'LAST + 3.    -    - NO STORAGE_ERROR OR CONSTRAINT_ERROR RAISE]
 c52104y: PASS
 c53007a: TIMEOUT
@@ -636,39 +699,39 @@ c54a22a: PASS
 c54a23a: PASS
 c54a24a: PASS
 c54a24b: PASS
-c54a42a: NO_RESULT [,.,. C54A42A ---- C54A42A Constraint_ErrorCPU mode: Z80 Loaded 14976 bytes from /tmp/tmpr5o_jt7f/test.com Program exit via JMP 0 ]
-c54a42b: NO_RESULT [,.,. C54A42B ---- C54A42B Constraint_ErrorCPU mode: Z80 Loaded 15616 bytes from /tmp/tmpulwxci6o/test.com Program exit via JMP 0 ]
+c54a42a: NO_RESULT [,.,. C54A42A ---- C54A42A Constraint_ErrorCPU mode: Z80 Loaded 15232 bytes from /tmp/tmpkzxwl297/test.com Program exit via JMP 0 ]
+c54a42b: NO_RESULT [,.,. C54A42B ---- C54A42B Constraint_ErrorCPU mode: Z80 Loaded 15872 bytes from /tmp/tmpnf6llori/test.com Program exit via JMP 0 ]
 c54a42c: PASS
-c54a42d: NO_RESULT [,.,. C54A42D ---- C54A42D    * WRONG ALTERNATIVE G2 CPU mode: Z80 Loaded 10752 bytes from /tmp/tmppmd268ae/test.com Program exit via JMP 0 ]
+c54a42d: NO_RESULT [,.,. C54A42D ---- C54A42D    * WRONG ALTERNATIVE G2 CPU mode: Z80 Loaded 10752 bytes from /tmp/tmpjadl3vx4/test.com Program exit via JMP 0 ]
 c54a42e: TIMEOUT
 c54a42f: PASS
-c54a42g: NO_RESULT [,.,. C54A42G ---- C54A42G    * WRONG ALTERNATIVE H5 CPU mode: Z80 Loaded 11904 bytes from /tmp/tmp0oq43jv4/test.com Program exit via JMP 0 ]
+c54a42g: NO_RESULT [,.,. C54A42G ---- C54A42G    * WRONG ALTERNATIVE H5 CPU mode: Z80 Loaded 11904 bytes from /tmp/tmp1lvifps3/test.com Program exit via JMP 0 ]
 c55b03a: PASS
 c55b04a: PASS
-c55b05a: NO_RESULT [,.,. C55B05A ---- C55B05A    * WRONG NULL RANGE LOOP EXECUTION    * NULL LOOP ERROR 3 CPU mode: Z80 Loaded 13184 bytes from /tmp/tmpo5h37j5z/test.com ]
+c55b05a: NO_RESULT [,.,. C55B05A ---- C55B05A    * WRONG NULL RANGE LOOP EXECUTION    * NULL LOOP ERROR 3 CPU mode: Z80 Loaded 13184 bytes from /tmp/tmp33e82oas/test.com ]
 c55b06a: COMPILE_ERROR [semantic: incompatible types in range: 'Character' and 'ENUM']
 c55b06b: COMPILE_ERROR [semantic: incompatible types in range: 'Boolean' and 'B3']
 c55b10a: COMPILE_ERROR [semantic: incompatible types in range: 'ALPHA' and 'BETA']
 c55b11a: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Integer' to 'ENUM']
 c55b11b: COMPILE_ERROR [semantic: type mismatch for parameter 'T': expected 'SI', got 'Integer']
-c55b15a: TIMEOUT
+c55b15a: NO_RESULT [,.,. C55B15A ---- C55B15A    * EXCEPTION NOT RAISED (I1)    * EXCEPTION NOT RAISED (I1)    * EXCEPTION NOT RAISED (I1)    * EXCEPTION NOT RAISED (I1) ]
 c55b16a: COMPILE_ERROR [semantic: incompatible types in range: 'Character' and 'ENUM']
 c55c02a: PASS
-c55c02b: NO_RESULT [,.,. C55C02B ---- C55C02B Constraint_ErrorCPU mode: Z80 Loaded 8064 bytes from /tmp/tmp7j1tikop/test.com Program exit via JMP 0 ]
-c56002a: TIMEOUT
+c55c02b: NO_RESULT [,.,. C55C02B ---- C55C02B Constraint_ErrorCPU mode: Z80 Loaded 8064 bytes from /tmp/tmpgxg99i0z/test.com Program exit via JMP 0 ]
+c56002a: NO_RESULT [,.,. C56002A ---- C56002A    * WRONG VALUES  -  1    * WRONG VALUES  -  2 CPU mode: Z80 Loaded 11392 bytes from /tmp/tmpa_kq_a0y/test.com Program exit]
 c57003a: TIMEOUT
 c57004a: TIMEOUT
-c57004b: NO_RESULT [,.,. C57004B ---- C57004B    - BEFORE 1    - INSIDE 1    - BEFORE 2    - INSIDE 2    - BEFORE 3 CPU mode: Z80 Loaded 11008 bytes from /tmp/tmpwaur7o4u]
+c57004b: NO_RESULT [,.,. C57004B ---- C57004B    - BEFORE 1    - INSIDE 1    - BEFORE 2    - INSIDE 2    - BEFORE 3 CPU mode: Z80 Loaded 11008 bytes from /tmp/tmpjoemzdkt]
 c58004c: PASS
 c58004d: PASS
-c58004g: COMPILE_ERROR [semantic: 'FACTORIALP' is not a procedure]
+c58004g: PASS
 c58005a: PASS
 c58005b: PASS
 c58005h: PASS
 c58006a: PASS
 c58006b: PASS
 c59002a: ASSEMBLE_ERROR [Error at line 2044: Symbol 'L48_BLOC' multiply defined Error at line 2173: Symbol 'L51_HAND' multiply defined Error at line 2175: Symbol 'L50_BLOC' multiply defined Error at line 2239: Symbol 'L52_THE]
-c59002b: LINK_ERROR [Error: Undefined symbol: _USR_C59002B_L211 Error: Undefined symbol: _USR_C59002B_L311 Error: Undefined symbol: _USR_C59002B_L131 Error: Undefined symbol: _USR_C59002B_L431 Error: Undefined symbol: _US]
+c59002b: LINK_ERROR [Error: Undefined symbol: _USR_C59002B_L311 Error: Undefined symbol: _USR_C59002B_L431 Error: Undefined symbol: _USR_C59002B_L331 Error: Undefined symbol: _USR_C59002B_L211 Error: Undefined symbol: _US]
 c59002c: COMPILE_ERROR [semantic: 'E2' not found]
 c61008a: PASS
 c61009a: PASS
@@ -678,14 +741,14 @@ c62003b: PASS
 c62004a: PASS
 c62006a: PASS
 c64002b: PASS
-c64004g: NO_RESULT [,.,. C64004G ---- C64004G CPU mode: Z80 Loaded 9856 bytes from /tmp/tmpzz6h4vua/test.com System reset ]
+c64004g: NO_RESULT [,.,. C64004G ---- C64004G CPU mode: Z80 Loaded 9856 bytes from /tmp/tmp0co8fe7i/test.com System reset ]
 c64005a: PASS
 c64005b: PASS
 c64005c: TIMEOUT
 c64005d0: COMPILE_ERROR [semantic: wrong number of arguments: expected 0, got 3]
-c64005da: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmp0qoax4xe/test.com Program exit via JMP 0 ]
-c64005db: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpqgx9x290/test.com Program exit via JMP 0 ]
-c64005dc: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpaoqp5t_q/test.com Program exit via JMP 0 ]
+c64005da: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpcf0ejehd/test.com Program exit via JMP 0 ]
+c64005db: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmp7rkkrepo/test.com Program exit via JMP 0 ]
+c64005dc: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpn8jjua6s/test.com Program exit via JMP 0 ]
 c64103b: TIMEOUT
 c64103c: PASS
 c64103d: PASS
@@ -717,13 +780,13 @@ c64106d: LINK_ERROR [Error: Undefined symbol: _P]
 c64107a: PASS
 c64108a: COMPILE_ERROR [semantic: dereference prefix must be an access type, got 'String(1..3)']
 c64109a: PASS
-c64109b: LINK_ERROR [Error: Undefined symbol: _A]
+c64109b: PASS
 c64109c: PASS
 c64109d: PASS
 c64109e: PASS
-c64109f: PASS
+c64109f: NO_RESULT [,.,. C64109F ---- C64109F    * IN OUT PARAM NOT RECEIVED CORRECTLY    * BOUNDS WRONG - IN OUT CPU mode: Z80 Loaded 10880 bytes from /tmp/tmp2wnezvbt/t]
 c64109g: PASS
-c64109h: PASS
+c64109h: TIMEOUT
 c64109i: PASS
 c64109j: PASS
 c64109k: PASS
@@ -750,13 +813,13 @@ c67005b: PASS
 c67005c: PASS
 c67005d: PASS
 c72001b: PASS
-c72002a: NO_RESULT [CPU mode: Z80 Loaded 27776 bytes from /tmp/tmp04a4h5uu/test.com Program exit via JMP 0 ]
+c72002a: NO_RESULT [CPU mode: Z80 Loaded 27776 bytes from /tmp/tmpwsei8imb/test.com Program exit via JMP 0 ]
 c73002a: PASS
 c74004a: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Integer' to 'PR']
 c74203a: TIMEOUT
 c74206a: PASS
 c74207b: PASS
-c74208a: NO_RESULT [Constraint_ErrorCPU mode: Z80 Loaded 8192 bytes from /tmp/tmpywwdzghj/test.com Program exit via JMP 0 ]
+c74208a: NO_RESULT [Constraint_ErrorCPU mode: Z80 Loaded 8192 bytes from /tmp/tmpoh6fir95/test.com Program exit via JMP 0 ]
 c74208b: PASS
 c74209a: PASS
 c74210a: PASS
@@ -766,85 +829,71 @@ c74302a: PASS
 c74302b: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'access_Integer' to 'AC']
 c74305a: PASS
 c74305b: COMPILE_ERROR [semantic: wrong number of arguments: expected 1, got 0]
-c74306a: NO_RESULT [CPU mode: Z80 Loaded 7680 bytes from /tmp/tmpvlfiq3y2/test.com Program exit via JMP 0 ]
+c74306a: NO_RESULT [CPU mode: Z80 Loaded 7680 bytes from /tmp/tmpedw1op8u/test.com Program exit via JMP 0 ]
 c74307a: PASS
-c74401d: LINK_ERROR [Error: Undefined symbol: _EQ Error: Undefined symbol: _P1 Error: Undefined symbol: _RENAMED]
-c74401e: LINK_ERROR [Error: Undefined symbol: _RESET Error: Undefined symbol: _P20 Error: Undefined symbol: _P21 Error: Undefined symbol: _EQ Error: Undefined symbol: _NEST1]
-c74401k: LINK_ERROR [Error: Undefined symbol: _TNEST1 Error: Undefined symbol: _P21 Error: Undefined symbol: _TP20 Error: Undefined symbol: _EQ Error: Undefined symbol: _RESET]
-c74401q: COMPILE_ERROR [semantic: generic 'SelectedName(span=SourceSpan(filename='/home/wohl/src/uada80/tests/acats/tests/c7/c74401q.ada', start_line=90, start_column=35, end_line=90, end_column=51), prefix=SelectedName(span]
+c74401d: LINK_ERROR [Error: Undefined symbol: _RENAMED Error: Undefined symbol: _EQ Error: Undefined symbol: _P1]
+c74401e: LINK_ERROR [Error: Undefined symbol: _EQ Error: Undefined symbol: _RESET Error: Undefined symbol: _NEST1 Error: Undefined symbol: _P21 Error: Undefined symbol: _P20]
+c74401k: LINK_ERROR [Error: Undefined symbol: _RESET Error: Undefined symbol: _TNEST1 Error: Undefined symbol: _P21 Error: Undefined symbol: _TP20 Error: Undefined symbol: _EQ]
+c74401q: LINK_ERROR [Error: Undefined symbol: _RESET Error: Undefined symbol: _NP20 Error: Undefined symbol: _EQ Error: Undefined symbol: _P21]
 c74402a: PASS
 c74402b: PASS
-c74406a: NO_RESULT [CPU mode: Z80 Loaded 7552 bytes from /tmp/tmpsnh2e94y/test.com Program exit via JMP 0 ]
-c74407b: NO_RESULT [CPU mode: Z80 Loaded 7808 bytes from /tmp/tmpacg1h489/test.com Program exit via JMP 0 ]
+c74406a: NO_RESULT [CPU mode: Z80 Loaded 7552 bytes from /tmp/tmpr0evx7jm/test.com Program exit via JMP 0 ]
+c74407b: NO_RESULT [CPU mode: Z80 Loaded 7808 bytes from /tmp/tmp0hnbny2w/test.com Program exit via JMP 0 ]
 c74409b: PASS
 c83007a: LINK_ERROR [Error: Undefined symbol: _R]
 c83012d: PASS
 c83022a: COMPILE_ERROR [semantic: wrong number of arguments: expected 2, got 1]
-c83022g0: COMPILE_ERROR [semantic: wrong number of arguments: expected 0, got 1]
-c83022g1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmp858hv0uw/test.com Program exit via JMP 0 ]
 c83023a: LINK_ERROR [Error: Undefined symbol: _HERE]
 c83024a: PASS
-c83024e0: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7424 bytes from /tmp/tmprogwus4h/test.com Program exit via JMP 0 ]
-c83024e1: COMPILE_ERROR [semantic: package specification for 'C83024E_P1' not found]
 c83025a: COMPILE_ERROR [semantic: wrong number of arguments: expected 2, got 1]
 c83025c: COMPILE_ERROR [semantic: wrong number of arguments: expected 2, got 1]
-c83027a: PASS
+c83027a: TIMEOUT
 c83027c: COMPILE_ERROR [semantic: 'INNER3' is not a record]
 c83028a: PASS
 c83029a: PASS
-c83030a: COMPILE_ERROR [semantic: 'P' is not a procedure]
+c83030a: NO_RESULT [ Constraint_ErrorCPU mode: Z80 Loaded 15232 bytes from /tmp/tmptm3keh9k/test.com Program exit via JMP 0 ]
 c83030c: LINK_ERROR [Error: Undefined symbol: _PROC1 Error: Undefined symbol: _PROC2]
 c83031a: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'INT2' to 'INT']
 c83031c: PASS
 c83031e: PASS
 c83032a: COMPILE_ERROR [semantic: return type mismatch: expected 'PRIV1', got 'ENUM1']
 c83033a: COMPILE_ERROR [semantic: 'STMT2' is not an array]
-c83051a: COMPILE_ERROR [semantic: generic 'SelectedName(span=SourceSpan(filename='/home/wohl/src/uada80/tests/acats/tests/c8/c83051a.ada', start_line=104, start_column=38, end_line=104, end_column=60), prefix=SelectedName(sp]
+c83051a: LINK_ERROR [Error: Undefined symbol: _NEW_DO_NOTHING Error: Undefined symbol: _MY_DO_NOTHING]
 c83b02a: PASS
 c83b02b: PASS
-c83e02a: NO_RESULT [,.,. C83E02A ---- C83E02A CPU mode: Z80 Loaded 9472 bytes from /tmp/tmp9oy3wc40/test.com Program exit via JMP 0 ]
+c83e02a: NO_RESULT [,.,. C83E02A ---- C83E02A CPU mode: Z80 Loaded 9472 bytes from /tmp/tmpvvq633t_/test.com Program exit via JMP 0 ]
 c83e02b: PASS
 c83e03a: PASS
 c83f01a: PASS
 c83f01b: PASS
-c83f01c0: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmp7mb8n1k1/test.com Program exit via JMP 0 ]
-c83f01c1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7296 bytes from /tmp/tmpamyspjvj/test.com Program exit via JMP 0 ]
-c83f01c2: PASS
-c83f01d0: PASS
-c83f01d1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpm7vl2mm9/test.com Program exit via JMP 0 ]
 c83f03a: PASS
 c83f03b: PASS
-c83f03c0: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpa2rto7y4/test.com Program exit via JMP 0 ]
-c83f03c1: ASSEMBLE_ERROR [Error at line 1841: Symbol '_C83F03C0_INIT' multiply defined Error at line 1842: Symbol '_C83F03C0_INIT_ENTRY' multiply defined]
-c83f03c2: PASS
-c83f03d0: PASS
-c83f03d1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpms_mr3hz/test.com Program exit via JMP 0 ]
 c84002a: PASS
 c84005a: PASS
 c84008a: LINK_ERROR [Error: Undefined symbol: _PROC]
 c84009a: PASS
 c85004b: COMPILE_ERROR [semantic: constant declaration must have initialization]
-c85005a: LINK_ERROR [Error: Undefined symbol: _STOP Error: Undefined symbol: _ENTRY1 Error: Undefined symbol: _VALU Error: Undefined symbol: _NEXT Error: Undefined symbol: _IDENT]
-c85005b: LINK_ERROR [Error: Undefined symbol: _STOP Error: Undefined symbol: _VALU Error: Undefined symbol: _IDENT Error: Undefined symbol: _ENTRY1 Error: Undefined symbol: _NEXT]
-c85005c: LINK_ERROR [Error: Undefined symbol: _START Error: Undefined symbol: _ENTRY1 Error: Undefined symbol: _NEXT Error: Undefined symbol: _IDENT Error: Undefined symbol: _VALU Error: Undefined symbol: _STOP]
-c85005d: LINK_ERROR [Error: Undefined symbol: _STOP Error: Undefined symbol: _NEXT]
-c85005e: LINK_ERROR [Error: Undefined symbol: _VALU Error: Undefined symbol: _NEXT Error: Undefined symbol: _STOP Error: Undefined symbol: _IDENT Error: Undefined symbol: _ENTRY1]
+c85005a: LINK_ERROR [Error: Undefined symbol: _NEXT Error: Undefined symbol: _IDENT]
+c85005b: LINK_ERROR [Error: Undefined symbol: _IDENT Error: Undefined symbol: _VALU Error: Undefined symbol: _NEXT]
+c85005c: LINK_ERROR [Error: Undefined symbol: _START Error: Undefined symbol: _IDENT Error: Undefined symbol: _NEXT Error: Undefined symbol: _VALU]
+c85005d: LINK_ERROR [Error: Undefined symbol: _NEXT]
+c85005e: LINK_ERROR [Error: Undefined symbol: _STOP Error: Undefined symbol: _VALU Error: Undefined symbol: _NEXT Error: Undefined symbol: _IDENT]
 c85005f: PASS
 c85005g: TIMEOUT
-c85006a: LINK_ERROR [Error: Undefined symbol: _IDENT Error: Undefined symbol: _RA1 Error: Undefined symbol: _VALU Error: Undefined symbol: _ENTRY1 Error: Undefined symbol: _STOP Error: Undefined symbol: _NEXT]
-c85006b: LINK_ERROR [Error: Undefined symbol: _IDENT Error: Undefined symbol: _ENTRY1 Error: Undefined symbol: _RA1 Error: Undefined symbol: _NEXT Error: Undefined symbol: _STOP Error: Undefined symbol: _VALU]
-c85006c: LINK_ERROR [Error: Undefined symbol: _NEXT Error: Undefined symbol: _ENTRY1 Error: Undefined symbol: _STOP Error: Undefined symbol: _IDENT Error: Undefined symbol: _VALU Error: Undefined symbol: _RA1 Error: Undef]
-c85006d: LINK_ERROR [Error: Undefined symbol: _NEXT Error: Undefined symbol: _STOP]
-c85006e: LINK_ERROR [Error: Undefined symbol: _IDENT Error: Undefined symbol: _STOP Error: Undefined symbol: _ENTRY1 Error: Undefined symbol: _RA1 Error: Undefined symbol: _NEXT Error: Undefined symbol: _VALU]
-c85006f: NO_RESULT [,.,. C85006F ---- C85006F CPU mode: Z80 Loaded 9600 bytes from /tmp/tmp5felsqc1/test.com Program exit via JMP 0 ]
-c85006g: NO_RESULT [,.,. C85006G ---- C85006G    * INCORRECT VALUE OF SLICE ATTRIBUTES - 1 CPU mode: Z80 Loaded 12032 bytes from /tmp/tmptm6yubpq/test.com Program exit vi]
+c85006a: LINK_ERROR [Error: Undefined symbol: _IDENT Error: Undefined symbol: _VALU Error: Undefined symbol: _STOP Error: Undefined symbol: _NEXT Error: Undefined symbol: _RA1]
+c85006b: LINK_ERROR [Error: Undefined symbol: _STOP Error: Undefined symbol: _IDENT Error: Undefined symbol: _NEXT Error: Undefined symbol: _VALU Error: Undefined symbol: _RA1]
+c85006c: LINK_ERROR [Error: Undefined symbol: _IDENT Error: Undefined symbol: _RA1 Error: Undefined symbol: _VALU Error: Undefined symbol: _START Error: Undefined symbol: _NEXT Error: Undefined symbol: _STOP]
+c85006d: LINK_ERROR [Error: Undefined symbol: _STOP Error: Undefined symbol: _NEXT]
+c85006e: LINK_ERROR [Error: Undefined symbol: _STOP Error: Undefined symbol: _IDENT Error: Undefined symbol: _NEXT Error: Undefined symbol: _RA1 Error: Undefined symbol: _VALU]
+c85006f: NO_RESULT [,.,. C85006F ---- C85006F CPU mode: Z80 Loaded 9600 bytes from /tmp/tmpxa5f56uf/test.com Program exit via JMP 0 ]
+c85006g: TIMEOUT
 c85007a: TIMEOUT
 c85007e: PASS
-c85009a: PASS
+c85009a: NO_RESULT [,.,. C85009A ---- C85009A    * WRONG EXCEPTION RAISED BY MY_EXCEPTION    * WRONG EXCEPTION RAISED BY MY_EXCEPTION2 Constraint_ErrorCPU mode: Z80 Loade]
 c85011a: COMPILE_ERROR [semantic: 'PACK2.PACKB' is not a package]
 c85013a: COMPILE_ERROR [semantic: type mismatch for parameter 'A': expected 'TA', got 'Universal_Integer']
-c85014a: LINK_ERROR [Error: Undefined symbol: _PROC1 Error: Undefined symbol: _ENTRY2 Error: Undefined symbol: _PROC2 Error: Undefined symbol: _ENTRY1 Error: Undefined symbol: _STOP]
-c85014b: LINK_ERROR [Error: Undefined symbol: _STOP Error: Undefined symbol: _ENTRY2 Error: Undefined symbol: _PROC1 Error: Undefined symbol: _ENTRY1 Error: Undefined symbol: _PROC2]
+c85014a: LINK_ERROR [Error: Undefined symbol: _ENTRY2 Error: Undefined symbol: _PROC2 Error: Undefined symbol: _ENTRY1 Error: Undefined symbol: _PROC1]
+c85014b: LINK_ERROR [Error: Undefined symbol: _PROC1 Error: Undefined symbol: _PROC2 Error: Undefined symbol: _ENTRY2 Error: Undefined symbol: _ENTRY1]
 c85014c: LINK_ERROR [Error: Undefined symbol: _PROC1 Error: Undefined symbol: _FUNC1]
 c85017a: PASS
 c85018a: COMPILE_ERROR [semantic: type mismatch for parameter 'A': expected 'TA', got 'Universal_Integer']
@@ -852,12 +901,6 @@ c85018b: LINK_ERROR [Error: Undefined symbol: _ENT2]
 c85019a: PASS
 c86003a: PASS
 c86004a: COMPILE_ERROR [semantic: generic 'STANDARD.C86004A_SWAP' not found]
-c86004b0: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7424 bytes from /tmp/tmpfsveh5jh/test.com Program exit via JMP 0 ]
-c86004b1: COMPILE_ERROR [semantic: procedure 'TEST' not found]
-c86004b2: COMPILE_ERROR [semantic: 'C86004B1' is not a procedure]
-c86004c0: LINK_ERROR [Error: Undefined symbol: _C86004C1]
-c86004c1: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpc1oqt25w/test.com Program exit via JMP 0 ]
-c86004c2: COMPILE_ERROR [semantic: 'C86004C01' is not a procedure]
 c86006i: FAIL [* STANDARD.MOD (+-=-) FAILED]
 c86007a: PASS
 c87a05a: PASS
@@ -887,7 +930,7 @@ c87b14b: PASS
 c87b14c: PASS
 c87b14d: PASS
 c87b15a: PASS
-c87b16a: PASS
+c87b16a: TIMEOUT
 c87b17a: PASS
 c87b18a: PASS
 c87b18b: PASS
@@ -895,7 +938,7 @@ c87b19a: PASS
 c87b23a: PASS
 c87b24a: PASS
 c87b24b: COMPILE_ERROR [semantic: incompatible types in range: 'Character' and 'Float']
-c87b26b: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Integer' to 'BIG_INT']
+c87b26b: NO_RESULT [,.,. C87B26B ---- C87B26B Constraint_ErrorCPU mode: Z80 Loaded 11008 bytes from /tmp/tmp31hiizoh/test.com Program exit via JMP 0 ]
 c87b27a: PASS
 c87b28a: PASS
 c87b29a: PASS
@@ -909,12 +952,12 @@ c87b34c: PASS
 c87b35c: COMPILE_ERROR [semantic: exponent must be integer type, got 'FIXED']
 c87b38a: PASS
 c87b39a: PASS
-c87b40a: NO_RESULT [,.,. C87B40A ---- C87B40A CPU mode: Z80 Loaded 21760 bytes from /tmp/tmpytnaten6/test.com System reset ]
+c87b40a: TIMEOUT
 c87b41a: PASS
 c87b42a: PASS
 c87b43a: PASS
 c87b44a: COMPILE_ERROR [semantic: return type mismatch: expected 'Integer', got 'CITRUS']
-c87b45a: NO_RESULT [,.,. C87B45A ---- C87B45A Unhandled exception: 1 CPU mode: Z80 Loaded 9472 bytes from /tmp/tmpl53v7m01/test.com Program exit via JMP 0 ]
+c87b45a: NO_RESULT [,.,. C87B45A ---- C87B45A Unhandled exception: 1 CPU mode: Z80 Loaded 9472 bytes from /tmp/tmp_w6pb1ka/test.com Program exit via JMP 0 ]
 c87b45c: LINK_ERROR [Error: Undefined symbol: _E1]
 c87b47a: PASS
 c87b48a: COMPILE_ERROR [semantic: operator '-' not defined for type 'Boolean']
@@ -923,7 +966,7 @@ c87b50a: LINK_ERROR [Error: Undefined symbol: _RED Error: Undefined symbol: _GRE
 c87b54a: PASS
 c87b57a: PASS
 c87b62a: PASS
-c87b62b: COMPILE_ERROR [semantic: expression is not static]
+c87b62b: PASS
 c87b62c: PASS
 c91004b: COMPILE_ERROR [semantic: 'SUB_TT1' not found]
 c91004c: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _BYE]
@@ -931,8 +974,8 @@ c91006a: PASS
 c91007a: PASS
 c92002a: PASS
 c92003a: LINK_ERROR [Error: Undefined symbol: _E]
-c92005a: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Integer' to 'BIG_INT']
-c92005b: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'BIG_INT', got 'Integer']
+c92005a: PASS
+c92005b: PASS
 c92006a: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _E2]
 c93001a: PASS
 c93002a: PASS
@@ -953,45 +996,45 @@ c93005h: LINK_ERROR [Error: Undefined symbol: _INCR]
 c93006a: LINK_ERROR [Error: Undefined symbol: _E]
 c93007a: PASS
 c93008a: PASS
-c93008b: PASS
-c94001a: LINK_ERROR [Error: Undefined symbol: _E]
-c94001b: COMPILE_ERROR [semantic: type mismatch for parameter 'A': expected 'TT', got '_unknown']
-c94001c: LINK_ERROR [Error: Undefined symbol: _E]
+c93008b: NO_RESULT [,.,. C93008B ---- C93008B CPU mode: Z80 Loaded 10624 bytes from /tmp/tmp1p_xgy37/test.com Program exit via JMP 0 ]
+c94001a: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c94001b: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c94001c: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
 c94001e: PASS
 c94001f: PASS
-c94001g: LINK_ERROR [Error: Undefined symbol: _READ Error: Undefined symbol: _WRITE]
-c94002a: COMPILE_ERROR [semantic: type mismatch for parameter 'A': expected 'T2', got '_unknown']
-c94002b: LINK_ERROR [Error: Undefined symbol: _ENT1 Error: Undefined symbol: _E]
-c94002d: LINK_ERROR [Error: Undefined symbol: _E2 Error: Undefined symbol: _E1]
+c94001g: LINK_ERROR [Error: Undefined symbol: _WRITE Error: Undefined symbol: _READ]
+c94002a: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c94002b: LINK_ERROR [Error: Undefined symbol: _E Error: Undefined symbol: _ENT1]
+c94002d: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _E2]
 c94002e: LINK_ERROR [Error: Undefined symbol: _E Error: Undefined symbol: _ENT1]
-c94002f: LINK_ERROR [Error: Undefined symbol: _E Error: Undefined symbol: _ENT1]
+c94002f: LINK_ERROR [Error: Undefined symbol: _ENT1 Error: Undefined symbol: _E]
 c94002g: COMPILE_ERROR [semantic: abort requires a task object, got '_unknown']
-c94004a: LINK_ERROR [Error: Undefined symbol: _E]
-c94004b: LINK_ERROR [Error: Undefined symbol: _E]
-c94004c: LINK_ERROR [Error: Undefined symbol: _E]
-c94005a: LINK_ERROR [Error: Undefined symbol: _E]
-c94005b: LINK_ERROR [Error: Undefined symbol: _E]
+c94004a: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c94004b: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c94004c: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c94005a: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c94005b: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
 c94006a: LINK_ERROR [Error: Undefined symbol: _E]
-c94007a: LINK_ERROR [Error: Undefined symbol: _OUTER Error: Undefined symbol: _ID]
-c94007b: LINK_ERROR [Error: Undefined symbol: _OUTER Error: Undefined symbol: _ID]
+c94007a: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c94007b: LINK_ERROR [Error: Undefined symbol: _ID Error: Undefined symbol: _OUTER]
 c94008a: PASS
 c94008b: PASS
-c94008c: LINK_ERROR [Error: Undefined symbol: _UPDATE Error: Undefined symbol: _SET Error: Undefined symbol: _E3 Error: Undefined symbol: _EVENT Error: Undefined symbol: _E1 Error: Undefined symbol: _READ Error: Undefined]
-c94008d: LINK_ERROR [Error: Undefined symbol: _EVENT Error: Undefined symbol: _READ]
-c94010a: NO_RESULT [,.,. C94010A ---- C94010A    * TASK NOT DEPENDENT ON MASTER - 1 CPU mode: Z80 Loaded 22528 bytes from /tmp/tmpmwjjnrpw/test.com Program exit via JMP 0]
+c94008c: LINK_ERROR [Error: Undefined symbol: _SET Error: Undefined symbol: _READ Error: Undefined symbol: _E3 Error: Undefined symbol: _UPDATE Error: Undefined symbol: _E1 Error: Undefined symbol: _E2 Error: Undefined sy]
+c94008d: LINK_ERROR [Error: Undefined symbol: _READ Error: Undefined symbol: _EVENT]
+c94010a: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
 c94011a: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'access_T' to 'ACC_T']
 c94020a: PASS
-c95008a: LINK_ERROR [Error: Undefined symbol: _E Error: Undefined symbol: _CONTINUE]
-c95009a: LINK_ERROR [Error: Undefined symbol: _E1N Error: Undefined symbol: _E2P Error: Undefined symbol: _EF2N]
+c95008a: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c95009a: LINK_ERROR [Error: Undefined symbol: _E1N Error: Undefined symbol: _EF2N Error: Undefined symbol: _E2P]
 c95010a: LINK_ERROR [Error: Undefined symbol: _E]
 c95011a: PASS
-c95012a: LINK_ERROR [Error: Undefined symbol: _E2 Error: Undefined symbol: _E1]
+c95012a: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
 c95021a: COMPILE_ERROR [semantic: 'E1' not found]
-c95022a: LINK_ERROR [Error: Undefined symbol: _GET_ID Error: Undefined symbol: _E1 Error: Undefined symbol: _RESTART Error: Undefined symbol: _E4 Error: Undefined symbol: _E2 Error: Undefined symbol: _E3]
-c95022b: COMPILE_ERROR [semantic: 'E1' is not a procedure]
-c95033a: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _BYE]
+c95022a: LINK_ERROR [Error: Undefined symbol: _GET_ID Error: Undefined symbol: _E4 Error: Undefined symbol: _E3 Error: Undefined symbol: _E1 Error: Undefined symbol: _RESTART Error: Undefined symbol: _E2]
+c95022b: LINK_ERROR [Error: Undefined symbol: _E4 Error: Undefined symbol: _ME Error: Undefined symbol: _E3 Error: Undefined symbol: _GET_ID Error: Undefined symbol: _E1 Error: Undefined symbol: _E2]
+c95033a: LINK_ERROR [Error: Undefined symbol: _BYE Error: Undefined symbol: _E1]
 c95033b: PASS
-c95034a: LINK_ERROR [Error: Undefined symbol: _E2 Error: Undefined symbol: _BYE Error: Undefined symbol: _E1]
+c95034a: LINK_ERROR [Error: Undefined symbol: _BYE Error: Undefined symbol: _E1 Error: Undefined symbol: _E2]
 c95034b: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _BYE]
 c95035a: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _BYE]
 c95040a: LINK_ERROR [Error: Undefined symbol: _E1]
@@ -1005,17 +1048,17 @@ c95065c: LINK_ERROR [Error: Undefined symbol: _E1]
 c95065d: LINK_ERROR [Error: Undefined symbol: _E1]
 c95065e: LINK_ERROR [Error: Undefined symbol: _E1]
 c95065f: LINK_ERROR [Error: Undefined symbol: _E1]
-c95066a: LINK_ERROR [Error: Undefined symbol: _E8 Error: Undefined symbol: _E4 Error: Undefined symbol: _E3 Error: Undefined symbol: _E7 Error: Undefined symbol: _E6 Error: Undefined symbol: _E1 Error: Undefined symbol: _]
-c95067a: LINK_ERROR [Error: Undefined symbol: _LOOK_INOUT_VR Error: Undefined symbol: _LOOK_IN_VR Error: Undefined symbol: _CHECK_IN_VR Error: Undefined symbol: _LOOK_IN_I Error: Undefined symbol: _CHECK_INOUT_I Error: Un]
-c95071a: LINK_ERROR [Error: Undefined symbol: _EA2 Error: Undefined symbol: _EB3 Error: Undefined symbol: _EC Error: Undefined symbol: _EA Error: Undefined symbol: _EB Error: Undefined symbol: _EB1 Error: Undefined symbol]
-c95072b: LINK_ERROR [Error: Undefined symbol: _EA Error: Undefined symbol: _EB]
+c95066a: LINK_ERROR [Error: Undefined symbol: _E5 Error: Undefined symbol: _E4 Error: Undefined symbol: _E2 Error: Undefined symbol: _E7 Error: Undefined symbol: _E8 Error: Undefined symbol: _E3 Error: Undefined symbol: _]
+c95067a: LINK_ERROR [Error: Undefined symbol: _CHECK_IN_I Error: Undefined symbol: _CHECK_INOUT_I Error: Undefined symbol: _CHECK_INOUT_R Error: Undefined symbol: _LOOK_IN_I Error: Undefined symbol: _LOOK_IN_VR Error: Und]
+c95071a: LINK_ERROR [Error: Undefined symbol: _EC1 Error: Undefined symbol: _EB2 Error: Undefined symbol: _EC3 Error: Undefined symbol: _EC4 Error: Undefined symbol: _EC Error: Undefined symbol: _EB Error: Undefined symbo]
+c95072b: LINK_ERROR [Error: Undefined symbol: _EB Error: Undefined symbol: _EA]
 c95073a: LINK_ERROR [Error: Undefined symbol: _MAT_ADD]
 c95074c: LINK_ERROR [Error: Undefined symbol: _E]
 c95076a: LINK_ERROR [Error: Undefined symbol: _E2 Error: Undefined symbol: _E1]
-c95078a: LINK_ERROR [Error: Undefined symbol: _START Error: Undefined symbol: _STOP]
+c95078a: LINK_ERROR [Error: Undefined symbol: _STOP Error: Undefined symbol: _START]
 c95080b: LINK_ERROR [Error: Undefined symbol: _E Error: Undefined symbol: _EF]
 c95082g: LINK_ERROR [Error: Undefined symbol: _E]
-c95085a: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _E4 Error: Undefined symbol: _E3 Error: Undefined symbol: _E2]
+c95085a: LINK_ERROR [Error: Undefined symbol: _E4 Error: Undefined symbol: _E1 Error: Undefined symbol: _E3 Error: Undefined symbol: _E2]
 c95085b: LINK_ERROR [Error: Undefined symbol: _E]
 c95085c: LINK_ERROR [Error: Undefined symbol: _E]
 c95085d: LINK_ERROR [Error: Undefined symbol: _E]
@@ -1036,9 +1079,1159 @@ c95086c: LINK_ERROR [Error: Undefined symbol: _P]
 c95086d: LINK_ERROR [Error: Undefined symbol: _P]
 c95086e: LINK_ERROR [Error: Undefined symbol: _E]
 c95086f: LINK_ERROR [Error: Undefined symbol: _E]
-c95087a: LINK_ERROR [Error: Undefined symbol: _E3 Error: Undefined symbol: _E2 Error: Undefined symbol: _E1]
+c95087a: LINK_ERROR [Error: Undefined symbol: _E2 Error: Undefined symbol: _E1 Error: Undefined symbol: _E3]
 c95087b: LINK_ERROR [Error: Undefined symbol: _E]
 c95087c: LINK_ERROR [Error: Undefined symbol: _E]
 c95087d: LINK_ERROR [Error: Undefined symbol: _E]
-c95088a: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _E2]
+c95088a: LINK_ERROR [Error: Undefined symbol: _E2 Error: Undefined symbol: _E1]
 c95089a: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _E2]
+c95090a: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _E2 Error: Undefined symbol: _E3]
+c95092a: LINK_ERROR [Error: Undefined symbol: _FIXED Error: Undefined symbol: _FLOAT Error: Undefined symbol: _ENUMERAT Error: Undefined symbol: _INTEGR Error: Undefined symbol: _ARRY Error: Undefined symbol: _RECD Error:]
+c95093a: LINK_ERROR [Error: Undefined symbol: _E1]
+c95095a: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _E2]
+c95095b: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _E2]
+c95095c: LINK_ERROR [Error: Undefined symbol: _E]
+c95095d: COMPILE_ERROR [semantic: type mismatch for parameter 'I1': expected 'Integer', got 'Boolean']
+c95095e: LINK_ERROR [Error: Undefined symbol: _E]
+c96001a: LINK_ERROR [Error: Undefined symbol: _CLOCK]
+c96004a: NO_RESULT [,.,. C96004A ---- C96004A Constraint_ErrorCPU mode: Z80 Loaded 23424 bytes from /tmp/tmpbfxc60e7/test.com Program exit via JMP 0 ]
+c96005a: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Duration' to 'Time']
+c96005d: LINK_ERROR [Error: Undefined symbol: _OP_SUB Error: Undefined symbol: _TIME_OF]
+c96005f: LINK_ERROR [Error: Undefined symbol: _TIME_OF]
+c96006a: LINK_ERROR [Error: Undefined symbol: _TIME_OF Error: Undefined symbol: _OP_ADD Error: Undefined symbol: _OP_GE Error: Undefined symbol: _OP_LE Error: Undefined symbol: _OP_GT Error: Undefined symbol: _OP_LT]
+c96007a: LINK_ERROR [Error: Undefined symbol: _TIME_OF]
+c96008a: LINK_ERROR [Error: Undefined symbol: _SPLIT Error: Undefined symbol: _DAY Error: Undefined symbol: _MONTH Error: Undefined symbol: _SECONDS Error: Undefined symbol: _TIME_OF Error: Undefined symbol: _CLOCK Error:]
+c96008b: LINK_ERROR [Error: Undefined symbol: _TIME_OF Error: Undefined symbol: _SPLIT Error: Undefined symbol: _SECONDS Error: Undefined symbol: _DAY]
+c97112a: COMPILE_ERROR [semantic: 'E' not found]
+c97113a: COMPILE_ERROR [semantic: 'E1' not found]
+c97114a: COMPILE_ERROR [semantic: 'E1' not found]
+c97115a: COMPILE_ERROR [semantic: 'E1' not found]
+c97116a: PASS
+c97117a: PASS
+c97117b: COMPILE_ERROR [semantic: 'NO_GO' not found]
+c97117c: COMPILE_ERROR [semantic: 'E' not found]
+c97118a: COMPILE_ERROR [semantic: 'E' not found]
+c97120a: COMPILE_ERROR [semantic: 'SYNCH' not found]
+c97120b: COMPILE_ERROR [semantic: 'E' not found]
+c97201a: COMPILE_ERROR [semantic: procedure 'DO_IT_NOW_ORELSE' not found]
+c97201b: COMPILE_ERROR [semantic: 'E' not found]
+c97201c: COMPILE_ERROR [semantic: 'E' not found]
+c97201d: LINK_ERROR [Error: Undefined symbol: _DO_IT_NOW_ORELSE Error: Undefined symbol: _KEEP_ALIVE]
+c97201e: LINK_ERROR [Error: Undefined symbol: _DO_IT_NOW_ORELSE]
+c97201g: COMPILE_ERROR [semantic: 'DO_IT_NOW_ORELSE' not found]
+c97201h: COMPILE_ERROR [semantic: 'DO_IT_NOW_ORELSE' not found]
+c97201x: COMPILE_ERROR [semantic: 'DO_IT_NOW_ORELSE' not found]
+c97202a: LINK_ERROR [Error: Undefined symbol: _KEEP_ALIVE]
+c97203a: COMPILE_ERROR [semantic: procedure 'A' not found]
+c97203b: COMPILE_ERROR [semantic: procedure 'A' not found]
+c97203c: LINK_ERROR [Error: Undefined symbol: _E Error: Undefined symbol: _SYNCH]
+c97204a: LINK_ERROR [Error: Undefined symbol: _E]
+c97204b: LINK_ERROR [Error: Undefined symbol: _E]
+c97205a: LINK_ERROR [Error: Undefined symbol: _E]
+c97205b: NO_RESULT [,.,. C97205B ---- C97205B CPU mode: Z80 Loaded 10752 bytes from /tmp/tmpczqwpu_a/test.com Program exit via JMP 0 ]
+c97301a: COMPILE_ERROR [semantic: procedure 'DO_IT_NOW_OR_WAIT' not found]
+c97301b: LINK_ERROR [Error: Undefined symbol: _DO_IT_NOW_OR_WAIT Error: Undefined symbol: _AWAKEN_T3 Error: Undefined symbol: _RELEASE_T Error: Undefined symbol: _AWAKEN_T2 Error: Undefined symbol: _CLOCK]
+c97301c: LINK_ERROR [Error: Undefined symbol: _NO_SPIN Error: Undefined symbol: _CLOCK Error: Undefined symbol: _DO_IT_NOW_OR_WAIT]
+c97301d: LINK_ERROR [Error: Undefined symbol: _KEEP_ALIVE Error: Undefined symbol: _DO_IT_NOW_OR_WAIT Error: Undefined symbol: _CLOCK]
+c97301e: LINK_ERROR [Error: Undefined symbol: _DO_IT_NOW_OR_WAIT Error: Undefined symbol: _CLOCK]
+c97302a: LINK_ERROR [Error: Undefined symbol: _KEEP_ALIVE]
+c97303a: COMPILE_ERROR [semantic: procedure 'A' not found]
+c97303b: COMPILE_ERROR [semantic: procedure 'A' not found]
+c97303c: LINK_ERROR [Error: Undefined symbol: _E Error: Undefined symbol: _SYNCH]
+c97304a: LINK_ERROR [Error: Undefined symbol: _E]
+c97304b: LINK_ERROR [Error: Undefined symbol: _E]
+c97305a: LINK_ERROR [Error: Undefined symbol: _E]
+c97305b: NO_RESULT [,.,. C97305B ---- C97305B CPU mode: Z80 Loaded 10880 bytes from /tmp/tmp5o47w76y/test.com Program exit via JMP 0 ]
+c97305c: LINK_ERROR [Error: Undefined symbol: _E]
+c97305d: NO_RESULT [,.,. C97305D ---- C97305D CPU mode: Z80 Loaded 19968 bytes from /tmp/tmpnnpp5otk/test.com Program exit via JMP 0 ]
+c97307a: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c99005a: COMPILE_ERROR [semantic: 'E1' not found]
+c9a003a: NO_RESULT [,.,. C9A003A ---- C9A003A CPU mode: Z80 Loaded 9472 bytes from /tmp/tmpq6jsk57s/test.com Program exit via JMP 0 ]
+c9a004a: PASS
+c9a007a: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c9a009a: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _GET Error: Undefined symbol: _PUT]
+c9a009c: LINK_ERROR [Error: Undefined symbol: _E1]
+c9a009f: LINK_ERROR [Error: Undefined symbol: _RESTART Error: Undefined symbol: _STOP Error: Undefined symbol: _START]
+c9a009g: LINK_ERROR [Error: Undefined symbol: _RESTART Error: Undefined symbol: _STOP Error: Undefined symbol: _START Error: Undefined symbol: _NO_CALL]
+c9a009h: LINK_ERROR [Error: Undefined symbol: _E1]
+c9a010a: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _E2]
+c9a011a: NO_RESULT [,.,. C9A011A ---- C9A011A Tasking_ErrorCPU mode: Z80 Loaded 9728 bytes from /tmp/tmpxdzu774f/test.com Program exit via JMP 0 ]
+c9a011b: COMPILE_ERROR [semantic: 'SELF_ABORT' not found]
+ca1003a: PASS
+ca1004a: PASS
+ca1005a: PASS
+ca1006a: COMPILE_ERROR [semantic: wrong number of arguments: expected 0, got 1]
+ca1106a: PASS
+ca1108a: COMPILE_ERROR [semantic: wrong number of arguments: expected 0, got 2]
+ca1108b: COMPILE_ERROR [semantic: wrong number of arguments: expected 0, got 2]
+ca2009a: PASS
+ca2009d: LINK_ERROR [Error: Undefined symbol: _NI_PROC1]
+ca2011b: LINK_ERROR [Error: Undefined symbol: _P2 Error: Undefined symbol: _P1]
+ca5004a: LINK_ERROR [Error: Undefined symbol: _E]
+ca5006a: PASS
+cb1001a: PASS
+cb1004a: PASS
+cb1005a: LINK_ERROR [Error: Undefined symbol: _PROP Error: Undefined symbol: _PROC1 Error: Undefined symbol: _PROC2]
+cb1010a: LINK_ERROR [Error: Undefined symbol: _E3B Error: Undefined symbol: _E3A Error: Undefined symbol: _E2 Error: Undefined symbol: _E1]
+cb1010c: NO_RESULT [,.,. CB1010C ---- CB1010C Constraint_ErrorCPU mode: Z80 Loaded 8960 bytes from /tmp/tmpewccuyyg/test.com Program exit via JMP 0 ]
+cb1010d: PASS
+cb2004a: PASS
+cb2005a: PASS
+cb2006a: PASS
+cb2007a: PASS
+cb3003a: NO_RESULT [,.,. CB3003A ---- CB3003A    * WRONG EXCEPTION RAISED (CASE 1)    * WRONG EXCEPTION RAISED (OTHERS) CPU mode: Z80 Loaded 11392 bytes from /tmp/tmpcr9i]
+cb3003b: NO_RESULT [,.,. CB3003B ---- CB3003B CPU mode: Z80 Loaded 10496 bytes from /tmp/tmp1j_ifp51/test.com Program exit via JMP 0 ]
+cb3004a: NO_RESULT [,.,. CB3004A ---- CB3004A    *    * P1.E1 EXCEPTION RAISED WHEN (P2)E1 EXPECTED.    *    * STANDARD.CONSTRAINT_ERROR EXCEPTION RAISED WHEN . CPU mode:]
+cb4001a: LINK_ERROR [Error: Undefined symbol: _R Error: Undefined symbol: _CALLEE2 Error: Undefined symbol: _CALLEE3 Error: Undefined symbol: _CALLEE1 Error: Undefined symbol: _S]
+cb4002a: PASS
+cb4003a: PASS
+cb4004a: PASS
+cb4005a: PASS
+cb4006a: PASS
+cb4007a: PASS
+cb4008a: LINK_ERROR [Error: Undefined symbol: _F2 Error: Undefined symbol: _F]
+cb4009a: LINK_ERROR [Error: Undefined symbol: _P3]
+cb4013a: NO_RESULT [,.,. CB4013A ---- CB4013A Tasking_ErrorCPU mode: Z80 Loaded 10112 bytes from /tmp/tmpqdq522hw/test.com Program exit via JMP 0 ]
+cb5001a: LINK_ERROR [Error: Undefined symbol: _E2]
+cb5001b: LINK_ERROR [Error: Undefined symbol: _E1 Error: Undefined symbol: _E2]
+cb5002a: LINK_ERROR [Error: Undefined symbol: _B Error: Undefined symbol: _A Error: Undefined symbol: _E Error: Undefined symbol: _STOP Error: Undefined symbol: _C Error: Undefined symbol: _D]
+cc1004a: LINK_ERROR [Error: Undefined symbol: _P]
+cc1005b: PASS
+cc1010a: COMPILE_ERROR [semantic: wrong number of arguments: expected 1, got 0]
+cc1010b: PASS
+cc1018a: LINK_ERROR [Error: Undefined symbol: _P]
+cc1104c: LINK_ERROR [Error: Undefined symbol: _E]
+cc1107b: PASS
+cc1111a: PASS
+cc1204a: COMPILE_ERROR [semantic: 'R1' is not a record]
+cc1207b: COMPILE_ERROR [semantic: 'R' is not a record]
+cc1220a: COMPILE_ERROR [semantic: 'P2' not found]
+cc1221a: TIMEOUT
+cc1221b: NO_RESULT [,.,. CC1221B ---- CC1221B Constraint_ErrorCPU mode: Z80 Loaded 24192 bytes from /tmp/tmpauviy9ws/test.com Program exit via JMP 0 ]
+cc1221c: TIMEOUT
+cc1221d: NO_RESULT [,.,. CC1221D ---- CC1221D    *    * INCORRECT CONVERSION FROM FIXED VALUE 2.0 WITH TYPE .    *    * INCORRECT CONVERSION FROM FIXED VALUE -2.0 WITH TY]
+cc1222a: NO_RESULT [,.,. CC1222A ---- CC1222A    *    * INCORRECT RESULTS FOR QUALIFICATION WITH TYPE - .    *    * INCORRECT RESULTS FOR QUALIFICATION WITH TYPE - .    *]
+cc1223a: TIMEOUT
+cc1224a: NO_RESULT [CPU mode: Z80 Loaded 37248 bytes from /tmp/tmpus9bwojh/test.com Program exit via JMP 0 ]
+cc1226b: COMPILE_ERROR [semantic: 'NLPDISC' is not a record]
+cc1227a: NO_RESULT [CPU mode: Z80 Loaded 7552 bytes from /tmp/tmpwp7oug1e/test.com Program exit via JMP 0 ]
+cc1301a: COMPILE_ERROR [semantic: wrong number of generic parameters for 'PKG': expected 5 to 12, got 1]
+cc1302a: COMPILE_ERROR [semantic: wrong number of generic parameters for 'PK2': expected 5, got 2]
+cc1304a: LINK_ERROR [Error: Undefined symbol: _P]
+cc1304b: LINK_ERROR [Error: Undefined symbol: _P Error: Undefined symbol: _S]
+cc1307a: COMPILE_ERROR [semantic: wrong number of generic parameters for 'PK': expected 1 to 2, got 0]
+cc1307b: COMPILE_ERROR [semantic: wrong number of generic parameters for 'P': expected 2 to 4, got 0]
+cc1308a: COMPILE_ERROR [semantic: enumeration literal 'F1' conflicts with existing declaration]
+cc1310a: COMPILE_ERROR [semantic: wrong number of generic parameters for 'PKG': expected 2 to 4, got 0]
+cc1311a: LINK_ERROR [Error: Undefined symbol: _PROC Error: Undefined symbol: _P]
+cc1311b: COMPILE_ERROR [semantic: wrong number of generic parameters for 'FUNC': expected 1, got 0]
+cc2002a: PASS
+cc3004a: COMPILE_ERROR [semantic: dereference prefix must be an access type, got 'AD']
+cc3007a: COMPILE_ERROR [semantic: wrong number of generic parameters for 'F1': expected 2 to 3, got 1]
+cc3007b: COMPILE_ERROR [semantic: dereference prefix must be an access type, got 'RECORD_POINTER']
+cc3011a: LINK_ERROR [Error: Undefined symbol: _P1]
+cc3011d: PASS
+cc3012a: PASS
+cc3015a: PASS
+cc3016b: COMPILE_ERROR [semantic: 'FIRST' not found]
+cc3016c: PASS
+cc3016f: COMPILE_ERROR [semantic: 'T5' is not a record]
+cc3016i: COMPILE_ERROR [semantic: 'T5A' is not a record]
+cc3017b: PASS
+cc3019a: COMPILE_ERROR [semantic: type mismatch for parameter 'VALUE': expected 'String(1..6)', got 'Universal_Integer']
+cc3106b: LINK_ERROR [Error: Undefined symbol: _GEN_PROC2 Error: Undefined symbol: _GEN_PROC1 Error: Undefined symbol: _GEN_PROC3 Error: Undefined symbol: _ENT_2 Error: Undefined symbol: _ARRAY_TEST]
+cc3120a: COMPILE_ERROR [semantic: type mismatch for parameter 'P': expected 'PRIV', got 'REC']
+cc3120b: COMPILE_ERROR [semantic: 'T1' is not a record]
+cc3121a: PASS
+cc3123a: COMPILE_ERROR [semantic: 'GEN_INT' not found]
+cc3125a: COMPILE_ERROR [semantic: wrong number of generic parameters for 'PKG': expected 1 to 2, got 0]
+cc3125b: PASS
+cc3125c: PASS
+cc3125d: PASS
+cc3126a: LINK_ERROR [Error: Undefined symbol: _NARR Error: Undefined symbol: _NVAR]
+cc3127a: PASS
+cc3128a: COMPILE_ERROR [semantic: 'ACCPRIV' is not a record]
+cc3203a: PASS
+cc3207b: LINK_ERROR [Error: Undefined symbol: _ENT]
+cc3220a: TIMEOUT
+cc3221a: PASS
+cc3222a: TIMEOUT
+cc3223a: TIMEOUT
+cc3224a: FAIL [* 'LAST(N) ATTRIBUTE REPORT.FAILED]
+cc3225a: LINK_ERROR [Error: Undefined symbol: _ONE]
+cc3230a: PASS
+cc3231a: PASS
+cc3232a: TIMEOUT
+cc3233a: TIMEOUT
+cc3234a: NO_RESULT [,.,. CC3234A ---- CC3234A    * INCORRECT RESULTS - 6    * INCORRECT RESULTS - 7    * INCORRECT RESULTS - 9    * INCORRECT RESULTS - 12    * INCORRECT ]
+cc3235a: NO_RESULT [,.,. CC3235A ---- CC3235A Constraint_ErrorCPU mode: Z80 Loaded 11392 bytes from /tmp/tmpqirlwyfh/test.com Program exit via JMP 0 ]
+cc3236a: PASS
+cc3240a: COMPILE_ERROR [semantic: 'T' is not a record]
+cc3305a: PASS
+cc3305b: PASS
+cc3305c: PASS
+cc3305d: PASS
+cc3601a: COMPILE_ERROR [semantic: 'F1' not found]
+cc3601c: PASS
+cc3602a: COMPILE_ERROR [semantic: wrong number of generic parameters for 'GP_DEF1': expected 1, got 0]
+cc3603a: PASS
+cc3605a: LINK_ERROR [Error: Undefined symbol: _PASSED_PROC]
+cc3606a: PASS
+cc3606b: PASS
+cc3607b: LINK_ERROR [Error: Undefined symbol: _DO_PROC]
+cd1009d: PASS
+cd1009e: PASS
+cd1009f: PASS
+cd1009g: PASS
+cd1009h: PASS
+cd1009i: PASS
+cd1009j: PASS
+cd1009n: PASS
+cd1009o: PASS
+cd1009p: PASS
+cd1009q: PASS
+cd1009r: PASS
+cd1009s: PASS
+cd1009v: PASS
+cd1009w: PASS
+cd1009x: PASS
+cd1009y: PASS
+cd1009z: PASS
+cd1c03a: PASS
+cd1c03b: TIMEOUT
+cd1c03c: PASS
+cd1c03f: PASS
+cd1c03g: PASS
+cd1c03h: PASS
+cd1c03i: LINK_ERROR [Error: Undefined symbol: _SHR16]
+cd1c04a: TIMEOUT
+cd1c04d: PASS
+cd1c04e: PASS
+cd2a21a: TIMEOUT
+cd2a21e: TIMEOUT
+cd2a22a: NO_RESULT [,.,. CD2A22A ---- CD2A22A    *    * INCORRECT RESULTS FOR RELATIONAL OPERATORS - 1.    * INCORRECT VALUE FOR CHECK_TYPE'IMAGE - 1    * INCORRECT VALUE]
+cd2a22e: TIMEOUT
+cd2a22i: TIMEOUT
+cd2a22j: TIMEOUT
+cd2a23a: NO_RESULT [Constraint_ErrorCPU mode: Z80 Loaded 22016 bytes from /tmp/tmpoojnv4ki/test.com Program exit via JMP 0 ]
+cd2a23e: TIMEOUT
+cd2a24a: NO_RESULT [Constraint_ErrorCPU mode: Z80 Loaded 22656 bytes from /tmp/tmpisof1vil/test.com Program exit via JMP 0 ]
+cd2a24e: NO_RESULT [Constraint_ErrorCPU mode: Z80 Loaded 21760 bytes from /tmp/tmpqqga1i97/test.com Program exit via JMP 0 ]
+cd2a24i: PASS
+cd2a24j: PASS
+cd2a31a: NO_RESULT [,.,. CD2A31A ---- CD2A31A    *    * CHECK ON REPRESENTATION FOR INT.    *    * INCORRECT RESULTS FOR RELATIONAL OPERATORS - 1.    *    * INCORRECT RES]
+cd2a31e: TIMEOUT
+cd2a32a: LINK_ERROR [Error: Undefined symbol: _SHR16]
+cd2a32c: NO_RESULT [,.,. CD2A32C ---- CD2A32C    *    * DERIVED_INT'SIZE MUST BE EQUAL TO7. CPU mode: Z80 Loaded 13696 bytes from /tmp/tmpa4s715b0/test.com System reset ]
+cd2a32e: NO_RESULT [,.,. CD2A32E ---- CD2A32E    *    * INCORRECT RESULTS FOR RELATIONAL OPERATORS - 1.    *    * INCORRECT RESULTS FOR BINARY ARITHMETIC OPERATORS - 1.  ]
+cd2a32g: TIMEOUT
+cd2a32i: TIMEOUT
+cd2a32j: NO_RESULT [,.,. CD2A32J ---- CD2A32J    *    * INCORRECT RESULTS FOR RELATIONAL OPERATORS. CPU mode: Z80 Loaded 14208 bytes from /tmp/tmpkhn5s5b5/test.com Progra]
+cd2a51a: TIMEOUT
+cd2a53a: NO_RESULT [,.,. CD2A53A ---- CD2A53A    *    * INCORRECT RESULTS FOR BINARY ADDING OPERATORS - 1.    *    * INCORRECT RESULTS FOR MULTIPLYING OPERATORS - 1.    *]
+cd2a53e: NO_RESULT [,.,. CD2A53E ---- CD2A53E    *    * INCORRECT RESULTS FOR UNARY ADDING OPERATORS - 1.    * INCORRECT VALUE FOR FIXED_ELEMENT'LAST    * INCORRECT VALUE]
+cd2b11b: TIMEOUT
+cd2b11d: PASS
+cd2b11e: PASS
+cd2b11f: PASS
+cd2b16a: PASS
+cd2d11a: TIMEOUT
+cd2d13a: PASS
+cd3014a: PASS
+cd3014c: PASS
+cd3014d: PASS
+cd3014f: PASS
+cd3015a: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'MAIN' to 'HUE']
+cd3015c: PASS
+cd3015e: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'MAIN' to 'HUE']
+cd3015f: PASS
+cd3015g: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'MAIN' to 'HUE']
+cd3015h: PASS
+cd3015i: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'MAIN' to 'HUE']
+cd3015k: PASS
+cd3021a: PASS
+cd4031a: PASS
+cd4051a: PASS
+cd4051b: PASS
+cd4051c: PASS
+cd4051d: PASS
+cd5003a: PASS
+cd5003b: PASS
+cd5003c: PASS
+cd5003d: LINK_ERROR [Error: Undefined symbol: _CD5003D_PROC2]
+cd5003e: LINK_ERROR [Error: Undefined symbol: _TST]
+cd5003f: PASS
+cd5003g: PASS
+cd5003h: PASS
+cd5003i: LINK_ERROR [Error: Undefined symbol: _PROC3]
+cd5011a: PASS
+cd5011c: PASS
+cd5011e: PASS
+cd5011g: PASS
+cd5011i: PASS
+cd5011k: PASS
+cd5011m: PASS
+cd5011q: PASS
+cd5011s: PASS
+cd5012a: NO_RESULT [,.,. CD5012A ---- CD5012A Constraint_ErrorCPU mode: Z80 Loaded 9344 bytes from /tmp/tmp8ya34ra5/test.com Program exit via JMP 0 ]
+cd5012b: PASS
+cd5012e: PASS
+cd5012f: PASS
+cd5012i: PASS
+cd5012m: PASS
+cd5013a: PASS
+cd5013c: PASS
+cd5013e: PASS
+cd5013g: PASS
+cd5013i: PASS
+cd5013k: PASS
+cd5013m: NO_RESULT [,.,. CD5013M ---- CD5013M Constraint_ErrorCPU mode: Z80 Loaded 9088 bytes from /tmp/tmpgomls0k9/test.com Program exit via JMP 0 ]
+cd5013o: PASS
+cd5014a: PASS
+cd5014c: PASS
+cd5014e: PASS
+cd5014g: PASS
+cd5014i: PASS
+cd5014k: PASS
+cd5014m: PASS
+cd5014o: PASS
+cd5014t: PASS
+cd5014v: PASS
+cd5014x: PASS
+cd5014y: PASS
+cd5014z: PASS
+cd7002a: PASS
+cd7007b: PASS
+cd7101d: PASS
+cd7103d: PASS
+cd7202a: PASS
+cd7204b: PASS
+cd7204c: PASS
+cd7305a: PASS
+cda201a: NO_RESULT [,.,. CDA201A ---- CDA201A    * INCORRECT RESULT FROM ARRAY-INTEGER-ARRAY Constraint_ErrorCPU mode: Z80 Loaded 8832 bytes from /tmp/tmpmkor694g/test.co]
+cda201b: NO_RESULT [,.,. CDA201B ---- CDA201B Constraint_ErrorCPU mode: Z80 Loaded 8576 bytes from /tmp/tmp85ki7ibx/test.com Program exit via JMP 0 ]
+cda201c: PASS
+cda201e: PASS
+cz1101a: PASS
+cz1102a: TIMEOUT
+cz1103a: COMPILE_ERROR [semantic: 'CHECK_FILE' is not a procedure]
+c324001: NO_RESULT [Unhandled exception: 5 CPU mode: Z80 Loaded 16640 bytes from /tmp/tmpp7x_fepr/test.com Program exit via JMP 0 ]
+c324002: COMPILE_ERROR [semantic: wrong number of arguments: expected 0, got 1]
+c324003: NO_RESULT [,.,. C324003 ---- C324003    -    - Test_In_Param_Not_Satisfy_Predicate_Open - Is_Open is TRUE.    * Calling Mode should have raised Status_Error    -]
+c324004: NO_RESULT [,.,. C324004 ---- C324004 Constraint_ErrorCPU mode: Z80 Loaded 13696 bytes from /tmp/tmpztsr8rrr/test.com Program exit via JMP 0 ]
+c324005: NO_RESULT [,.,. C324005 ---- C324005 Constraint_ErrorCPU mode: Z80 Loaded 13696 bytes from /tmp/tmpy810wgb9/test.com Program exit via JMP 0 ]
+c324006: TIMEOUT
+c330001: COMPILE_ERROR [semantic: package specification for 'C330001_0' not found]
+c330002: TIMEOUT
+c332001: COMPILE_ERROR [semantic: incompatible types for arithmetic: 'Modular_Type' and 'Integer_Type']
+c340001: COMPILE_ERROR [semantic: package specification for 'C340001_2' not found]
+c340a01: COMPILE_ERROR [semantic: package specification for 'F340A000' not found]
+c340a02: COMPILE_ERROR [semantic: package specification for 'F340A000' not found]
+c341a01: COMPILE_ERROR [semantic: type 'Bank.Dollar_Amount' not found for use type clause]
+c341a02: COMPILE_ERROR [semantic: type 'Bank.Dollar_Amount' not found for use type clause]
+c341a03: COMPILE_ERROR [semantic: type 'Bank.Dollar_Amount' not found for use type clause]
+c341a04: COMPILE_ERROR [semantic: type 'Bank.Dollar_Amount' not found for use type clause]
+c350001: LINK_ERROR [Error: Undefined symbol: _TST_NEW_ENUM Error: Undefined symbol: _TST_INT Error: Undefined symbol: _TST_ENUM Error: Undefined symbol: _TST_DER Error: Undefined symbol: _TST_TINY]
+c350a01: COMPILE_ERROR [semantic: 'Raw' not found]
+c350a02: LINK_ERROR [Error: Undefined symbol: _SMALL_INTEGER Error: Undefined symbol: _T4 Error: Undefined symbol: _T5 Error: Undefined symbol: _T3 Error: Undefined symbol: _T2 Error: Undefined symbol: _T1]
+c350b01: COMPILE_ERROR [semantic: 'Flt_Value' not found]
+c350b02: LINK_ERROR [Error: Undefined symbol: _T1 Error: Undefined symbol: _T3 Error: Undefined symbol: _T2]
+c352001: LINK_ERROR [Error: Undefined symbol: _IDENT_WIDE_STR Error: Undefined symbol: _STR_TO_INT]
+c354002: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c354003: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c354004: COMPILE_ERROR [semantic: incompatible types for arithmetic: 'Address_Type' and 'Integer']
+c35a001: TIMEOUT
+c360002: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'Unconstrained_Array', got 'Unconstrained_Array_Aliased']
+c360a01: COMPILE_ERROR [semantic: 'Raw' not found]
+c360a02: LINK_ERROR [Error: Undefined symbol: _T1 Error: Undefined symbol: _SMALL_INTEGER Error: Undefined symbol: _T4 Error: Undefined symbol: _T2 Error: Undefined symbol: _T5 Error: Undefined symbol: _T3]
+c360b01: COMPILE_ERROR [semantic: 'Flt_Value' not found]
+c360b02: LINK_ERROR [Error: Undefined symbol: _T3 Error: Undefined symbol: _T1 Error: Undefined symbol: _T2]
+c371001: PASS
+c371002: TIMEOUT
+c371003: TIMEOUT
+c380001: LINK_ERROR [Error: Undefined symbol: _EXC_NAME_OCC Error: Undefined symbol: _EXC_INFO]
+c380002: PASS
+c380003: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7296 bytes from /tmp/tmpfdt265dm/test.com Program exit via JMP 0 ]
+c380004: COMPILE_ERROR [semantic: generic 'Check' not found]
+c390002: COMPILE_ERROR [semantic: package specification for 'Vehicle' not found]
+c390003: COMPILE_ERROR [semantic: type mismatch for parameter 'It': expected 'Object'Class', got 'Motorcycle']
+c390004: COMPILE_ERROR [semantic: type mismatch for parameter 'Object': expected 'Vehicle'Class', got 'Car'Class']
+c390007: COMPILE_ERROR [semantic: 'Parent_Outer' not found]
+c390010: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c390011: PASS
+c390012: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c391001: COMPILE_ERROR [semantic: type 'Modules.Command_Formats' not found for use type clause]
+c391002: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c391003: COMPILE_ERROR [semantic: type mismatch for parameter 'A': expected 'Account', got 'Account'Class']
+c392002: COMPILE_ERROR [semantic: type mismatch for parameter 'V': expected 'Vehicle'Class', got 'Motorcycle']
+c392003: LINK_ERROR [Error: Undefined symbol: _ASSIGN_REPRESENTATIVE Error: Undefined symbol: _INCREMENT_COUNTERS Error: Undefined symbol: _OPEN Error: Undefined symbol: _INCREMENT_BANK_RESERVE]
+c392004: COMPILE_ERROR [semantic: type mismatch for parameter 'The_Vehicle': expected 'Vehicle', got 'Car']
+c392005: COMPILE_ERROR [semantic: type mismatch for parameter 'Cam': expected 'Remote_Camera', got 'Remote_Camera'Class']
+c392008: COMPILE_ERROR [semantic: type mismatch for parameter 'A': expected 'Account', got 'Account'Class']
+c392010: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c392011: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c392013: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmprvrak2m3/test.com Program exit via JMP 0 ]
+c392014: COMPILE_ERROR [semantic: 'T' not found]
+c392015: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c392a01: COMPILE_ERROR [semantic: type mismatch for parameter 'Acct': expected 'Bank_Account'Class', got 'Savings_Account']
+c392c05: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c392c07: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c392d01: COMPILE_ERROR [semantic: type mismatch for parameter 'C': expected 'Remote_Camera', got 'Remote_Camera'Class']
+c392d02: COMPILE_ERROR [semantic: type mismatch for parameter 'C': expected 'Remote_Camera', got 'Remote_Camera'Class']
+c392d03: COMPILE_ERROR [semantic: type mismatch for parameter 'C': expected 'Remote_Camera', got 'Remote_Camera'Class']
+c393001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c393007: COMPILE_ERROR [semantic: procedure 'Set_Time' not found]
+c393008: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c393009: COMPILE_ERROR [semantic: procedure 'Display' not found]
+c393010: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c393011: COMPILE_ERROR [semantic: procedure 'Set_Status' not found]
+c393012: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c393013: COMPILE_ERROR [semantic: package specification for 'C393013_4' not found]
+c393a02: COMPILE_ERROR [semantic: type 'F393A00_2.Rotational_Measurement' not found for use type clause]
+c393a03: COMPILE_ERROR [semantic: package specification for 'C393A03_0' not found]
+c393a05: COMPILE_ERROR [semantic: package specification for 'C393A05_0' not found]
+c393a06: COMPILE_ERROR [semantic: package specification for 'C393A06_0' not found]
+c393b12: PASS
+c393b13: PASS
+c393b14: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Integer' to '_unknown']
+c394001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c394002: TIMEOUT
+c394003: NO_RESULT [,.,. C394003 ---- C394003    *    * Subtest 1 failed: 50.    *    * Subtest 2 failed: 51.    *    * Subtest 3 failed: 52. CPU mode: Z80 Loaded 26752 b]
+c3a0001: NO_RESULT [,.,. C3A0001 ---- C3A0001 Constraint_ErrorCPU mode: Z80 Loaded 18304 bytes from /tmp/tmpm0h4jcqf/test.com Program exit via JMP 0 ]
+c3a0002: LINK_ERROR [Error: Undefined symbol: _LOG_ACCESS]
+c3a0003: COMPILE_ERROR [semantic: dereference prefix must be an access type, got 'Sine_Function_Ptr']
+c3a0004: PASS
+c3a0005: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c3a0006: COMPILE_ERROR [semantic: 'Trig_Function_Ptr' is not an array]
+c3a0007: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c3a0008: COMPILE_ERROR [semantic: 'Integrand_Ptr' is not an array]
+c3a0009: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c3a0010: COMPILE_ERROR [semantic: 'Process' is not a procedure]
+c3a0011: COMPILE_ERROR [semantic: 'The_Heading' not found]
+c3a0013: COMPILE_ERROR [semantic: dereference prefix must be an access type, got '_unknown']
+c3a0014: TIMEOUT
+c3a0015: COMPILE_ERROR [semantic: package 'System.Storage_Pools' not found]
+c3a0016: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmphhonboks/test.com Program exit via JMP 0 ]
+c3a0017: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 16896 bytes from /tmp/tmpg0ww5bll/test.com Program exit via JMP 0 ]
+c3a0018: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 16768 bytes from /tmp/tmpcjbblclr/test.com Program exit via JMP 0 ]
+c3a0019: COMPILE_ERROR [semantic: procedure 'Use_It' not found]
+c3a0020: COMPILE_ERROR [semantic: type mismatch for parameter 'Obj': expected 'Int_Ptr', got '_unknown']
+c3a0021: LINK_ERROR [Error: Undefined symbol: _USER]
+c3a0022: COMPILE_ERROR [semantic: procedure 'Use_It' not found]
+c3a0023: COMPILE_ERROR [semantic: type mismatch for parameter 'Obj': expected 'Rec_Ptr', got '_unknown']
+c3a0024: LINK_ERROR [Error: Undefined symbol: _USER]
+c3a0025: COMPILE_ERROR [semantic: procedure 'Use_It' not found]
+c3a0026: COMPILE_ERROR [semantic: procedure 'Use_It' not found]
+c3a0027: COMPILE_ERROR [semantic: procedure 'Use_It' not found]
+c3a0028: COMPILE_ERROR [semantic: procedure 'Use_It' not found]
+c3a0029: COMPILE_ERROR [semantic: procedure 'Use_It' not found]
+c3a0030: NO_RESULT [   *    * Null Bar value when non-null expected, case0. CPU mode: Z80 Loaded 8832 bytes from /tmp/tmpbv8qa9x8/test.com Program exit via JMP 0 ]
+c3a1001: COMPILE_ERROR [semantic: 'Disc' not found]
+c3a1002: COMPILE_ERROR [semantic: 'Incomplete5' is not a task type]
+c3a1005: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'access_Set' to 'Bag_Type']
+c3a2001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c3a2002: NO_RESULT [,.,. C3A2002 ---- C3A2002 Constraint_ErrorCPU mode: Z80 Loaded 13568 bytes from /tmp/tmp_80sonaa/test.com Program exit via JMP 0 ]
+c3a2003: ASSEMBLE_ERROR [Error at line 3005: Undefined symbol '_x0' Error at line 3061: Undefined symbol '_x0' Error at line 3117: Undefined symbol '_x0' Error at line 3163: Undefined symbol '_x0']
+c3a2004: COMPILE_ERROR [semantic: 'Val' is not a procedure]
+c3a2a01: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'FAF', got 'access_FD']
+c3a2a02: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'AccTagClass_L0', got 'access_FD']
+c410001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c413001: COMPILE_ERROR [semantic: record 'TQ' has no component 'Base_Func']
+c413002: COMPILE_ERROR [semantic: record 'TQ' has no component 'Base_Func']
+c413003: COMPILE_ERROR [semantic: record 'TQ' has no component 'Base_Func']
+c413004: COMPILE_ERROR [semantic: record 'TQ' has no component 'Base_Func']
+c413005: COMPILE_ERROR [semantic: record 'TP' has no component 'Get']
+c413006: LINK_ERROR [Error: Undefined symbol: _E]
+c413007: COMPILE_ERROR [semantic: record 'TP' has no component 'Prim_Func1']
+c415001: COMPILE_ERROR [semantic: 'Null_Key' not found]
+c416a01: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c416a02: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c420001: PASS
+c431001: COMPILE_ERROR [semantic: type mismatch for parameter 'Disk': expected 'CD_ROM', got 'Recording'Class']
+c431002: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpy9o9xrk4/test.com Program exit via JMP 0 ]
+c431003: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmp31jlsj2y/test.com Program exit via JMP 0 ]
+c431004: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpco9zymrm/test.com Program exit via JMP 0 ]
+c431a01: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c431a02: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c431a03: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c432001: COMPILE_ERROR [semantic: package specification for 'C432001_1' not found]
+c432002: TIMEOUT
+c432003: NO_RESULT [,.,. C432003 ---- C432003    * Incorrect object values for Object A CPU mode: Z80 Loaded 18816 bytes from /tmp/tmpi_bk56d5/test.com System reset ]
+c432004: COMPILE_ERROR [semantic: package specification for 'C432004_1' not found]
+c432005: LINK_ERROR [Error: Undefined symbol: _GET Error: Undefined symbol: _SET]
+c433001: TIMEOUT
+c433002: TIMEOUT
+c433003: NO_RESULT [,.,. C433003 ---- C433003    * Wrong value: O1    * Wrong value: O2    * Wrong value: O3    * Wrong value: O4    * Wrong value: O5    * Wrong value: O]
+c433004: NO_RESULT [,.,. C433004 ---- C433004    * Wrong value: O1    *    * Wrong value - used Default_Value rather than Default_Component_Value: O2.    * Wrong value: O]
+c433005: PASS
+c433006: COMPILE_ERROR [semantic: 'Test_A' not found]
+c433007: NO_RESULT [,.,. C433007 ---- C433007    * Wrong result from Clear (A)    * Wrong result from Clear (B)    * Wrong result from Clear (C)    * Wrong result from Cl]
+c433008: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpol2lh1ve/test.com Program exit via JMP 0 ]
+c433a01: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c433a02: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c433a03: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c433a04: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c450001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c452001: TIMEOUT
+c452002: COMPILE_ERROR [semantic: incompatible types in range: 'Month' and 'Shape']
+c452003: COMPILE_ERROR [semantic: 'Non_Null_Any_Root_Ptr' not found]
+c452004: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c452005: COMPILE_ERROR [semantic: 'Data' not found]
+c452006: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'Raw_Access', got 'Nonlim_Handle']
+c452a01: NO_RESULT [,.,. C452A01 ---- C452A01    -    - C~ - Checking reemergence of equality.    *    * C~ - predefined equality reemerged in generic instantiation.   ]
+c452a02: COMPILE_ERROR [semantic: generic 'Ada.Strings.Bounded.Generic_Bounded_Length' not found]
+c452a03: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c453001: NO_RESULT [,.,. C453001 ---- C453001 Constraint_ErrorCPU mode: Z80 Loaded 33536 bytes from /tmp/tmprfnbdm_l/test.com Program exit via JMP 0 ]
+c455001: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'F1' to 'F3']
+c456001: PASS
+c457001: TIMEOUT
+c457002: TIMEOUT
+c457003: NO_RESULT [,.,. C457003 ---- C457003    * More than one dependent expression evaluated    * More than one dependent expression evaluated    * More than one depen]
+c457004: COMPILE_ERROR [semantic: case expression selector must be a discrete type, got 'Rec']
+c457005: NO_RESULT [,.,. C457005 ---- C457005 Constraint_ErrorCPU mode: Z80 Loaded 16512 bytes from /tmp/tmp38n9f_3a/test.com Program exit via JMP 0 ]
+c457006: COMPILE_ERROR [semantic: 'Aug' not found]
+c457007: COMPILE_ERROR [semantic: 'A_I1' not found]
+c458001: NO_RESULT [,.,. C458001 ---- C458001    * Expression evaluated out of order Constraint_ErrorCPU mode: Z80 Loaded 17920 bytes from /tmp/tmpgr7bn5ds/test.com Progr]
+c458002: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmp1bcss_j6/test.com Program exit via JMP 0 ]
+c458003: NO_RESULT [,.,. C458003 ---- C458003    * Expression evaluated out of order Constraint_ErrorCPU mode: Z80 Loaded 16640 bytes from /tmp/tmpqe1wksbr/test.com Progr]
+c458a01: COMPILE_ERROR [semantic: 'F458A00_Sparse_Arrays' is not a generic]
+c458a02: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpsrjj4y18/test.com Program exit via JMP 0 ]
+c460001: NO_RESULT [,.,. C460001 ---- C460001 CPU mode: Z80 Loaded 14080 bytes from /tmp/tmpr4kkbv97/test.com Program exit via JMP 0 ]
+c460002: ASSEMBLE_ERROR [Error at line 3130: Undefined symbol '_x0' Error at line 3186: Undefined symbol '_x0' Error at line 3242: Undefined symbol '_x0' Error at line 3288: Undefined symbol '_x0']
+c460004: COMPILE_ERROR [semantic: type mismatch for parameter 'X': expected 'DDTag_Type', got 'Tag_Type'Class']
+c460005: COMPILE_ERROR [semantic: cannot convert from 'Tag_Type'Class' to 'Tag_Type']
+c460006: COMPILE_ERROR [semantic: 'Parent_Inner' not found]
+c460007: NO_RESULT [,.,. C460007 ---- C460007    *    * Wrong result for named number operand(case 1), nonstatic target subtype.    *    * Wrong result for named number o]
+c460008: ASSEMBLE_ERROR [Error at line 3496: Undefined symbol '_shy_by_one']
+c460009: NO_RESULT [,.,. C460009 ---- C460009    -    - Dead assignment prevention in Arr_Obj1 => 0.    -    - Dead assignment prevention in Arr_Obj2 => 0.    -    - Dead]
+c460010: COMPILE_ERROR [semantic: generic 'Generic_Equality' not found]
+c460011: ASSEMBLE_ERROR [Error at line 2200: Undefined symbol '_shy_by_one']
+c460012: LINK_ERROR [Error: Undefined symbol: _F Error: Undefined symbol: _EXC_NAME_OCC]
+c460013: LINK_ERROR [Error: Undefined symbol: _EXCLUDE Error: Undefined symbol: _INCLUDE Error: Undefined symbol: _EXC_NAME_OCC Error: Undefined symbol: _CONTROLLED]
+c460014: COMPILE_ERROR [semantic: cannot convert from 'Facade_Class_Ptr_Type' to 'Facade_A_Ptr_Type']
+c460015: COMPILE_ERROR [semantic: cannot convert from 'Facade_Class_Ptr_Type' to 'Facade_A_Ptr_Type']
+c460a01: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'AccTagClass_L0', got 'access_Derived_Tagged_Type']
+c460a02: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'AccTagClass_L0', got 'access_Derived_Tagged_Type']
+c470001: COMPILE_ERROR [semantic: package specification for 'C470001_0' not found]
+c480001: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'access_Root'Class' to 'Any_Root_Access']
+c490001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c490002: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c490003: ASSEMBLE_ERROR [Error at line 2626: Undefined symbol '_n' Error at line 2674: Undefined symbol '_n' Error at line 2902: Undefined symbol '_n' Error at line 2950: Undefined symbol '_n']
+c540001: TIMEOUT
+c540002: COMPILE_ERROR [semantic: case expression must be discrete type]
+c540003: NO_RESULT [,.,. C540003 ---- C540003 Constraint_ErrorCPU mode: Z80 Loaded 16896 bytes from /tmp/tmp7_u62l6j/test.com Program exit via JMP 0 ]
+c550001: LINK_ERROR [Error: Undefined symbol: _CHECK_SEC_COLOR Error: Undefined symbol: _TC_BACKWARD_CHECK Error: Undefined symbol: _CHECK_ODD Error: Undefined symbol: _CHECK_SCORE Error: Undefined symbol: _CHECK_TREBLE E]
+c552001: TIMEOUT
+c552002: NO_RESULT [,.,. C552002 ---- C552002    *    * 1) Each component wasn't visited exactly once in Fortran forward canonical order. CPU mode: Z80 Loaded 10496 bytes]
+c552a01: COMPILE_ERROR [semantic: 'F552A00_Sparse_Arrays' is not a generic]
+c552a02: COMPILE_ERROR [semantic: 'F552A00_Sparse_Arrays' is not a generic]
+c611001: COMPILE_ERROR [semantic: package specification for 'C611001_0.C611001_1' not found]
+c611a01: COMPILE_ERROR [semantic: package specification for 'C611A010.Child' not found]
+c620001: NO_RESULT [,.,. C620001 ---- C620001 Constraint_ErrorCPU mode: Z80 Loaded 31744 bytes from /tmp/tmpz90nj1_r/test.com Program exit via JMP 0 ]
+c620002: LINK_ERROR [Error: Undefined symbol: _EB Error: Undefined symbol: _EA Error: Undefined symbol: _EC]
+c631001: LINK_ERROR [Error: Undefined symbol: _INT_PROC Error: Undefined symbol: _ENU_PROC]
+c640001: LINK_ERROR [Error: Undefined symbol: _TABLE]
+c640002: PASS
+c641001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c641002: NO_RESULT [,.,. C641002 ---- C641002 Constraint_ErrorCPU mode: Z80 Loaded 25600 bytes from /tmp/tmpn49d8ri9/test.com Program exit via JMP 0 ]
+c641003: NO_RESULT [,.,. C641003 ---- C641003 Constraint_ErrorCPU mode: Z80 Loaded 25472 bytes from /tmp/tmpfd16mncq/test.com Program exit via JMP 0 ]
+c650002: LINK_ERROR [Error: Undefined symbol: _START_JOB Error: Undefined symbol: _RECORD_JOB_RESULT]
+c650003: COMPILE_ERROR [semantic: function must return a value]
+c650a01: COMPILE_ERROR [semantic: procedure 'Set_Alert_Time' not found]
+c650a02: COMPILE_ERROR [semantic: procedure 'Set_Alert_Time' not found]
+c650b01: LINK_ERROR [Error: Undefined symbol: _ADD_SPIN Error: Undefined symbol: _VALIDATE Error: Undefined symbol: _WINDMILL Error: Undefined symbol: _STOP]
+c650b02: LINK_ERROR [Error: Undefined symbol: _STOP Error: Undefined symbol: _VALIDATE Error: Undefined symbol: _WINDMILL Error: Undefined symbol: _ADD_SPIN]
+c650b03: LINK_ERROR [Error: Undefined symbol: _VALIDATE Error: Undefined symbol: _STOP Error: Undefined symbol: _ADD_SPIN Error: Undefined symbol: _WINDMILL]
+c650b04: COMPILE_ERROR [semantic: type 'F650B00_2.Rotational_Measurement' not found for use type clause]
+c651001: PASS
+c651002: PASS
+c660001: COMPILE_ERROR [semantic: wrong number of arguments: expected 0, got 1]
+c680001: COMPILE_ERROR [semantic: dereference prefix must be an access type, got 'Func_Ref']
+c730001: COMPILE_ERROR [semantic: package specification for 'C730001_2' not found]
+c730002: COMPILE_ERROR [semantic: package specification for 'C730002_1' not found]
+c730003: COMPILE_ERROR [semantic: package specification for 'C730003_0' not found]
+c730004: COMPILE_ERROR [semantic: 'String1' not found]
+c730a01: COMPILE_ERROR [semantic: package specification for 'F730A000' not found]
+c730a02: COMPILE_ERROR [semantic: package specification for 'F730A000' not found]
+c731001: COMPILE_ERROR [semantic: procedure 'Main' not found]
+c732002: COMPILE_ERROR [semantic: package specification for 'C732002_Places.Inner' not found]
+c732a01: COMPILE_ERROR [semantic: type mismatch for parameter 'Bell_To_Swap': expected 'Bell_Range_Type', got 'Integer']
+c732a02: COMPILE_ERROR [semantic: type mismatch for parameter 'Bell_To_Swap': expected 'Bell_Range_Type', got 'Integer']
+c732b01: COMPILE_ERROR [semantic: 'Change_Discriminated_Type' is not a record]
+c732b02: COMPILE_ERROR [semantic: 'Change_Discriminated_Type' is not a record]
+c732c01: COMPILE_ERROR [semantic: type mismatch for parameter 'Bell_To_Swap': expected 'Bell_Range_Type', got 'Integer']
+c760001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c760002: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c760007: NO_RESULT [CPU mode: Z80 Loaded 14464 bytes from /tmp/tmp6dzu13ce/test.com Program exit via JMP 0 ]
+c760009: COMPILE_ERROR [semantic: package specification for 'C760009_1' not found]
+c760010: COMPILE_ERROR [semantic: 'Formal_Tagged' is not a record]
+c760011: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c760012: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c760013: NO_RESULT [,.,. C760013 ---- C760013 CPU mode: Z80 Loaded 8576 bytes from /tmp/tmplmycq0zb/test.com BIOS WBOOT called - exiting ]
+c760014: COMPILE_ERROR [semantic: package specification for 'C760014_0' not found]
+c760015: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c760a01: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c760a02: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c760a03: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c761001: NO_RESULT [,.,. C761001 ---- C761001 CPU mode: Z80 Loaded 8832 bytes from /tmp/tmpmein6rb0/test.com Program exit via JMP 0 ]
+c761002: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c761003: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c761004: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c761005: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c761006: COMPILE_ERROR [semantic: wrong number of arguments: expected 0, got 1]
+c761007: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c761010: LINK_ERROR [Error: Undefined symbol: _MAIN]
+c761011: COMPILE_ERROR [semantic: package specification for 'C761011_0' not found]
+c761012: COMPILE_ERROR [semantic: package specification for 'C761012_0' not found]
+c761013: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c831001: COMPILE_ERROR [semantic: type mismatch for parameter 'C': expected 'Remote_Camera', got 'Remote_Camera'Class']
+c840001: LINK_ERROR [Error: Undefined symbol: _PRECISION_FLOAT]
+c840002: COMPILE_ERROR [semantic: 'Prim_Func' not found]
+c851001: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmp1gryt4vd/test.com Program exit via JMP 0 ]
+c851002: COMPILE_ERROR [semantic: package specification for 'C851002_A' not found]
+c854001: LINK_ERROR [Error: Undefined symbol: _SAME_FUNC Error: Undefined symbol: _OTHER_NAME Error: Undefined symbol: _SAME_PROC Error: Undefined symbol: _USER_DEFINED_EQUAL Error: Undefined symbol: _REN_PROC Error: Unde]
+c854002: NO_RESULT [   * C~ Unhandled exception: 5 CPU mode: Z80 Loaded 8704 bytes from /tmp/tmpznx0jo4l/test.com Program exit via JMP 0 ]
+c854003: PASS
+c910001: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmp8ayp5yz9/test.com Program exit via JMP 0 ]
+c910002: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpr0wmvskn/test.com Program exit via JMP 0 ]
+c910003: COMPILE_ERROR [semantic: 'Results' not found]
+c920001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c930001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c940001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c940002: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c940004: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c940005: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c940006: LINK_ERROR [Error: Undefined symbol: _NOTIFY]
+c940007: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c940010: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c940011: COMPILE_ERROR [semantic: 'acc_Ramp' is not a record]
+c940012: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpo_mqcnem/test.com Program exit via JMP 0 ]
+c940013: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c940014: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c940015: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmp7fruz1yo/test.com Program exit via JMP 0 ]
+c940016: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c940017: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c940a03: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c950001: LINK_ERROR [Error: Undefined symbol: _SIGNAL_STARTED Error: Undefined symbol: _WAIT_READY]
+c951001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c951002: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c953001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c953002: LINK_ERROR [Error: Undefined symbol: _TAKE_ID Error: Undefined symbol: _E2 Error: Undefined symbol: _E3 Error: Undefined symbol: _E1 Error: Undefined symbol: _RELEASE Error: Undefined symbol: _WAIT Error: Undefin]
+c953003: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmplala9yiw/test.com Program exit via JMP 0 ]
+c954001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c954010: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c954011: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c954012: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c954013: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c954014: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c954015: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c954016: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c954017: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c954018: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c954019: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c954020: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c954021: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c954022: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c954023: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c954024: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c954025: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c954026: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c954027: COMPILE_ERROR [semantic: 'Adder_Implementer' is not a record]
+c954a01: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c954a02: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c954a03: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c960001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c960002: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c960004: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpkvy76qyv/test.com Program exit via JMP 0 ]
+c961001: PASS
+c974001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c974002: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c974003: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c974004: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c974005: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c974006: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7552 bytes from /tmp/tmp1m4hfewd/test.com Program exit via JMP 0 ]
+c974007: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpl3vwg0hg/test.com Program exit via JMP 0 ]
+c974008: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c974009: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c974010: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c974011: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c974012: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c974013: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c974014: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpeemqbup9/test.com Program exit via JMP 0 ]
+c980001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c980002: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmp51b2x3qw/test.com Program exit via JMP 0 ]
+c980003: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+c990001: LINK_ERROR [Error: Undefined symbol: _GO_ON Error: Undefined symbol: _E Error: Undefined symbol: _TSK_DONE]
+ca11001: COMPILE_ERROR [semantic: exception 'Complex_Error' not found]
+ca11002: COMPILE_ERROR [semantic: 'System_File' not found]
+ca11003: COMPILE_ERROR [semantic: package specification for 'CA11003_0.CA11003_1' not found]
+ca11006: COMPILE_ERROR [semantic: package specification for 'CA11006_0.CA11006_1' not found]
+ca11007: COMPILE_ERROR [semantic: package specification for 'CA11007_0.CA11007_1.CA11007_2' not found]
+ca11008: COMPILE_ERROR [semantic: 'File_Descriptor_Type' not found]
+ca11009: COMPILE_ERROR [semantic: 'File_Counter' not found]
+ca11010: COMPILE_ERROR [semantic: 'File_Counter' not found]
+ca11011: COMPILE_ERROR [semantic: 'File_Counter' not found]
+ca11012: COMPILE_ERROR [semantic: 'Zero' not found]
+ca11013: COMPILE_ERROR [semantic: generic 'CA11013_3.CA11013_1' not found]
+ca11014: COMPILE_ERROR [semantic: type 'List_Mgr.Node_Pointer' not found for use type clause]
+ca11015: COMPILE_ERROR [semantic: 'Get_Physical_Feature' not found]
+ca11016: COMPILE_ERROR [semantic: 'Get_Physical_Feature' not found]
+ca11017: COMPILE_ERROR [semantic: 'CA11017_1' not found]
+ca11018: COMPILE_ERROR [semantic: 'Msg_Type' is not a record]
+ca11019: COMPILE_ERROR [semantic: generic 'CA11019_1' not found]
+ca11020: COMPILE_ERROR [semantic: generic 'CA11020_1' not found]
+ca11021: COMPILE_ERROR [semantic: generic 'CA11021_1' not found]
+ca11022: COMPILE_ERROR [semantic: 'Column' not found]
+ca11a01: COMPILE_ERROR [semantic: package specification for 'FA11A00.CA11A01_0.CA11A01_1' not found]
+ca11a02: PASS
+ca11b01: COMPILE_ERROR [semantic: type mismatch for parameter 'The_Widget': expected 'App1_Widget', got 'Widget_Color_Enum']
+ca11b02: COMPILE_ERROR [semantic: type mismatch for parameter 'The_Widget': expected 'App1_Widget', got 'Widget_Color_Enum']
+ca11c01: COMPILE_ERROR [semantic: 'FA11C00_0.FA11C00_1' is not a package]
+ca11c02: COMPILE_ERROR [semantic: 'FA11C00_0.FA11C00_1' is not a package]
+ca11c03: COMPILE_ERROR [semantic: package 'FA11C00_0.FA11C00_1' not found]
+ca11d02: COMPILE_ERROR [semantic: 'Zero' not found]
+ca11d03: PASS
+ca12002: LINK_ERROR [Error: Undefined symbol: _P]
+ca13001: COMPILE_ERROR [semantic: 'Boolean' is not an array]
+ca13002: COMPILE_ERROR [semantic: procedure 'Send_Control_Sequence' not found]
+ca13003: LINK_ERROR [Error: Undefined symbol: _CA13003_3 Error: Undefined symbol: _GENERATE_REPORT]
+ca13a01: LINK_ERROR [Error: Undefined symbol: _CA13A01_6 Error: Undefined symbol: _EMERGENCY]
+ca13a02: COMPILE_ERROR [semantic: generic 'FA13A00_1.CA13A02_4' not found]
+ca15003: COMPILE_ERROR [semantic: generic 'CA15003A.Pure' not found]
+ca21001: LINK_ERROR [Error: Undefined symbol: _G]
+ca21002: COMPILE_ERROR [semantic: package specification for 'CA21002_Pure1' not found]
+cb10002: COMPILE_ERROR [semantic: wrong number of arguments: expected 0, got 1]
+cb20001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cb20003: LINK_ERROR [Error: Undefined symbol: _RESPONSE]
+cb20004: LINK_ERROR [Error: Undefined symbol: _DATA_ITEM Error: Undefined symbol: _GET Error: Undefined symbol: _PUT]
+cb20005: COMPILE_ERROR [semantic: 'Max_Resources' not found]
+cb20006: COMPILE_ERROR [semantic: 'Max_Resources' not found]
+cb20007: COMPILE_ERROR [semantic: 'Max_Resources' not found]
+cb20a02: PASS
+cb30001: LINK_ERROR [Error: Undefined symbol: _RERAISE_OCCURRENCE Error: Undefined symbol: _RAISE_IT]
+cb30002: ASSEMBLE_ERROR [Error at line 2867: Undefined symbol '_current_exception' Error at line 2971: Undefined symbol '_exception_msg' Error at line 3088: Undefined symbol '_current_exception' Error at line 3192: Undefined ]
+cb40005: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cb40a01: COMPILE_ERROR [semantic: exception 'Completed_Text_Processing' not found]
+cb40a04: LINK_ERROR [Error: Undefined symbol: _CB40A04_0]
+cb41001: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Integer' to 'Exception_Id']
+cb41002: COMPILE_ERROR [semantic: 'Excptn' not found]
+cb41003: COMPILE_ERROR [semantic: type mismatch for parameter 'E': expected 'Exception_Id', got 'Integer']
+cb41004: LINK_ERROR [Error: Undefined symbol: _SAVE_OCCURRENCE Error: Undefined symbol: _RAISE_EXCEPTION Error: Undefined symbol: _RERAISE_OCCURRENCE]
+cb42001: LINK_ERROR [Error: Undefined symbol: _RERAISE_OCCURRENCE]
+cb42002: NO_RESULT [,.,. CB42002 ---- CB42002    * Boolean evaluation checker not called    * String evaluation checker not called    * f&]ut]tu]nv]fw]y]aIMY2! Constraint]
+cb42003: LINK_ERROR [Error: Undefined symbol: _ASSERT]
+cb50001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cc30001: COMPILE_ERROR [semantic: 'Message' is not a record]
+cc30002: COMPILE_ERROR [semantic: 'Camera_Type' is not a record]
+cc30003: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cc30004: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'access_Item' to 'Access_Item']
+cc40001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cc50001: NO_RESULT [,.,. CC50001 ---- CC50001    * User-defined ""="" not called inside generic for Count    *    * User-defined ""="" not called inside generic for Perso]
+cc50a01: COMPILE_ERROR [semantic: 'TC_Default_Value' not found]
+cc50a02: COMPILE_ERROR [semantic: 'Stacker' not found]
+cc51001: COMPILE_ERROR [semantic: 'Message_Type' is not a record]
+cc51002: COMPILE_ERROR [semantic: 'Send' not found]
+cc51003: COMPILE_ERROR [semantic: 'Dbl_Square' is not a record]
+cc51004: COMPILE_ERROR [semantic: 'Squares' is not a record]
+cc51006: COMPILE_ERROR [semantic: 'Weight_To_String' not found]
+cc51007: COMPILE_ERROR [semantic: 'Alert_Type' is not a record]
+cc51008: COMPILE_ERROR [semantic: procedure 'S' not found]
+cc51009: COMPILE_ERROR [semantic: package 'Sets' not found]
+cc51011: COMPILE_ERROR [semantic: package 'Sets' not found]
+cc51a01: LINK_ERROR [Error: Undefined symbol: _FRACTION_TYPE]
+cc51b03: PASS
+cc51d01: COMPILE_ERROR [semantic: procedure 'Update_ID' not found]
+cc51d02: COMPILE_ERROR [semantic: procedure 'Update_ID' not found]
+cc54001: NO_RESULT [,.,. CC54001 ---- CC54001 Constraint_ErrorCPU mode: Z80 Loaded 8832 bytes from /tmp/tmp53prjtw9/test.com Program exit via JMP 0 ]
+cc54002: LINK_ERROR [Error: Undefined symbol: _ELEMENTS]
+cc54003: COMPILE_ERROR [semantic: 'Function_Ptr' is not an array]
+cc54004: COMPILE_ERROR [semantic: dereference prefix must be an access type, got 'Element_Ptr']
+cc60001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cc70001: COMPILE_ERROR [semantic: 'List_Mgr' not found]
+cc70002: COMPILE_ERROR [semantic: 'Matrix_Ops' not found]
+cc70003: COMPILE_ERROR [semantic: 'List_Mgr' not found]
+cc70a01: COMPILE_ERROR [semantic: package 'Complex_Package' not found]
+cc70a02: COMPILE_ERROR [semantic: 'Group' not found]
+cc70b01: COMPILE_ERROR [semantic: package 'List_Mgr' not found]
+cc70b02: COMPILE_ERROR [semantic: procedure 'Double' not found]
+cc70c01: COMPILE_ERROR [semantic: generic 'FC70C00_1' not found]
+cc70c02: COMPILE_ERROR [semantic: generic 'FC70C00_1' not found]
+cd10001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cd10002: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Integer' to 'T1']
+cd11001: LINK_ERROR [Error: Undefined symbol: _T1 Error: Undefined symbol: _F3 Error: Undefined symbol: _T2 Error: Undefined symbol: _F1 Error: Undefined symbol: _F2 Error: Undefined symbol: _TEST2 Error: Undefined symbol]
+cd20001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cd30001: COMPILE_ERROR [semantic: 'SPPRT13.Variable_Address2' is not a package]
+cd30002: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cd30003: NO_RESULT [,.,. CD30003 ---- CD30003    *    * Expected Bit_8'Size =0. CPU mode: Z80 Loaded 15104 bytes from /tmp/tmpclm4_w27/test.com System reset ]
+cd30004: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cd30006: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cd30007: PASS
+cd30008: PASS
+cd30009: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cd30010: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cd30011: PASS
+cd30012: NO_RESULT [,.,. CD30012 ---- CD30012    *    * CHECK ON REPRESENTATION FOR Derived_Int.    *    * CHECK ON REPRESENTATION FOR Int_in_P.    *    * CHECK ON REPRES]
+cd30013: COMPILE_ERROR [semantic: unknown identifier 'Test_Type']
+cd30014: PASS
+cd40001: PASS
+cd70001: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'Int_Max', got 'Integer']
+cd72a01: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cd72a02: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cd90001: PASS
+cd92001: COMPILE_ERROR [semantic: expression is not static]
+cdb0001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cdb0002: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cdb0a01: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cdb0a02: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cdb3a01: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cdb4001: COMPILE_ERROR [semantic: 'Subpools' not found]
+cdd1001: TIMEOUT
+cdd2001: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Integer' to 'R']
+cdd2a01: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'Derived1', got 'Integer']
+cdd2a02: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'Parent', got 'Integer']
+cdd2a03: COMPILE_ERROR [lowering: type object 'OpCode' has no attribute 'GETSP']
+cdd2b01: COMPILE_ERROR [semantic: package specification for 'FDD2B00' not found]
+cdd2b02: COMPILE_ERROR [semantic: package specification for 'FDD2B00' not found]
+cdd2b03: COMPILE_ERROR [semantic: package specification for 'FDD2B00' not found]
+cdd2b04: COMPILE_ERROR [semantic: package specification for 'FDD2B00' not found]
+cde0001: COMPILE_ERROR [semantic: package specification for 'CDE0001_0' not found]
+cde0002: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cde0003: COMPILE_ERROR [semantic: 'CDE0003_0.G' is not a generic]
+cxa3001: LINK_ERROR [Error: Undefined symbol: _IS_GRAPHIC Error: Undefined symbol: _IS_UPPER Error: Undefined symbol: _IS_SPECIAL Error: Undefined symbol: _IS_CONTROL Error: Undefined symbol: _IS_BASIC Error: Undefined sy]
+cxa3002: LINK_ERROR [Error: Undefined symbol: _TO_LOWER Error: Undefined symbol: _TO_BASIC Error: Undefined symbol: _TO_UPPER]
+cxa3003: TIMEOUT
+cxa3004: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'Wide_String(1..3)', got 'String']
+cxa3005: COMPILE_ERROR [/home/wohl/src/uada80/tests/acats/tests/cxa/cxa3005.a: io: Cannot read file: 'utf-8' codec can't decode byte 0xaa in position 11423: invalid start byte]
+cxa3006: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'Wide_String', got 'String']
+cxa3007: COMPILE_ERROR [/home/wohl/src/uada80/tests/acats/tests/cxa/cxa3007.a: io: Cannot read file: 'utf-8' codec can't decode byte 0xaa in position 11372: invalid start byte]
+cxa3008: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'Wide_Wide_String', got 'String']
+cxa4001: COMPILE_ERROR [semantic: expected Boolean, got 'String']
+cxa4002: LINK_ERROR [Error: Undefined symbol: _REPLACE_SLICE]
+cxa4003: LINK_ERROR [Error: Undefined symbol: _TRANSLATE Error: Undefined symbol: _REPLACE_SLICE Error: Undefined symbol: _MOVE Error: Undefined symbol: _FIND_TOKEN Error: Undefined symbol: _OVERWRITE]
+cxa4004: LINK_ERROR [Error: Undefined symbol: _TO_SET Error: Undefined symbol: _INDEX_NON_BLANK Error: Undefined symbol: _TO_MAPPING Error: Undefined symbol: _COUNT Error: Undefined symbol: _FIND_TOKEN Error: Undefined sy]
+cxa4005: LINK_ERROR [Error: Undefined symbol: _OVERWRITE Error: Undefined symbol: _TAIL Error: Undefined symbol: _INSERT Error: Undefined symbol: _DELETE Error: Undefined symbol: _TRIM Error: Undefined symbol: _HEAD Error]
+cxa4006: COMPILE_ERROR [semantic: generic 'Ada.Strings.Bounded.Generic_Bounded_Length' not found]
+cxa4007: COMPILE_ERROR [semantic: generic 'Ada.Strings.Bounded.Generic_Bounded_Length' not found]
+cxa4008: COMPILE_ERROR [semantic: generic 'ASB.Generic_Bounded_Length' not found]
+cxa4009: COMPILE_ERROR [semantic: generic 'ASB.Generic_Bounded_Length' not found]
+cxa4010: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'String' to 'Unbounded_String']
+cxa4011: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'Unbounded_String', got 'String']
+cxa4012: COMPILE_ERROR [semantic: type 'Wide_Maps.Wide_Character_Set' not found for use type clause]
+cxa4013: COMPILE_ERROR [semantic: package 'Ada.Strings.Wide_Fixed' not found]
+cxa4014: COMPILE_ERROR [semantic: type 'AS.Wide_Maps.Wide_Character_Set' not found for use type clause]
+cxa4015: LINK_ERROR [Error: Undefined symbol: _TO_SET Error: Undefined symbol: _TO_MAPPING Error: Undefined symbol: _INDEX_NON_BLANK Error: Undefined symbol: _COUNT Error: Undefined symbol: _MOVE Error: Undefined symbol: ]
+cxa4016: LINK_ERROR [Error: Undefined symbol: _OVERWRITE Error: Undefined symbol: _TO_MAPPING Error: Undefined symbol: _DELETE Error: Undefined symbol: _INSERT Error: Undefined symbol: _HEAD Error: Undefined symbol: _REPL]
+cxa4017: COMPILE_ERROR [semantic: generic 'Ada.Strings.Wide_Bounded.Generic_Bounded_Length' not found]
+cxa4018: COMPILE_ERROR [semantic: generic 'Ada.Strings.Wide_Bounded.Generic_Bounded_Length' not found]
+cxa4019: COMPILE_ERROR [semantic: generic 'ASB.Generic_Bounded_Length' not found]
+cxa4020: COMPILE_ERROR [semantic: generic 'ASW.Generic_Bounded_Length' not found]
+cxa4021: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'String' to 'Unbounded_Wide_String']
+cxa4022: COMPILE_ERROR [semantic: type 'Wide_Maps.Wide_Character_Set' not found for use type clause]
+cxa4023: COMPILE_ERROR [semantic: type 'Wide_Maps.Wide_Character_Set' not found for use type clause]
+cxa4024: COMPILE_ERROR [semantic: expected Boolean, got 'String']
+cxa4025: COMPILE_ERROR [semantic: type 'Wide_Maps.Wide_Character_Set' not found for use type clause]
+cxa4026: COMPILE_ERROR [semantic: wrong number of arguments: expected 1, got 2]
+cxa4027: COMPILE_ERROR [semantic: generic 'Ada.Strings.Bounded.Generic_Bounded_Length' not found]
+cxa4028: COMPILE_ERROR [semantic: generic 'Ada.Strings.Bounded.Generic_Bounded_Length' not found]
+cxa4029: COMPILE_ERROR [semantic: generic 'Ada.Strings.Wide_Bounded.Generic_Bounded_Length' not found]
+cxa4030: COMPILE_ERROR [semantic: package 'Unbounded' not found]
+cxa4031: LINK_ERROR [Error: Undefined symbol: _APPEND Error: Undefined symbol: _TO_UNBOUNDED_STRING Error: Undefined symbol: _LENGTH]
+cxa4032: LINK_ERROR [Error: Undefined symbol: _OVERWRITE Error: Undefined symbol: _INSERT Error: Undefined symbol: _TAIL Error: Undefined symbol: _HEAD Error: Undefined symbol: _REPLACE_SLICE Error: Undefined symbol: _TRI]
+cxa4033: COMPILE_ERROR [semantic: type 'Wide_Maps.Wide_Character_Set' not found for use type clause]
+cxa4035: COMPILE_ERROR [semantic: generic 'Ada.Strings.Bounded.Generic_Bounded_Length' not found]
+cxa4036: COMPILE_ERROR [/home/wohl/src/uada80/tests/acats/tests/cxa/cxa4036.a: io: Cannot read file: 'utf-8' codec can't decode byte 0xe0 in position 7045: invalid continuation byte]
+cxa4037: LINK_ERROR [Error: Undefined symbol: _FIND_TOKEN Error: Undefined symbol: _EXC_INFO Error: Undefined symbol: _EXC_NAME_OCC]
+cxa4038: COMPILE_ERROR [semantic: generic 'Ada.Strings.Bounded.Generic_Bounded_Length' not found]
+cxa4039: COMPILE_ERROR [semantic: 'Ident_Wide_Char' not found]
+cxa5011: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxa5012: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxa5013: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxa5015: COMPILE_ERROR [semantic: type mismatch for parameter 'Actual_Result': expected 'Float', got 'Integer']
+cxa5016: PASS
+cxa5a01: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'Float', got 'Integer']
+cxa5a02: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'Float', got 'Integer']
+cxa5a03: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'Float', got 'Integer']
+cxa5a04: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'Float', got 'Integer']
+cxa5a05: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'Float', got 'Integer']
+cxa5a06: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'Float', got 'Integer']
+cxa5a07: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'Float', got 'Integer']
+cxa5a08: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'Float', got 'Integer']
+cxa5a09: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'Float', got 'Integer']
+cxa5a10: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'Float', got 'Integer']
+cxa8001: LINK_ERROR [Error: Undefined symbol: _READ Error: Undefined symbol: _DELETE Error: Undefined symbol: _CREATE Error: Undefined symbol: _END_OF_FILE Error: Undefined symbol: _OPEN Error: Undefined symbol: _CLOSE Er]
+cxa8002: LINK_ERROR [Error: Undefined symbol: _NAME Error: Undefined symbol: _READ Error: Undefined symbol: _IS_OPEN Error: Undefined symbol: _RESET Error: Undefined symbol: _CLOSE Error: Undefined symbol: _DELETE Error: ]
+cxa8003: LINK_ERROR [Error: Undefined symbol: _MODE Error: Undefined symbol: _RESET Error: Undefined symbol: _IS_OPEN Error: Undefined symbol: _DELETE Error: Undefined symbol: _OPEN Error: Undefined symbol: _CREATE]
+cxa9001: COMPILE_ERROR [semantic: generic 'Ada.Direct_IO' has no declaration]
+cxa9002: COMPILE_ERROR [semantic: generic 'Ada.Direct_IO' has no declaration]
+cxaa001: COMPILE_ERROR [lowering: 'ASTLowering' object has no attribute 'symbol_table']
+cxaa002: COMPILE_ERROR [lowering: 'ASTLowering' object has no attribute 'symbol_table']
+cxaa003: COMPILE_ERROR [lowering: 'ASTLowering' object has no attribute 'symbol_table']
+cxaa004: LINK_ERROR [Error: Undefined symbol: _PAGE Error: Undefined symbol: _LINE Error: Undefined symbol: _IS_OPEN Error: Undefined symbol: _COL Error: Undefined symbol: _END_OF_PAGE]
+cxaa005: NO_RESULT [,.,. CXAA005 ---- CXAA005 10291071   * Incorrect Col position after 2nd Put 1092CPU mode: Z80 Loaded 14464 bytes from /tmp/tmpcy39qw2z/test.com Progra]
+cxaa006: NO_RESULT [,.,. CXAA006 ---- CXAA006 105710441057   * Incorrect position after 3rd Put CPU mode: Z80 Loaded 13568 bytes from /tmp/tmp53jxpgtl/test.com Program ex]
+cxaa007: COMPILE_ERROR [semantic: generic 'Text_IO.Integer_IO' has no declaration]
+cxaa008: COMPILE_ERROR [semantic: generic 'Text_IO.Fixed_IO' not found]
+cxaa009: COMPILE_ERROR [semantic: generic 'Text_IO.Float_IO' has no declaration]
+cxaa010: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Decimal_IO' not found]
+cxaa011: COMPILE_ERROR [semantic: generic 'Text_IO.Enumeration_IO' has no declaration]
+cxaa012: LINK_ERROR [Error: Undefined symbol: _IS_OPEN Error: Undefined symbol: _END_OF_FILE]
+cxaa013: LINK_ERROR [Error: Undefined symbol: _IS_OPEN]
+cxaa014: LINK_ERROR [Error: Undefined symbol: _END_OF_PAGE Error: Undefined symbol: _IS_OPEN Error: Undefined symbol: _END_OF_LINE]
+cxaa015: LINK_ERROR [Error: Undefined symbol: _IS_OPEN]
+cxaa016: COMPILE_ERROR [semantic: 'Standard_Input' not found]
+cxaa017: COMPILE_ERROR [semantic: 'IS4' not found]
+cxaa018: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxaa019: COMPILE_ERROR [lowering: 'ASTLowering' object has no attribute 'symbol_table']
+cxaa020: COMPILE_ERROR [semantic: generic 'Enumeration_IO' has no declaration]
+cxaa021: COMPILE_ERROR [semantic: generic 'Ada.Strings.Bounded.Generic_Bounded_Length' not found]
+cxaa022: COMPILE_ERROR [semantic: package 'Ada.Strings.Unbounded' not found]
+cxab001: COMPILE_ERROR [lowering: type object 'OpCode' has no attribute 'GETSP']
+cxac001: LINK_ERROR [Error: Undefined symbol: _STREAM Error: Undefined symbol: _RESET Error: Undefined symbol: _IS_OPEN Error: Undefined symbol: _OPEN Error: Undefined symbol: _CREATE Error: Undefined symbol: _DELETE]
+cxac002: LINK_ERROR [Error: Undefined symbol: _DELETE Error: Undefined symbol: _OPEN Error: Undefined symbol: _FLUSH Error: Undefined symbol: _CREATE Error: Undefined symbol: _RESET]
+cxac003: LINK_ERROR [Error: Undefined symbol: _CREATE Error: Undefined symbol: _CLOSE Error: Undefined symbol: _OPEN Error: Undefined symbol: _RESET Error: Undefined symbol: _DELETE]
+cxac004: COMPILE_ERROR [semantic: package 'Ada.Strings.Unbounded' not found]
+cxac005: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Count' to 'Positive_Count']
+cxac006: LINK_ERROR [Error: Undefined symbol: _IS_OPEN Error: Undefined symbol: _DELETE Error: Undefined symbol: _CREATE Error: Undefined symbol: _OPEN Error: Undefined symbol: _RESET Error: Undefined symbol: _INDEX Error]
+cxac007: COMPILE_ERROR [semantic: package specification for 'CXAC007_Logger' not found]
+cxac008: LINK_ERROR [Error: Undefined symbol: _SET_MODE Error: Undefined symbol: _SET_INDEX Error: Undefined symbol: _CLOSE Error: Undefined symbol: _WRITE Error: Undefined symbol: _CREATE Error: Undefined symbol: _OPEN E]
+cxac009: COMPILE_ERROR [semantic: package specification for 'CXAC009_Logger' not found]
+cxaca01: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxaca02: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Integer' to 'String(1..8)']
+cxacb01: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Integer' to 'Service_Type']
+cxacb02: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Integer' to 'Service_Type']
+cxacc01: COMPILE_ERROR [semantic: 'Ticket_Request' not found]
+cxaf001: LINK_ERROR [Error: Undefined symbol: _SET_EXIT_STATUS]
+cxag001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxag002: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxag003: LINK_ERROR [Error: Undefined symbol: _DELETE_FILE]
+cxah001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxah002: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxah003: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxai001: COMPILE_ERROR [semantic: generic 'Ada.Containers.Vectors' has no declaration]
+cxai002: COMPILE_ERROR [semantic: generic 'Ada.Containers.Doubly_Linked_Lists' has no declaration]
+cxai003: COMPILE_ERROR [semantic: 'Hash_Type' is not an array]
+cxai004: COMPILE_ERROR [semantic: generic 'Ada.Containers.Ordered_Maps' has no declaration]
+cxai005: COMPILE_ERROR [semantic: 'Hash_Type' is not an array]
+cxai006: COMPILE_ERROR [semantic: generic 'Ada.Containers.Ordered_Sets' has no declaration]
+cxai007: COMPILE_ERROR [semantic: generic 'Ada.Containers.Multiway_Trees' not found]
+cxai008: COMPILE_ERROR [semantic: generic 'Ada.Containers.Indefinite_Multiway_Trees' not found]
+cxai009: COMPILE_ERROR [semantic: generic 'Ada.Containers.Indefinite_Holders' not found]
+cxai010: COMPILE_ERROR [semantic: generic 'Ada.Containers.Bounded_Vectors' not found]
+cxai011: COMPILE_ERROR [semantic: generic 'Ada.Containers.Bounded_Doubly_Linked_Lists' not found]
+cxai012: COMPILE_ERROR [semantic: 'Hash_Type' is not an array]
+cxai013: COMPILE_ERROR [semantic: generic 'Ada.Containers.Bounded_Ordered_Maps' not found]
+cxai014: COMPILE_ERROR [semantic: 'Hash_Type' is not an array]
+cxai015: COMPILE_ERROR [semantic: generic 'Ada.Containers.Bounded_Ordered_Sets' not found]
+cxai016: COMPILE_ERROR [semantic: generic 'Ada.Containers.Bounded_Multiway_Trees' not found]
+cxai017: COMPILE_ERROR [semantic: generic 'Ada.Containers.Vectors' has no declaration]
+cxai018: COMPILE_ERROR [semantic: generic 'Ada.Containers.Vectors' has no declaration]
+cxai019: COMPILE_ERROR [semantic: generic 'Ada.Containers.Doubly_Linked_Lists' has no declaration]
+cxai020: COMPILE_ERROR [semantic: 'Hash_Type' is not an array]
+cxai021: COMPILE_ERROR [semantic: generic 'Ada.Containers.Ordered_Maps' has no declaration]
+cxai022: COMPILE_ERROR [semantic: 'Hash_Type' is not an array]
+cxai023: COMPILE_ERROR [semantic: generic 'Ada.Containers.Ordered_Sets' has no declaration]
+cxai024: COMPILE_ERROR [semantic: generic 'Ada.Containers.Multiway_Trees' not found]
+cxai025: COMPILE_ERROR [semantic: generic 'Ada.Containers.Bounded_Vectors' not found]
+cxai026: COMPILE_ERROR [semantic: generic 'Ada.Containers.Bounded_Doubly_Linked_Lists' not found]
+cxai027: COMPILE_ERROR [semantic: 'Hash_Type' is not an array]
+cxai028: COMPILE_ERROR [semantic: generic 'Ada.Containers.Bounded_Ordered_Maps' not found]
+cxai029: COMPILE_ERROR [semantic: 'Hash_Type' is not an array]
+cxai030: COMPILE_ERROR [semantic: generic 'Ada.Containers.Bounded_Ordered_Sets' not found]
+cxai031: COMPILE_ERROR [semantic: generic 'Ada.Containers.Bounded_Multiway_Trees' not found]
+cxai032: COMPILE_ERROR [semantic: generic 'Ada.Containers.Ordered_Maps' has no declaration]
+cxai033: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxai034: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxai035: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxai036: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxaia01: COMPILE_ERROR [semantic: 'Value_In_1' not found]
+cxaia02: COMPILE_ERROR [semantic: 'Value_In_1' not found]
+cxaia03: COMPILE_ERROR [semantic: 'Value_In_1' not found]
+cxaia04: COMPILE_ERROR [semantic: 'Value_In_1' not found]
+cxaia05: COMPILE_ERROR [semantic: 'Value_In_1' not found]
+cxaia06: COMPILE_ERROR [semantic: 'Value_In_1' not found]
+cxaia07: COMPILE_ERROR [semantic: 'Value_In_1' not found]
+cxaia08: COMPILE_ERROR [semantic: 'Value_In_1' not found]
+cxaia09: COMPILE_ERROR [semantic: 'Value_In_1' not found]
+cxaia10: COMPILE_ERROR [semantic: 'Value_In_1' not found]
+cxaia11: COMPILE_ERROR [semantic: 'Value_In_1' not found]
+cxaia12: COMPILE_ERROR [semantic: 'Value_In_1' not found]
+cxaia13: COMPILE_ERROR [semantic: 'Value_In_1' not found]
+cxaia14: COMPILE_ERROR [semantic: 'Value_In_1' not found]
+cxaib01: COMPILE_ERROR [semantic: package specification for 'FXAIB00' not found]
+cxaib02: COMPILE_ERROR [semantic: package specification for 'FXAIB00' not found]
+cxaib03: COMPILE_ERROR [semantic: package specification for 'FXAIB00' not found]
+cxaib04: COMPILE_ERROR [semantic: package specification for 'FXAIB00' not found]
+cxaib05: COMPILE_ERROR [semantic: package specification for 'FXAIB00' not found]
+cxaib06: COMPILE_ERROR [semantic: package specification for 'FXAIB00' not found]
+cxaib07: COMPILE_ERROR [semantic: package specification for 'FXAIB00' not found]
+cxaib08: COMPILE_ERROR [semantic: package specification for 'FXAIB00' not found]
+cxaj001: NO_RESULT [,.,. CXAJ001 ---- CXAJ001    -    - Current country code is C~.    * Country code not in expected range CPU mode: Z80 Loaded 12416 bytes from /tmp/tm]
+cxb2001: COMPILE_ERROR [semantic: type mismatch for parameter 'Value': expected 'Unsigned_64', got 'Unsigned_8']
+cxb2002: COMPILE_ERROR [semantic: type mismatch for parameter 'Value': expected 'Unsigned_64', got 'Unsigned_16']
+cxb2003: COMPILE_ERROR [semantic: type mismatch for parameter 'Value': expected 'Unsigned_64', got 'Unsigned_32']
+cxb3001: LINK_ERROR [Error: Undefined symbol: _TO_ADA Error: Undefined symbol: _TO_C Error: Undefined symbol: _IS_NUL_TERMINATED]
+cxb3002: LINK_ERROR [Error: Undefined symbol: _VALUE Error: Undefined symbol: _TO_CHARS_PTR Error: Undefined symbol: _UPDATE Error: Undefined symbol: _FREE Error: Undefined symbol: _NEW_STRING Error: Undefined symbol: _ST]
+cxb3003: COMPILE_ERROR [semantic: generic 'C.Pointers' not found]
+cxb3005: COMPILE_ERROR [semantic: procedure 'To_C' not found]
+cxb3007: COMPILE_ERROR [semantic: package 'Ada.Strings.Wide_Fixed' not found]
+cxb3008: COMPILE_ERROR [semantic: generic 'Interfaces.C.Pointers' not found]
+cxb3009: COMPILE_ERROR [semantic: type 'IC.char_array' not found for use type clause]
+cxb3010: COMPILE_ERROR [semantic: type 'IC.char_array' not found for use type clause]
+cxb3011: COMPILE_ERROR [semantic: type 'IC.char_array' not found for use type clause]
+cxb3012: COMPILE_ERROR [semantic: type 'IC.char_array' not found for use type clause]
+cxb3014: COMPILE_ERROR [semantic: generic 'Interfaces.C.Pointers' not found]
+cxb3015: COMPILE_ERROR [semantic: type 'Interfaces.C.char_array' not found for use type clause]
+cxb3016: COMPILE_ERROR [semantic: type 'Interfaces.C.char_array' not found for use type clause]
+cxb3019: NO_RESULT [,.,. CXB3019 ---- CXB3019    *    * T001 - not equal.    * T001 Exception not raised    *    * T002 - not equal.    *    * T003 - not equal.    * T003]
+cxb3020: PASS
+cxb3021: PASS
+cxb3022: PASS
+cxb4001: COMPILE_ERROR [semantic: type 'COBOL.Decimal_Element' not found for use type clause]
+cxb4002: COMPILE_ERROR [semantic: generic 'Ada.Strings.Bounded.Generic_Bounded_Length' not found]
+cxb4003: COMPILE_ERROR [semantic: generic 'COBOL.Decimal_Conversions' not found]
+cxb4004: COMPILE_ERROR [semantic: type 'Interfaces.COBOL.Numeric' not found for use type clause]
+cxb4005: COMPILE_ERROR [semantic: generic 'Ada.Strings.Bounded.Generic_Bounded_Length' not found]
+cxb4006: COMPILE_ERROR [semantic: package 'Interfaces.COBOL' not found]
+cxb4007: COMPILE_ERROR [semantic: package 'Interfaces.COBOL' not found]
+cxb4008: COMPILE_ERROR [semantic: package 'Interfaces.COBOL' not found]
+cxb5001: LINK_ERROR [Error: Undefined symbol: _TO_FORTRAN Error: Undefined symbol: _TO_ADA]
+cxb5002: COMPILE_ERROR [semantic: generic 'Ada.Strings.Bounded.Generic_Bounded_Length' not found]
+cxb5003: COMPILE_ERROR [semantic: generic 'Ada.Strings.Bounded.Generic_Bounded_Length' not found]
+cxc3001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxc3002: PASS
+cxc3003: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxc3004: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxc3005: LINK_ERROR [Error: Undefined symbol: _EXCHANGE_HANDLER Error: Undefined symbol: _ATTACH_HANDLER Error: Undefined symbol: _DETACH_HANDLER]
+cxc3006: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxc3007: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxc3008: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxc3009: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxc3010: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxc6001: PASS
+cxc6002: LINK_ERROR [Error: Undefined symbol: _GRID]
+cxc6003: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxc7001: COMPILE_ERROR [semantic: type 'Ada.Task_Identification.Task_ID' not found for use type clause]
+cxc7002: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxc7003: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxc7004: COMPILE_ERROR [semantic: type 'Ada.Task_Identification.Task_Id' not found for use type clause]
+cxc7005: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxc7006: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Integer' to 'Task_Id']
+cxd1001: COMPILE_ERROR [semantic: 'App_Priority' not found]
+cxd1002: PASS
+cxd1003: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpcolgl4x0/test.com Program exit via JMP 0 ]
+cxd1004: COMPILE_ERROR [semantic: 'Low' not found]
+cxd1005: COMPILE_ERROR [semantic: 'Low' not found]
+cxd1006: PASS
+cxd1007: NO_RESULT [   *    * expected main priority to be3. CPU mode: Z80 Loaded 8320 bytes from /tmp/tmpnwva528p/test.com Program exit via JMP 0 ]
+cxd1008: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxd2001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxd2002: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxd2003: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxd2004: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxd2006: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxd2007: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxd2008: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxd3001: NO_RESULT [,.,. C~ ---- C~ CPU mode: Z80 Loaded 7168 bytes from /tmp/tmpgo94gzku/test.com Program exit via JMP 0 ]
+cxd3002: LINK_ERROR [Error: Undefined symbol: _FOR_CEILING_CHECK]
+cxd3003: COMPILE_ERROR [semantic: 'Protected_Object' not found]
+cxd4001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxd4002: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxd4003: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxd4004: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxd4005: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxd4006: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxd4007: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxd4008: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxd4009: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxd4010: COMPILE_ERROR [semantic: incompatible types for arithmetic: 'Time' and 'Universal_Real']
+cxd5001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxd6001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxd6002: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxd6003: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxd8001: LINK_ERROR [Error: Undefined symbol: _MILLISECONDS Error: Undefined symbol: _NANOSECONDS Error: Undefined symbol: _TO_TIME_SPAN Error: Undefined symbol: _TO_DURATION Error: Undefined symbol: _MICROSECONDS]
+cxd8002: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxd8003: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxd9001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxda001: LINK_ERROR [Error: Undefined symbol: _SET_TRUE Error: Undefined symbol: _SET_FALSE Error: Undefined symbol: _CURRENT_STATE]
+cxda002: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxda003: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxda004: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxdb001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxdb002: LINK_ERROR [Error: Undefined symbol: _GET_ID Error: Undefined symbol: _HOLD Error: Undefined symbol: _SET_PRIORITY Error: Undefined symbol: _GET_PRIORITY Error: Undefined symbol: _CONTINUE Error: Undefined symbol]
+cxdb003: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxdb004: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxe1001: COMPILE_ERROR [semantic: type mismatch in initialization: expected 'Hold_Partition_ID', got 'Integer']
+cxe2001: COMPILE_ERROR [semantic: type 'System.RPC.Partition_ID' not found for use type clause]
+cxe2002: COMPILE_ERROR [semantic: generic 'CXE2002_2.Gen' not found]
+cxe4001: NO_RESULT [,.,. CXE4001_B ---- CXE4001_B    *    * Partitioning Error - 1 and Part_B are in the same partition.. CPU mode: Z80 Loaded 15360 bytes from /tmp/tmpb2]
+cxe4002: LINK_ERROR [Error: Undefined symbol: _P2 Error: Undefined symbol: _M1 Error: Undefined symbol: _M2 Error: Undefined symbol: _P4 Error: Undefined symbol: _P3]
+cxe4003: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxe4004: LINK_ERROR [Error: Undefined symbol: _P4 Error: Undefined symbol: _EVEN_MORE_INTS Error: Undefined symbol: _CHK Error: Undefined symbol: _SOME_INTS Error: Undefined symbol: _INTS_3 Error: Undefined symbol: _SOME_]
+cxe4005: COMPILE_ERROR [semantic: 'Serial_Number' not found]
+cxe4006: COMPILE_ERROR [semantic: type mismatch for parameter 'RTT': expected 'Root_Tagged_Type', got 'Integer']
+cxe5001: COMPILE_ERROR [semantic: 'System.RPC' is not a package]
+cxe5002: COMPILE_ERROR [semantic: type 'System.RPC.Partition_ID' not found for use type clause]
+cxe5003: COMPILE_ERROR [semantic: package specification for 'System.RPC' not found]
+cxf1001: COMPILE_ERROR [semantic: expression is not static]
+cxf2001: COMPILE_ERROR [semantic: generic 'Ada.Decimal.Divide' not found]
+cxf2002: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Integer' to 'Decimal_Fixed']
+cxf2003: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Integer' to 'Decimal_Fixed_1']
+cxf2004: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Integer' to 'Decimal_Fixed']
+cxf2005: TIMEOUT
+cxf2a01: COMPILE_ERROR [semantic: 'Operator_Ptr' is not an array]
+cxf2a02: COMPILE_ERROR [semantic: 'Operator_Ptr' is not an array]
+cxf3001: COMPILE_ERROR [semantic: generic 'Editing.Decimal_Output' not found]
+cxf3002: COMPILE_ERROR [semantic: package 'Ada.Wide_Text_IO' not found]
+cxf3003: COMPILE_ERROR [semantic: package 'Ada.Text_IO.Editing' not found]
+cxf3004: COMPILE_ERROR [semantic: package 'Ada.Text_IO.Editing' not found]
+cxf3a01: COMPILE_ERROR [semantic: 'Editing' not found]
+cxf3a02: COMPILE_ERROR [semantic: 'Editing' not found]
+cxf3a03: COMPILE_ERROR [semantic: generic 'Editing.Decimal_Output' not found]
+cxf3a04: COMPILE_ERROR [semantic: generic 'Editing.Decimal_Output' not found]
+cxf3a05: COMPILE_ERROR [semantic: generic 'Editing.Decimal_Output' not found]
+cxf3a06: COMPILE_ERROR [semantic: generic 'Editing.Decimal_Output' not found]
+cxf3a07: COMPILE_ERROR [semantic: generic 'Editing.Decimal_Output' not found]
+cxf3a08: COMPILE_ERROR [semantic: generic 'Editing.Decimal_Output' not found]
+cxg1001: COMPILE_ERROR [semantic: generic 'Ada.Numerics.Generic_Complex_Types' not found]
+cxg1002: COMPILE_ERROR [semantic: generic 'Ada.Numerics.Generic_Complex_Types' not found]
+cxg1003: COMPILE_ERROR [semantic: generic 'Ada.Numerics.Generic_Complex_Types' not found]
+cxg1004: COMPILE_ERROR [semantic: generic 'Ada.Numerics.Generic_Complex_Types' not found]
+cxg1005: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxg2001: COMPILE_ERROR [semantic: generic 'Ada.Numerics.Generic_Elementary_Functions' not found]
+cxg2002: COMPILE_ERROR [semantic: generic 'Ada.Numerics.Generic_Complex_Types' not found]
+cxg2003: COMPILE_ERROR [semantic: generic 'Ada.Numerics.Generic_Elementary_Functions' not found]
+cxg2004: COMPILE_ERROR [semantic: generic 'Ada.Numerics.Generic_Elementary_Functions' not found]
+cxg2005: COMPILE_ERROR [semantic: incompatible types for arithmetic: 'Real' and 'Integer']
+cxg2006: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxg2007: COMPILE_ERROR [semantic: generic 'Ada.Numerics.Generic_Complex_Types' not found]
+cxg2008: COMPILE_ERROR [semantic: generic 'Ada.Numerics.Generic_Complex_Types' not found]
+cxg2009: COMPILE_ERROR [semantic: generic 'Ada.Numerics.Generic_Elementary_Functions' not found]
+cxg2010: COMPILE_ERROR [semantic: generic 'Ada.Numerics.Generic_Elementary_Functions' not found]
+cxg2011: COMPILE_ERROR [semantic: generic 'Ada.Numerics.Generic_Elementary_Functions' not found]
+cxg2012: COMPILE_ERROR [semantic: generic 'Ada.Numerics.Generic_Elementary_Functions' not found]
+cxg2013: COMPILE_ERROR [semantic: generic 'Ada.Numerics.Generic_Elementary_Functions' not found]
+cxg2014: COMPILE_ERROR [semantic: generic 'Ada.Numerics.Generic_Elementary_Functions' not found]
+cxg2015: COMPILE_ERROR [semantic: generic 'Ada.Numerics.Generic_Elementary_Functions' not found]
+cxg2016: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxg2017: COMPILE_ERROR [semantic: generic 'Ada.Numerics.Generic_Elementary_Functions' not found]
+cxg2018: COMPILE_ERROR [semantic: generic 'Ada.Numerics.Generic_Complex_Types' not found]
+cxg2019: COMPILE_ERROR [semantic: generic 'Ada.Numerics.Generic_Complex_Types' not found]
+cxg2020: COMPILE_ERROR [semantic: generic 'Ada.Numerics.Generic_Complex_Types' not found]
+cxg2021: COMPILE_ERROR [semantic: generic 'Ada.Numerics.Generic_Complex_Types' not found]
+cxg2022: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Halves' to 'Pairs']
+cxg2023: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Pennies' to 'Dollars']
+cxg2024: COMPILE_ERROR [semantic: type mismatch in assignment: cannot assign 'Integer' to 'Dollars']
+cxh1001: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+cxh3001: LINK_ERROR [Error: Undefined symbol: _SET Error: Undefined symbol: _RELEASE]
+cxh3002: LINK_ERROR [Error: Undefined symbol: _MAIN_A_PROC Error: Undefined symbol: _TASK_ENTRY Error: Undefined symbol: _PROT_ENTRY]
+cz00004: COMPILE_ERROR [semantic: generic 'Ada.Text_IO.Modular_IO' has no declaration]
+
+# Summary
+# COMPILE_ERROR: 775
+# PASS: 672
+# LINK_ERROR: 311
+# NO_RESULT: 273
+# TIMEOUT: 170
+# ASSEMBLE_ERROR: 17
+# FAIL: 2
+# Total: 2220
