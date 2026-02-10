@@ -90,12 +90,16 @@ def main():
         f.write("# Format: TEST_NAME: STATUS [details]\n")
         f.write("#\n\n")
 
-        for i, test_file in enumerate(tests):
-            name = test_file.stem
+        for i, test_files in enumerate(tests):
+            name = test_files[-1].stem  # main file is last in group
 
-            # Run test
-            stage, success, output = compile_and_run_acats([test_file])
-            status, details = classify_result(stage, success, output)
+            # Run test (catch any unhandled exceptions)
+            try:
+                stage, success, output = compile_and_run_acats(test_files)
+                status, details = classify_result(stage, success, output)
+            except Exception as e:
+                status = "COMPILE_ERROR"
+                details = f"CRASH: {type(e).__name__}: {str(e)[:150]}"
 
             # Update stats
             if status in stats:

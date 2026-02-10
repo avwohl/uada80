@@ -1506,6 +1506,13 @@ class ASTLowering:
                         self.builder.pop(discard)
                     else:
                         init_value = self._lower_expr(decl.init_expr)
+                        # Range check on initialization value
+                        check_type = ada_type
+                        if check_type is None and local.ada_type:
+                            check_type = self._resolve_local_type(local.ada_type)
+                        if check_type:
+                            self._emit_range_check(init_value, check_type,
+                                                   comment=f"init range check for {name}")
                         self.builder.mov(local.vreg, init_value,
                                         comment=f"init {name}")
 
@@ -2727,15 +2734,11 @@ class ASTLowering:
         if not task_sym:
             return
 
-        # Entries are stored on the task's ada_type (TaskType), not directly on the symbol
-        task_type = getattr(task_sym, 'ada_type', None)
-        entries = getattr(task_type, 'entries', None) or getattr(task_sym, 'entries', None)
-        if not entries:
-            return
-
-        # For each entry, generate a callable stub
-        for entry in entries:
-            if isinstance(entry, EntryDecl):
+        # Get EntryDecl AST nodes from the task type's definition
+        # (TaskTypeDecl.entries stores EntryDecl objects, not EntryInfo)
+        defn = task_sym.definition
+        if defn and hasattr(defn, 'entries') and defn.entries:
+            for entry in defn.entries:
                 self._generate_entry_stub(task_body.name, entry)
 
     def _generate_entry_stub(self, task_name: str, entry: EntryDecl) -> None:
@@ -4702,6 +4705,21 @@ class ASTLowering:
                             task_id_vreg = self._lower_expr(prefix)
                         except Exception:
                             pass
+                    # Fallback: symbol lookup fails during lowering (scope issues)
+                    # Check if local's type refers to a task type declaration
+                    elif task_sym is None and self.ctx and prefix_name in self.ctx.locals:
+                        local = self.ctx.locals[prefix_name]
+                        type_mark = local.ada_type  # AST type_mark node
+                        type_name = None
+                        if isinstance(type_mark, Identifier):
+                            type_name = type_mark.name.lower()
+                        elif isinstance(type_mark, SubtypeIndication) and isinstance(getattr(type_mark, 'type_mark', None), Identifier):
+                            type_name = type_mark.type_mark.name.lower()
+                        if type_name and hasattr(self, '_current_body_declarations'):
+                            for d in self._current_body_declarations:
+                                if isinstance(d, TaskTypeDecl) and d.name.lower() == type_name:
+                                    task_id_vreg = local.vreg
+                                    break
             else:
                 # Non-identifier prefix (indexed component, dereference, etc.)
                 # Try to determine the type of the prefix expression
@@ -11267,6 +11285,11 @@ class ASTLowering:
                     is_constrained=True,
                 )
             # For dynamic bounds, return None (caller must handle)
+        # Handle SubtypeIndication wrapper: unwrap to get inner type_mark
+        if isinstance(type_node, SubtypeIndication):
+            if type_node.type_mark:
+                return self._resolve_local_type(type_node.type_mark)
+            return None
         # If it's an Identifier, look up the type name
         if isinstance(type_node, Identifier):
             type_name = type_node.name.lower()
@@ -11274,11 +11297,16 @@ class ASTLowering:
             sym = self.symbols.lookup(type_node.name)
             if sym and sym.ada_type:
                 return sym.ada_type
-            # Check local type declarations from current body
+            # Check local type/subtype declarations from current body
             if hasattr(self, '_current_body_declarations') and self._current_body_declarations:
                 from uada80.ast_nodes import ModularTypeDef, RecordTypeDef
                 from uada80.type_system import RecordType, RecordComponent, IntegerType
                 for d in self._current_body_declarations:
+                    # Handle subtype declarations (e.g., subtype Short is Integer range ...)
+                    if isinstance(d, SubtypeDecl) and d.name.lower() == type_name:
+                        if d.ada_type:
+                            return d.ada_type
+                        continue
                     if isinstance(d, TypeDecl) and d.name.lower() == type_name:
                         # Prefer ada_type set by semantic analysis (has correct bounds, etc.)
                         if d.ada_type:
