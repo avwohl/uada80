@@ -944,7 +944,16 @@ class SymbolTable:
         )
         bnd_concat_func.runtime_name = "_bnd_concat"
 
-        bounded_pkg.public_symbols = {
+        # Generic_Bounded_Length is the standard nested generic inside
+        # Ada.Strings.Bounded (see Ada RM A.4.4).  Tests instantiate it as:
+        #   package B10 is new Ada.Strings.Bounded.Generic_Bounded_Length(Max => 10);
+        gbl_pkg = Symbol(
+            name="Generic_Bounded_Length",
+            kind=SymbolKind.GENERIC_PACKAGE,
+            scope_level=0,
+        )
+        gbl_pkg.is_builtin_generic = True
+        gbl_pkg.public_symbols = {
             "bounded_string": bounded_str_sym,
             "max_length": max_length_sym,
             "null_bounded_string": null_bounded_sym,
@@ -961,7 +970,22 @@ class SymbolTable:
             "&": bnd_concat_func,
         }
 
+        bounded_pkg.public_symbols = {
+            "generic_bounded_length": gbl_pkg,
+        }
+
         strings_pkg.public_symbols["bounded"] = bounded_pkg
+
+        # Register Ada.Strings.Bounded as a flat name so with-clause loading
+        # finds the builtin (with runtime names) rather than loading the adalib
+        # spec which would lack runtime linkage.
+        flat_bounded = Symbol(
+            name="Ada.Strings.Bounded",
+            kind=SymbolKind.PACKAGE,
+            scope_level=0,
+        )
+        flat_bounded.public_symbols = bounded_pkg.public_symbols
+        self.current_scope.define(flat_bounded)
 
         # Add Strings to Ada package
         ada_pkg.public_symbols["strings"] = strings_pkg

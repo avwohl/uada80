@@ -1,254 +1,260 @@
 -- Ada.Strings.Bounded for Z80
--- Bounded-length string handling
+-- Bounded-length string handling (Ada RM A.4.4)
 --
--- Provides generic bounded strings with compile-time maximum length.
+-- Non-generic parent package containing the nested generic
+-- Generic_Bounded_Length, which provides bounded strings with
+-- compile-time maximum length.
 
 with Ada.Strings;
 
-generic
-   Max : Positive;  -- Maximum string length
 package Ada.Strings.Bounded is
    pragma Preelaborate;
 
-   Max_Length : constant Positive := Max;
+   generic
+      Max : Positive;  -- Maximum string length
+   package Generic_Bounded_Length is
 
-   type Bounded_String is private;
+      Max_Length : constant Positive := Max;
 
-   Null_Bounded_String : constant Bounded_String;
+      type Bounded_String is private;
 
-   subtype Length_Range is Natural range 0 .. Max_Length;
+      Null_Bounded_String : constant Bounded_String;
 
-   function Length (Source : Bounded_String) return Length_Range;
+      subtype Length_Range is Natural range 0 .. Max_Length;
 
-   -- Conversion functions
-   function To_Bounded_String
-     (Source : String;
-      Drop   : Truncation := Error) return Bounded_String;
+      function Length (Source : Bounded_String) return Length_Range;
 
-   function To_String (Source : Bounded_String) return String;
+      -- Conversion functions
+      function To_Bounded_String
+        (Source : String;
+         Drop   : Truncation := Error) return Bounded_String;
 
-   procedure Set_Bounded_String
-     (Target : out Bounded_String;
-      Source : String;
-      Drop   : Truncation := Error);
+      function To_String (Source : Bounded_String) return String;
 
-   -- Append operations
-   procedure Append
-     (Source   : in Out Bounded_String;
-      New_Item : Bounded_String;
-      Drop     : Truncation := Error);
+      procedure Set_Bounded_String
+        (Target : out Bounded_String;
+         Source : String;
+         Drop   : Truncation := Error);
 
-   procedure Append
-     (Source   : in Out Bounded_String;
-      New_Item : String;
-      Drop     : Truncation := Error);
+      -- Append operations
+      procedure Append
+        (Source   : in Out Bounded_String;
+         New_Item : Bounded_String;
+         Drop     : Truncation := Error);
 
-   procedure Append
-     (Source   : in Out Bounded_String;
-      New_Item : Character;
-      Drop     : Truncation := Error);
+      procedure Append
+        (Source   : in Out Bounded_String;
+         New_Item : String;
+         Drop     : Truncation := Error);
 
-   function "&"
-     (Left, Right : Bounded_String) return Bounded_String;
+      procedure Append
+        (Source   : in Out Bounded_String;
+         New_Item : Character;
+         Drop     : Truncation := Error);
 
-   function "&"
-     (Left : Bounded_String; Right : String) return Bounded_String;
+      function "&"
+        (Left, Right : Bounded_String) return Bounded_String;
 
-   function "&"
-     (Left : String; Right : Bounded_String) return Bounded_String;
+      function "&"
+        (Left : Bounded_String; Right : String) return Bounded_String;
 
-   function "&"
-     (Left : Bounded_String; Right : Character) return Bounded_String;
+      function "&"
+        (Left : String; Right : Bounded_String) return Bounded_String;
 
-   function "&"
-     (Left : Character; Right : Bounded_String) return Bounded_String;
+      function "&"
+        (Left : Bounded_String; Right : Character) return Bounded_String;
 
-   -- Element access
-   function Element
-     (Source : Bounded_String;
-      Index  : Positive) return Character;
+      function "&"
+        (Left : Character; Right : Bounded_String) return Bounded_String;
 
-   procedure Replace_Element
-     (Source : in Out Bounded_String;
-      Index  : Positive;
-      By     : Character);
+      -- Element access
+      function Element
+        (Source : Bounded_String;
+         Index  : Positive) return Character;
 
-   -- Slice operations
-   function Slice
-     (Source : Bounded_String;
-      Low    : Positive;
-      High   : Natural) return String;
+      procedure Replace_Element
+        (Source : in Out Bounded_String;
+         Index  : Positive;
+         By     : Character);
 
-   function Bounded_Slice
-     (Source : Bounded_String;
-      Low    : Positive;
-      High   : Natural) return Bounded_String;
+      -- Slice operations
+      function Slice
+        (Source : Bounded_String;
+         Low    : Positive;
+         High   : Natural) return String;
 
-   procedure Bounded_Slice
-     (Source : Bounded_String;
-      Target : out Bounded_String;
-      Low    : Positive;
-      High   : Natural);
+      function Bounded_Slice
+        (Source : Bounded_String;
+         Low    : Positive;
+         High   : Natural) return Bounded_String;
 
-   -- Comparison functions
-   function "="  (Left, Right : Bounded_String) return Boolean;
-   function "="  (Left : Bounded_String; Right : String) return Boolean;
-   function "="  (Left : String; Right : Bounded_String) return Boolean;
+      procedure Bounded_Slice
+        (Source : Bounded_String;
+         Target : out Bounded_String;
+         Low    : Positive;
+         High   : Natural);
 
-   function "<"  (Left, Right : Bounded_String) return Boolean;
-   function "<"  (Left : Bounded_String; Right : String) return Boolean;
-   function "<"  (Left : String; Right : Bounded_String) return Boolean;
+      -- Comparison functions
+      function "="  (Left, Right : Bounded_String) return Boolean;
+      function "="  (Left : Bounded_String; Right : String) return Boolean;
+      function "="  (Left : String; Right : Bounded_String) return Boolean;
 
-   function "<=" (Left, Right : Bounded_String) return Boolean;
-   function "<=" (Left : Bounded_String; Right : String) return Boolean;
-   function "<=" (Left : String; Right : Bounded_String) return Boolean;
+      function "<"  (Left, Right : Bounded_String) return Boolean;
+      function "<"  (Left : Bounded_String; Right : String) return Boolean;
+      function "<"  (Left : String; Right : Bounded_String) return Boolean;
 
-   function ">"  (Left, Right : Bounded_String) return Boolean;
-   function ">"  (Left : Bounded_String; Right : String) return Boolean;
-   function ">"  (Left : String; Right : Bounded_String) return Boolean;
+      function "<=" (Left, Right : Bounded_String) return Boolean;
+      function "<=" (Left : Bounded_String; Right : String) return Boolean;
+      function "<=" (Left : String; Right : Bounded_String) return Boolean;
 
-   function ">=" (Left, Right : Bounded_String) return Boolean;
-   function ">=" (Left : Bounded_String; Right : String) return Boolean;
-   function ">=" (Left : String; Right : Bounded_String) return Boolean;
+      function ">"  (Left, Right : Bounded_String) return Boolean;
+      function ">"  (Left : Bounded_String; Right : String) return Boolean;
+      function ">"  (Left : String; Right : Bounded_String) return Boolean;
 
-   -- Search functions
-   function Index
-     (Source  : Bounded_String;
-      Pattern : String;
-      Going   : Direction := Forward) return Natural;
+      function ">=" (Left, Right : Bounded_String) return Boolean;
+      function ">=" (Left : Bounded_String; Right : String) return Boolean;
+      function ">=" (Left : String; Right : Bounded_String) return Boolean;
 
-   function Index
-     (Source : Bounded_String;
-      Set    : String;
-      Test   : Membership := Inside;
-      Going  : Direction := Forward) return Natural;
+      -- Search functions
+      function Index
+        (Source  : Bounded_String;
+         Pattern : String;
+         Going   : Direction := Forward) return Natural;
 
-   function Index_Non_Blank
-     (Source : Bounded_String;
-      Going  : Direction := Forward) return Natural;
+      function Index
+        (Source : Bounded_String;
+         Set    : String;
+         Test   : Membership := Inside;
+         Going  : Direction := Forward) return Natural;
 
-   function Count
-     (Source  : Bounded_String;
-      Pattern : String) return Natural;
+      function Index_Non_Blank
+        (Source : Bounded_String;
+         Going  : Direction := Forward) return Natural;
 
-   function Count
-     (Source : Bounded_String;
-      Set    : String) return Natural;
+      function Count
+        (Source  : Bounded_String;
+         Pattern : String) return Natural;
 
-   -- Transformation functions
-   function Replace_Slice
-     (Source : Bounded_String;
-      Low    : Positive;
-      High   : Natural;
-      By     : String;
-      Drop   : Truncation := Error) return Bounded_String;
+      function Count
+        (Source : Bounded_String;
+         Set    : String) return Natural;
 
-   procedure Replace_Slice
-     (Source : in Out Bounded_String;
-      Low    : Positive;
-      High   : Natural;
-      By     : String;
-      Drop   : Truncation := Error);
+      -- Transformation functions
+      function Replace_Slice
+        (Source : Bounded_String;
+         Low    : Positive;
+         High   : Natural;
+         By     : String;
+         Drop   : Truncation := Error) return Bounded_String;
 
-   function Insert
-     (Source   : Bounded_String;
-      Before   : Positive;
-      New_Item : String;
-      Drop     : Truncation := Error) return Bounded_String;
+      procedure Replace_Slice
+        (Source : in Out Bounded_String;
+         Low    : Positive;
+         High   : Natural;
+         By     : String;
+         Drop   : Truncation := Error);
 
-   procedure Insert
-     (Source   : in Out Bounded_String;
-      Before   : Positive;
-      New_Item : String;
-      Drop     : Truncation := Error);
+      function Insert
+        (Source   : Bounded_String;
+         Before   : Positive;
+         New_Item : String;
+         Drop     : Truncation := Error) return Bounded_String;
 
-   function Overwrite
-     (Source   : Bounded_String;
-      Position : Positive;
-      New_Item : String;
-      Drop     : Truncation := Error) return Bounded_String;
+      procedure Insert
+        (Source   : in Out Bounded_String;
+         Before   : Positive;
+         New_Item : String;
+         Drop     : Truncation := Error);
 
-   procedure Overwrite
-     (Source   : in Out Bounded_String;
-      Position : Positive;
-      New_Item : String;
-      Drop     : Truncation := Error);
+      function Overwrite
+        (Source   : Bounded_String;
+         Position : Positive;
+         New_Item : String;
+         Drop     : Truncation := Error) return Bounded_String;
 
-   function Delete
-     (Source  : Bounded_String;
-      From    : Positive;
-      Through : Natural) return Bounded_String;
+      procedure Overwrite
+        (Source   : in Out Bounded_String;
+         Position : Positive;
+         New_Item : String;
+         Drop     : Truncation := Error);
 
-   procedure Delete
-     (Source  : in Out Bounded_String;
-      From    : Positive;
-      Through : Natural);
+      function Delete
+        (Source  : Bounded_String;
+         From    : Positive;
+         Through : Natural) return Bounded_String;
 
-   -- Trim functions
-   function Trim
-     (Source : Bounded_String;
-      Side   : Trim_End) return Bounded_String;
+      procedure Delete
+        (Source  : in Out Bounded_String;
+         From    : Positive;
+         Through : Natural);
 
-   procedure Trim
-     (Source : in Out Bounded_String;
-      Side   : Trim_End);
+      -- Trim functions
+      function Trim
+        (Source : Bounded_String;
+         Side   : Trim_End) return Bounded_String;
 
-   function Trim
-     (Source : Bounded_String;
-      Left   : String;
-      Right  : String) return Bounded_String;
+      procedure Trim
+        (Source : in Out Bounded_String;
+         Side   : Trim_End);
 
-   procedure Trim
-     (Source : in Out Bounded_String;
-      Left   : String;
-      Right  : String);
+      function Trim
+        (Source : Bounded_String;
+         Left   : String;
+         Right  : String) return Bounded_String;
 
-   -- Head and Tail
-   function Head
-     (Source : Bounded_String;
-      Count  : Natural;
-      Pad    : Character := Space;
-      Drop   : Truncation := Error) return Bounded_String;
+      procedure Trim
+        (Source : in Out Bounded_String;
+         Left   : String;
+         Right  : String);
 
-   procedure Head
-     (Source : in Out Bounded_String;
-      Count  : Natural;
-      Pad    : Character := Space;
-      Drop   : Truncation := Error);
+      -- Head and Tail
+      function Head
+        (Source : Bounded_String;
+         Count  : Natural;
+         Pad    : Character := Space;
+         Drop   : Truncation := Error) return Bounded_String;
 
-   function Tail
-     (Source : Bounded_String;
-      Count  : Natural;
-      Pad    : Character := Space;
-      Drop   : Truncation := Error) return Bounded_String;
+      procedure Head
+        (Source : in Out Bounded_String;
+         Count  : Natural;
+         Pad    : Character := Space;
+         Drop   : Truncation := Error);
 
-   procedure Tail
-     (Source : in Out Bounded_String;
-      Count  : Natural;
-      Pad    : Character := Space;
-      Drop   : Truncation := Error);
+      function Tail
+        (Source : Bounded_String;
+         Count  : Natural;
+         Pad    : Character := Space;
+         Drop   : Truncation := Error) return Bounded_String;
 
-   -- Replication
-   function "*"
-     (Left  : Natural;
-      Right : Character) return Bounded_String;
+      procedure Tail
+        (Source : in Out Bounded_String;
+         Count  : Natural;
+         Pad    : Character := Space;
+         Drop   : Truncation := Error);
 
-   function "*"
-     (Left  : Natural;
-      Right : String) return Bounded_String;
+      -- Replication
+      function "*"
+        (Left  : Natural;
+         Right : Character) return Bounded_String;
 
-   function "*"
-     (Left  : Natural;
-      Right : Bounded_String) return Bounded_String;
+      function "*"
+        (Left  : Natural;
+         Right : String) return Bounded_String;
 
-private
+      function "*"
+        (Left  : Natural;
+         Right : Bounded_String) return Bounded_String;
 
-   type Bounded_String is record
-      Data   : String (1 .. Max_Length);
-      Length : Length_Range := 0;
-   end record;
+   private
 
-   Null_Bounded_String : constant Bounded_String :=
-     (Data => (others => ' '), Length => 0);
+      type Bounded_String is record
+         Data   : String (1 .. Max_Length);
+         Length : Length_Range := 0;
+      end record;
+
+      Null_Bounded_String : constant Bounded_String :=
+        (Data => (others => ' '), Length => 0);
+
+   end Generic_Bounded_Length;
 
 end Ada.Strings.Bounded;

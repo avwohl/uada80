@@ -1363,6 +1363,21 @@ class SemanticAnalyzer:
             self.error(f"'{generic_name}' is not a generic", inst.generic_name)
             return
 
+        # For builtin generics (e.g. Ada.Strings.Bounded.Generic_Bounded_Length),
+        # copy public_symbols directly — no AST-based re-analysis needed since
+        # the symbols already carry runtime_name linkage.
+        if getattr(generic_sym, 'is_builtin_generic', False):
+            inst_symbol = Symbol(
+                name=inst.name,
+                kind=SymbolKind.PACKAGE,
+            )
+            inst_symbol.generic_instance_of = generic_sym
+            inst_symbol.generic_actuals = inst.actual_parameters
+            for sym_name, sym in generic_sym.public_symbols.items():
+                inst_symbol.public_symbols[sym_name] = sym
+            self.symbols.define(inst_symbol)
+            return
+
         # Get the generic declaration
         generic_decl = getattr(generic_sym, 'generic_decl', None)
         if generic_decl is None:

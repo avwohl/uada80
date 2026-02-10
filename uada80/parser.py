@@ -2777,7 +2777,11 @@ class Parser:
 
         # Parse subtype indication (may include range/index constraints)
         # e.g., Natural range 1..9999 or String(1..10)
-        type_mark = self.parse_subtype_indication()
+        # Also handle anonymous access types: access T, access constant T, not null access T
+        if self.check(TokenType.ACCESS) or (self.check(TokenType.NOT) and self.peek(1).type == TokenType.NULL):
+            type_mark = self._parse_access_type_indication()
+        else:
+            type_mark = self.parse_subtype_indication()
 
         default_value = None
         if self.match(TokenType.ASSIGN):
