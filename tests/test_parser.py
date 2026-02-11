@@ -10,7 +10,7 @@ from uada80.ast_nodes import (
     AssignmentStmt, IfStmt, CaseStmt, LoopStmt, ReturnStmt, NullStmt,
     ProcedureCallStmt, BlockStmt, ExitStmt, RaiseStmt,
     Identifier, IntegerLiteral, RealLiteral, StringLiteral, CharacterLiteral,
-    BinaryExpr, UnaryExpr, BinaryOp, UnaryOp,
+    BinaryExpr, UnaryExpr, BinaryOp, UnaryOp, Parenthesized,
     IndexedComponent, SelectedName, AttributeReference,
     IntegerTypeDef, EnumerationTypeDef, ArrayTypeDef, RecordTypeDef,
     RangeExpr, Aggregate,
@@ -1386,7 +1386,11 @@ def test_expression_function():
     assert len(unit.declarations) == 0
     assert len(unit.statements) == 1
     assert isinstance(unit.statements[0], ReturnStmt)
-    assert isinstance(unit.statements[0].value, BinaryExpr)
+    # Expression function body is a parenthesized expression
+    val = unit.statements[0].value
+    if isinstance(val, Parenthesized):
+        val = val.expr
+    assert isinstance(val, BinaryExpr)
 
 
 def test_expression_function_with_condition():
@@ -1417,8 +1421,11 @@ def test_expression_function_simple():
     assert len(unit.statements) == 1
     ret_stmt = unit.statements[0]
     assert isinstance(ret_stmt, ReturnStmt)
-    assert isinstance(ret_stmt.value, Identifier)
-    assert ret_stmt.value.name == "X"
+    val = ret_stmt.value
+    if isinstance(val, Parenthesized):
+        val = val.expr
+    assert isinstance(val, Identifier)
+    assert val.name == "X"
 
 
 # ============================================================================

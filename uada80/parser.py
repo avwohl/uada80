@@ -291,6 +291,9 @@ class Parser:
 
     def parse_library_item(self) -> Decl:
         """Parse a library item (package, subprogram, generic, subunit, etc.)."""
+        # Skip optional 'private' keyword for private child units
+        self.match(TokenType.PRIVATE)
+
         # Check for separate subunit: SEPARATE (parent) body
         if self.check(TokenType.SEPARATE):
             return self.parse_subunit()
@@ -1229,8 +1232,11 @@ class Parser:
             return aspects
 
         while True:
-            # Parse aspect name
+            # Parse aspect name (may include 'Class suffix)
             aspect_name = self.expect_identifier()
+            if self.match(TokenType.APOSTROPHE):
+                suffix = self.expect_identifier()
+                aspect_name = f"{aspect_name}'{suffix}"
             aspect_value = None
 
             # Check for optional value
@@ -2606,6 +2612,12 @@ class Parser:
                 is_aliased=is_aliased,
             )
 
+        # Null record type: type T is null record;
+        if self.check(TokenType.NULL) and self.peek(1).type == TokenType.RECORD:
+            self.advance()  # consume NULL
+            self.advance()  # consume RECORD
+            return RecordTypeDef(components=[])
+
         # Record type
         if self.match(TokenType.RECORD):
             components = []
@@ -2709,6 +2721,23 @@ class Parser:
             # Parse implemented interfaces: and Interface1 and Interface2
             while self.match(TokenType.AND):
                 interfaces.append(self.parse_name())
+
+            # Check for "with private" (tagged type with private extension)
+            if self.check(TokenType.WITH) and self.peek(1).type == TokenType.PRIVATE:
+                self.advance()  # consume WITH
+                self.advance()  # consume PRIVATE
+                # Treat as private extension - return DerivedTypeDef with empty record extension
+                record_extension = RecordTypeDef(components=[])
+                return DerivedTypeDef(parent_type=parent_type, record_extension=record_extension, interfaces=interfaces, constraint=constraint, digits_constraint=digits_constraint, delta_constraint=delta_constraint)
+
+            # Check for "with null record" (tagged type with no extension components)
+            if (self.check(TokenType.WITH) and self.peek(1).type == TokenType.NULL
+                    and self.peek(2).type == TokenType.RECORD):
+                self.advance()  # consume WITH
+                self.advance()  # consume NULL
+                self.advance()  # consume RECORD
+                record_extension = RecordTypeDef(components=[])
+                return DerivedTypeDef(parent_type=parent_type, record_extension=record_extension, interfaces=interfaces, constraint=constraint, digits_constraint=digits_constraint, delta_constraint=delta_constraint)
 
             # Check for record extension: with record ... end record
             # Note: Don't consume WITH here if it's for aspects (WITH followed by identifier)
@@ -3029,7 +3058,10 @@ class Parser:
             if self.match(TokenType.SEPARATE):
                 self.expect(TokenType.SEMICOLON)
                 kind = "function" if spec.is_function else "procedure"
-                return BodyStub(name=spec.name, kind=kind, span=spec.span)
+                return BodyStub(name=spec.name, kind=kind,
+                                parameters=spec.parameters,
+                                return_type=spec.return_type,
+                                span=spec.span)
 
             # Generic instantiation: procedure/function X is new Y(args);
             if self.match(TokenType.NEW):
@@ -3059,25 +3091,9 @@ class Parser:
 
             # Ada 2012 expression function: function F(...) return T is (Expr);
             if self.check(TokenType.LEFT_PAREN):
-                start = self.current
-                self.advance()  # consume '('
-
-                # Check for conditional expression: (if ...)
-                if self.check(TokenType.IF):
-                    expr = self.parse_conditional_expr(start)
-                # Check for quantified expression: (for ...)
-                elif self.check(TokenType.FOR):
-                    expr = self.parse_quantified_expr(start)
-                # Check for case expression: (case ...)
-                elif self.check(TokenType.CASE):
-                    expr = self.parse_case_expr(start)
-                # Ada 2022 declare expression: (declare ... begin Expr)
-                elif self.check(TokenType.DECLARE):
-                    expr = self.parse_declare_expr(start)
-                else:
-                    # Regular expression
-                    expr = self.parse_expression()
-                    self.expect(TokenType.RIGHT_PAREN)
+                # Don't consume '(' — let parse_expression handle the
+                # full parenthesized expression (including aggregates)
+                expr = self.parse_expression()
 
                 self.expect(TokenType.SEMICOLON)
 
@@ -3101,9 +3117,9 @@ class Parser:
                 handlers = self.parse_exception_handlers()
 
             self.expect(TokenType.END)
-            # Optional subprogram name (can be identifier or operator string)
+            # Optional subprogram name (can be dotted identifier or operator string)
             if self.check(TokenType.IDENTIFIER):
-                self.advance()
+                self.parse_dotted_name()  # Consume dotted name for child units
             elif self.check(TokenType.STRING_LITERAL):
                 self.advance()  # Operator name like "+"
             self.expect(TokenType.SEMICOLON)

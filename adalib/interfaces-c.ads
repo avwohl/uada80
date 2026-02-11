@@ -40,7 +40,7 @@ package Interfaces.C is
    function To_C (Item : String; Append_Nul : Boolean := True) return char_array;
    function To_Ada (Item : char_array; Trim_Nul : Boolean := True) return String;
 
-   function To_C (Item : String; Target : out char_array; Count : out size_t; Append_Nul : Boolean := True);
+   procedure To_C (Item : String; Target : out char_array; Count : out size_t; Append_Nul : Boolean := True);
 
    -- Convert between chars_ptr and String
    function Value (Item : chars_ptr) return String;

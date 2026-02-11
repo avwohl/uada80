@@ -1033,6 +1033,8 @@ class BodyStub(Decl):
 
     name: str
     kind: str  # "procedure", "function", "package", "task", "protected"
+    parameters: list[ParameterSpec] = field(default_factory=list)
+    return_type: Optional[Expr] = None
 
 
 @dataclass

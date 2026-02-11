@@ -257,6 +257,9 @@ class SemanticAnalyzer:
 
     def analyze(self, program: Program) -> SemanticResult:
         """Analyze a complete program."""
+        # Store all units for later lookup of child package specs
+        self._all_units = program.units
+
         for unit in program.units:
             self._analyze_compilation_unit(unit)
 
@@ -313,7 +316,7 @@ class SemanticAnalyzer:
                     loaded_pkg = self._load_external_package(pkg_name)
                     if loaded_pkg:
                         self.symbols.define(loaded_pkg)
-                    else:
+                    elif not self._find_package_in_ast(pkg_name):
                         # Create a placeholder package symbol
                         pkg_symbol = Symbol(
                             name=pkg_name,
@@ -356,7 +359,7 @@ class SemanticAnalyzer:
                         loaded_full = self._load_external_package(full_name)
                         if loaded_full:
                             self.symbols.define(loaded_full)
-                        else:
+                        elif not self._find_package_in_ast(full_name):
                             # Try to resolve the child package from the root's public_symbols
                             child_sym = self._resolve_hierarchical_package(name)
                             if child_sym:
@@ -425,6 +428,31 @@ class SemanticAnalyzer:
             # Works for both packages and block labels (both have public_symbols)
             if prefix_sym.public_symbols and selector in prefix_sym.public_symbols:
                 return prefix_sym.public_symbols[selector]
+        return None
+
+    def _find_package_in_ast(self, pkg_name: str) -> Optional[Symbol]:
+        """Search the combined AST for a package declaration by name.
+
+        When compiling multiple files together, child package specs may live
+        in other files in the same compilation.  Scan the units list and
+        analyze the matching PackageDecl on demand.
+        """
+        all_units = getattr(self, '_all_units', None)
+        if not all_units:
+            return None
+        pkg_name_lower = pkg_name.lower()
+        for cu in all_units:
+            if isinstance(cu.unit, PackageDecl):
+                decl_name = cu.unit.name.lower() if isinstance(cu.unit.name, str) else str(cu.unit.name).lower()
+                if decl_name == pkg_name_lower:
+                    # Found — analyze its context clauses and declaration
+                    for clause in cu.context_clauses:
+                        if isinstance(clause, WithClause):
+                            self._analyze_with_clause(clause)
+                        elif isinstance(clause, UseClause):
+                            self._analyze_use_clause(clause)
+                    self._analyze_package_decl(cu.unit)
+                    return self.symbols.lookup(pkg_name)
         return None
 
     def _find_package_file(self, pkg_name: str) -> Optional[str]:
@@ -1102,6 +1130,14 @@ class SemanticAnalyzer:
             pkg_symbol.generic_decl = pkg
         self.symbols.define(pkg_symbol)
 
+        # For child packages (dotted names like Parent.Child), also register
+        # in the parent's public_symbols for hierarchical lookup
+        if "." in pkg.name:
+            parts = pkg.name.rsplit(".", 1)
+            parent_sym = self.symbols.lookup(parts[0])
+            if parent_sym and parent_sym.kind in (SymbolKind.PACKAGE, SymbolKind.GENERIC_PACKAGE):
+                parent_sym.public_symbols[parts[1].lower()] = pkg_symbol
+
         # Track current package for pragma Pure/Preelaborate
         old_package = self.current_package
         self.current_package = pkg_symbol
@@ -1413,16 +1449,24 @@ class SemanticAnalyzer:
         self.symbols.define(inst_symbol)
 
         # Build mapping from generic formal names to actual values/types
+        # Handle both positional and named actual parameters
         formal_to_actual: dict[str, any] = {}
-        for i, formal in enumerate(generic_decl.generic_formals):
-            if i < len(inst.actual_parameters):
-                actual = inst.actual_parameters[i]
-                if hasattr(formal, 'name'):
-                    # Object formal (like X : Integer)
-                    formal_to_actual[formal.name.lower()] = actual
-                elif hasattr(formal, 'type_name'):
-                    # Type formal (like type T is private)
-                    formal_to_actual[formal.type_name.lower()] = actual
+        positional_actuals = []
+        named_actuals = {}
+        for ap in inst.actual_parameters:
+            if isinstance(ap, ActualParameter) and ap.name:
+                named_actuals[ap.name.lower()] = ap
+            else:
+                positional_actuals.append(ap)
+        pos_idx = 0
+        for formal in generic_decl.generic_formals:
+            formal_name = getattr(formal, 'name', None) or getattr(formal, 'type_name', None)
+            if formal_name and formal_name.lower() in named_actuals:
+                formal_to_actual[formal_name.lower()] = named_actuals[formal_name.lower()]
+            elif pos_idx < len(positional_actuals):
+                if formal_name:
+                    formal_to_actual[formal_name.lower()] = positional_actuals[pos_idx]
+                pos_idx += 1
 
         # Enter the package scope to define its contents
         self.symbols.enter_scope(inst.name)
@@ -1434,40 +1478,42 @@ class SemanticAnalyzer:
         # Add generic formal type and object symbols to the instance scope
         # This ensures that references to formal names resolve correctly
         from uada80.ast_nodes import GenericObjectDecl
-        for i, formal in enumerate(generic_decl.generic_formals):
-            if i < len(inst.actual_parameters):
-                actual = inst.actual_parameters[i]
-                if isinstance(formal, GenericTypeDecl):
-                    # Type formal: create a type symbol with the actual type
-                    type_name = formal.name
-                    actual_type = self._resolve_type(actual)
-                    if actual_type:
-                        type_sym = Symbol(
-                            name=type_name,
-                            kind=SymbolKind.TYPE,
-                            ada_type=actual_type,
-                        )
-                        self.symbols.define(type_sym)
-                elif isinstance(formal, GenericObjectDecl):
-                    # Object formal: create a variable symbol with the actual's type
-                    # Handle multi-name formals (e.g., "X, Y : Integer")
-                    names = getattr(formal, 'names', None) or [formal.name]
-                    for obj_name in names:
-                        # Extract the expression from ActualParameter if needed
-                        actual_expr = getattr(actual, 'value', actual)
-                        actual_type = self._analyze_expr(actual_expr)
-                        # Evaluate static value of the actual for constants
-                        static_value = None
-                        if formal.mode == "in":
-                            static_value = self._try_eval_static(actual_expr)
-                        obj_sym = Symbol(
-                            name=obj_name,
-                            kind=SymbolKind.VARIABLE,
-                            ada_type=actual_type,
-                            is_constant=(formal.mode == "in"),
-                            value=static_value,
-                        )
-                        self.symbols.define(obj_sym)
+        for formal in generic_decl.generic_formals:
+            formal_name = getattr(formal, 'name', None) or getattr(formal, 'type_name', None)
+            if not formal_name or formal_name.lower() not in formal_to_actual:
+                continue
+            actual = formal_to_actual[formal_name.lower()]
+            # Unwrap ActualParameter to get the raw expression
+            actual_expr = getattr(actual, 'value', actual)
+            if isinstance(formal, GenericTypeDecl):
+                # Type formal: create a type symbol with the actual type
+                type_name = formal.name
+                actual_type = self._resolve_type(actual_expr)
+                if actual_type:
+                    type_sym = Symbol(
+                        name=type_name,
+                        kind=SymbolKind.TYPE,
+                        ada_type=actual_type,
+                    )
+                    self.symbols.define(type_sym)
+            elif isinstance(formal, GenericObjectDecl):
+                # Object formal: create a variable symbol with the actual's type
+                # Handle multi-name formals (e.g., "X, Y : Integer")
+                names = getattr(formal, 'names', None) or [formal.name]
+                for obj_name in names:
+                    actual_type = self._analyze_expr(actual_expr)
+                    # Evaluate static value of the actual for constants
+                    static_value = None
+                    if formal.mode == "in":
+                        static_value = self._try_eval_static(actual_expr)
+                    obj_sym = Symbol(
+                        name=obj_name,
+                        kind=SymbolKind.VARIABLE,
+                        ada_type=actual_type,
+                        is_constant=(formal.mode == "in"),
+                        value=static_value,
+                    )
+                    self.symbols.define(obj_sym)
 
         # Process the generic package's declarations
         for decl in generic_decl.declarations:
@@ -1687,8 +1733,13 @@ class SemanticAnalyzer:
                 self.symbols.define(loaded_pkg)
                 pkg_symbol = loaded_pkg
             else:
-                self.error(f"package specification for '{body.name}' not found")
-                return
+                # Try to find the spec in the combined AST (multi-file compilation)
+                ast_pkg = self._find_package_in_ast(body.name)
+                if ast_pkg:
+                    pkg_symbol = ast_pkg
+                else:
+                    self.error(f"package specification for '{body.name}' not found")
+                    return
         if pkg_symbol.kind not in (SymbolKind.PACKAGE, SymbolKind.GENERIC_PACKAGE):
             self.error(f"'{body.name}' is not a package")
             return
@@ -2844,26 +2895,29 @@ class SemanticAnalyzer:
         whose body will be provided in a separate compilation unit.
         We define the symbol here so it can be referenced before the body is seen.
         """
-        if stub.kind == "procedure":
-            # Don't overwrite an existing symbol (e.g., generic procedure spec)
+        if stub.kind in ("procedure", "function"):
+            # Don't overwrite an existing symbol (e.g., generic spec)
             existing = self.symbols.lookup(stub.name)
             if existing is None:
+                # Analyze parameters from the stub's subprogram spec
+                params = []
+                for param_spec in (stub.parameters or []):
+                    param_type = self._resolve_type(param_spec.type_mark)
+                    for param_name in param_spec.names:
+                        param_sym = Symbol(
+                            name=param_name,
+                            kind=SymbolKind.PARAMETER,
+                            ada_type=param_type,
+                            mode=param_spec.mode,
+                        )
+                        params.append(param_sym)
+                ret_type = self._resolve_type(stub.return_type) if stub.return_type else None
+                is_func = stub.kind == "function"
                 symbol = Symbol(
                     name=stub.name,
-                    kind=SymbolKind.PROCEDURE,
-                    parameters=[],  # No parameters available from stub
-                    definition=stub,
-                )
-                self.symbols.define(symbol)
-        elif stub.kind == "function":
-            # Don't overwrite an existing symbol (e.g., generic function spec)
-            existing = self.symbols.lookup(stub.name)
-            if existing is None:
-                symbol = Symbol(
-                    name=stub.name,
-                    kind=SymbolKind.FUNCTION,
-                    parameters=[],  # No parameters available from stub
-                    return_type=None,
+                    kind=SymbolKind.FUNCTION if is_func else SymbolKind.PROCEDURE,
+                    parameters=params,
+                    return_type=ret_type,
                     definition=stub,
                 )
                 self.symbols.define(symbol)
@@ -3266,6 +3320,18 @@ class SemanticAnalyzer:
                         component_type=parent.component_type,
                         is_constrained=True,
                         bounds=[(low, high)],
+                        base_type=parent,
+                    )
+                else:
+                    # Bounds not statically known but constraint was given —
+                    # mark as constrained with placeholder bounds (0, 0)
+                    return ArrayType(
+                        name=name,
+                        size_bits=parent.size_bits,
+                        index_types=parent.index_types,
+                        component_type=parent.component_type,
+                        is_constrained=True,
+                        bounds=[(0, 0)],
                         base_type=parent,
                     )
             return ArrayType(
