@@ -3435,6 +3435,9 @@ class Parser:
 
     def parse_package_specification(self, name: str, start: Token) -> PackageDecl | GenericInstantiation:
         """Parse package specification or instantiation."""
+        # Handle Ada 2012 aspect specification: package Name with Aspect is
+        if self.check(TokenType.WITH):
+            self.parse_aspect_specification()  # consume and discard aspects
         self.expect(TokenType.IS)
 
         # Check for generic instantiation: package X is new Generic_Pkg(...)
