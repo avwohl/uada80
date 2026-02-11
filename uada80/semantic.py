@@ -3330,6 +3330,19 @@ class SemanticAnalyzer:
                 result.is_private_extension = True
             return result
 
+        # Handle private extension from interface type
+        # e.g., type Object is new Point with private;
+        if isinstance(parent, InterfaceType) and getattr(type_def, 'is_private_extension', False):
+            result = RecordType(
+                name=name,
+                is_tagged=True,
+                parent_type=None,
+                components=[],
+                interfaces=[parent],
+            )
+            result.is_private_extension = True
+            return result
+
         # Handle derivation from interface type with record extension
         # e.g., type Circle is new Shape with record Radius : Float; end record;
         if isinstance(parent, InterfaceType) and type_def.record_extension:
@@ -3775,6 +3788,34 @@ class SemanticAnalyzer:
         result = check_symbol(sym)
         if result is not None:
             return result
+
+        # For prefix notation, Ada requires searching the package where the
+        # tagged type (or its ancestors) is declared (Ada RM 4.1.3).
+        # Search through all visible package symbols' public_symbols.
+        def search_package_symbols(pkg_sym: Symbol) -> Optional[AdaType]:
+            if not pkg_sym.public_symbols:
+                return None
+            sel_sym = pkg_sym.public_symbols.get(selector_lower)
+            if sel_sym:
+                res = check_symbol(sel_sym)
+                if res is not None:
+                    return res
+            # Search nested child packages
+            for child_name, child_sym in pkg_sym.public_symbols.items():
+                if child_sym.kind in (SymbolKind.PACKAGE, SymbolKind.GENERIC_PACKAGE):
+                    res = search_package_symbols(child_sym)
+                    if res is not None:
+                        return res
+            return None
+
+        scope = self.symbols.current_scope
+        while scope is not None:
+            for sym_name, sym_val in scope.symbols.items():
+                if sym_val.kind in (SymbolKind.PACKAGE, SymbolKind.GENERIC_PACKAGE):
+                    res = search_package_symbols(sym_val)
+                    if res is not None:
+                        return res
+            scope = scope.parent
 
         return None
 

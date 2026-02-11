@@ -236,8 +236,18 @@ class Parser:
         """
         clauses: list[WithClause | UseClause] = []
 
-        while self.check(TokenType.WITH, TokenType.USE, TokenType.PRAGMA):
-            if self.match(TokenType.WITH):
+        while self.check(TokenType.WITH, TokenType.USE, TokenType.PRAGMA, TokenType.LIMITED, TokenType.PRIVATE):
+            if self.check(TokenType.LIMITED) and self.peek_next_type() == TokenType.WITH:
+                # "limited with Pkg;" - parse as regular with clause
+                self.advance()  # consume 'limited'
+                self.advance()  # consume 'with'
+                clauses.append(self.parse_with_clause())
+            elif self.check(TokenType.PRIVATE) and self.peek_next_type() == TokenType.WITH:
+                # "private with Pkg;" - parse as regular with clause
+                self.advance()  # consume 'private'
+                self.advance()  # consume 'with'
+                clauses.append(self.parse_with_clause())
+            elif self.match(TokenType.WITH):
                 clauses.append(self.parse_with_clause())
             elif self.match(TokenType.USE):
                 clauses.append(self.parse_use_clause())

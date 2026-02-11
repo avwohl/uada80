@@ -1046,8 +1046,9 @@ def same_type(t1: AdaType, t2: AdaType) -> bool:
 def is_derived_from(t: AdaType, root_name: str) -> bool:
     """Check if a type is derived from a type with the given root name.
 
-    This follows the derivation chain (via is_derived=True) to find
-    if the type ultimately derives from the named root type.
+    This follows the derivation chain (via is_derived=True and parent_type
+    for tagged types) to find if the type ultimately derives from the named
+    root type.
 
     Examples:
         is_derived_from(My_Bool, "Boolean") -> True if type My_Bool is new Boolean
@@ -1057,9 +1058,13 @@ def is_derived_from(t: AdaType, root_name: str) -> bool:
     if t.name.lower() == root_name.lower():
         return True
 
-    # Check if it's a derived type with a base_type we can follow
+    # Check if it's a derived type with a base_type we can follow (scalar types)
     if hasattr(t, 'is_derived') and t.is_derived and hasattr(t, 'base_type') and t.base_type:
         return is_derived_from(t.base_type, root_name)
+
+    # For tagged record types, follow parent_type chain
+    if isinstance(t, RecordType) and t.parent_type:
+        return is_derived_from(t.parent_type, root_name)
 
     return False
 
@@ -1222,6 +1227,15 @@ def types_compatible(t1: AdaType, t2: AdaType) -> bool:
                     if is_derived_from(specific, t1.name):
                         return True
 
+            # Case 4: Both specific tagged types, one derived from the other
+            # In Ada, a derived tagged type T2 can be passed where T1 is expected
+            # (dispatching or implicit view conversion)
+            if not t1.is_class_wide and not t2.is_class_wide:
+                if is_derived_from(t2, t1.name):
+                    return True
+                if is_derived_from(t1, t2.name):
+                    return True
+
     # Access type compatibility: two access types are compatible if they
     # have the same designated type. This handles:
     # - Named access types with same designated type
@@ -1354,6 +1368,29 @@ def can_convert(from_type: AdaType, to_type: AdaType) -> bool:
             if same_type(ancestor, from_type) or same_type(ancestor.base_type, from_type):
                 return True
             ancestor = ancestor.base_type
+
+    # Class-wide type conversions (Ada RM 4.6):
+    # T'Class can be converted to any specific type T or derived from T
+    # T can be converted to T'Class
+    if isinstance(from_type, RecordType) and isinstance(to_type, RecordType):
+        if from_type.is_class_wide and not to_type.is_class_wide:
+            # T'Class → T (view conversion / type narrowing)
+            specific = getattr(from_type, 'specific_type', None)
+            if specific:
+                if same_type(specific, to_type) or is_derived_from(to_type, specific.name):
+                    return True
+                if is_derived_from(specific, to_type.name):
+                    return True
+            # Also allow if to_type is in the hierarchy at all
+            if is_derived_from(to_type, from_type.name.replace("'Class", "")):
+                return True
+        if not from_type.is_class_wide and to_type.is_class_wide:
+            # T → T'Class (view conversion / type widening)
+            specific = getattr(to_type, 'specific_type', None)
+            if specific:
+                if same_type(from_type, specific) or is_derived_from(from_type, specific.name):
+                    return True
+            return True  # Any specific tagged type can convert to any class-wide
 
     # For tagged types (RecordType), also check parent_type chain
     # This handles conversions like Car(derived) to Vehicle(parent)
