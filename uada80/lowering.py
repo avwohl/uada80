@@ -4887,6 +4887,49 @@ class ASTLowering:
                     self._lower_text_io_call(selector, stmt.args, False)
                     return
 
+            # Check if this is an access-to-subprogram call (indirect call)
+            # Must check BEFORE _resolve_overload, since parameters/variables with
+            # AccessSubprogramType won't be found by overload resolution (it only finds procedures)
+            call_name_lower = stmt.name.name.lower()
+            is_access_subprog_call = False
+            access_subprog_type = None
+
+            # Check local parameters/variables first
+            if self.ctx and call_name_lower in self.ctx.param_types:
+                type_name = self.ctx.param_types[call_name_lower]
+                type_sym = self._lookup_type_symbol(type_name)
+                if type_sym and type_sym.ada_type:
+                    from uada80.type_system import AccessSubprogramType
+                    if isinstance(type_sym.ada_type, AccessSubprogramType):
+                        is_access_subprog_call = True
+                        access_subprog_type = type_sym.ada_type
+            # Also check locals (for local variables with access-to-subprogram type)
+            if not is_access_subprog_call and self.ctx and call_name_lower in self.ctx.locals:
+                local_info = self.ctx.locals[call_name_lower]
+                if local_info.ada_type:
+                    from uada80.type_system import AccessSubprogramType, AccessType
+                    if isinstance(local_info.ada_type, AccessSubprogramType):
+                        is_access_subprog_call = True
+                        access_subprog_type = local_info.ada_type
+                    elif isinstance(local_info.ada_type, AccessType) and getattr(local_info.ada_type, 'is_access_subprogram', False):
+                        is_access_subprog_call = True
+                        access_subprog_type = local_info.ada_type
+            # Also check symbol table (for module-level variables)
+            if not is_access_subprog_call:
+                direct_sym = self.symbols.lookup(stmt.name.name)
+                if direct_sym and direct_sym.ada_type:
+                    from uada80.type_system import AccessType, AccessSubprogramType
+                    if isinstance(direct_sym.ada_type, AccessSubprogramType):
+                        is_access_subprog_call = True
+                        access_subprog_type = direct_sym.ada_type
+                    elif isinstance(direct_sym.ada_type, AccessType) and getattr(direct_sym.ada_type, 'is_access_subprogram', False):
+                        is_access_subprog_call = True
+                        access_subprog_type = direct_sym.ada_type
+
+            if is_access_subprog_call:
+                self._lower_indirect_proc_call_from_type(stmt, access_subprog_type)
+                return
+
             # Resolve overloaded procedure
             sym = self._resolve_overload(stmt.name.name, stmt.args)
 
@@ -11074,6 +11117,24 @@ class ASTLowering:
 
         return result
 
+    def _lookup_type_symbol(self, type_name: str) -> Optional[Symbol]:
+        """Look up a type symbol by name, searching scopes and package public_symbols."""
+        # Direct lookup first (works when 'use' clause is active)
+        sym = self.symbols.lookup(type_name)
+        if sym and sym.kind == SymbolKind.TYPE:
+            return sym
+        # Search all scopes for packages, then check their public_symbols
+        type_name_lower = type_name.lower()
+        scope = self.symbols.current_scope
+        while scope is not None:
+            for sym_name, sym_entry in scope.symbols.items():
+                if sym_entry.kind == SymbolKind.PACKAGE and sym_entry.public_symbols:
+                    child = sym_entry.public_symbols.get(type_name_lower)
+                    if child and child.kind == SymbolKind.TYPE:
+                        return child
+            scope = scope.parent
+        return None
+
     def _resolve_overload(self, name: str, args: list) -> Optional[Symbol]:
         """Resolve an overloaded function/procedure call.
 
@@ -11766,15 +11827,43 @@ class ASTLowering:
                     return result
 
         if isinstance(expr.name, Identifier):
+            # Check for access-to-subprogram variable BEFORE overload resolution
+            # (parameters/variables won't be found by _resolve_overload)
+            func_name_lower = expr.name.name.lower()
+            is_access_func = False
+
+            # Check local parameters first
+            if self.ctx and func_name_lower in self.ctx.param_types:
+                type_name = self.ctx.param_types[func_name_lower]
+                type_sym = self.symbols.lookup(type_name)
+                if type_sym and type_sym.ada_type:
+                    from uada80.type_system import AccessSubprogramType
+                    if isinstance(type_sym.ada_type, AccessSubprogramType):
+                        is_access_func = True
+            # Check locals
+            if not is_access_func and self.ctx and func_name_lower in self.ctx.locals:
+                local_info = self.ctx.locals[func_name_lower]
+                if local_info.ada_type:
+                    from uada80.type_system import AccessSubprogramType, AccessType
+                    if isinstance(local_info.ada_type, AccessSubprogramType):
+                        is_access_func = True
+                    elif isinstance(local_info.ada_type, AccessType) and getattr(local_info.ada_type, 'is_access_subprogram', False):
+                        is_access_func = True
+            # Check symbol table
+            if not is_access_func:
+                direct_sym = self.symbols.lookup(expr.name.name)
+                if direct_sym and direct_sym.ada_type:
+                    from uada80.type_system import AccessSubprogramType, AccessType
+                    if isinstance(direct_sym.ada_type, AccessSubprogramType):
+                        is_access_func = True
+                    elif isinstance(direct_sym.ada_type, AccessType) and getattr(direct_sym.ada_type, 'is_access_subprogram', False):
+                        is_access_func = True
+
+            if is_access_func:
+                return self._lower_indirect_call(expr, None)
+
             # Resolve overloaded function
             sym = self._resolve_overload(expr.name.name, expr.args)
-
-            # Check if this is an access-to-subprogram variable (indirect call)
-            if sym and sym.ada_type:
-                from uada80.type_system import AccessType
-                if isinstance(sym.ada_type, AccessType) and sym.ada_type.is_access_subprogram:
-                    # Indirect call through function pointer
-                    return self._lower_indirect_call(expr, sym)
 
             # Determine the call target - use external name if imported
             # or runtime_name for built-in container operations
@@ -11977,6 +12066,68 @@ class ASTLowering:
         ))
 
         return result
+
+    def _lower_indirect_proc_call_from_type(self, stmt: ProcedureCallStmt, access_type):
+        """Lower an indirect procedure call through an access-to-subprogram value.
+
+        Used for access-to-subprogram types:
+            type Proc_Ptr is access procedure (X : in Float; Y : out Call_Kind);
+            P : Proc_Ptr := Some_Proc'Access;
+            P(Theta, Result);  -- indirect call
+        """
+        from uada80.type_system import AccessSubprogramType
+
+        # Get the function pointer value
+        if isinstance(stmt.name, Dereference):
+            func_ptr = self._lower_expr(stmt.name.prefix)
+        elif isinstance(stmt.name, Identifier):
+            func_ptr = self._lower_expr(stmt.name)
+        else:
+            func_ptr = self._lower_expr(stmt.name)
+
+        # Get parameter modes from the type definition AST
+        # AccessSubprogramType has parameter_types (list of AdaType) but no modes.
+        # Modes come from the type's definition (TypeDecl -> AccessSubprogramTypeDef)
+        param_modes = []
+        type_sym = self._lookup_type_symbol(access_type.name) if access_type else None
+        if type_sym and type_sym.definition:
+            from uada80.ast_nodes import TypeDecl, AccessSubprogramTypeDef
+            typedef = type_sym.definition
+            if isinstance(typedef, TypeDecl) and isinstance(typedef.type_def, AccessSubprogramTypeDef):
+                for p in typedef.type_def.parameters:
+                    mode = p.mode if p.mode else 'in'
+                    # Each ParameterSpec may have multiple names
+                    for _ in p.names:
+                        param_modes.append(mode)
+
+        # Push arguments (right to left)
+        stack_slots = 0
+        args = stmt.args if stmt.args else []
+        for i, arg in enumerate(reversed(args)):
+            forward_idx = len(args) - 1 - i
+            mode = param_modes[forward_idx] if forward_idx < len(param_modes) else 'in'
+            arg_expr = arg.value if hasattr(arg, 'value') and arg.value else arg
+
+            if mode in ('out', 'in out'):
+                # Pass by reference - push address
+                addr = self._get_lvalue_address(arg_expr)
+                self.builder.push(addr)
+            else:
+                value = self._lower_expr(arg_expr)
+                self.builder.push(value)
+            stack_slots += 1
+
+        # Emit indirect call instruction
+        self.builder.emit(IRInstr(
+            OpCode.CALL_INDIRECT,
+            src1=func_ptr,
+            comment=f"indirect procedure call via {stmt.name.name if hasattr(stmt.name, 'name') else 'ptr'}"
+        ))
+
+        # Clean up stack
+        for _ in range(stack_slots):
+            temp = self.builder.new_vreg(IRType.WORD, "_discard")
+            self.builder.pop(temp)
 
     def _lower_attribute(self, expr: AttributeReference):
         """Lower an attribute reference."""
@@ -12204,6 +12355,45 @@ class ASTLowering:
                             src1=MemoryLocation(is_global=True, symbol_name=var_name, ir_type=IRType.PTR),
                             comment=f"{var_name}'Address"
                         ))
+                    return result
+
+        # Handle 'Access on SelectedName (package-qualified subprograms/variables)
+        # e.g., C3A0012_0.Log_Calc_Fast'Access
+        if attr == "access" and isinstance(expr.prefix, SelectedName):
+            selector = expr.prefix.selector.lower()
+            # Look up the prefix package and then the selector
+            prefix_parts = []
+            node = expr.prefix.prefix
+            while isinstance(node, SelectedName):
+                prefix_parts.append(node.selector)
+                node = node.prefix
+            if isinstance(node, Identifier):
+                prefix_parts.append(node.name)
+            prefix_parts.reverse()
+
+            # Navigate package hierarchy to find the symbol
+            pkg_sym = self.symbols.lookup(prefix_parts[0]) if prefix_parts else None
+            for part in prefix_parts[1:]:
+                if pkg_sym and pkg_sym.public_symbols:
+                    pkg_sym = pkg_sym.public_symbols.get(part.lower())
+                else:
+                    pkg_sym = None
+                    break
+            if pkg_sym and pkg_sym.public_symbols:
+                target_sym = pkg_sym.public_symbols.get(selector)
+                if target_sym and target_sym.kind in (SymbolKind.PROCEDURE, SymbolKind.FUNCTION):
+                    result = self.builder.new_vreg(IRType.PTR, "_access")
+                    # Get the mangled label name for the subprogram
+                    if target_sym.external_name:
+                        label_name = target_sym.external_name.lower()
+                    else:
+                        label_name = f"_{target_sym.name.lower()}"
+                    self.builder.emit(IRInstr(
+                        OpCode.LEA,
+                        dst=result,
+                        src1=Label(label_name),
+                        comment=f"{expr.prefix.selector}'Access"
+                    ))
                     return result
 
         # Handle 'Pos, 'Val, 'Succ, 'Pred with arguments

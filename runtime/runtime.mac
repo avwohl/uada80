@@ -2473,6 +2473,15 @@ _dispatch_call:
     JP (HL)
 
 ; ============================================================
+; _call_hl - Indirect call through HL register
+; Input: HL = address to call
+; Usage: CALL _call_hl  (pushes return addr, then JP (HL))
+; ============================================================
+    PUBLIC _call_hl
+_call_hl:
+    JP (HL)
+
+; ============================================================
 ; Fixed-Point Support (Q16.16 format)
 ; 32-bit fixed point: 16 bits integer, 16 bits fraction
 ; Value = stored_value / 65536

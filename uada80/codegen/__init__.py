@@ -7369,12 +7369,12 @@ class Z80CodeGen:
         """Generate indirect CALL through function pointer.
 
         src1 = function pointer (address to call)
-        Uses _dispatch_call helper which expects address in hl.
+        Uses _call_hl helper: CALL _call_hl pushes return addr then JP (HL).
         """
         # Load function pointer into hl
         self._load_to_hl(instr.src1)
-        # Call through hl using the dispatch helper
-        self._emit_instr("call", "_dispatch_call")
+        # Call through hl: CALL _call_hl pushes return addr, JP (HL) enters target
+        self._emit_instr("call", "_call_hl")
 
     def _gen_dispatch(self, instr: IRInstr) -> None:
         """Generate dispatching call through vtable.
