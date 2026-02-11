@@ -354,6 +354,21 @@ class SemanticAnalyzer:
                             self._setup_standard_package(pkg_symbol, root_pkg.upper())
                         self.symbols.define(pkg_symbol)
 
+                # Load all intermediate packages (e.g., for A.B.C, also load A.B)
+                # Ada RM 10.1.2: with A.B.C makes A, A.B, and A.B.C all visible
+                parts_list = full_name.split(".")
+                for i in range(2, len(parts_list)):
+                    intermediate = ".".join(parts_list[:i])
+                    if self.symbols.lookup(intermediate) is None:
+                        loaded_inter = self._load_external_package(intermediate)
+                        if loaded_inter:
+                            self.symbols.define(loaded_inter)
+                            # Update parent's child reference
+                            inter_parts = intermediate.rsplit(".", 1)
+                            parent_sym = self.symbols.lookup(inter_parts[0])
+                            if parent_sym:
+                                parent_sym.public_symbols[inter_parts[1].lower()] = loaded_inter
+
                 # Also register the full hierarchical name for direct lookup
                 # This allows "Ada.Text_IO" to be found when used as a prefix
                 if full_name != root_pkg:
@@ -363,6 +378,12 @@ class SemanticAnalyzer:
                         loaded_full = self._load_external_package(full_name)
                         if loaded_full:
                             self.symbols.define(loaded_full)
+                            # Update parent's child reference to point to fully-loaded symbol
+                            parts = full_name.rsplit(".", 1)
+                            if len(parts) == 2:
+                                parent_sym = self.symbols.lookup(parts[0])
+                                if parent_sym:
+                                    parent_sym.public_symbols[parts[1].lower()] = loaded_full
                         elif not self._find_package_in_ast(full_name):
                             # Try to resolve the child package from the root's public_symbols
                             child_sym = self._resolve_hierarchical_package(name)
