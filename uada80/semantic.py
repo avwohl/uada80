@@ -3323,7 +3323,7 @@ class SemanticAnalyzer:
         elif isinstance(type_def, InterfaceTypeDef):
             return self._build_interface_type(name, type_def)
         elif isinstance(type_def, PrivateTypeDef):
-            return self._build_private_type(name, type_def)
+            return self._build_private_type(name, type_def, is_tagged)
         elif isinstance(type_def, RealTypeDef):
             return self._build_real_type(name, type_def)
 
@@ -3786,7 +3786,8 @@ class SemanticAnalyzer:
         )
 
     def _build_private_type(
-        self, name: str, type_def: PrivateTypeDef
+        self, name: str, type_def: PrivateTypeDef,
+        is_tagged: bool = False,
     ) -> AdaType:
         """Build a private type placeholder.
 
@@ -3794,10 +3795,13 @@ class SemanticAnalyzer:
         type that will be completed with a full type definition in the
         private part of the package.
         """
-        return AdaType(
+        ada_type = AdaType(
             name=name,
             kind=TypeKind.PRIVATE,
         )
+        if is_tagged or getattr(type_def, 'is_tagged', False):
+            ada_type.is_tagged = True
+        return ada_type
 
     # =========================================================================
     # Primitive Operation Inheritance
@@ -4132,15 +4136,19 @@ class SemanticAnalyzer:
             return False
         return True
 
+    # Sentinel to distinguish "found procedure (return type None)" from "not found"
+    _PROCEDURE_FOUND = AdaType(name="_procedure_found", kind=TypeKind.PRIVATE)
+
     def _find_prefix_notation_primitive(
-        self, tagged_type: RecordType, selector: str
+        self, tagged_type, selector: str
     ) -> Optional[AdaType]:
         """Find a primitive operation for prefix notation calls.
 
         In Ada 2005+, you can call X.Method(Args) where Method is a primitive
         operation that takes X (or access to X, or X'Class) as the first parameter.
 
-        Returns the return type for functions, None for procedures.
+        Returns the return type for functions, _PROCEDURE_FOUND sentinel for
+        procedures, or None if not found.
         """
         selector_lower = selector.lower()
 
@@ -4190,7 +4198,10 @@ class SemanticAnalyzer:
                                             is_match = True
 
                         if is_match:
-                            return sym.return_type  # None for procedures
+                            # Return return_type for functions, sentinel for procedures
+                            if sym.return_type is not None:
+                                return sym.return_type
+                            return SemanticAnalyzer._PROCEDURE_FOUND
 
                 # Check for overloaded version
                 sym = sym.overloaded_next
@@ -6397,7 +6408,7 @@ class SemanticAnalyzer:
             if prefix_type.is_tagged:
                 prim_type = self._find_prefix_notation_primitive(prefix_type, expr.selector)
                 if prim_type is not None:
-                    return prim_type
+                    return None if prim_type is self._PROCEDURE_FOUND else prim_type
 
             self.error(
                 f"record '{prefix_type.name}' has no component '{expr.selector}'",
@@ -6422,7 +6433,7 @@ class SemanticAnalyzer:
                 if designated.is_tagged:
                     prim_type = self._find_prefix_notation_primitive(designated, expr.selector)
                     if prim_type is not None:
-                        return prim_type
+                        return None if prim_type is self._PROCEDURE_FOUND else prim_type
 
                 self.error(
                     f"record '{designated.name}' has no component '{expr.selector}'",
@@ -6447,6 +6458,13 @@ class SemanticAnalyzer:
                 expr,
             )
             return None
+
+        # For tagged types that aren't records (e.g., tagged private types from
+        # generic instantiation), still try prefix notation
+        if getattr(prefix_type, 'is_tagged', False):
+            prim_type = self._find_prefix_notation_primitive(prefix_type, expr.selector)
+            if prim_type is not None:
+                return None if prim_type is self._PROCEDURE_FOUND else prim_type
 
         self.error(f"'{prefix_type.name}' is not a record", expr.prefix)
         return None

@@ -188,6 +188,7 @@ class OpCode(Enum):
 
     # Special
     NOP = auto()  # no operation
+    GETSP = auto()  # dst = current stack pointer
     LABEL = auto()  # label definition (pseudo-instruction)
     INLINE_ASM = auto()  # inline assembly (asm code in comment field)
 

@@ -6798,6 +6798,11 @@ class Z80CodeGen:
             self._gen_lea(instr)
         elif op == OpCode.NOP:
             self._emit_instr("nop")
+        elif op == OpCode.GETSP:
+            # Get current stack pointer into destination register
+            dst = self._resolve_operand(instr.dst)
+            self._emit_instr(f"ld {dst},0")
+            self._emit_instr(f"add {dst},sp")
         # Exception handling
         elif op == OpCode.EXC_PUSH:
             self._gen_exc_push(instr)

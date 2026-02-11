@@ -1134,23 +1134,31 @@ class ASTLowering:
         )
         generic_sym = self.symbols.lookup(generic_name)
 
-        # If symbol table lookup fails, search current body declarations directly
+        # If symbol table lookup fails, search body declarations stack
         # This handles local generic definitions that are in a different scope
-        if generic_sym is None and hasattr(self, '_current_body_declarations') and self._current_body_declarations:
+        # (e.g., generic declared in outer scope, instantiated in nested DECLARE)
+        if generic_sym is None:
             from uada80.ast_nodes import GenericSubprogramUnit
-            for decl in self._current_body_declarations:
-                if isinstance(decl, GenericSubprogramUnit) and decl.name.lower() == generic_name.lower():
-                    # Found the generic - create a pseudo-symbol for it
-                    # Also find the corresponding body
-                    generic_body = None
-                    for body_decl in self._current_body_declarations:
-                        if isinstance(body_decl, SubprogramBody) and body_decl.spec.name.lower() == generic_name.lower():
-                            generic_body = body_decl
-                            break
-                    # Lower the instantiation directly
-                    if inst.kind in ("procedure", "function"):
-                        self._lower_generic_subprogram_from_ast(inst, decl, generic_body)
-                    return
+            # Search current body declarations + all outer scopes
+            search_lists = []
+            if hasattr(self, '_current_body_declarations') and self._current_body_declarations:
+                search_lists.append(self._current_body_declarations)
+            if hasattr(self, '_body_declarations_stack'):
+                for decl_list in reversed(self._body_declarations_stack):
+                    if decl_list is not self._current_body_declarations:
+                        search_lists.append(decl_list)
+            for decl_list in search_lists:
+                for decl in decl_list:
+                    if isinstance(decl, GenericSubprogramUnit) and decl.name.lower() == generic_name.lower():
+                        # Found the generic - also find corresponding body
+                        generic_body = None
+                        for body_decl in decl_list:
+                            if isinstance(body_decl, SubprogramBody) and body_decl.spec.name.lower() == generic_name.lower():
+                                generic_body = body_decl
+                                break
+                        if inst.kind in ("procedure", "function"):
+                            self._lower_generic_subprogram_from_ast(inst, decl, generic_body)
+                        return
 
         if inst.kind == "package":
             self._lower_generic_package_instantiation(inst, generic_sym)
@@ -5668,8 +5676,8 @@ class ASTLowering:
                     type_name = str(local.ada_type).lower()
                     return "file_type" in type_name
             # Check symbol table
-            if self.symbol_table:
-                sym = self.symbol_table.lookup(expr.name)
+            if self.symbols:
+                sym = self.symbols.lookup(expr.name)
                 if sym:
                     if hasattr(sym, 'type_ref') and sym.type_ref:
                         type_name = str(sym.type_ref).lower()
@@ -6170,8 +6178,8 @@ class ASTLowering:
                     return local.size
                 if local.type_ref:
                     return self._sizeof_type(local.type_ref)
-            if self.symbol_table:
-                sym = self.symbol_table.lookup(expr.name)
+            if self.symbols:
+                sym = self.symbols.lookup(expr.name)
                 if sym and sym.type_ref:
                     return self._sizeof_type(sym.type_ref)
         # Default to word size (2 bytes)
@@ -6194,8 +6202,8 @@ class ASTLowering:
         if type_name in ("short_integer",):
             return 2
         # Check for array/record in symbol table
-        if self.symbol_table:
-            sym = self.symbol_table.lookup(str(type_ref))
+        if self.symbols:
+            sym = self.symbols.lookup(str(type_ref))
             if sym:
                 if hasattr(sym, 'size') and sym.size:
                     return sym.size
