@@ -869,6 +869,18 @@ class SemanticAnalyzer:
                 except Exception:
                     pass  # Skip declarations that fail analysis
 
+            # Analyze private declarations (completes private types with full definitions)
+            # E.g., "type Controlled is abstract tagged private;" in public part
+            # is completed by "type Controlled is abstract tagged record...end record;"
+            # in the private part. Without this, private tagged types remain as
+            # plain AdaType(kind=PRIVATE) instead of becoming RecordType.
+            for decl in pkg_decl.private_declarations:
+                try:
+                    self._analyze_declaration(decl)
+                    self._add_to_package(pkg_symbol, decl, is_private=True)
+                except Exception:
+                    pass  # Skip declarations that fail analysis
+
             # For standard packages, merge in fallback values for constants
             # that weren't properly evaluated during analysis
             if pkg_name.upper() in ("SYSTEM", "ADA", "INTERFACES"):
