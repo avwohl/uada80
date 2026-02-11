@@ -321,16 +321,24 @@ class SemanticAnalyzer:
         else:
             parent_name = str(subunit.parent_unit)
 
-        # Enter the parent package scope so the body can see parent declarations
+        # Enter the parent scope so the body can see parent declarations
         parent_sym = self.symbols.lookup(parent_name)
+        entered_scope = False
         if parent_sym and parent_sym.kind == SymbolKind.PACKAGE:
             self.symbols.enter_scope(parent_name)
+            entered_scope = True
             # Import parent's symbols into this scope
             for sym_name, sym_val in parent_sym.public_symbols.items():
                 try:
                     self.symbols.define(sym_val)
                 except Exception:
                     pass
+        elif parent_sym and parent_sym.kind in (SymbolKind.PROCEDURE, SymbolKind.FUNCTION):
+            # Parent is a subprogram - find nested declarations from its AST
+            self.symbols.enter_scope(parent_name)
+            entered_scope = True
+            # Search the parent's AST for nested package specs and other declarations
+            self._import_subprogram_locals(parent_name)
 
         # Analyze the body
         body = subunit.body
@@ -344,8 +352,31 @@ class SemanticAnalyzer:
             self._analyze_protected_body(body)
 
         # Leave the parent scope
-        if parent_sym and parent_sym.kind == SymbolKind.PACKAGE:
+        if entered_scope:
             self.symbols.leave_scope()
+
+    def _import_subprogram_locals(self, parent_name: str) -> None:
+        """Import local declarations from a subprogram parent for separate subunit analysis.
+
+        When a subunit is separated from a subprogram parent, we need to find
+        the parent's nested package specs and other declarations from the AST.
+        """
+        all_units = getattr(self, '_all_units', None)
+        if not all_units:
+            return
+        parent_lower = parent_name.lower()
+        # Find the parent subprogram body in the AST
+        for cu in all_units:
+            if isinstance(cu.unit, SubprogramBody):
+                body_name = cu.unit.spec.name.lower() if isinstance(cu.unit.spec.name, str) else str(cu.unit.spec.name).lower()
+                if body_name == parent_lower:
+                    # Found the parent - analyze nested package specs
+                    for decl in cu.unit.declarations:
+                        if isinstance(decl, PackageDecl):
+                            self._analyze_package_decl(decl)
+                        elif isinstance(decl, PackageBody):
+                            pass  # Body stubs handled when subunit is processed
+                    return
 
     def _analyze_with_clause(self, clause: WithClause) -> None:
         """Analyze a with clause.
@@ -3368,7 +3399,18 @@ class SemanticAnalyzer:
         components: list[RecordComponent] = []
 
         for comp_decl in type_def.components:
-            comp_type = self._resolve_type(comp_decl.type_mark)
+            if isinstance(comp_decl.type_mark, AccessTypeIndication):
+                # Anonymous access type in record component (e.g., Id : access String)
+                designated = self._resolve_type(comp_decl.type_mark.subtype)
+                comp_type = AccessType(
+                    name=f"access_{designated.name}" if designated else "_anonymous_access",
+                    size_bits=16,
+                    designated_type=designated,
+                    is_access_all=getattr(comp_decl.type_mark, 'is_all', False),
+                    is_access_constant=getattr(comp_decl.type_mark, 'is_constant', False),
+                )
+            else:
+                comp_type = self._resolve_type(comp_decl.type_mark)
             # If type couldn't be resolved, use a placeholder type
             if comp_type is None:
                 comp_type = IntegerType(name="_unknown", size_bits=16, low=0, high=0)
@@ -3384,7 +3426,17 @@ class SemanticAnalyzer:
             for variant in type_def.variant_part.variants:
                 var_components: list[RecordComponent] = []
                 for comp_decl in variant.components:
-                    comp_type = self._resolve_type(comp_decl.type_mark)
+                    if isinstance(comp_decl.type_mark, AccessTypeIndication):
+                        designated = self._resolve_type(comp_decl.type_mark.subtype)
+                        comp_type = AccessType(
+                            name=f"access_{designated.name}" if designated else "_anonymous_access",
+                            size_bits=16,
+                            designated_type=designated,
+                            is_access_all=getattr(comp_decl.type_mark, 'is_all', False),
+                            is_access_constant=getattr(comp_decl.type_mark, 'is_constant', False),
+                        )
+                    else:
+                        comp_type = self._resolve_type(comp_decl.type_mark)
                     if comp_type is None:
                         comp_type = IntegerType(name="_unknown", size_bits=16, low=0, high=0)
                     for comp_name in comp_decl.names:
