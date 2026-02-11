@@ -1298,6 +1298,24 @@ def types_compatible(t1: AdaType, t2: AdaType) -> bool:
                             return True
                         if specific and is_derived_from(t1.designated_type, specific.name):
                             return True
+            else:
+                # One or both designated types are None (e.g., from limited with)
+                # Use name-based fallback: compare "access_X" names with designated types
+                d1 = t1.designated_type
+                d2 = t2.designated_type
+                t1_name = getattr(t1, 'name', '') or ''
+                t2_name = getattr(t2, 'name', '') or ''
+                # Extract base type name from anonymous access name "access_X"
+                if d1 and d2 is None and t2_name.startswith('access_'):
+                    base_name = t2_name[7:]
+                    d1_name = getattr(d1, 'name', '').replace("'Class", '')
+                    if base_name.lower() == d1_name.lower():
+                        return True
+                if d2 and d1 is None and t1_name.startswith('access_'):
+                    base_name = t1_name[7:]
+                    d2_name = getattr(d2, 'name', '').replace("'Class", '')
+                    if base_name.lower() == d2_name.lower():
+                        return True
 
     # Check subtype relationship
     if is_subtype_of(t1, t2) or is_subtype_of(t2, t1):

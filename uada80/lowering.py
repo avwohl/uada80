@@ -649,6 +649,9 @@ class ASTLowering:
         # Use scope prefix and counter to ensure each function definition gets a unique label
         # Ada is case-insensitive, so normalize all labels to lowercase
         func_name = self._mangle_operator_name(spec.name.lower())
+        # Replace dots with underscores for child subprogram names
+        # (e.g., "fa11d00.ca11d011" -> "fa11d00_ca11d011")
+        func_name = func_name.replace('.', '_')
         func_name_lower = func_name
         return_type_expr = spec.return_type if spec.is_function else None
         type_sig = self._get_param_type_sig_from_spec(spec.parameters, return_type_expr)
@@ -4932,6 +4935,24 @@ class ASTLowering:
 
             # Resolve overloaded procedure
             sym = self._resolve_overload(stmt.name.name, stmt.args)
+            # Fallback: if overload resolution didn't find it, try direct symbol lookup
+            # (handles child subprograms accessible via use-clause)
+            if sym is None:
+                sym = self.symbols.lookup(stmt.name.name)
+            # Further fallback: search package public_symbols for child subprograms
+            # Only match symbols that are themselves child subprogram units (name contains '.')
+            if sym is None:
+                call_name_lower = stmt.name.name.lower()
+                scope = self.symbols.current_scope
+                while scope is not None and sym is None:
+                    for sym_entry in scope.symbols.values():
+                        if sym_entry.kind == SymbolKind.PACKAGE and sym_entry.public_symbols:
+                            child = sym_entry.public_symbols.get(call_name_lower)
+                            if (child and child.kind in (SymbolKind.PROCEDURE, SymbolKind.FUNCTION)
+                                    and '.' in child.name):
+                                sym = child
+                                break
+                    scope = scope.parent
 
             # Check for procedure renaming (alias_for)
             # If the symbol is a renamed procedure, resolve to the original
@@ -4959,7 +4980,7 @@ class ASTLowering:
             # Determine the call target - use external name if imported
             # or runtime_name for built-in container operations
             # Ada is case-insensitive, so normalize to lowercase for consistent linking
-            call_target = self._mangle_operator_name(stmt.name.name.lower())
+            call_target = self._mangle_operator_name(stmt.name.name.lower()).replace('.', '_')
             if sym:
                 if sym.runtime_name:
                     # Built-in container/library operation
@@ -4967,7 +4988,7 @@ class ASTLowering:
                 elif sym.is_imported and sym.external_name:
                     call_target = sym.external_name.lower()
                 else:
-                    call_target = self._mangle_operator_name(sym.name.lower())
+                    call_target = self._mangle_operator_name(sym.name.lower()).replace('.', '_')
 
             # Check for overloaded procedure - use unique label if available
             # Use type signature from resolved symbol to match definition
@@ -11864,11 +11885,27 @@ class ASTLowering:
 
             # Resolve overloaded function
             sym = self._resolve_overload(expr.name.name, expr.args)
+            # Fallback: search package public_symbols for child subprograms
+            # Only match symbols that are child subprogram units (name contains '.')
+            if sym is None:
+                sym = self.symbols.lookup(expr.name.name)
+            if sym is None:
+                func_name_search = expr.name.name.lower()
+                scope = self.symbols.current_scope
+                while scope is not None and sym is None:
+                    for sym_entry in scope.symbols.values():
+                        if sym_entry.kind == SymbolKind.PACKAGE and sym_entry.public_symbols:
+                            child = sym_entry.public_symbols.get(func_name_search)
+                            if (child and child.kind in (SymbolKind.PROCEDURE, SymbolKind.FUNCTION)
+                                    and '.' in child.name):
+                                sym = child
+                                break
+                    scope = scope.parent
 
             # Determine the call target - use external name if imported
             # or runtime_name for built-in container operations
             # Ada is case-insensitive, so normalize to lowercase for consistent linking
-            call_target = self._mangle_operator_name(expr.name.name.lower())
+            call_target = self._mangle_operator_name(expr.name.name.lower()).replace('.', '_')
             if sym:
                 if sym.runtime_name:
                     # Built-in container/library operation
@@ -11876,7 +11913,7 @@ class ASTLowering:
                 elif sym.is_imported and sym.external_name:
                     call_target = sym.external_name.lower()
                 else:
-                    call_target = self._mangle_operator_name(sym.name.lower())
+                    call_target = self._mangle_operator_name(sym.name.lower()).replace('.', '_')
 
             # Check for overloaded function - use unique label if available
             # Use type signature from resolved symbol to match definition
