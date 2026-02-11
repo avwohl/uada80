@@ -1662,6 +1662,30 @@ class SemanticAnalyzer:
                 count += 1
         return count
 
+    def _count_generic_defaults(self, formals: list) -> int:
+        """Count generic formals with default values.
+
+        Handles: default_value (object formals), is_box (subprogram '<>'),
+        default_subprogram (specific subprogram default), and multi-name
+        object formals where one default covers all names.
+        """
+        from uada80.ast_nodes import GenericObjectDecl
+        count = 0
+        for f in formals:
+            has_default = (
+                (hasattr(f, 'default_value') and f.default_value is not None) or
+                (hasattr(f, 'is_box') and f.is_box) or
+                (hasattr(f, 'default_subprogram') and f.default_subprogram is not None)
+            )
+            if has_default:
+                # Multi-name object formals: "P, Q : T := val" — all names have the default
+                if isinstance(f, GenericObjectDecl):
+                    names = getattr(f, 'names', None)
+                    count += len(names) if names else 1
+                else:
+                    count += 1
+        return count
+
     def _analyze_generic_instantiation(self, inst: GenericInstantiation) -> None:
         """Analyze a generic instantiation."""
         # Look up the generic
@@ -1720,12 +1744,7 @@ class SemanticAnalyzer:
         # Check number of actual parameters (accounting for defaults and multi-name formals)
         num_formals = self._count_generic_parameters(generic_decl.generic_formals)
         num_actuals = len(inst.actual_parameters)
-        # Count formals with default values (including 'is <>' box defaults)
-        num_with_defaults = sum(
-            1 for f in generic_decl.generic_formals
-            if (hasattr(f, 'default_value') and f.default_value is not None) or
-               (hasattr(f, 'is_box') and f.is_box)
-        )
+        num_with_defaults = self._count_generic_defaults(generic_decl.generic_formals)
         min_required = num_formals - num_with_defaults
 
         if num_actuals < min_required or num_actuals > num_formals:
@@ -1938,12 +1957,7 @@ class SemanticAnalyzer:
             # Check number of actual parameters (accounting for defaults and multi-name formals)
             num_formals = self._count_generic_parameters(generic_decl.formals)
             num_actuals = len(inst.actual_parameters)
-            # Count formals with default values (including 'is <>' box defaults)
-            num_with_defaults = sum(
-                1 for f in generic_decl.formals
-                if (hasattr(f, 'default_value') and f.default_value is not None) or
-                   (hasattr(f, 'is_box') and f.is_box)
-            )
+            num_with_defaults = self._count_generic_defaults(generic_decl.formals)
             min_required = num_formals - num_with_defaults
 
             if num_actuals < min_required or num_actuals > num_formals:
@@ -2893,9 +2907,11 @@ class SemanticAnalyzer:
             ))
 
         # Create the task type
+        is_single = getattr(decl, 'is_single', False)
         task_type = TaskType(
             name=decl.name,
             entries=entries,
+            is_single_task=is_single,
         )
 
         if existing is not None and existing.ada_type and existing.ada_type.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE):
@@ -2904,9 +2920,10 @@ class SemanticAnalyzer:
             existing.ada_type = task_type
             existing.definition = decl
         else:
+            sym_kind = SymbolKind.TASK if is_single else SymbolKind.TASK_TYPE
             symbol = Symbol(
                 name=decl.name,
-                kind=SymbolKind.TASK_TYPE,
+                kind=sym_kind,
                 ada_type=task_type,
                 definition=decl,
             )
@@ -2941,7 +2958,7 @@ class SemanticAnalyzer:
             )
             self.symbols.define(symbol)
             task_sym = symbol
-        elif task_sym.kind != SymbolKind.TASK_TYPE:
+        elif task_sym.kind not in (SymbolKind.TASK_TYPE, SymbolKind.TASK):
             self.error(f"'{body.name}' is not a task type", body)
             return
 

@@ -3958,6 +3958,7 @@ class Parser:
             entries=entries,
             declarations=declarations,
             interfaces=interfaces,
+            is_single=not is_type,
             span=self.make_span(start),
         )
 

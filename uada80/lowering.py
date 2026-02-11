@@ -261,6 +261,8 @@ class ASTLowering:
         self._package_prefix_stack: list[str] = []
         # Whether the program uses tasking (need _TASK_INI at startup)
         self._uses_tasking: bool = False
+        # Track single task names (not task types) for entry call detection
+        self._single_task_names: set[str] = set()
 
     def _find_global_name(self, name: str) -> str:
         """Find the actual global name for a variable (may have package prefix)."""
@@ -2727,11 +2729,9 @@ class ASTLowering:
         Single tasks (task T;) are both a type and an object declaration.
         Task types (task type T;) can have multiple instances.
         """
-        # Task type declarations are handled during semantic analysis.
-        # The entry points are registered there.
-        # We just need to ensure the task initialization code will be called
-        # when a task object is created (handled in _lower_task_object_decl).
-        pass
+        # Track single tasks for entry call detection in lowering
+        if getattr(decl, 'is_single', False):
+            self._single_task_names.add(decl.name.lower())
 
     def _lower_task_body(self, decl: TaskBody) -> None:
         """Lower a task body (implementation of task execution).
@@ -2815,8 +2815,13 @@ class ASTLowering:
 
         # For single tasks, emit TASK_CREATE in enclosing scope
         if self.ctx:
-            task_sym = self.symbols.lookup(decl.name) if self.symbols else None
-            if task_sym and hasattr(task_sym, 'ada_type') and getattr(task_sym.ada_type, 'is_single_task', False):
+            is_single = decl.name.lower() in self._single_task_names
+            if not is_single:
+                # Fallback: check symbol table
+                task_sym = self.symbols.lookup(decl.name) if self.symbols else None
+                is_single = (task_sym and hasattr(task_sym, 'ada_type') and
+                             getattr(task_sym.ada_type, 'is_single_task', False))
+            if is_single:
                 self._uses_tasking = True
                 task_id_vreg = self.builder.new_vreg(IRType.WORD, f"_{decl.name.lower()}_tid")
                 self.builder.task_create(task_id_vreg, Label(task_name),

@@ -1000,6 +1000,7 @@ class TaskTypeDecl(Decl):
     entries: list["EntryDecl"] = field(default_factory=list)
     declarations: list[Decl] = field(default_factory=list)
     interfaces: list["Expr"] = field(default_factory=list)  # Interface inheritance
+    is_single: bool = False  # True for 'task T is' (single task, not task type)
 
 
 @dataclass
