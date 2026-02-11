@@ -2429,6 +2429,13 @@ class SemanticAnalyzer:
             is_tagged = getattr(decl, 'is_tagged', False)
             ada_type = self._build_type(decl.name, decl.type_def, is_tagged)
 
+            # If type build failed for a private extension, create a stub so that
+            # the completion in the private part can replace it later
+            if ada_type is None and isinstance(decl.type_def, DerivedTypeDef):
+                if getattr(decl.type_def, 'is_private_extension', False):
+                    ada_type = RecordType(name=decl.name, is_tagged=True)
+                    ada_type.is_private_extension = True
+
             # Add discriminants to record types
             if isinstance(ada_type, RecordType) and decl.discriminants:
                 for disc_spec in decl.discriminants:

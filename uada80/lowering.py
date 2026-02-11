@@ -1718,9 +1718,20 @@ class ASTLowering:
         Returns the constant integer value of the expression.
         Used for named numbers, array bounds, etc.
         """
-        from uada80.ast_nodes import IntegerLiteral, RealLiteral, Identifier, BinaryExpr, UnaryExpr
+        from uada80.ast_nodes import (IntegerLiteral, RealLiteral, Identifier,
+                                       BinaryExpr, UnaryExpr, Parenthesized,
+                                       QualifiedExpr, IndexedComponent)
 
-        if isinstance(expr, IntegerLiteral):
+        if isinstance(expr, Parenthesized):
+            return self._evaluate_static_expr(expr.expr)
+        elif isinstance(expr, QualifiedExpr):
+            return self._evaluate_static_expr(expr.expr)
+        elif isinstance(expr, IndexedComponent):
+            # Type conversion: T(X) — evaluate the argument
+            if expr.indices and len(expr.indices) == 1:
+                return self._evaluate_static_expr(expr.indices[0])
+            return 0
+        elif isinstance(expr, IntegerLiteral):
             return expr.value
         elif isinstance(expr, RealLiteral):
             # Convert to fixed-point representation for Z80
