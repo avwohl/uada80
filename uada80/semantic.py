@@ -1842,6 +1842,33 @@ class SemanticAnalyzer:
         for name, sym in self.symbols.current_scope.symbols.items():
             inst_symbol.public_symbols[name] = sym
 
+        # Fix up access types with incomplete designated types
+        # (forward-declared types are now complete after all declarations processed)
+        access_decls: dict[str, TypeDecl] = {}
+        for decl in generic_decl.declarations:
+            if isinstance(decl, TypeDecl) and isinstance(decl.type_def, AccessTypeDef):
+                access_decls[decl.name.lower()] = decl
+        for sym_name, sym in list(inst_symbol.public_symbols.items()):
+            if sym.kind == SymbolKind.TYPE and isinstance(sym.ada_type, AccessType):
+                acc = sym.ada_type
+                needs_fixup = (
+                    acc.designated_type is None or
+                    (hasattr(acc.designated_type, 'kind') and
+                     acc.designated_type.kind in (TypeKind.PRIVATE, TypeKind.INCOMPLETE))
+                )
+                if needs_fixup:
+                    if sym_name in access_decls:
+                        resolved = self._resolve_type(access_decls[sym_name].type_def.designated_type)
+                        if resolved and resolved.kind not in (TypeKind.PRIVATE, TypeKind.INCOMPLETE):
+                            acc.designated_type = resolved
+                    else:
+                        # Try resolving by name of designated type
+                        dt_name = getattr(acc.designated_type, 'name', None)
+                        if dt_name:
+                            resolved = self.symbols.lookup_type(dt_name)
+                            if resolved and resolved.kind not in (TypeKind.PRIVATE, TypeKind.INCOMPLETE):
+                                acc.designated_type = resolved
+
         self.symbols.leave_scope()
 
     def _analyze_generic_subprogram(self, gen_subprog: GenericSubprogramUnit) -> None:
