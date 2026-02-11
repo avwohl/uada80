@@ -261,6 +261,29 @@ class ASTLowering:
         # Whether the program uses tasking (need _TASK_INI at startup)
         self._uses_tasking: bool = False
 
+    def _find_global_name(self, name: str) -> str:
+        """Find the actual global name for a variable (may have package prefix)."""
+        if self.builder.module:
+            name_lower = name.lower()
+            # Try with package prefix (e.g., "pkg_varname")
+            for pkg_prefix in reversed(self._package_prefix_stack):
+                search_prefix = f"{pkg_prefix}_".lower()
+                for global_name in self.builder.module.globals:
+                    if global_name.lower().startswith(search_prefix):
+                        var_part = global_name[len(pkg_prefix) + 1:]
+                        if var_part.lower() == name_lower:
+                            return global_name
+            # Try exact match
+            for global_name in self.builder.module.globals:
+                if global_name.lower() == name_lower:
+                    return global_name
+            # Try suffix match (from USE'd packages)
+            search_suffix = f"_{name}".lower()
+            for global_name in self.builder.module.globals:
+                if global_name.lower().endswith(search_suffix):
+                    return global_name
+        return name
+
     def _make_memory_location(
         self,
         symbol_name: str,
@@ -6171,12 +6194,14 @@ class ASTLowering:
             # Check for global arrays
             sym = self.symbols.lookup(name)
             if sym and sym.kind == SymbolKind.VARIABLE:
+                # Find the actual global name (may have package prefix)
+                global_name = self._find_global_name(name)
                 addr = self.builder.new_vreg(IRType.PTR, f"_{name}_addr")
                 self.builder.emit(IRInstr(
                     OpCode.LEA,
                     dst=addr,
                     src1=self._make_memory_location(
-                        name, is_global=True, ir_type=IRType.PTR, symbol=sym
+                        global_name, is_global=True, ir_type=IRType.PTR, symbol=sym
                     ),
                 ))
                 return addr
@@ -6555,12 +6580,13 @@ class ASTLowering:
             # Check for global records
             sym = self.symbols.lookup(name)
             if sym and sym.kind == SymbolKind.VARIABLE:
+                global_name = self._find_global_name(name)
                 addr = self.builder.new_vreg(IRType.PTR, f"_{name}_addr")
                 self.builder.emit(IRInstr(
                     OpCode.LEA,
                     dst=addr,
                     src1=self._make_memory_location(
-                        name, is_global=True, ir_type=IRType.PTR, symbol=sym
+                        global_name, is_global=True, ir_type=IRType.PTR, symbol=sym
                     ),
                 ))
                 return addr
