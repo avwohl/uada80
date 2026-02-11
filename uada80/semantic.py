@@ -4475,7 +4475,7 @@ class SemanticAnalyzer:
                 return
 
             # Handle access-to-subprogram (function pointer) calls
-            if symbol.kind in (SymbolKind.VARIABLE, SymbolKind.CONSTANT):
+            if symbol.kind in (SymbolKind.VARIABLE, SymbolKind.CONSTANT, SymbolKind.PARAMETER):
                 if isinstance(symbol.ada_type, AccessSubprogramType):
                     if symbol.ada_type.is_function:
                         self.error(
@@ -5715,7 +5715,7 @@ class SemanticAnalyzer:
                     return symbol.return_type
 
             # Check if prefix is an access-to-function variable (function pointer call)
-            if symbol and symbol.kind in (SymbolKind.VARIABLE, SymbolKind.CONSTANT):
+            if symbol and symbol.kind in (SymbolKind.VARIABLE, SymbolKind.CONSTANT, SymbolKind.PARAMETER):
                 if isinstance(symbol.ada_type, AccessSubprogramType):
                     if symbol.ada_type.is_function:
                         # This is a function call through access type: Func_Ptr(args)

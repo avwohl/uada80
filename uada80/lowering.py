@@ -6193,7 +6193,7 @@ class ASTLowering:
 
             # Check for global arrays
             sym = self.symbols.lookup(name)
-            if sym and sym.kind == SymbolKind.VARIABLE:
+            if sym and sym.kind in (SymbolKind.VARIABLE, SymbolKind.PARAMETER, SymbolKind.CONSTANT):
                 # Find the actual global name (may have package prefix)
                 global_name = self._find_global_name(name)
                 addr = self.builder.new_vreg(IRType.PTR, f"_{name}_addr")
@@ -6205,6 +6205,21 @@ class ASTLowering:
                     ),
                 ))
                 return addr
+
+            # Symbol not found in scope - try direct global search
+            if sym is None and self.builder.module:
+                global_name = self._find_global_name(name)
+                if global_name.lower() != name.lower():
+                    # Found a prefixed global
+                    addr = self.builder.new_vreg(IRType.PTR, f"_{name}_addr")
+                    self.builder.emit(IRInstr(
+                        OpCode.LEA,
+                        dst=addr,
+                        src1=self._make_memory_location(
+                            global_name, is_global=True, ir_type=IRType.PTR
+                        ),
+                    ))
+                    return addr
 
         # Handle record field that is an array (e.g., X.Values where Values is an array field)
         if isinstance(prefix, SelectedName):
@@ -6251,13 +6266,14 @@ class ASTLowering:
                         ))
                         return addr
                 else:
-                    # Global variable
+                    # Global variable - find prefixed name
+                    global_name = self._find_global_name(selector)
                     addr = self.builder.new_vreg(IRType.PTR, f"_{selector}_addr")
                     self.builder.emit(IRInstr(
                         OpCode.LEA,
                         dst=addr,
                         src1=self._make_memory_location(
-                            selector, is_global=True, ir_type=IRType.PTR, symbol=sym
+                            global_name, is_global=True, ir_type=IRType.PTR, symbol=sym
                         ),
                     ))
                     return addr
