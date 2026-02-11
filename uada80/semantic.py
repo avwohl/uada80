@@ -6034,6 +6034,31 @@ class SemanticAnalyzer:
         if low_type and high_type:
             result = common_type(low_type, high_type)
             if result is None:
+                # Re-resolve overloaded literals with context from the other
+                # bound. E.g., 'A' .. ENUM'(Z) — 'A' defaulted to Character
+                # but should be ENUM since ENUM has 'A' as a literal.
+                # Also handles identifier enum literals: FALSE .. B3'(TRUE).
+                def _is_resolvable_literal(e):
+                    return isinstance(e, CharacterLiteral) or isinstance(e, Identifier)
+
+                reresolved = False
+                if (_is_resolvable_literal(expr.low) and
+                        high_type.kind == TypeKind.ENUMERATION and
+                        low_type != high_type):
+                    new_low = self._analyze_expr(expr.low, expected_type=high_type)
+                    if new_low and common_type(new_low, high_type) is not None:
+                        low_type = new_low
+                        reresolved = True
+                if not reresolved and (_is_resolvable_literal(expr.high) and
+                        low_type.kind == TypeKind.ENUMERATION and
+                        low_type != high_type):
+                    new_high = self._analyze_expr(expr.high, expected_type=low_type)
+                    if new_high and common_type(new_high, low_type) is not None:
+                        high_type = new_high
+                        reresolved = True
+                if reresolved:
+                    result = common_type(low_type, high_type)
+            if result is None:
                 self.error(
                     f"incompatible types in range: "
                     f"'{low_type.name}' and '{high_type.name}'",
