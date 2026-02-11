@@ -3763,25 +3763,56 @@ class SemanticAnalyzer:
                             if parent_package:
                                 break
 
+        # If we couldn't find a package for the direct parent type name,
+        # follow the base_type chain (e.g., SUBPARENT -> PARENT -> in PKG)
+        # Track the base type we found in the package for primitive matching,
+        # but keep parent_type as the original for type substitution.
+        primitive_match_type = parent_type
+        if parent_package is None or parent_package.kind != SymbolKind.PACKAGE:
+            base = parent_type
+            while base is not None:
+                base_name = base.name.lower() if hasattr(base, 'name') else None
+                if base_name:
+                    for scope in self.symbols.scope_stack:
+                        for sym_name, sym in scope.symbols.items():
+                            if sym.kind == SymbolKind.PACKAGE and sym.public_symbols:
+                                if base_name in sym.public_symbols:
+                                    parent_package = sym
+                                    primitive_match_type = base
+                                    break
+                        if parent_package:
+                            break
+                if parent_package:
+                    break
+                if hasattr(base, 'base_type') and base.base_type:
+                    base = base.base_type
+                elif isinstance(base, RecordType) and base.parent_type:
+                    base = base.parent_type
+                else:
+                    break
+
         if parent_package is None or parent_package.kind != SymbolKind.PACKAGE:
             return
 
         # Find primitive operations in the parent package
-        # A primitive operation has the parent type as parameter or return type
+        # A primitive operation has the parent type as parameter or return type.
+        # When deriving from a subtype (e.g., TYPE S IS NEW SUBPARENT where
+        # SUBPARENT IS PARENT(TRUE, 3)), primitive_match_type is the base type
+        # (PARENT) whose operations we inherit.
         for sym_name, sym in parent_package.public_symbols.items():
             if sym.kind not in (SymbolKind.FUNCTION, SymbolKind.PROCEDURE):
                 continue
 
-            # Check if this is a primitive operation of parent_type
+            # Check if this is a primitive operation of the match type
             is_primitive = False
 
             # Check return type (for functions)
-            if sym.return_type and same_type(sym.return_type, parent_type):
+            if sym.return_type and same_type(sym.return_type, primitive_match_type):
                 is_primitive = True
 
             # Check parameter types
             for param in sym.parameters:
-                if param.ada_type and same_type(param.ada_type, parent_type):
+                if param.ada_type and same_type(param.ada_type, primitive_match_type):
                     is_primitive = True
                     break
 
@@ -3794,15 +3825,15 @@ class SemanticAnalyzer:
             inherited_sym = Symbol(
                 name=sym.name,
                 kind=sym.kind,
-                # Return type: substitute parent_type with derived_type
-                return_type=derived_type if sym.return_type and same_type(sym.return_type, parent_type) else sym.return_type,
+                # Return type: substitute primitive_match_type with derived_type
+                return_type=derived_type if sym.return_type and same_type(sym.return_type, primitive_match_type) else sym.return_type,
                 parameters=[],
                 definition=sym.definition,
             )
 
             # Copy parameters, substituting types as needed
             for param in sym.parameters:
-                param_type = derived_type if param.ada_type and same_type(param.ada_type, parent_type) else param.ada_type
+                param_type = derived_type if param.ada_type and same_type(param.ada_type, primitive_match_type) else param.ada_type
                 inherited_param = Symbol(
                     name=param.name,
                     kind=SymbolKind.PARAMETER,
