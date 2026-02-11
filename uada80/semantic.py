@@ -2355,6 +2355,15 @@ class SemanticAnalyzer:
                     self.error(f"unknown exception '{exc_name.name}'", exc_name)
                 elif symbol.kind != SymbolKind.EXCEPTION:
                     self.error(f"'{exc_name.name}' is not an exception", exc_name)
+            elif isinstance(exc_name, SelectedName):
+                # Handle Package.Exception_Name
+                symbol = self._resolve_hierarchical_package(exc_name)
+                if symbol is None:
+                    name = self._get_hierarchical_name(exc_name)
+                    self.error(f"unknown exception '{name}'", exc_name)
+                elif symbol.kind != SymbolKind.EXCEPTION:
+                    name = self._get_hierarchical_name(exc_name)
+                    self.error(f"'{name}' is not an exception", exc_name)
 
         # Analyze handler statements
         for stmt in handler.statements:
@@ -4235,6 +4244,14 @@ class SemanticAnalyzer:
                         f"'{stmt.exception_name.name}' is not an exception",
                         stmt,
                     )
+            elif isinstance(stmt.exception_name, SelectedName):
+                symbol = self._resolve_hierarchical_package(stmt.exception_name)
+                if symbol is None:
+                    name = self._get_hierarchical_name(stmt.exception_name)
+                    self.error(f"exception '{name}' not found", stmt)
+                elif symbol.kind != SymbolKind.EXCEPTION:
+                    name = self._get_hierarchical_name(stmt.exception_name)
+                    self.error(f"'{name}' is not an exception", stmt)
 
     def _analyze_delay_stmt(self, stmt: DelayStmt) -> None:
         """Analyze a delay statement."""
