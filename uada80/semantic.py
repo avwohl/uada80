@@ -359,7 +359,9 @@ class SemanticAnalyzer:
         """Import local declarations from a subprogram parent for separate subunit analysis.
 
         When a subunit is separated from a subprogram parent, we need to find
-        the parent's nested package specs and other declarations from the AST.
+        the parent's declarations from the AST and analyze them so the subunit
+        can see them (Ada LRM 10.1.3: subunits have visibility of declarations
+        prior to the body stub in the parent).
         """
         all_units = getattr(self, '_all_units', None)
         if not all_units:
@@ -370,12 +372,18 @@ class SemanticAnalyzer:
             if isinstance(cu.unit, SubprogramBody):
                 body_name = cu.unit.spec.name.lower() if isinstance(cu.unit.spec.name, str) else str(cu.unit.spec.name).lower()
                 if body_name == parent_lower:
-                    # Found the parent - analyze nested package specs
+                    # Analyze context clauses of the parent unit
+                    for clause in cu.context_clauses:
+                        if isinstance(clause, WithClause):
+                            self._analyze_with_clause(clause)
+                        elif isinstance(clause, UseClause):
+                            self._analyze_use_clause(clause)
+                    # Analyze parameters
+                    for param_spec in cu.unit.spec.parameters:
+                        self._analyze_parameter_spec(param_spec, None, add_to_symbol=False)
+                    # Analyze all declarations from the parent body
                     for decl in cu.unit.declarations:
-                        if isinstance(decl, PackageDecl):
-                            self._analyze_package_decl(decl)
-                        elif isinstance(decl, PackageBody):
-                            pass  # Body stubs handled when subunit is processed
+                        self._analyze_declaration(decl)
                     return
 
     def _analyze_with_clause(self, clause: WithClause) -> None:
