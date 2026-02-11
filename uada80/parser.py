@@ -237,7 +237,16 @@ class Parser:
         clauses: list[WithClause | UseClause] = []
 
         while self.check(TokenType.WITH, TokenType.USE, TokenType.PRAGMA, TokenType.LIMITED, TokenType.PRIVATE):
-            if self.check(TokenType.LIMITED) and self.peek_next_type() == TokenType.WITH:
+            if self.check(TokenType.LIMITED) and self.peek_next_type() == TokenType.PRIVATE:
+                # "limited private with Pkg;" - Ada 2005 limited+private with
+                if self.peek(2).type == TokenType.WITH:
+                    self.advance()  # consume 'limited'
+                    self.advance()  # consume 'private'
+                    self.advance()  # consume 'with'
+                    clauses.append(self.parse_with_clause())
+                else:
+                    break  # Not a context clause
+            elif self.check(TokenType.LIMITED) and self.peek_next_type() == TokenType.WITH:
                 # "limited with Pkg;" - parse as regular with clause
                 self.advance()  # consume 'limited'
                 self.advance()  # consume 'with'
@@ -247,6 +256,10 @@ class Parser:
                 self.advance()  # consume 'private'
                 self.advance()  # consume 'with'
                 clauses.append(self.parse_with_clause())
+            elif self.check(TokenType.LIMITED, TokenType.PRIVATE):
+                # LIMITED or PRIVATE not followed by WITH — this is the start
+                # of a library item (private package/subprogram), not a context clause
+                break
             elif self.match(TokenType.WITH):
                 clauses.append(self.parse_with_clause())
             elif self.match(TokenType.USE):
@@ -2620,10 +2633,20 @@ class Parser:
                     constraint=constraint,
                 )
 
+            # Determine if array is constrained or unconstrained
+            # An unconstrained array has "range <>" in its index definition
+            from uada80.ast_nodes import BoxConstraint as _BoxConstraint
+            is_constrained = True
+            for idx in index_subtypes:
+                if isinstance(idx, SubtypeIndication) and isinstance(idx.constraint, _BoxConstraint):
+                    is_constrained = False
+                    break
+
             return ArrayTypeDef(
                 index_subtypes=index_subtypes,
                 component_type=component_type,
                 is_aliased=is_aliased,
+                is_constrained=is_constrained,
             )
 
         # Null record type: type T is null record;
