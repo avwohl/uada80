@@ -9,8 +9,8 @@ Tests that need multiple files compiled together are handled by grouping
 related files (same base name pattern) and compiling them as a unit.
 """
 
+import multiprocessing
 import re
-import signal
 import shutil
 import subprocess
 import tempfile
@@ -202,6 +202,37 @@ def get_acats_c_tests():
     return groups
 
 
+def _compile_worker(compiler, files, result_dict):
+    """Worker function for compilation with timeout."""
+    try:
+        result = compiler.compile_files(files)
+        result_dict['result'] = result
+    except Exception as e:
+        result_dict['error'] = str(e)
+
+
+def _compile_with_timeout(compiler, files, timeout=60):
+    """Run compiler.compile_files with a timeout using multiprocessing.
+
+    Returns the compilation result, or None if timed out.
+    """
+    manager = multiprocessing.Manager()
+    result_dict = manager.dict()
+    p = multiprocessing.Process(target=_compile_worker, args=(compiler, files, result_dict))
+    p.start()
+    p.join(timeout)
+    if p.is_alive():
+        p.terminate()
+        p.join(2)
+        if p.is_alive():
+            p.kill()
+            p.join(1)
+        return None
+    if 'error' in result_dict:
+        raise RuntimeError(result_dict['error'])
+    return result_dict.get('result')
+
+
 def compile_and_run_acats(test_files, timeout=5.0):
     """Compile ACATS test files and run on cpmemu.
 
@@ -226,20 +257,13 @@ def compile_and_run_acats(test_files, timeout=5.0):
         support = resolve_support_files(test_files)
         files = [REPORT_FILE] + support + list(test_files)
         try:
-            # Set a 60-second alarm to kill compiler hangs
-            old_handler = signal.signal(signal.SIGALRM, lambda s, f: (_ for _ in ()).throw(TimeoutError("compilation timeout")))
-            signal.alarm(60)
-            try:
-                result = compiler.compile_files(files)
-            finally:
-                signal.alarm(0)
-                signal.signal(signal.SIGALRM, old_handler)
+            result = _compile_with_timeout(compiler, files, timeout=60)
+            if result is None:
+                return "compile", False, "TIMEOUT: compilation hung (>60s)"
             if not result.success:
                 msg = str(result.errors[0]) if result.errors else "unknown"
                 return "compile", False, msg
             asm_file.write_text(result.output)
-        except TimeoutError:
-            return "compile", False, "TIMEOUT: compilation hung (>60s)"
         except Exception as e:
             return "compile", False, str(e)
 
