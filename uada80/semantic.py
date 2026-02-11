@@ -1529,29 +1529,49 @@ class SemanticAnalyzer:
             if not hasattr(type_sym, 'ada_type') or type_sym.ada_type is None:
                 # Determine the appropriate type kind based on the constraint
                 constraint = getattr(formal, 'constraint', None) or 'private'
-                if constraint == 'range':
+                if constraint == 'derived' and hasattr(formal, 'parent_type') and formal.parent_type:
+                    # Derived type formal (type T is new Parent [with private])
+                    parent = self._resolve_type(formal.parent_type)
+                    if parent and isinstance(parent, RecordType):
+                        # Create a record type with parent's components
+                        type_sym.ada_type = RecordType(
+                            name=formal.name,
+                            components=list(parent.components),
+                            discriminants=list(parent.discriminants) if parent.discriminants else [],
+                            parent_type=parent,
+                            is_tagged=parent.is_tagged,
+                        )
+                    elif parent:
+                        type_sym.ada_type = AdaType(kind=parent.kind, name=formal.name)
+                        type_sym.ada_type.base_type = parent
+                    else:
+                        type_sym.ada_type = AdaType(kind=TypeKind.PRIVATE, name=formal.name)
+                elif constraint == 'range':
                     # Signed integer type (type T is range <>)
                     type_kind = TypeKind.INTEGER
+                    type_sym.ada_type = AdaType(kind=type_kind, name=formal.name)
                 elif constraint == 'mod':
                     # Modular integer type (type T is mod <>)
                     type_kind = TypeKind.MODULAR
+                    type_sym.ada_type = AdaType(kind=type_kind, name=formal.name)
                 elif constraint == 'digits':
                     # Floating point type (type T is digits <>)
                     type_kind = TypeKind.FLOAT
+                    type_sym.ada_type = AdaType(kind=type_kind, name=formal.name)
                 elif constraint in ('delta', 'delta_digits'):
                     # Fixed point type (type T is delta <>)
                     type_kind = TypeKind.FIXED
+                    type_sym.ada_type = AdaType(kind=type_kind, name=formal.name)
                 elif constraint == 'discrete':
                     # Discrete type (type T is (<>))
                     type_kind = TypeKind.ENUMERATION
+                    type_sym.ada_type = AdaType(kind=type_kind, name=formal.name)
                 else:
-                    # Private, tagged private, derived, etc.
+                    # Private, tagged private, etc.
                     type_kind = TypeKind.PRIVATE
+                    type_sym.ada_type = AdaType(kind=type_kind, name=formal.name)
 
-                type_sym.ada_type = AdaType(
-                    kind=type_kind,
-                    name=formal.name,
-                )
+                type_sym.ada_type.is_generic_formal = True
                 self.symbols.define(type_sym)
                 sym = type_sym
 
