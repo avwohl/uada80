@@ -2814,6 +2814,9 @@ class Parser:
 
         self.expect(TokenType.COLON)
 
+        # Optional aliased keyword (e.g., Indent : aliased Natural := 0)
+        self.match(TokenType.ALIASED)
+
         # Parse subtype indication (may include range/index constraints)
         # e.g., Natural range 1..9999 or String(1..10)
         # Also handle anonymous access types: access T, access constant T, not null access T
@@ -2992,8 +2995,12 @@ class Parser:
             self.expect(TokenType.SEMICOLON)
             return ExceptionDecl(names=names, renames=renames_expr, span=self.make_span(start))
 
+        # Handle aliased and constant in either order:
+        # Ada allows: X : aliased constant T; or X : constant aliased T;
         is_constant = self.match(TokenType.CONSTANT)
         is_aliased = self.match(TokenType.ALIASED)
+        if not is_constant:
+            is_constant = self.match(TokenType.CONSTANT)
 
         type_mark = None
         if not self.check(TokenType.ASSIGN) and not self.check(TokenType.RENAMES):
