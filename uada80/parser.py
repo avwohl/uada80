@@ -2782,17 +2782,25 @@ class Parser:
                 self.advance()  # consume WITH
                 self.advance()  # consume RECORD
                 components = []
+                variant_part = None
                 while not self.check(TokenType.END, TokenType.EOF):
                     start_pos = self.pos
-                    comp = self.parse_component_declaration()
-                    if comp:
-                        components.append(comp)
-                    elif self.pos == start_pos:
-                        # No progress - skip to avoid infinite loop
-                        self.advance()
+                    if self.match(TokenType.NULL):
+                        self.expect(TokenType.SEMICOLON)
+                        break
+                    elif self.match(TokenType.CASE):
+                        variant_part = self.parse_variant_part()
+                        break
+                    else:
+                        comp = self.parse_component_declaration()
+                        if comp:
+                            components.append(comp)
+                        elif self.pos == start_pos:
+                            # No progress - skip to avoid infinite loop
+                            self.advance()
                 self.expect(TokenType.END)
                 self.expect(TokenType.RECORD)
-                record_extension = RecordTypeDef(components=components)
+                record_extension = RecordTypeDef(components=components, variant_part=variant_part)
 
             return DerivedTypeDef(parent_type=parent_type, record_extension=record_extension, interfaces=interfaces, constraint=constraint, digits_constraint=digits_constraint, delta_constraint=delta_constraint)
 
