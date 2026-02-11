@@ -3734,7 +3734,7 @@ class SemanticAnalyzer:
                             # Class-wide type match
                             elif (isinstance(first_type, RecordType) and
                                   first_type.is_tagged and
-                                  is_derived_from(first_type, tagged_type)):
+                                  is_derived_from(first_type, tagged_type.name if hasattr(tagged_type, 'name') else str(tagged_type))):
                                 is_match = True
                             # Access to tagged type match
                             elif isinstance(first_type, AccessType):
