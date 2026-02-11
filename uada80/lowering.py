@@ -16131,45 +16131,9 @@ class ASTLowering:
                 self.builder.mov(result, Immediate(0, IRType.WORD))
             return result
 
-        if attr == "first":
-            # Container.First - Get first cursor
-            # Note: 'First for arrays is handled earlier
-            # Only use container calls if first arg is actually a container, not a dimension number
-            result = self.builder.new_vreg(IRType.WORD, "_first_cursor")
-            if expr.args and not isinstance(expr.args[0], IntegerLiteral):
-                # Check if arg looks like a container (not an integer dimension)
-                container = self._lower_expr(expr.args[0])
-                self.builder.push(container)
-                self.builder.call(Label("_cont_first"), comment="First")
-                temp = self.builder.new_vreg(IRType.WORD, "_discard")
-                self.builder.pop(temp)
-                self.builder.emit(IRInstr(
-                    OpCode.MOV, result,
-                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
-                    comment="capture first cursor"
-                ))
-                return result
-            # Fall through to default for array 'First
-
-        if attr == "last":
-            # Container.Last - Get last cursor
-            # Note: 'Last for arrays is handled earlier
-            # Only use container calls if first arg is actually a container, not a dimension number
-            result = self.builder.new_vreg(IRType.WORD, "_last_cursor")
-            if expr.args and not isinstance(expr.args[0], IntegerLiteral):
-                # Check if arg looks like a container (not an integer dimension)
-                container = self._lower_expr(expr.args[0])
-                self.builder.push(container)
-                self.builder.call(Label("_cont_last"), comment="Last")
-                temp = self.builder.new_vreg(IRType.WORD, "_discard")
-                self.builder.pop(temp)
-                self.builder.emit(IRInstr(
-                    OpCode.MOV, result,
-                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
-                    comment="capture last cursor"
-                ))
-                return result
-            # Fall through to default for array 'Last
+        # Container first/last are parameterless (Container.First, Container.Last).
+        # If there are args, they're array dimension specifiers - don't use container path.
+        # Fall through to the default first/last handling below.
 
         if attr == "find":
             # Container.Find(Item) - Find element, return cursor
