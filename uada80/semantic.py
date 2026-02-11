@@ -4131,19 +4131,39 @@ class SemanticAnalyzer:
                         # Check if first param matches the tagged type
                         is_match = False
                         if first_type:
+                            tagged_name = tagged_type.name if hasattr(tagged_type, 'name') else str(tagged_type)
                             # Direct match
                             if same_type(first_type, tagged_type):
                                 is_match = True
-                            # Class-wide type match
+                            # Derived type match: tagged_type derives from first_type
+                            # e.g., TQ.Base_Func where Base_Func takes TP param
                             elif (isinstance(first_type, RecordType) and
                                   first_type.is_tagged and
-                                  is_derived_from(first_type, tagged_type.name if hasattr(tagged_type, 'name') else str(tagged_type))):
+                                  is_derived_from(tagged_type, first_type.name)):
                                 is_match = True
+                            # Class-wide type match: param is T'Class, obj is T or derived
+                            elif (hasattr(first_type, 'is_class_wide') and first_type.is_class_wide):
+                                specific = getattr(first_type, 'specific_type', None)
+                                if specific:
+                                    if same_type(specific, tagged_type) or is_derived_from(tagged_type, specific.name):
+                                        is_match = True
+                                elif hasattr(first_type, 'name') and first_type.name.endswith("'Class"):
+                                    base = first_type.name[:-6]
+                                    if tagged_name == base or is_derived_from(tagged_type, base):
+                                        is_match = True
                             # Access to tagged type match
                             elif isinstance(first_type, AccessType):
                                 designated = first_type.designated_type
-                                if designated and same_type(designated, tagged_type):
-                                    is_match = True
+                                if designated:
+                                    if same_type(designated, tagged_type):
+                                        is_match = True
+                                    elif is_derived_from(tagged_type, designated.name):
+                                        is_match = True
+                                    # Access to class-wide
+                                    elif hasattr(designated, 'is_class_wide') and designated.is_class_wide:
+                                        sp = getattr(designated, 'specific_type', None)
+                                        if sp and (same_type(sp, tagged_type) or is_derived_from(tagged_type, sp.name)):
+                                            is_match = True
 
                         if is_match:
                             return sym.return_type  # None for procedures

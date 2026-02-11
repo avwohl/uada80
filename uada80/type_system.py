@@ -1185,6 +1185,12 @@ def types_compatible(t1: AdaType, t2: AdaType) -> bool:
     if t2.name == "Character" and is_derived_from(t1, "Character"):
         return True
 
+    # Derived enumeration types inherit parent's literals
+    # In Ada, RED of parent type MAIN is compatible with derived type HUE (NEW MAIN)
+    if t1.kind == TypeKind.ENUMERATION and t2.kind == TypeKind.ENUMERATION:
+        if is_derived_from(t1, t2.name) or is_derived_from(t2, t1.name):
+            return True
+
     # Interface compatibility: a tagged type is compatible with interfaces it implements
     if isinstance(t2, InterfaceType) and isinstance(t1, RecordType):
         if t1.is_tagged and t1.implements_interface(t2):
