@@ -63,6 +63,20 @@ def resolve_support_files(test_files):
     if not index:
         return []
 
+    def _find_support(unit_name):
+        """Find support file for a unit, with fallback for multi-unit files.
+
+        E.g., f341a00_0 -> look for f341a00_0.a first, then f341a00.a
+        """
+        if unit_name in index:
+            return unit_name
+        # Try stripping trailing _N suffix (multi-unit files like f341a00.a
+        # contain F341A00_0, F341A00_1, etc.)
+        base = re.sub(r'_\d+$', '', unit_name)
+        if base != unit_name and base in index:
+            return base
+        return None
+
     # Scan all test files for with clauses
     needed = set()
     for f in test_files:
@@ -72,8 +86,11 @@ def resolve_support_files(test_files):
             continue
         for m in re.finditer(r'(?i)\bwith\s+([A-Za-z][A-Za-z0-9_]*)', text):
             unit = m.group(1).lower()
-            if unit in index and unit != 'report':
-                needed.add(unit)
+            if unit == 'report':
+                continue
+            found = _find_support(unit)
+            if found:
+                needed.add(found)
 
     if not needed:
         return []
@@ -96,8 +113,11 @@ def resolve_support_files(test_files):
             return
         for m in re.finditer(r'(?i)\bwith\s+([A-Za-z][A-Za-z0-9_]*)', text):
             dep = m.group(1).lower()
-            if dep in index and dep != 'report' and dep != unit:
-                _resolve(dep)
+            if dep == 'report' or dep == unit:
+                continue
+            found_dep = _find_support(dep)
+            if found_dep:
+                _resolve(found_dep)
         resolved.append(path)
 
     for unit in sorted(needed):
