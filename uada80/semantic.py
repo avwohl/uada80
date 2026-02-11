@@ -2962,6 +2962,7 @@ class SemanticAnalyzer:
                             kind=SymbolKind.PARAMETER,
                             ada_type=param_type,
                             mode=param_spec.mode,
+                            default_value=param_spec.default_value,
                         )
                         params.append(param_sym)
                 ret_type = self._resolve_type(stub.return_type) if stub.return_type else None
@@ -4544,10 +4545,28 @@ class SemanticAnalyzer:
             if num_args < min_required or num_args > num_params:
                 continue  # Wrong number of arguments
 
-            # Check type compatibility for each argument
+            # Check type compatibility for each argument (handle named args)
             all_match = True
             exact_matches = 0
-            for i, (arg_type, param) in enumerate(zip(arg_types, candidate.parameters)):
+            for i, arg in enumerate(args):
+                if i >= len(arg_types):
+                    break
+                arg_type = arg_types[i]
+                # Match argument to parameter (named or positional)
+                if hasattr(arg, 'name') and arg.name:
+                    param = None
+                    for p in candidate.parameters:
+                        if p.name.lower() == arg.name.lower():
+                            param = p
+                            break
+                    if param is None:
+                        all_match = False
+                        break
+                elif i < len(candidate.parameters):
+                    param = candidate.parameters[i]
+                else:
+                    all_match = False
+                    break
                 if arg_type is None or param.ada_type is None:
                     continue
                 if not types_compatible(param.ada_type, arg_type):
@@ -4596,7 +4615,29 @@ class SemanticAnalyzer:
         # because parameter types are generic formals, not substituted actuals
         is_generic_instance = getattr(subprog, 'generic_instance_of', None) is not None
 
-        for arg, param in zip(args, subprog.parameters):
+        # Match arguments to parameters (handle named arguments)
+        matched_params = []
+        for i, arg in enumerate(args):
+            if hasattr(arg, 'name') and arg.name:
+                # Named argument: find matching parameter
+                param = None
+                for p in subprog.parameters:
+                    if p.name.lower() == arg.name.lower():
+                        param = p
+                        break
+                if param is None:
+                    self.error(
+                        f"no parameter named '{arg.name}'",
+                        arg.value if arg.value else node,
+                    )
+                    continue
+            elif i < len(subprog.parameters):
+                param = subprog.parameters[i]
+            else:
+                continue
+            matched_params.append((arg, param))
+
+        for arg, param in matched_params:
             if arg.value:
                 # Pass expected type for context-dependent expressions (aggregates)
                 arg_type = self._analyze_expr(arg.value, expected_type=param.ada_type)
