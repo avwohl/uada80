@@ -1074,8 +1074,13 @@ class ASTLowering:
 
     def _lower_package_init(self, body: PackageBody) -> None:
         """Generate initialization function for a package body."""
-        # Use lowercase for consistency with codegen's symbol mangling
-        init_func_name = f"_{body.name}_init".replace(".", "_").lower()
+        # Use counter-based init function name to avoid 8-char symbol collisions.
+        # um80 truncates symbols to 8 chars, so qualified names like
+        # _ca2002a1_pkg_init and _ca2002a2_pkg_init both truncate to _CA2002A.
+        if not hasattr(self, '_init_counter'):
+            self._init_counter = 0
+        init_func_name = f"_ini{self._init_counter}"
+        self._init_counter += 1
 
         # Create init function
         func = self.builder.new_function(init_func_name, IRType.VOID)

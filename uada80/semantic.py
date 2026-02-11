@@ -131,6 +131,7 @@ from uada80.type_system import (
     IntegerType,
     ModularType,
     FloatType,
+    FixedType,
     EnumerationType,
     ArrayType,
     RecordType,
@@ -881,6 +882,10 @@ class SemanticAnalyzer:
                 except Exception:
                     pass  # Skip declarations that fail analysis
 
+            # After private completion, fix up access types whose designated_type
+            # was None or incomplete when first built
+            self._fixup_access_types(pkg_symbol, pkg_decl)
+
             # For standard packages, merge in fallback values for constants
             # that weren't properly evaluated during analysis
             if pkg_name.upper() in ("SYSTEM", "ADA", "INTERFACES"):
@@ -1368,8 +1373,39 @@ class SemanticAnalyzer:
             self._analyze_declaration(decl)
             self._add_to_package(pkg_symbol, decl, is_private=True)
 
+        # After private completion, fix up access types whose designated_type
+        # was None or incomplete/private when first built from public declarations
+        self._fixup_access_types(pkg_symbol, pkg)
+
         self.symbols.leave_scope()
         self.current_package = old_package
+
+    def _fixup_access_types(self, pkg_symbol: Symbol, pkg: PackageDecl) -> None:
+        """Fix up access types whose designated_type was None or incomplete.
+
+        After analyzing private declarations, types that were private stubs
+        during public declaration analysis are now complete. Re-resolve the
+        designated types of any access types that were built with incomplete info.
+        """
+        # Build map: access type name -> TypeDecl for re-resolution
+        access_decls: dict[str, TypeDecl] = {}
+        for decl in pkg.declarations:
+            if isinstance(decl, TypeDecl) and isinstance(decl.type_def, AccessTypeDef):
+                access_decls[decl.name.lower()] = decl
+
+        for sym_name, sym in list(pkg_symbol.public_symbols.items()):
+            if sym.kind == SymbolKind.TYPE and isinstance(sym.ada_type, AccessType):
+                acc = sym.ada_type
+                needs_fixup = (
+                    acc.designated_type is None or
+                    (hasattr(acc.designated_type, 'kind') and
+                     acc.designated_type.kind in (TypeKind.PRIVATE, TypeKind.INCOMPLETE))
+                )
+                if needs_fixup and sym_name in access_decls:
+                    td = access_decls[sym_name]
+                    resolved = self._resolve_type(td.type_def.designated_type)
+                    if resolved and resolved.kind not in (TypeKind.PRIVATE, TypeKind.INCOMPLETE):
+                        acc.designated_type = resolved
 
     def _import_parent_package_symbols(self, child_name: str) -> None:
         """Import parent package symbols for a child package.
@@ -3544,6 +3580,46 @@ class SemanticAnalyzer:
                 is_limited=is_limited,
             )
 
+        # Handle derivation from modular type
+        if isinstance(parent, ModularType):
+            return ModularType(
+                name=name,
+                size_bits=parent.size_bits,
+                modulus=parent.modulus,
+            )
+
+        # Handle derivation from float type
+        if isinstance(parent, FloatType):
+            return FloatType(
+                name=name,
+                size_bits=parent.size_bits,
+                digits=parent.digits,
+                range_first=parent.range_first,
+                range_last=parent.range_last,
+                base_type=parent,
+            )
+
+        # Handle derivation from fixed type
+        if isinstance(parent, FixedType):
+            return FixedType(
+                name=name,
+                size_bits=parent.size_bits,
+                delta=parent.delta,
+                range_first=parent.range_first,
+                range_last=parent.range_last,
+                digits=parent.digits,
+                base_type=parent,
+            )
+
+        # Handle derivation from non-tagged record type
+        if isinstance(parent, RecordType) and not parent.is_tagged:
+            return RecordType(
+                name=name,
+                components=list(parent.components),
+                discriminants=list(parent.discriminants) if parent.discriminants else [],
+                parent_type=parent,
+            )
+
         # Handle derivation from array type
         if isinstance(parent, ArrayType):
             # Apply index constraint if present (e.g., type T is new String(1..10))
@@ -3646,6 +3722,19 @@ class SemanticAnalyzer:
             parent_type_name = None
             if isinstance(parent_type_expr, Identifier):
                 parent_type_name = parent_type_expr.name.lower()
+            elif isinstance(parent_type_expr, Slice):
+                # TYPE T IS NEW PARENT(5..7) parses as Slice with prefix=PARENT
+                if isinstance(parent_type_expr.prefix, Identifier):
+                    parent_type_name = parent_type_expr.prefix.name.lower()
+                elif isinstance(parent_type_expr.prefix, SelectedName):
+                    parent_type_name = parent_type_expr.prefix.selector.lower()
+            elif isinstance(parent_type_expr, (FunctionCall, IndexedComponent)):
+                # TYPE T IS NEW PARENT(5) parses as FunctionCall/IndexedComponent
+                fc_name = parent_type_expr.name if isinstance(parent_type_expr, FunctionCall) else parent_type_expr.prefix
+                if isinstance(fc_name, Identifier):
+                    parent_type_name = fc_name.name.lower()
+                elif isinstance(fc_name, SelectedName):
+                    parent_type_name = fc_name.selector.lower()
             elif hasattr(parent_type_expr, 'name'):
                 parent_type_name = str(parent_type_expr.name).lower()
 

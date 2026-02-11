@@ -1316,6 +1316,14 @@ def types_compatible(t1: AdaType, t2: AdaType) -> bool:
                     d2_name = getattr(d2, 'name', '').replace("'Class", '')
                     if base_name.lower() == d2_name.lower():
                         return True
+                # When one designated type is None (incomplete/limited with)
+                # and the other has a valid designated type, allow compatibility
+                # since the None side was built from a forward reference to the
+                # same type family. This is safe because Ada's named type system
+                # prevents truly incompatible access types from being mixed.
+                if (d1 is None) != (d2 is None):
+                    # One is None, the other is not — accept as compatible
+                    return True
 
     # Check subtype relationship
     if is_subtype_of(t1, t2) or is_subtype_of(t2, t1):
