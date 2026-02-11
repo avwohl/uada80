@@ -1212,6 +1212,15 @@ def types_compatible(t1: AdaType, t2: AdaType) -> bool:
                     # Allow if specific2 is derived from specific1
                     if is_derived_from(specific2, specific1.name):
                         return True
+            # Case 3: Parameter is T (specific), argument is T'Class
+            # Valid for dispatching calls in Ada
+            if not t1.is_class_wide and t2.is_class_wide:
+                specific = getattr(t2, 'specific_type', None)
+                if specific:
+                    if same_type(t1, specific) or is_derived_from(t1, specific.name):
+                        return True
+                    if is_derived_from(specific, t1.name):
+                        return True
 
     # Access type compatibility: two access types are compatible if they
     # have the same designated type. This handles:

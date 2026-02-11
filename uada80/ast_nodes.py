@@ -614,6 +614,7 @@ class DerivedTypeDef(TypeDef):
     constraint: Optional[Expr] = None  # Range constraint for scalar derived types
     digits_constraint: Optional[Expr] = None  # Precision constraint for derived floating-point
     delta_constraint: Optional[Expr] = None  # Delta constraint for derived fixed-point
+    is_private_extension: bool = False  # True for "new Parent with private"
 
 
 @dataclass

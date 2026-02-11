@@ -2728,7 +2728,7 @@ class Parser:
                 self.advance()  # consume PRIVATE
                 # Treat as private extension - return DerivedTypeDef with empty record extension
                 record_extension = RecordTypeDef(components=[])
-                return DerivedTypeDef(parent_type=parent_type, record_extension=record_extension, interfaces=interfaces, constraint=constraint, digits_constraint=digits_constraint, delta_constraint=delta_constraint)
+                return DerivedTypeDef(parent_type=parent_type, record_extension=record_extension, interfaces=interfaces, constraint=constraint, digits_constraint=digits_constraint, delta_constraint=delta_constraint, is_private_extension=True)
 
             # Check for "with null record" (tagged type with no extension components)
             if (self.check(TokenType.WITH) and self.peek(1).type == TokenType.NULL

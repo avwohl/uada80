@@ -261,6 +261,10 @@ class SemanticAnalyzer:
         self._all_units = program.units
 
         for unit in program.units:
+            # Skip units already analyzed on-demand (e.g., child package specs)
+            analyzed = getattr(self, '_analyzed_units', set())
+            if id(unit) in analyzed:
+                continue
             self._analyze_compilation_unit(unit)
 
         return SemanticResult(symbols=self.symbols, errors=self.errors)
@@ -440,12 +444,17 @@ class SemanticAnalyzer:
         all_units = getattr(self, '_all_units', None)
         if not all_units:
             return None
+        analyzed = getattr(self, '_analyzed_units', None)
+        if analyzed is None:
+            self._analyzed_units = analyzed = set()
         pkg_name_lower = pkg_name.lower()
         for cu in all_units:
             if isinstance(cu.unit, PackageDecl):
                 decl_name = cu.unit.name.lower() if isinstance(cu.unit.name, str) else str(cu.unit.name).lower()
-                if decl_name == pkg_name_lower:
-                    # Found — analyze its context clauses and declaration
+                if decl_name == pkg_name_lower and id(cu) not in analyzed:
+                    # Mark as analyzed so the main loop skips it
+                    analyzed.add(id(cu))
+                    # Analyze context clauses and declaration
                     for clause in cu.context_clauses:
                         if isinstance(clause, WithClause):
                             self._analyze_with_clause(clause)
@@ -969,6 +978,10 @@ class SemanticAnalyzer:
         self.symbols.enter_scope(spec.name)
         old_subprogram = self.current_subprogram
         self.current_subprogram = subprog_symbol
+
+        # For child subprograms (dotted names), import parent package symbols
+        if "." in spec.name:
+            self._import_parent_package_symbols(spec.name)
 
         # If completing a generic, make the generic formal symbols visible
         if is_completing_generic:
@@ -1747,6 +1760,11 @@ class SemanticAnalyzer:
         # Enter package scope
         self.symbols.enter_scope(body.name)
 
+        # For child packages, make parent's declarations visible
+        # Ada RM 10.1.1: A child package body has visibility to its parent
+        if "." in body.name:
+            self._import_parent_package_symbols(body.name)
+
         # Make generic formal symbols visible in the body (for generic packages)
         for sym in pkg_symbol.generic_formal_symbols.values():
             self.symbols.define(sym)
@@ -2074,9 +2092,14 @@ class SemanticAnalyzer:
 
         # Check if we're completing an incomplete or private type
         if existing is not None:
-            if (existing.kind == SymbolKind.TYPE and
-                existing.ada_type and
-                existing.ada_type.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE)):
+            is_completing_private = (
+                existing.kind == SymbolKind.TYPE and
+                existing.ada_type and (
+                    existing.ada_type.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE) or
+                    getattr(existing.ada_type, 'is_private_extension', False)
+                )
+            )
+            if is_completing_private:
                 # This is completing an incomplete or private type - update the existing symbol
                 is_tagged = getattr(decl, 'is_tagged', False)
                 ada_type = self._build_type(decl.name, decl.type_def, is_tagged)
@@ -3262,7 +3285,7 @@ class SemanticAnalyzer:
             # Propagate limited status from parent or from explicit declaration
             is_limited = getattr(type_def, 'is_limited', False) or parent.is_limited or parent.is_limited_type()
 
-            return RecordType(
+            result = RecordType(
                 name=name,
                 is_tagged=True,
                 parent_type=parent,
@@ -3272,6 +3295,10 @@ class SemanticAnalyzer:
                 is_limited_controlled=is_limited_controlled,
                 is_limited=is_limited,
             )
+            # Mark private extensions so completion in the private part works
+            if getattr(type_def, 'is_private_extension', False):
+                result.is_private_extension = True
+            return result
 
         # Handle derivation from interface type with record extension
         # e.g., type Circle is new Shape with record Radius : Float; end record;
@@ -3511,7 +3538,7 @@ class SemanticAnalyzer:
                     return self.symbols.lookup_type(actual.name)
             return self.symbols.lookup_type(type_name)
         elif isinstance(type_expr, SelectedName):
-            # Package.Type
+            # Package.Type or Parent.Child.Type
             prefix_name = self._get_identifier_name(type_expr.prefix)
             if prefix_name:
                 symbol = self.symbols.lookup_selected(
@@ -3519,6 +3546,13 @@ class SemanticAnalyzer:
                 )
                 if symbol and symbol.ada_type:
                     return symbol.ada_type
+            # Handle hierarchical names like System.Storage_Elements.Integer_Address
+            prefix_sym = self._resolve_hierarchical_package(type_expr.prefix)
+            if prefix_sym and prefix_sym.public_symbols:
+                selector = type_expr.selector.lower()
+                type_sym = prefix_sym.public_symbols.get(selector)
+                if type_sym and type_sym.ada_type:
+                    return type_sym.ada_type
         elif isinstance(type_expr, AttributeReference):
             # Handle type attributes like Type'Class, Type'Base
             if type_expr.attribute.lower() == 'class':
