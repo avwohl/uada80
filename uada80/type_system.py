@@ -1236,6 +1236,32 @@ def types_compatible(t1: AdaType, t2: AdaType) -> bool:
                 if is_derived_from(t1, t2.name):
                     return True
 
+    # Fallback class-wide compatibility by name:
+    # When one type is a placeholder (AdaType, not RecordType) due to limited with,
+    # check by name pattern: T is compatible with T'Class and vice versa.
+    # Also covers cases where only one side is a RecordType.
+    t1_name = t1.name if hasattr(t1, 'name') else ''
+    t2_name = t2.name if hasattr(t2, 'name') else ''
+    if t2_name.endswith("'Class"):
+        # t2 is class-wide, t1 is specific — check if t1 is the specific type
+        specific_name = t2_name[:-6]  # Remove "'Class"
+        if t1_name == specific_name or is_derived_from(t1, specific_name):
+            return True
+        # Also check with RecordType specific_type if available
+        if isinstance(t2, RecordType) and t2.is_class_wide:
+            specific = getattr(t2, 'specific_type', None)
+            if specific and (same_type(t1, specific) or is_derived_from(t1, specific.name)):
+                return True
+    if t1_name.endswith("'Class"):
+        # t1 is class-wide, t2 is specific — check if t2 is the specific type
+        specific_name = t1_name[:-6]  # Remove "'Class"
+        if t2_name == specific_name or is_derived_from(t2, specific_name):
+            return True
+        if isinstance(t1, RecordType) and t1.is_class_wide:
+            specific = getattr(t1, 'specific_type', None)
+            if specific and (same_type(t2, specific) or is_derived_from(t2, specific.name)):
+                return True
+
     # Access type compatibility: two access types are compatible if they
     # have the same designated type. This handles:
     # - Named access types with same designated type

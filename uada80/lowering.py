@@ -16912,6 +16912,60 @@ class ASTLowering:
                     # This is a qualified array variable access - fall through to array indexing
                     pass
                 else:
+                    # Check if the selector is a TYPE (for package-qualified type conversions)
+                    # E.g., C3900010.Alert_Type(LA) is a type conversion, not a function call
+                    is_pkg_type = False
+                    sel_sym_type = self.symbols.lookup(selector)
+                    if sel_sym_type and sel_sym_type.kind == SymbolKind.TYPE:
+                        is_pkg_type = True
+                    elif not sel_sym_type:
+                        # Check in package's public_symbols
+                        pkg_prefix = expr.prefix.prefix
+                        if isinstance(pkg_prefix, Identifier):
+                            pkg_sym = self.symbols.lookup(pkg_prefix.name)
+                            if pkg_sym and pkg_sym.public_symbols:
+                                child = pkg_sym.public_symbols.get(selector)
+                                if child and child.kind == SymbolKind.TYPE:
+                                    is_pkg_type = True
+                        elif isinstance(pkg_prefix, SelectedName):
+                            # Multi-level package: A.B.Type(X)
+                            # Try resolving the full package path
+                            parts = []
+                            node = pkg_prefix
+                            while isinstance(node, SelectedName):
+                                parts.append(node.selector)
+                                node = node.prefix
+                            if isinstance(node, Identifier):
+                                parts.append(node.name)
+                            parts.reverse()
+                            pkg_sym = self.symbols.lookup(parts[0])
+                            for part in parts[1:]:
+                                if pkg_sym and pkg_sym.public_symbols:
+                                    pkg_sym = pkg_sym.public_symbols.get(part.lower())
+                            if pkg_sym and pkg_sym.public_symbols:
+                                child = pkg_sym.public_symbols.get(selector)
+                                if child and child.kind == SymbolKind.TYPE:
+                                    is_pkg_type = True
+                    # Also check body declarations for local type names
+                    if not is_pkg_type:
+                        for decl_list in self._body_declarations_stack:
+                            for decl in decl_list:
+                                if isinstance(decl, TypeDecl):
+                                    decl_name = decl.name.lower() if isinstance(decl.name, str) else decl.name.name.lower()
+                                    if decl_name == selector:
+                                        is_pkg_type = True
+                                        break
+                            if is_pkg_type:
+                                break
+
+                    if is_pkg_type and expr.indices and len(expr.indices) == 1:
+                        # Package-qualified type conversion: Pkg.Type(expr)
+                        type_conv = TypeConversion(
+                            type_mark=expr.prefix,
+                            operand=expr.indices[0]
+                        )
+                        return self._lower_type_conversion(type_conv)
+
                     # For package-qualified function calls, treat as function call
                     # Build the FunctionCall and dispatch
                     if expr.actual_params:

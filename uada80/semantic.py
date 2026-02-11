@@ -397,6 +397,16 @@ class SemanticAnalyzer:
                                 full_pkg.public_symbols = child_sym.public_symbols
                                 full_pkg.private_symbols = child_sym.private_symbols
                                 self.symbols.define(full_pkg)
+                    # Ensure child is registered in parent's public_symbols
+                    # (may have been defined earlier without parent linkage)
+                    if existing_full is None:
+                        existing_full = self.symbols.lookup(full_name)
+                    if existing_full is not None:
+                        parts = full_name.rsplit(".", 1)
+                        if len(parts) == 2:
+                            parent_sym = self.symbols.lookup(parts[0])
+                            if parent_sym and parts[1].lower() not in parent_sym.public_symbols:
+                                parent_sym.public_symbols[parts[1].lower()] = existing_full
 
     def _get_hierarchical_name(self, name) -> str:
         """Get the full dotted name from a hierarchical package reference.
@@ -456,11 +466,11 @@ class SemanticAnalyzer:
         return None
 
     def _find_package_in_ast(self, pkg_name: str) -> Optional[Symbol]:
-        """Search the combined AST for a package declaration by name.
+        """Search the combined AST for a package or subprogram declaration by name.
 
-        When compiling multiple files together, child package specs may live
-        in other files in the same compilation.  Scan the units list and
-        analyze the matching PackageDecl on demand.
+        When compiling multiple files together, child package specs and child
+        subprograms may live in other files in the same compilation.  Scan the
+        units list and analyze the matching declaration on demand.
         """
         all_units = getattr(self, '_all_units', None)
         if not all_units:
@@ -469,6 +479,8 @@ class SemanticAnalyzer:
         if analyzed is None:
             self._analyzed_units = analyzed = set()
         pkg_name_lower = pkg_name.lower()
+        # Also match by child name for hierarchical names like FA11D00.CA11D011
+        child_name = pkg_name_lower.split(".")[-1] if "." in pkg_name_lower else None
         for cu in all_units:
             if isinstance(cu.unit, PackageDecl):
                 decl_name = cu.unit.name.lower() if isinstance(cu.unit.name, str) else str(cu.unit.name).lower()
@@ -483,6 +495,50 @@ class SemanticAnalyzer:
                             self._analyze_use_clause(clause)
                     self._analyze_package_decl(cu.unit)
                     return self.symbols.lookup(pkg_name)
+            elif isinstance(cu.unit, (SubprogramBody, SubprogramDecl)):
+                # Handle child subprograms (procedure/function as compilation unit)
+                spec = cu.unit.spec if isinstance(cu.unit, SubprogramBody) else cu.unit
+                decl_name = spec.name.lower() if isinstance(spec.name, str) else str(spec.name).lower()
+                # Match full name or child name
+                if (decl_name == pkg_name_lower or (child_name and decl_name == child_name)) and id(cu) not in analyzed:
+                    analyzed.add(id(cu))
+                    # Analyze context clauses
+                    for clause in cu.context_clauses:
+                        if isinstance(clause, WithClause):
+                            self._analyze_with_clause(clause)
+                        elif isinstance(clause, UseClause):
+                            self._analyze_use_clause(clause)
+                    # Create a subprogram symbol
+                    is_function = spec.is_function
+                    kind = SymbolKind.FUNCTION if is_function else SymbolKind.PROCEDURE
+                    subprog_symbol = Symbol(
+                        name=pkg_name,
+                        kind=kind,
+                    )
+                    subprog_symbol.is_withed = True
+                    # Extract parameters
+                    for param_spec in spec.parameters:
+                        param_type = self._resolve_type(param_spec.type_mark)
+                        for param_name in param_spec.names:
+                            param_symbol = Symbol(
+                                name=param_name,
+                                kind=SymbolKind.PARAMETER,
+                                ada_type=param_type,
+                                mode=param_spec.mode,
+                            )
+                            param_symbol.default_value = param_spec.default_value
+                            subprog_symbol.parameters.append(param_symbol)
+                    # Extract return type for functions
+                    if is_function and spec.return_type:
+                        subprog_symbol.return_type = self._resolve_type(spec.return_type)
+                    self.symbols.define(subprog_symbol)
+                    # Also register in parent package's public_symbols
+                    if "." in pkg_name:
+                        parts = pkg_name.rsplit(".", 1)
+                        parent_sym = self.symbols.lookup(parts[0])
+                        if parent_sym:
+                            parent_sym.public_symbols[parts[1].lower()] = subprog_symbol
+                    return subprog_symbol
         return None
 
     def _find_package_file(self, pkg_name: str) -> Optional[str]:
@@ -647,7 +703,59 @@ class SemanticAnalyzer:
                 self._loaded_packages[pkg_key] = gen_symbol
                 return gen_symbol
 
+            # Handle non-generic child subprograms (procedure/function as compilation unit)
+            # E.g., "with Parent.Child_Proc;" where Child_Proc is a procedure
             if not pkg_decl:
+                child_subprog = None
+                for unit in program.units:
+                    if isinstance(unit.unit, SubprogramBody):
+                        if unit.unit.spec.name.lower() == pkg_name.lower():
+                            child_subprog = unit.unit
+                            break
+                        # Check child name: FA11D00.CA11D011 -> match CA11D011
+                        if "." in pkg_name:
+                            child_name = pkg_name.split(".")[-1].lower()
+                            if unit.unit.spec.name.lower() == child_name:
+                                child_subprog = unit.unit
+                                break
+                    elif isinstance(unit.unit, SubprogramDecl):
+                        if unit.unit.name.lower() == pkg_name.lower():
+                            child_subprog = unit.unit
+                            break
+                        if "." in pkg_name:
+                            child_name = pkg_name.split(".")[-1].lower()
+                            if unit.unit.name.lower() == child_name:
+                                child_subprog = unit.unit
+                                break
+
+                if child_subprog is not None:
+                    spec = child_subprog.spec if isinstance(child_subprog, SubprogramBody) else child_subprog
+                    is_function = spec.is_function
+                    kind = SymbolKind.FUNCTION if is_function else SymbolKind.PROCEDURE
+                    subprog_symbol = Symbol(
+                        name=pkg_name,
+                        kind=kind,
+                    )
+                    subprog_symbol.is_withed = True
+                    # Extract parameters
+                    for param_spec in spec.parameters:
+                        param_type = self._resolve_type(param_spec.type_mark)
+                        for param_name in param_spec.names:
+                            param_symbol = Symbol(
+                                name=param_name,
+                                kind=SymbolKind.PARAMETER,
+                                ada_type=param_type,
+                                mode=param_spec.mode,
+                            )
+                            param_symbol.default_value = param_spec.default_value
+                            subprog_symbol.parameters.append(param_symbol)
+                    # Extract return type for functions
+                    if is_function and spec.return_type:
+                        subprog_symbol.return_type = self._resolve_type(spec.return_type)
+
+                    self._loaded_packages[pkg_key] = subprog_symbol
+                    return subprog_symbol
+
                 return None
 
             # Handle package renaming (e.g., package Text_IO renames Ada.Text_IO)
