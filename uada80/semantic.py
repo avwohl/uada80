@@ -6452,7 +6452,7 @@ class SemanticAnalyzer:
                           "digits", "machine_emax", "machine_emin",
                           "machine_mantissa", "machine_radix",
                           "model_emin", "model_mantissa",
-                          "safe_emax", "safe_large", "mantissa",
+                          "safe_emax", "mantissa",
                           "bit_order", "word_size", "max_alignment_for_allocation"):
             return PREDEFINED_TYPES["Universal_Integer"]
 
@@ -6565,6 +6565,13 @@ class SemanticAnalyzer:
         # 'Update attribute (Ada 2012 AI12-0001) - for record/array update
         if attr_lower == "update":
             # Returns same type as prefix
+            return prefix_type
+
+        # Floating-point attributes that return the same type as the prefix
+        # Model_Epsilon, Model_Small, Safe_Last, Safe_First, Safe_Large, Epsilon
+        # are real-valued attributes per Ada RM
+        if attr_lower in ("model_epsilon", "model_small", "safe_last", "safe_first",
+                          "safe_large", "epsilon"):
             return prefix_type
 
         # Floating-point rounding/truncation attributes
