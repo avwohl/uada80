@@ -35,6 +35,7 @@ from uada80.ast_nodes import (
     EntryDecl,
     EntryBody,
     BodyStub,
+    Subunit,
     ProtectedTypeDecl,
     ProtectedBody,
     # Statements
@@ -297,6 +298,53 @@ class SemanticAnalyzer:
             self._analyze_generic_instantiation(unit.unit)
         elif isinstance(unit.unit, GenericSubprogramUnit):
             self._analyze_generic_subprogram(unit.unit)
+        elif isinstance(unit.unit, Subunit):
+            self._analyze_subunit(unit.unit)
+
+    def _analyze_subunit(self, subunit: Subunit) -> None:
+        """Analyze a separate subunit (SEPARATE (parent) body)."""
+        # Extract parent unit name
+        if isinstance(subunit.parent_unit, Identifier):
+            parent_name = subunit.parent_unit.name
+        elif isinstance(subunit.parent_unit, SelectedName):
+            # Build dotted name from SelectedName
+            parts = []
+            node = subunit.parent_unit
+            while isinstance(node, SelectedName):
+                parts.append(node.selector)
+                node = node.prefix
+            if isinstance(node, Identifier):
+                parts.append(node.name)
+            parts.reverse()
+            parent_name = '.'.join(parts)
+        else:
+            parent_name = str(subunit.parent_unit)
+
+        # Enter the parent package scope so the body can see parent declarations
+        parent_sym = self.symbols.lookup(parent_name)
+        if parent_sym and parent_sym.kind == SymbolKind.PACKAGE:
+            self.symbols.enter_scope(parent_name)
+            # Import parent's symbols into this scope
+            for sym_name, sym_val in parent_sym.public_symbols.items():
+                try:
+                    self.symbols.define(sym_val)
+                except Exception:
+                    pass
+
+        # Analyze the body
+        body = subunit.body
+        if isinstance(body, SubprogramBody):
+            self._analyze_subprogram_body(body)
+        elif isinstance(body, PackageBody):
+            self._analyze_package_body(body)
+        elif isinstance(body, TaskBody):
+            self._analyze_task_body(body)
+        elif isinstance(body, ProtectedBody):
+            self._analyze_protected_body(body)
+
+        # Leave the parent scope
+        if parent_sym and parent_sym.kind == SymbolKind.PACKAGE:
+            self.symbols.leave_scope()
 
     def _analyze_with_clause(self, clause: WithClause) -> None:
         """Analyze a with clause.

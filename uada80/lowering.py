@@ -94,6 +94,7 @@ from uada80.ast_nodes import (
     ArrayTypeDef,
     ActualParameter,
     IndexConstraint,
+    Subunit,
 )
 from uada80.ir import (
     IRType,
@@ -614,6 +615,16 @@ class ASTLowering:
             self._lower_package_body(unit.unit)
         elif isinstance(unit.unit, GenericInstantiation):
             self._lower_generic_instantiation(unit.unit)
+        elif isinstance(unit.unit, Subunit):
+            self._lower_subunit(unit.unit)
+
+    def _lower_subunit(self, subunit: Subunit) -> None:
+        """Lower a separate subunit (SEPARATE (parent) body)."""
+        body = subunit.body
+        if isinstance(body, SubprogramBody):
+            self._lower_subprogram_body(body)
+        elif isinstance(body, PackageBody):
+            self._lower_package_body(body)
 
     def _lower_subprogram_body(self, body: SubprogramBody) -> None:
         """Lower a subprogram body."""
