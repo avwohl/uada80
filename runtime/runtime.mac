@@ -223,9 +223,11 @@ _div16_zero:
     JP _exc_do_raise
 
 ; ============================================================
-; _mod16 - 16-bit signed modulo (remainder)
+; _mod16 - 16-bit signed modulo (Ada mod semantics)
 ; Input: HL = dividend, DE = divisor
-; Output: HL = remainder
+; Output: HL = dividend mod divisor
+; Ada mod: result has sign of divisor
+; If signs differ and remainder != 0: result = |divisor| - |remainder|, with divisor sign
 ; Destroys: A, BC, DE
 ; ============================================================
     PUBLIC _mod16
@@ -237,9 +239,13 @@ _mod16:
 
     PUSH BC
 
-    ; Save dividend sign for remainder
+    ; Save combined sign (bit 7 = signs differ) and divisor sign
     LD A, H
-    PUSH AF
+    XOR D
+    LD C, A             ; C = combined sign
+    LD B, D             ; B = divisor high byte (sign)
+    PUSH BC             ; save signs
+    PUSH DE             ; save original divisor
 
     ; Make HL positive
     BIT 7, H
@@ -267,7 +273,7 @@ _mod16_de_pos:
 
     ; Unsigned division - we want remainder
     LD B, H
-    LD C, L             ; BC = dividend
+    LD C, L             ; BC = |dividend|
     LD HL, 0            ; HL = remainder
 
     LD A, 16
@@ -293,12 +299,44 @@ _mod16_next:
     DEC A
     JR NZ, _mod16_loop
 
-    ; HL now contains remainder
-    ; Apply dividend's sign to remainder
-    POP AF
-    BIT 7, A
-    JR Z, _mod16_ret
+    ; HL = |remainder|
+    ; If remainder is zero, result is zero
+    LD A, H
+    OR L
+    JR Z, _mod16_rz
 
+    ; Remainder != 0
+    POP DE              ; DE = original divisor
+    POP BC              ; B = divisor sign, C = combined sign
+    BIT 7, C
+    JR Z, _mod16_same
+
+    ; Signs differed: result = |divisor| - |remainder|, with divisor sign
+    EX DE, HL           ; DE = |remainder|, HL = original divisor
+    BIT 7, H
+    JR Z, _mod16_dp
+    ; Negate HL to get |divisor|
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+_mod16_dp:
+    ; HL = |divisor|, DE = |remainder|
+    OR A
+    SBC HL, DE          ; HL = |divisor| - |remainder|
+    ; Apply divisor sign
+    BIT 7, B
+    JR Z, _mod16_ret
+    JR _mod16_neg
+
+_mod16_same:
+    ; Same signs: result = |remainder| with divisor sign
+    BIT 7, B
+    JR Z, _mod16_ret
+_mod16_neg:
     ; Negate result
     LD A, L
     CPL
@@ -309,6 +347,14 @@ _mod16_next:
     INC HL
 
 _mod16_ret:
+    POP BC
+    RET
+
+_mod16_rz:
+    ; Remainder is zero - clean up stack and return 0
+    POP DE
+    POP BC
+    ; HL is already 0
     POP BC
     RET
 

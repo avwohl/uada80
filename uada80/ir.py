@@ -285,6 +285,7 @@ class IRFunction:
     locals_size: int = 0  # Total size of local variables in bytes
     blocks: list[BasicBlock] = field(default_factory=list)
     entry_block: Optional[BasicBlock] = None
+    forwarding_target: Optional[str] = None  # For renaming stubs: jp _target
 
     def new_block(self, label: str) -> BasicBlock:
         """Create a new basic block."""

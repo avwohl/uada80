@@ -1355,12 +1355,24 @@ class ASTLowering:
             # Nested subprogram - lower separately
             self._lower_subprogram_body(decl)
         elif isinstance(decl, SubprogramDecl):
-            # Subprogram declaration - track renamings
-            if decl.renames and self.ctx:
-                # Get the aliased name (e.g., "Ada.Integer_Text_IO.Put")
+            # Subprogram declaration - track renamings and generate forwarding stubs
+            if decl.renames:
                 alias_name = self._get_hierarchical_name(decl.renames)
-                if alias_name:
+                if alias_name and self.ctx:
                     self.ctx.local_renamings[decl.name.lower()] = alias_name
+                # Generate a forwarding stub (jp _target) for non-local renames
+                # Local renames are handled by local_renamings at call sites
+                # Only generate stubs when the target is a locally-defined subprogram
+                if alias_name and not self.ctx:
+                    # Package-level rename: always need a stub
+                    self._lower_subprogram_renaming(decl, alias_name)
+                elif alias_name and self.ctx:
+                    # Local rename: generate stub if target is a local function
+                    # (so external callers can link to it)
+                    target_lower = alias_name.lower().replace('.', '_')
+                    if (target_lower in self._nested_subprogram_labels or
+                        any(k[1] == target_lower for k in self._function_label_map)):
+                        self._lower_subprogram_renaming(decl, alias_name)
         elif isinstance(decl, TypeDecl):
             self._lower_type_decl(decl)
         elif isinstance(decl, SubtypeDecl):
@@ -1774,6 +1786,62 @@ class ASTLowering:
                 exc_label = f"_exc_{name.lower()}"
                 # Exception info: ID (2 bytes) + name pointer
                 self.builder.module.add_global(exc_label, IRType.WORD, 2)
+
+    def _lower_subprogram_renaming(self, decl, alias_name: str) -> None:
+        """Generate a forwarding stub for a subprogram renaming.
+
+        For 'procedure P renames Q', generates:
+            _p: jp _q
+        The stack layout is identical so a simple JP suffices.
+        """
+        if not alias_name:
+            return
+
+        # Resolve the target to its actual function label
+        target_label = None
+        target_name_lower = alias_name.lower().replace('.', '_')
+
+        # 1. Check nested subprogram labels (same compilation unit)
+        if target_name_lower in self._nested_subprogram_labels:
+            target_label = self._nested_subprogram_labels[target_name_lower]
+
+        # 2. Check function label map for scoped lookups
+        if not target_label:
+            scope_prefix = ""
+            if self.ctx and self.ctx.subprogram_name:
+                scope_prefix = self.ctx.subprogram_name + "_"
+            # Try with current scope prefix first
+            for key, label in self._function_label_map.items():
+                if key[1] == target_name_lower:
+                    target_label = label
+                    break
+
+        # 3. Look up semantic symbol for external_name
+        if not target_label:
+            sem_sym = self.symbols.lookup(alias_name)
+            if sem_sym and sem_sym.external_name:
+                target_label = sem_sym.external_name.lower()
+            elif sem_sym and sem_sym.alias_for:
+                actual = self.symbols.lookup(sem_sym.alias_for)
+                if actual and actual.external_name:
+                    target_label = actual.external_name.lower()
+
+        # 4. Fallback: just use the mangled name
+        if not target_label:
+            target_label = target_name_lower
+
+        stub_name = decl.name.lower()
+
+        # Save and restore builder state
+        old_function = self.builder.function
+        old_block = self.builder.block
+
+        func = self.builder.new_function(stub_name, IRType.VOID)
+        func.forwarding_target = target_label
+
+        # Restore builder state
+        self.builder.function = old_function
+        self.builder.block = old_block
 
     def _lower_generic_renaming(self, decl: RenamingDecl) -> None:
         """Lower a general renaming declaration.

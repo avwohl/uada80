@@ -32,14 +32,14 @@ from tests.test_acats_execution import (
 def classify_result(stage, success, output):
     """Classify test result into a status category."""
     if not success:
-        if stage == "compile":
+        if output and output.startswith("TIMEOUT"):
+            return "TIMEOUT", output[:200].replace('\n', ' ')
+        elif stage == "compile":
             return "COMPILE_ERROR", output[:200].replace('\n', ' ')
         elif stage == "assemble":
             return "ASSEMBLE_ERROR", output[:200].replace('\n', ' ')
         elif stage == "link":
             return "LINK_ERROR", output[:200].replace('\n', ' ')
-        elif output == "TIMEOUT":
-            return "TIMEOUT", ""
         else:
             return f"{stage.upper()}_ERROR", output[:200].replace('\n', ' ')
 

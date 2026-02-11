@@ -10,6 +10,7 @@ related files (same base name pattern) and compiling them as a unit.
 """
 
 import re
+import signal
 import shutil
 import subprocess
 import tempfile
@@ -225,11 +226,20 @@ def compile_and_run_acats(test_files, timeout=5.0):
         support = resolve_support_files(test_files)
         files = [REPORT_FILE] + support + list(test_files)
         try:
-            result = compiler.compile_files(files)
+            # Set a 60-second alarm to kill compiler hangs
+            old_handler = signal.signal(signal.SIGALRM, lambda s, f: (_ for _ in ()).throw(TimeoutError("compilation timeout")))
+            signal.alarm(60)
+            try:
+                result = compiler.compile_files(files)
+            finally:
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, old_handler)
             if not result.success:
                 msg = str(result.errors[0]) if result.errors else "unknown"
                 return "compile", False, msg
             asm_file.write_text(result.output)
+        except TimeoutError:
+            return "compile", False, "TIMEOUT: compilation hung (>60s)"
         except Exception as e:
             return "compile", False, str(e)
 

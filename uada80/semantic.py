@@ -1659,7 +1659,7 @@ class SemanticAnalyzer:
                 pos_idx += 1
 
         # Enter the package scope to define its contents
-        self.symbols.enter_scope(inst.name)
+        self.symbols.enter_scope(inst.name, is_package=True)
 
         # Save generic context for type resolution
         old_generic_formals = getattr(self, '_generic_formals', {})
