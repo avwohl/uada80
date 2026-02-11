@@ -2599,8 +2599,12 @@ class Parser:
             self.expect(TokenType.RIGHT_PAREN)
             self.expect(TokenType.OF)
 
-            # Component type may be prefixed with "aliased"
+            # Component type may be prefixed with "aliased" and/or "not null"
             is_aliased = self.match(TokenType.ALIASED)
+            # Handle "not null" exclusion on component type
+            if self.check(TokenType.NOT) and self.peek(1).type == TokenType.NULL and self.peek(2).type != TokenType.ACCESS:
+                self.advance()  # consume NOT
+                self.advance()  # consume NULL
             component_type = self.parse_name()
             # Check for range constraint: array (...) of Integer range Low..High
             constraint = None
@@ -2820,7 +2824,8 @@ class Parser:
         # Parse subtype indication (may include range/index constraints)
         # e.g., Natural range 1..9999 or String(1..10)
         # Also handle anonymous access types: access T, access constant T, not null access T
-        if self.check(TokenType.ACCESS) or (self.check(TokenType.NOT) and self.peek(1).type == TokenType.NULL):
+        # But NOT "not null <named_type>" which is null exclusion (handled by parse_subtype_indication)
+        if self.check(TokenType.ACCESS) or (self.check(TokenType.NOT) and self.peek(1).type == TokenType.NULL and self.peek(2).type == TokenType.ACCESS):
             type_mark = self._parse_access_type_indication()
         else:
             type_mark = self.parse_subtype_indication()
@@ -2876,6 +2881,10 @@ class Parser:
 
             self.expect(TokenType.COLON)
 
+            # Handle "not null access T" or "not null T" (null exclusion)
+            if self.check(TokenType.NOT) and self.peek(1).type == TokenType.NULL:
+                self.advance()  # consume NOT
+                self.advance()  # consume NULL
             is_access = self.match(TokenType.ACCESS)
             type_mark = self.parse_name()
 
@@ -2919,8 +2928,13 @@ class Parser:
         - Delta constraint: Fixed_Type delta 0.01 range 0.0..1.0
         - Index constraint: String(1..10) - parsed as part of name
         - Discriminant constraint: Record_Type(Field => Value) - parsed as part of name
+        - Null exclusion: not null T (just consume and ignore the not null)
         """
         start = self.current
+        # Handle null exclusion: "not null T" where T is a named access type
+        if self.check(TokenType.NOT) and self.peek(1).type == TokenType.NULL:
+            self.advance()  # consume NOT
+            self.advance()  # consume NULL
         type_mark = self.parse_name()
         constraint = None
 
@@ -3007,7 +3021,7 @@ class Parser:
             # Check for anonymous array type: array (Index) of Element
             if self.check(TokenType.ARRAY):
                 type_mark = self.parse_type_definition()
-            elif self.check(TokenType.ACCESS) or (self.check(TokenType.NOT) and self.peek(1).type == TokenType.NULL):
+            elif self.check(TokenType.ACCESS) or (self.check(TokenType.NOT) and self.peek(1).type == TokenType.NULL and self.peek(2).type == TokenType.ACCESS):
                 # Anonymous access type: access T, not null access T
                 type_mark = self._parse_access_type_indication()
             else:
@@ -3364,10 +3378,15 @@ class Parser:
 
             # Check for anonymous access parameter types
             # e.g., X : access T, X : access constant T, X : not null access T
-            if self.check(TokenType.ACCESS) or (self.check(TokenType.NOT) and self.peek(1).type == TokenType.NULL):
+            # But NOT "not null <named_type>" which is null exclusion
+            if self.check(TokenType.ACCESS) or (self.check(TokenType.NOT) and self.peek(1).type == TokenType.NULL and self.peek(2).type == TokenType.ACCESS):
                 is_access_param = True
                 type_mark = self._parse_access_type_indication()
             else:
+                # Handle "not null <named_type>" null exclusion on parameters
+                if self.check(TokenType.NOT) and self.peek(1).type == TokenType.NULL:
+                    self.advance()  # consume NOT
+                    self.advance()  # consume NULL
                 type_mark = self.parse_name()
 
             default_value = None
