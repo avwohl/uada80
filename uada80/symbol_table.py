@@ -6565,9 +6565,10 @@ class SymbolTable:
             symbol = scope.lookup_local(name_lower)
             add_symbol_chain(symbol)
 
-            # Check USE clauses in this scope
-            symbol = scope.lookup_use_clause(name_lower)
-            add_symbol_chain(symbol)
+            # Check ALL USE'd packages in this scope (not just first match)
+            for pkg in scope.use_clauses:
+                if name_lower in pkg.public_symbols:
+                    add_symbol_chain(pkg.public_symbols[name_lower])
 
             scope = scope.parent
 

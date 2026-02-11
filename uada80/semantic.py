@@ -4957,6 +4957,59 @@ class SemanticAnalyzer:
         matches.sort(key=lambda x: x[1], reverse=True)
         return matches[0][0]
 
+    def _resolve_overload(self, symbol: Symbol, args: list, node) -> Optional[Symbol]:
+        """Try to find the best overload match among all visible overloads.
+
+        Returns the best matching overload, or None to use the default.
+        """
+        # Analyze argument types without reporting errors
+        arg_types = []
+        for arg in args:
+            arg_expr = arg.value if hasattr(arg, 'value') else arg
+            # Don't double-analyze - just get the type
+            t = self._analyze_expr(arg_expr)
+            arg_types.append(t)
+
+        # Collect all overloads (follow overloaded_next chain + check outer scopes)
+        candidates = []
+        sym = symbol
+        while sym is not None:
+            if sym.kind == SymbolKind.FUNCTION and len(sym.parameters) == len(args):
+                candidates.append(sym)
+            sym = getattr(sym, 'overloaded_next', None)
+
+        # Also search outer scopes for same-named functions
+        for scope in self.symbols.scope_stack:
+            s = scope.lookup_local(symbol.name.lower())
+            while s is not None:
+                if s.kind == SymbolKind.FUNCTION and len(s.parameters) == len(args):
+                    if s not in candidates:
+                        candidates.append(s)
+                s = getattr(s, 'overloaded_next', None)
+
+        if len(candidates) <= 1:
+            return None  # No overloads to resolve
+
+        # Score each candidate
+        best_score = -1
+        best_sym = None
+        for cand in candidates:
+            score = 0
+            match = True
+            for i, (param, arg_type) in enumerate(zip(cand.parameters, arg_types)):
+                if arg_type is None or param.ada_type is None:
+                    continue
+                if types_compatible(param.ada_type, arg_type):
+                    score += 1
+                else:
+                    match = False
+                    break
+            if match and score > best_score:
+                best_score = score
+                best_sym = cand
+
+        return best_sym
+
     def _check_call_arguments(
         self, subprog: Symbol, args: list, node: ASTNode
     ) -> None:
@@ -6057,6 +6110,7 @@ class SemanticAnalyzer:
                 arg_types = [self._analyze_expr(idx) for idx in expr.indices]
                 overloads = self.symbols.all_overloads(expr.prefix.name)
                 best_match = None
+                derived_match = None
                 for candidate in overloads:
                     if candidate.kind != SymbolKind.FUNCTION:
                         continue
@@ -6065,16 +6119,24 @@ class SemanticAnalyzer:
                         continue
                     # Check if argument types are compatible
                     all_match = True
+                    all_derived = True
                     for i, param in enumerate(cand_params):
                         if arg_types[i] and param.ada_type:
                             if not types_compatible(param.ada_type, arg_types[i]):
                                 all_match = False
-                                break
+                                # Check derived type relationship as fallback
+                                if not (is_derived_from(arg_types[i], param.ada_type.name) or
+                                        is_derived_from(param.ada_type, arg_types[i].name)):
+                                    all_derived = False
                     if all_match:
                         best_match = candidate
                         break
+                    elif all_derived and derived_match is None:
+                        derived_match = candidate
                 if best_match:
                     return best_match.return_type
+                if derived_match:
+                    return derived_match.return_type
                 # No matching overload found - try with first overload anyway
                 # (could be an array result being indexed)
                 func_params = symbol.parameters if symbol.parameters else []
@@ -6592,7 +6654,7 @@ class SemanticAnalyzer:
                     return left_type
                 return left_type or right_type
 
-            # Regular function call
+            # Regular function call - collect all visible overloads
             symbol = self.symbols.lookup(func_name)
             if symbol is None:
                 self.error(f"'{func_name}' not found", expr)
@@ -6600,6 +6662,11 @@ class SemanticAnalyzer:
             if symbol.kind != SymbolKind.FUNCTION:
                 self.error(f"'{func_name}' is not a function", expr)
                 return None
+
+            # Try overload resolution: find the overload whose params match
+            best = self._resolve_overload(symbol, expr.args, expr)
+            if best is not None:
+                symbol = best
 
             self._check_call_arguments(symbol, expr.args, expr)
             return symbol.return_type
