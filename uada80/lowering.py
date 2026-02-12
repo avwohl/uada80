@@ -5451,10 +5451,12 @@ class ASTLowering:
                             # function (e.g., Report.Failed imported via USE clause)
                             enc = getattr(self.ctx, 'enclosing_ctx', None)
                             if enc and enc.subprogram_name:
-                                # Check if the simple name is a known external function
-                                # (defined in the IR module already, e.g., from Report pkg)
                                 is_known_external = False
-                                if self.builder.module:
+                                # External package functions have no definition AST node
+                                if sym and sym.definition is None and sym.kind in (
+                                    SymbolKind.FUNCTION, SymbolKind.PROCEDURE):
+                                    is_known_external = True
+                                if not is_known_external and self.builder.module:
                                     for func in self.builder.module.functions:
                                         if func.name.lower() == call_target.lower():
                                             is_known_external = True
@@ -12579,9 +12581,12 @@ class ASTLowering:
                         if not found:
                             enc = getattr(self.ctx, 'enclosing_ctx', None)
                             if enc and enc.subprogram_name:
-                                # Only prefix if not a known external function
                                 is_known_external = False
-                                if self.builder.module:
+                                # External package functions have no definition AST node
+                                if sym and sym.definition is None and sym.kind in (
+                                    SymbolKind.FUNCTION, SymbolKind.PROCEDURE):
+                                    is_known_external = True
+                                if not is_known_external and self.builder.module:
                                     for func in self.builder.module.functions:
                                         if func.name.lower() == call_target.lower():
                                             is_known_external = True
