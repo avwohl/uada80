@@ -1280,9 +1280,14 @@ class ASTLowering:
             return
 
         # Create instantiated subprogram with the new name
+        # Track the original name so call resolution inside the body doesn't
+        # match the instantiation name (avoids infinite recursion when the
+        # generic body calls a function with the same name as inst.name)
         original_name = body.spec.name
         body.spec.name = inst.name
+        self._generic_original_name = original_name.lower()
         self._lower_subprogram_body(body)
+        self._generic_original_name = None
         body.spec.name = original_name  # Restore original name
 
         # Clear the type map
@@ -1314,9 +1319,14 @@ class ASTLowering:
         self._generic_prefix = inst.name
 
         # Create instantiated subprogram with the new name
+        # Track the original name so call resolution inside the body doesn't
+        # match the instantiation name (avoids infinite recursion when the
+        # generic body calls a function with the same name as inst.name)
         original_name = body.spec.name
         body.spec.name = inst.name
+        self._generic_original_name = original_name.lower()
         self._lower_subprogram_body(body)
+        self._generic_original_name = None
         body.spec.name = original_name  # Restore original name
 
         # Clear the type map
@@ -5198,8 +5208,17 @@ class ASTLowering:
             type_sig = self._get_param_type_sig_from_symbol(sym)
             # For nested subprograms, check the simple nested label map first
             # (doesn't require type signature matching since nested can't be overloaded)
+            # But skip if it would create self-recursion in a generic instantiation
+            generic_orig = getattr(self, '_generic_original_name', None)
+            current_func_label = None
+            if self.ctx and self.ctx.subprogram_name and self.builder.function:
+                current_func_label = self.builder.function.name
             if call_target in self._nested_subprogram_labels:
-                call_target = self._nested_subprogram_labels[call_target]
+                resolved = self._nested_subprogram_labels[call_target]
+                if generic_orig and current_func_label and resolved == current_func_label:
+                    pass  # Skip: would create self-recursion in generic body
+                else:
+                    call_target = resolved
             else:
                 # For overloaded procedures, use the full label map with type signature
                 # Try with scope prefix first (for nested calls), then without (for top-level)
@@ -5207,13 +5226,15 @@ class ASTLowering:
                 if self.ctx and self.ctx.subprogram_name:
                     scope_prefix = self.ctx.subprogram_name + "_"
                 label_key = (scope_prefix, call_target, type_sig)
-                if label_key in self._function_label_map:
-                    call_target = self._function_label_map[label_key]
+                resolved_label = self._function_label_map.get(label_key)
+                if resolved_label and not (generic_orig and current_func_label and resolved_label == current_func_label):
+                    call_target = resolved_label
                 else:
                     # Try without scope prefix (top-level or different scope)
                     label_key = ("", call_target, type_sig)
-                    if label_key in self._function_label_map:
-                        call_target = self._function_label_map[label_key]
+                    resolved_label = self._function_label_map.get(label_key)
+                    if resolved_label and not (generic_orig and current_func_label and resolved_label == current_func_label):
+                        call_target = resolved_label
                     elif self.ctx and getattr(self.ctx, 'enclosing_ctx', None):
                         # Forward reference in a nested function:
                         # Try enclosing scope chain to construct the scoped label.
@@ -12274,8 +12295,17 @@ class ASTLowering:
             type_sig = self._get_param_type_sig_from_symbol(sym)
             # For nested subprograms, check the simple nested label map first
             # (doesn't require type signature matching since nested can't be overloaded)
+            # But skip if it would create self-recursion in a generic instantiation
+            generic_orig = getattr(self, '_generic_original_name', None)
+            current_func_label = None
+            if self.ctx and self.ctx.subprogram_name and self.builder.function:
+                current_func_label = self.builder.function.name
             if call_target in self._nested_subprogram_labels:
-                call_target = self._nested_subprogram_labels[call_target]
+                resolved = self._nested_subprogram_labels[call_target]
+                if generic_orig and current_func_label and resolved == current_func_label:
+                    pass  # Skip: would create self-recursion in generic body
+                else:
+                    call_target = resolved
             else:
                 # For overloaded functions, use the full label map with type signature
                 # Try with scope prefix first (for nested calls), then without (for top-level)
@@ -12283,13 +12313,15 @@ class ASTLowering:
                 if self.ctx and self.ctx.subprogram_name:
                     scope_prefix = self.ctx.subprogram_name + "_"
                 label_key = (scope_prefix, call_target, type_sig)
-                if label_key in self._function_label_map:
-                    call_target = self._function_label_map[label_key]
+                resolved_label = self._function_label_map.get(label_key)
+                if resolved_label and not (generic_orig and current_func_label and resolved_label == current_func_label):
+                    call_target = resolved_label
                 else:
                     # Try without scope prefix (top-level or different scope)
                     label_key = ("", call_target, type_sig)
-                    if label_key in self._function_label_map:
-                        call_target = self._function_label_map[label_key]
+                    resolved_label = self._function_label_map.get(label_key)
+                    if resolved_label and not (generic_orig and current_func_label and resolved_label == current_func_label):
+                        call_target = resolved_label
                     elif self.ctx and getattr(self.ctx, 'enclosing_ctx', None):
                         # Forward reference in nested function
                         found = False
@@ -12298,6 +12330,9 @@ class ASTLowering:
                             prefix = (ctx.subprogram_name + "_") if ctx.subprogram_name else ""
                             if prefix:
                                 candidate = f"{prefix}{call_target}"
+                                if generic_orig and current_func_label and candidate == current_func_label:
+                                    ctx = getattr(ctx, 'enclosing_ctx', None)
+                                    continue
                                 if any(v == candidate for v in self._nested_subprogram_labels.values()):
                                     call_target = candidate
                                     found = True
