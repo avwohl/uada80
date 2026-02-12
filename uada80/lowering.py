@@ -6901,6 +6901,9 @@ class ASTLowering:
                     sym = self.symbols.lookup(var_name)
                     if sym and sym.ada_type:
                         rec_type = sym.ada_type
+                # Follow implicit dereference for access types
+                if isinstance(rec_type, AccessType) and rec_type.designated_type:
+                    rec_type = rec_type.designated_type
 
             # If we found a record type, find the array field
             if rec_type and isinstance(rec_type, RecordType):
@@ -11933,6 +11936,19 @@ class ASTLowering:
             if type_node.type_mark:
                 return self._resolve_local_type(type_node.type_mark)
             return None
+        # Handle SelectedName (e.g., C3A1003E.Dept_Ptr) — look up by selector or full name
+        if isinstance(type_node, SelectedName):
+            # Try full hierarchical name first
+            full_name = self._get_hierarchical_name(type_node).lower()
+            sym = self.symbols.lookup(full_name)
+            if sym and sym.ada_type:
+                return sym.ada_type
+            # Try just the selector
+            selector = type_node.selector.lower() if isinstance(type_node.selector, str) else str(type_node.selector).lower()
+            sym = self.symbols.lookup(selector)
+            if sym and sym.ada_type:
+                return sym.ada_type
+            return None
         # If it's an Identifier, look up the type name
         if isinstance(type_node, Identifier):
             type_name = type_node.name.lower()
@@ -12278,6 +12294,31 @@ class ASTLowering:
 
                     return result
                 else:
+                    # Check if this is actually a record array field access (not a function call)
+                    # e.g., Old.List(I) where Old is access-to-record and List is an array field
+                    from uada80.type_system import RecordType as _RecordType, ArrayType as _ArrayType, AccessType as _AccessType
+                    _rec_type = None
+                    if self.ctx and prefix_name in self.ctx.locals:
+                        _local = self.ctx.locals[prefix_name]
+                        if _local.ada_type:
+                            _rec_type = self._resolve_local_type(_local.ada_type)
+                    if _rec_type is None:
+                        _sym = self.symbols.lookup(prefix_name) if self.symbols else None
+                        if _sym and _sym.ada_type:
+                            _rec_type = _sym.ada_type
+                    # Follow implicit dereference for access types
+                    if isinstance(_rec_type, _AccessType) and _rec_type.designated_type:
+                        _rec_type = _rec_type.designated_type
+                    if isinstance(_rec_type, _RecordType):
+                        for _comp in _rec_type.components:
+                            if _comp.name.lower() == selector.lower() and isinstance(_comp.component_type, _ArrayType):
+                                # This is record.array_field(index) — redirect to _lower_indexed
+                                from uada80.ast_nodes import IndexedComponent as _IC
+                                indexed_expr = _IC(prefix=expr.name, indices=list(
+                                    a.value if hasattr(a, 'value') else a for a in expr.args
+                                ))
+                                return self._lower_indexed(indexed_expr)
+
                     # Not a protected type - this is a package-qualified function call
                     # Check if this is a predefined operator that should use inline code
                     # (e.g., P."="(X, Y) for scalar types)
