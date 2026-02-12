@@ -11178,6 +11178,10 @@ class ASTLowering:
             if is_string:
                 return self._lower_string_comparison(op, left, right)
 
+            # Check if this is a record comparison
+            if left_type and isinstance(left_type, RecordType):
+                return self._lower_record_comparison(op, left, right, left_type)
+
         if op == BinaryOp.ADD:
             self.builder.add(result, left, right)
         elif op == BinaryOp.SUB:
@@ -11511,6 +11515,64 @@ class ASTLowering:
             self.builder.cmp_ge(result, cmp_result, Immediate(0, IRType.WORD))
         else:
             # Default: equality
+            self.builder.cmp_eq(result, cmp_result, Immediate(0, IRType.WORD))
+
+        return result
+
+    def _lower_record_comparison(self, op: BinaryOp, left, right, rec_type: RecordType):
+        """Lower record equality/inequality comparison.
+
+        Compares records component-by-component using byte-by-byte memcmp.
+        For tagged types, skips the vtable pointer at offset 0.
+        """
+        result = self.builder.new_vreg(IRType.WORD, "_rec_cmp_result")
+
+        # Get the size to compare and the starting offset
+        total_size = rec_type.size_bytes()
+        start_offset = 2 if rec_type.is_tagged else 0
+        cmp_size = total_size - start_offset
+
+        if cmp_size <= 0:
+            # Empty record — always equal
+            self.builder.mov(result, Immediate(1 if op == BinaryOp.EQ else 0, IRType.WORD))
+            return result
+
+        # Adjust pointers to skip vtable if tagged
+        if start_offset > 0:
+            left_adj = self.builder.new_vreg(IRType.PTR, "_rec_l")
+            right_adj = self.builder.new_vreg(IRType.PTR, "_rec_r")
+            self.builder.add(left_adj, left, Immediate(start_offset, IRType.WORD))
+            self.builder.add(right_adj, right, Immediate(start_offset, IRType.WORD))
+        else:
+            left_adj = left
+            right_adj = right
+
+        # Call _memcmp(ptr1, ptr2, size) → HL = 0 if equal
+        self.builder.push(Immediate(cmp_size, IRType.WORD))
+        self.builder.push(right_adj)
+        self.builder.push(left_adj)
+        self.builder.call(Label("_memcmp"), comment="record comparison")
+
+        cmp_result = self.builder.new_vreg(IRType.WORD, "_mcmp")
+        self.builder.emit(IRInstr(
+            OpCode.MOV, cmp_result,
+            MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+            comment="capture memcmp result"
+        ))
+
+        # Clean up stack (3 arguments)
+        temp = self.builder.new_vreg(IRType.WORD, "_discard")
+        self.builder.pop(temp)
+        self.builder.pop(temp)
+        self.builder.pop(temp)
+
+        # Convert to boolean: memcmp returns 0 if equal
+        if op == BinaryOp.EQ:
+            self.builder.cmp_eq(result, cmp_result, Immediate(0, IRType.WORD))
+        elif op == BinaryOp.NE:
+            self.builder.cmp_ne(result, cmp_result, Immediate(0, IRType.WORD))
+        else:
+            # Records only support = and /=, but handle gracefully
             self.builder.cmp_eq(result, cmp_result, Immediate(0, IRType.WORD))
 
         return result
