@@ -1489,10 +1489,15 @@ def can_convert(from_type: AdaType, to_type: AdaType) -> bool:
     # This handles cases like ENUM1 derived from ENUM and ENUM2 derived from ENUM
     # We need to trace the full derivation chain, not just subtypes
     def get_ultimate_ancestor(t: AdaType) -> AdaType:
-        """Follow base_type chain to find ultimate ancestor for derived types."""
+        """Follow base_type/parent_type chain to find ultimate ancestor for derived types."""
         current = t
-        while hasattr(current, 'base_type') and current.base_type:
-            current = current.base_type
+        # For RecordType, follow parent_type chain
+        if isinstance(current, RecordType):
+            while isinstance(current, RecordType) and current.parent_type:
+                current = current.parent_type
+        else:
+            while hasattr(current, 'base_type') and current.base_type:
+                current = current.base_type
         return current
 
     from_ancestor = get_ultimate_ancestor(from_type)

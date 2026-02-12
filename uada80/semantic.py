@@ -5100,7 +5100,8 @@ class SemanticAnalyzer:
             self._check_call_arguments(symbol, stmt.args, stmt)
 
     def _resolve_overloaded_call(
-        self, overloads: list[Symbol], args: list, node: ASTNode
+        self, overloads: list[Symbol], args: list, node: ASTNode,
+        expected_type: Optional[AdaType] = None,
     ) -> Optional[Symbol]:
         """Resolve an overloaded call to the best matching subprogram.
 
@@ -5172,9 +5173,15 @@ class SemanticAnalyzer:
 
         # Prefer the one with most exact matches
         matches.sort(key=lambda x: x[1], reverse=True)
+        # If there's a tie and we have expected_type, prefer matching return type
+        if expected_type and len(matches) > 1 and matches[0][1] == matches[1][1]:
+            for candidate, score in matches:
+                if candidate.return_type and types_compatible(candidate.return_type, expected_type):
+                    return candidate
         return matches[0][0]
 
-    def _resolve_overload(self, symbol: Symbol, args: list, node) -> Optional[Symbol]:
+    def _resolve_overload(self, symbol: Symbol, args: list, node,
+                          expected_type: Optional[AdaType] = None) -> Optional[Symbol]:
         """Try to find the best overload match among all visible overloads.
 
         Returns the best matching overload, or None to use the default.
@@ -5210,6 +5217,7 @@ class SemanticAnalyzer:
         # Score each candidate
         best_score = -1
         best_sym = None
+        tied_candidates = []
         for cand in candidates:
             score = 0
             match = True
@@ -5221,9 +5229,19 @@ class SemanticAnalyzer:
                 else:
                     match = False
                     break
-            if match and score > best_score:
-                best_score = score
-                best_sym = cand
+            if match:
+                if score > best_score:
+                    best_score = score
+                    best_sym = cand
+                    tied_candidates = [cand]
+                elif score == best_score:
+                    tied_candidates.append(cand)
+
+        # If there's a tie and expected_type is available, prefer matching return type
+        if expected_type and len(tied_candidates) > 1:
+            for cand in tied_candidates:
+                if cand.return_type and types_compatible(cand.return_type, expected_type):
+                    return cand
 
         return best_sym
 
@@ -5429,13 +5447,13 @@ class SemanticAnalyzer:
         elif isinstance(expr, RangeExpr):
             return self._analyze_range_expr(expr)
         elif isinstance(expr, IndexedComponent):
-            return self._analyze_indexed_component(expr)
+            return self._analyze_indexed_component(expr, expected_type=expected_type)
         elif isinstance(expr, SelectedName):
             return self._analyze_selected_name(expr, expected_type)
         elif isinstance(expr, AttributeReference):
             return self._analyze_attribute_ref(expr)
         elif isinstance(expr, FunctionCall):
-            return self._analyze_function_call(expr)
+            return self._analyze_function_call(expr, expected_type=expected_type)
         elif isinstance(expr, TypeConversion):
             return self._analyze_type_conversion(expr)
         elif isinstance(expr, QualifiedExpr):
@@ -6300,7 +6318,7 @@ class SemanticAnalyzer:
             return result
         return low_type or high_type
 
-    def _analyze_indexed_component(self, expr: IndexedComponent) -> Optional[AdaType]:
+    def _analyze_indexed_component(self, expr: IndexedComponent, expected_type=None) -> Optional[AdaType]:
         """Analyze an indexed component (array access) or type conversion.
 
         In Ada, T(X) can be either:
@@ -6356,7 +6374,7 @@ class SemanticAnalyzer:
                     return None
                 # For arithmetic operators, return common numeric type
                 if op_name in {'+', '-', '*', '/', 'MOD', 'REM', '**'}:
-                    if left_type.kind in (TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.FLOAT):
+                    if left_type.kind in (TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.FLOAT, TypeKind.FIXED):
                         return left_type
                 # For comparison operators, return Boolean
                 if op_name in {'=', '/=', '<', '>', '<=', '>='}:
@@ -6445,8 +6463,11 @@ class SemanticAnalyzer:
                                         is_derived_from(param.ada_type, arg_types[i].name)):
                                     all_derived = False
                     if all_match:
-                        best_match = candidate
-                        break
+                        if expected_type and candidate.return_type and types_compatible(candidate.return_type, expected_type):
+                            # Exact return type match - use immediately
+                            return candidate.return_type
+                        if best_match is None:
+                            best_match = candidate
                     elif all_derived and derived_match is None:
                         derived_match = candidate
                 if best_match:
@@ -7003,7 +7024,7 @@ class SemanticAnalyzer:
         # Default: return Integer for unknown attributes
         return PREDEFINED_TYPES["Integer"]
 
-    def _analyze_function_call(self, expr: FunctionCall) -> Optional[AdaType]:
+    def _analyze_function_call(self, expr: FunctionCall, expected_type=None) -> Optional[AdaType]:
         """Analyze a function call."""
         if isinstance(expr.name, Identifier):
             func_name = expr.name.name
@@ -7070,7 +7091,7 @@ class SemanticAnalyzer:
                 return None
 
             # Try overload resolution: find the overload whose params match
-            best = self._resolve_overload(symbol, expr.args, expr)
+            best = self._resolve_overload(symbol, expr.args, expr, expected_type=expected_type)
             if best is not None:
                 symbol = best
 
