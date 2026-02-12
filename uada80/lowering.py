@@ -4979,8 +4979,22 @@ class ASTLowering:
                         self.builder.push(val)
                         stack_slots += 1
 
-                # Call the procedure
-                self.builder.call(Label(call_target))
+                # Check if this is a dispatching call (Obj.Method syntax)
+                is_dispatching = self._is_dispatching_call(sym, stmt.args)
+                # For SelectedName prefix calls, the prefix IS the controlling operand
+                if is_dispatching and sym and sym.vtable_slot >= 0:
+                    # Push the prefix object as controlling operand
+                    obj_ptr = self._lower_expr(stmt.name.prefix)
+                    self.builder.push(obj_ptr)
+                    stack_slots += 1
+                    self.builder.emit(IRInstr(
+                        OpCode.DISPATCH,
+                        src1=obj_ptr,
+                        src2=Immediate(sym.vtable_slot, IRType.WORD),
+                        comment=f"dispatch {call_target}"
+                    ))
+                else:
+                    self.builder.call(Label(call_target))
 
                 # Clean up stack (use stack_slots which accounts for dope vectors)
                 for _ in range(stack_slots):
