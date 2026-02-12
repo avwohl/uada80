@@ -1161,18 +1161,25 @@ class ASTLowering:
         actual type parameters substituted for formal parameters.
         """
         # Look up the generic unit
-        generic_name = (
-            inst.generic_name.name
-            if hasattr(inst.generic_name, "name")
-            else str(inst.generic_name)
-        )
+        generic_name = self._get_hierarchical_name(inst.generic_name)
         generic_sym = self.symbols.lookup(generic_name)
+        # For SelectedName (e.g. PKG.GENERIC_PROC), also try lookup_selected
+        if generic_sym is None and isinstance(inst.generic_name, SelectedName):
+            prefix_name = self._get_hierarchical_name(inst.generic_name.prefix)
+            prefix_sym = self.symbols.lookup(prefix_name)
+            if prefix_sym and prefix_sym.public_symbols:
+                selector = inst.generic_name.selector.lower()
+                generic_sym = prefix_sym.public_symbols.get(selector)
 
         # If symbol table lookup fails, search body declarations stack
         # This handles local generic definitions that are in a different scope
         # (e.g., generic declared in outer scope, instantiated in nested DECLARE)
         if generic_sym is None:
             from uada80.ast_nodes import GenericSubprogramUnit
+            # For hierarchical names like PKG.GENERIC_PROC, try both
+            # the full name and just the selector
+            search_name = generic_name.lower()
+            selector_name = generic_name.split('.')[-1].lower() if '.' in generic_name else search_name
             # Search current body declarations + all outer scopes
             search_lists = []
             if hasattr(self, '_current_body_declarations') and self._current_body_declarations:
@@ -1183,11 +1190,12 @@ class ASTLowering:
                         search_lists.append(decl_list)
             for decl_list in search_lists:
                 for decl in decl_list:
-                    if isinstance(decl, GenericSubprogramUnit) and decl.name.lower() == generic_name.lower():
+                    if isinstance(decl, GenericSubprogramUnit) and decl.name.lower() in (search_name, selector_name):
                         # Found the generic - also find corresponding body
                         generic_body = None
+                        match_name = decl.name.lower()
                         for body_decl in decl_list:
-                            if isinstance(body_decl, SubprogramBody) and body_decl.spec.name.lower() == generic_name.lower():
+                            if isinstance(body_decl, SubprogramBody) and body_decl.spec.name.lower() == match_name:
                                 generic_body = body_decl
                                 break
                         if inst.kind in ("procedure", "function"):
