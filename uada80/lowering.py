@@ -10399,6 +10399,15 @@ class ASTLowering:
         if hasattr(self, '_inline_params') and name in self._inline_params:
             return self._inline_params[name]
 
+        # Check generic formal object substitution (e.g., formal 'F' -> actual 'FLO')
+        if self._generic_type_map and name in self._generic_type_map:
+            actual_name = self._generic_type_map[name]
+            # Check if there's also a _subp_ entry - if so, it's a subprogram formal, not an object
+            if f"_subp_{name}" not in self._generic_type_map:
+                # It's a generic formal object - substitute with actual identifier
+                actual_expr = Identifier(name=actual_name)
+                return self._lower_identifier(actual_expr)
+
         # Check if this is a protected type component (inside a protected operation)
         if self.ctx.protected_obj_ptr is not None and self.ctx.protected_type is not None:
             # Look up the component in the protected type
