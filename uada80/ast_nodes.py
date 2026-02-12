@@ -597,6 +597,7 @@ class Variant(ASTNode):
 
     choices: list[Choice]
     components: list[ComponentDecl]
+    variant_part: "VariantPart" = None
 
 
 @dataclass
@@ -1313,6 +1314,7 @@ class AcceptStmt(Stmt):
     entry_index: Optional[Expr] = None  # For entry families: accept E(index)
     parameters: list[ParameterSpec] = field(default_factory=list)
     statements: list[Stmt] = field(default_factory=list)
+    exception_handlers: list = field(default_factory=list)
 
 
 @dataclass

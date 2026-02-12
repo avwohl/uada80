@@ -1012,6 +1012,14 @@ class Parser:
                 agg = Aggregate(components=components, span=self.make_span(start))
                 return self.parse_aggregate_attribute_suffix(agg, start)
 
+            # Check for null record aggregate: (null record)
+            if self.check(TokenType.NULL) and self.peek(1) and self.peek(1).type == TokenType.RECORD:
+                self.advance()  # consume NULL
+                self.advance()  # consume RECORD
+                self.expect(TokenType.RIGHT_PAREN)
+                agg = Aggregate(components=[], span=self.make_span(start))
+                return self.parse_aggregate_attribute_suffix(agg, start)
+
             # Parse first expression
             first_expr = self.parse_expression()
 
@@ -2087,7 +2095,13 @@ class Parser:
         self.match(TokenType.CONSTANT)
 
         # Type mark (may include constraints like Natural range 1..10)
-        type_mark = self.parse_subtype_indication()
+        # Also handle anonymous access types: [not null] access T
+        if self.check(TokenType.ACCESS):
+            type_mark = self._parse_access_type_indication()
+        elif self.check(TokenType.NOT) and self.peek(1).type == TokenType.NULL and self.peek(2).type == TokenType.ACCESS:
+            type_mark = self._parse_access_type_indication()
+        else:
+            type_mark = self.parse_subtype_indication()
 
         # Optional initialization
         init_expr = None
@@ -2186,8 +2200,11 @@ class Parser:
                 self.expect(TokenType.RIGHT_PAREN)
 
         statements = []
+        exception_handlers = []
         if self.match(TokenType.DO):
             statements = self.parse_statement_sequence()
+            if self.match(TokenType.EXCEPTION):
+                exception_handlers = self.parse_exception_handlers()
             self.expect(TokenType.END)
             if self.check(TokenType.IDENTIFIER):
                 self.advance()  # Optional entry name
@@ -2195,7 +2212,8 @@ class Parser:
         self.expect(TokenType.SEMICOLON)
 
         return AcceptStmt(entry_name=entry_name, entry_index=entry_index,
-                          parameters=parameters, statements=statements, span=self.make_span(start))
+                          parameters=parameters, statements=statements,
+                          exception_handlers=exception_handlers, span=self.make_span(start))
 
     def parse_select_statement(self) -> SelectStmt:
         """Parse select statement.
@@ -2587,8 +2605,12 @@ class Parser:
             if self.match(TokenType.LIMITED):
                 is_limited = True
 
-            # Parse type definition (pass is_limited for interface types)
-            type_def = self.parse_type_definition(is_limited=is_limited)
+            # Check for tagged incomplete type: "type T is tagged;"
+            if (is_tagged or is_limited) and self.check(TokenType.SEMICOLON):
+                type_def = None  # Incomplete type declaration
+            else:
+                # Parse type definition (pass is_limited for interface types)
+                type_def = self.parse_type_definition(is_limited=is_limited)
         else:
             # Incomplete type declaration
             type_def = None
@@ -2698,9 +2720,15 @@ class Parser:
             # Component type may be prefixed with "aliased" and/or "not null"
             is_aliased = self.match(TokenType.ALIASED)
             # Handle anonymous access types in array component type
-            if self.check(TokenType.ACCESS) or (self.check(TokenType.NOT) and self.peek(1).type == TokenType.NULL):
+            if self.check(TokenType.ACCESS):
+                component_type = self._parse_access_type_indication()
+            elif self.check(TokenType.NOT) and self.peek(1).type == TokenType.NULL and self.peek(2).type == TokenType.ACCESS:
                 component_type = self._parse_access_type_indication()
             else:
+                # Handle "not null" null exclusion on named types
+                if self.check(TokenType.NOT) and self.peek(1).type == TokenType.NULL:
+                    self.advance()  # consume NOT
+                    self.advance()  # consume NULL
                 component_type = self.parse_name()
             # Check for range constraint: array (...) of Integer range Low..High
             constraint = None
@@ -2963,12 +2991,17 @@ class Parser:
             self.expect(TokenType.ARROW)
 
             components = []
+            nested_variant = None
             # Handle null; for empty variant parts
             if self.match(TokenType.NULL):
                 self.expect(TokenType.SEMICOLON)
             else:
                 while not self.check(TokenType.WHEN, TokenType.END, TokenType.EOF):
                     start_pos = self.pos
+                    # Check for nested variant part
+                    if self.match(TokenType.CASE):
+                        nested_variant = self.parse_variant_part()
+                        break
                     comp = self.parse_component_declaration()
                     if comp:
                         components.append(comp)
@@ -2976,7 +3009,7 @@ class Parser:
                         # No progress - skip to avoid infinite loop
                         self.advance()
 
-            variants.append(Variant(choices=choices, components=components))
+            variants.append(Variant(choices=choices, components=components, variant_part=nested_variant))
 
         self.expect(TokenType.END)
         self.expect(TokenType.CASE)
@@ -3337,7 +3370,9 @@ class Parser:
         return_type = None
         if is_function:
             # For generic instantiation "function Name is new ...", no return type
-            if not (self.check(TokenType.IS) and self.peek(1).type == TokenType.NEW):
+            # For generic function renaming "function Name renames ...", no return type
+            if not (self.check(TokenType.IS) and self.peek(1).type == TokenType.NEW) \
+               and not self.check(TokenType.RENAMES):
                 self.expect(TokenType.RETURN)
                 return_type = self._parse_return_type()
 
@@ -3793,7 +3828,19 @@ class Parser:
             elif self.match(TokenType.OUT):
                 mode = "out"
 
-            type_ref = self.parse_name()
+            # Type can be a name, or an anonymous access type (access T, not null access function...)
+            if self.check(TokenType.ACCESS):
+                type_ref = self._parse_access_type_indication()
+            elif self.check(TokenType.NOT) and self.peek(1).type == TokenType.NULL:
+                if self.peek(2).type == TokenType.ACCESS:
+                    type_ref = self._parse_access_type_indication()
+                else:
+                    # Null exclusion on named type: not null T
+                    self.advance()  # consume NOT
+                    self.advance()  # consume NULL
+                    type_ref = self.parse_name()
+            else:
+                type_ref = self.parse_name()
 
             default_value = None
             if self.match(TokenType.ASSIGN):
