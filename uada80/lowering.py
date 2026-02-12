@@ -2867,6 +2867,12 @@ class ASTLowering:
             elif isinstance(decl, ObjectDecl):
                 # Package body can have local variables too
                 self._lower_nested_package_object_init(decl, pkg_prefix)
+            elif isinstance(decl, PackageBody):
+                # Recursively lower nested package bodies (e.g., P contains Q)
+                self._lower_nested_package_body(decl)
+            elif isinstance(decl, GenericInstantiation):
+                # Generic instantiation inside nested package body
+                self._lower_generic_instantiation(decl)
 
         # Leave package scope
         self.symbols.leave_scope()
@@ -5635,6 +5641,60 @@ class ASTLowering:
                     OpCode.LEA, addr,
                     MemoryLocation(is_global=True, symbol_name=name, ir_type=IRType.PTR),
                     comment=f"addr of global {name}"
+                ))
+                return addr
+
+        # Handle Dereference: E.all passed as in out → address is the pointer value
+        if isinstance(arg, Dereference):
+            # The address of the designated object is the pointer itself
+            return self._lower_expr(arg.prefix)
+
+        # Handle SelectedName: Pkg.Var or Rec.Field passed as in out
+        if isinstance(arg, SelectedName):
+            # Try to lower as a record field access and get its address
+            # For package-qualified names, try the selector as an identifier
+            prefix_name = arg.prefix.name.lower() if isinstance(arg.prefix, Identifier) else ""
+            sel_name = arg.selector.lower()
+            # Check if prefix is a local record → field address
+            if prefix_name and self.ctx and prefix_name in self.ctx.locals:
+                local = self.ctx.locals[prefix_name]
+                ada_type = self._resolve_local_type(local.ada_type) if local.ada_type else None
+                from uada80.type_system import RecordType as _RT_addr
+                if isinstance(ada_type, _RT_addr):
+                    # Compute field offset and return address
+                    offset = 0
+                    if ada_type.is_tagged:
+                        offset = 2  # skip vtable pointer
+                    for comp in ada_type.components:
+                        if comp.name.lower() == sel_name:
+                            break
+                        comp_size = 2
+                        if comp.component_type and hasattr(comp.component_type, 'size_bits') and comp.component_type.size_bits:
+                            comp_size = (comp.component_type.size_bits + 7) // 8
+                        offset += comp_size
+                    base_addr = self.builder.new_vreg(IRType.PTR, f"_{prefix_name}_addr")
+                    frame_offset = -(self.ctx.locals_size - local.stack_offset)
+                    self.builder.emit(IRInstr(
+                        OpCode.LEA, base_addr,
+                        MemoryLocation(offset=frame_offset, ir_type=IRType.PTR, is_frame_offset=True),
+                        comment=f"addr of local {prefix_name}"
+                    ))
+                    if offset > 0:
+                        field_addr = self.builder.new_vreg(IRType.PTR, f"_{sel_name}_addr")
+                        self.builder.emit(IRInstr(
+                            OpCode.ADD, field_addr, base_addr,
+                            Immediate(offset, IRType.WORD),
+                            comment=f"field offset {sel_name} (+{offset})"
+                        ))
+                        return field_addr
+                    return base_addr
+            # Check if selector is a global (package-qualified)
+            if sel_name in self.globals:
+                addr = self.builder.new_vreg(IRType.PTR, f"_{sel_name}_addr")
+                self.builder.emit(IRInstr(
+                    OpCode.LEA, addr,
+                    MemoryLocation(is_global=True, symbol_name=sel_name, ir_type=IRType.PTR),
+                    comment=f"addr of global {sel_name}"
                 ))
                 return addr
 
