@@ -1535,6 +1535,12 @@ class ASTLowering:
                     type_sym = self.symbols.lookup(type_name)
                     if type_sym:
                         ada_type = type_sym.ada_type
+                elif isinstance(decl.type_mark.type_mark, SelectedName):
+                    # Package-qualified type: Pkg.Type_Name
+                    type_name = decl.type_mark.type_mark.selector
+                    type_sym = self.symbols.lookup(type_name)
+                    if type_sym:
+                        ada_type = type_sym.ada_type
             elif isinstance(decl.type_mark, ArrayTypeDef):
                 # Anonymous array type - build ArrayType from definition
                 from uada80.type_system import ArrayType, IntegerType
@@ -1564,6 +1570,12 @@ class ASTLowering:
             elif isinstance(decl.type_mark, Identifier):
                 # Direct type name
                 type_name = decl.type_mark.name
+                type_sym = self.symbols.lookup(type_name)
+                if type_sym:
+                    ada_type = type_sym.ada_type
+            elif isinstance(decl.type_mark, SelectedName):
+                # Package-qualified type: Pkg.Type_Name
+                type_name = decl.type_mark.selector
                 type_sym = self.symbols.lookup(type_name)
                 if type_sym:
                     ada_type = type_sym.ada_type
@@ -11950,6 +11962,13 @@ class ASTLowering:
                     if local.ada_type:
                         # ada_type might be AST node or AdaType - resolve it
                         return self._resolve_local_type(local.ada_type)
+                # Check parameters
+                if name in self.ctx.params:
+                    param_type_name = self.ctx.param_types.get(name)
+                    if param_type_name:
+                        type_sym = self.symbols.lookup(param_type_name)
+                        if type_sym and type_sym.ada_type:
+                            return type_sym.ada_type
                 # Also check enclosing contexts (for nested subprograms)
                 enc = getattr(self.ctx, 'enclosing_ctx', None)
                 while enc:
@@ -18467,18 +18486,25 @@ class ASTLowering:
                 ada_type = type_sym.ada_type
 
                 if isinstance(ada_type, RecordType):
-                    # Calculate total record size from components
-                    total = 0
+                    # Use size_bytes() if available (most reliable)
+                    if hasattr(ada_type, 'size_bytes') and callable(ada_type.size_bytes):
+                        sz = ada_type.size_bytes()
+                        if sz and sz > 0:
+                            return sz
+                    # Fallback: calculate from components
+                    total = 2 if ada_type.is_tagged else 0  # vtable ptr for tagged
                     for comp in ada_type.components:
-                        # Get field size (default to 2 for unknown types)
                         field_size = 2
                         field_type = comp.component_type
-                        if field_type and hasattr(field_type, 'name'):
-                            fn = field_type.name.lower()
-                            if fn in ('character', 'boolean'):
-                                field_size = 1
-                            elif fn == 'float':
-                                field_size = 6
+                        if field_type:
+                            if hasattr(field_type, 'size_bits') and field_type.size_bits:
+                                field_size = (field_type.size_bits + 7) // 8
+                            elif hasattr(field_type, 'name'):
+                                fn = field_type.name.lower()
+                                if fn in ('character', 'boolean'):
+                                    field_size = 1
+                                elif fn == 'float':
+                                    field_size = 6
                         total += field_size
                     return max(total, 2)  # At least 2 bytes
 
