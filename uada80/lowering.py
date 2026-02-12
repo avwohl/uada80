@@ -1721,10 +1721,11 @@ class ASTLowering:
             )
             self.symbols.define(sym)
 
-    def _evaluate_static_expr(self, expr: Expr) -> int:
+    def _evaluate_static_expr(self, expr: Expr) -> int | float:
         """Evaluate a static expression at compile time.
 
-        Returns the constant integer value of the expression.
+        Returns the constant value of the expression (int or float).
+        Named numbers in Ada are universal_integer or universal_real.
         Used for named numbers, array bounds, etc.
         """
         from uada80.ast_nodes import (IntegerLiteral, RealLiteral, Identifier,
@@ -1743,8 +1744,7 @@ class ASTLowering:
         elif isinstance(expr, IntegerLiteral):
             return expr.value
         elif isinstance(expr, RealLiteral):
-            # Convert to fixed-point representation for Z80
-            return int(expr.value * 65536)  # 16.16 fixed point
+            return expr.value
         elif isinstance(expr, Identifier):
             # Look up named number or constant
             name = expr.name.lower()
@@ -1765,7 +1765,12 @@ class ASTLowering:
             elif op == BinaryOp.MUL:
                 return left * right
             elif op == BinaryOp.DIV:
-                return left // right if right != 0 else 0
+                if right == 0:
+                    return 0
+                # Use true division if either operand is float
+                if isinstance(left, float) or isinstance(right, float):
+                    return left / right
+                return left // right
             elif op == BinaryOp.MOD:
                 return left % right if right != 0 else 0
             elif op == BinaryOp.EXP:
@@ -10448,9 +10453,16 @@ class ASTLowering:
             ))
             return result
 
-        # Check named numbers (universal integer constants)
+        # Check named numbers (universal integer/real constants)
         if name in self.ctx.named_numbers:
-            return Immediate(self.ctx.named_numbers[name], IRType.WORD)
+            val = self.ctx.named_numbers[name]
+            if isinstance(val, float):
+                # Check context to determine if this should be integer or float
+                if val == int(val):
+                    val = int(val)  # Exact integer value as float (e.g., 1024.0)
+                else:
+                    val = int(val)  # Truncate non-integer floats for integer context
+            return Immediate(val, IRType.WORD)
 
         # Check for boolean literals
         if name == "true":
