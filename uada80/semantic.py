@@ -5422,7 +5422,7 @@ class SemanticAnalyzer:
         elif isinstance(expr, ContainerAggregate):
             return self._analyze_container_aggregate(expr)
         elif isinstance(expr, Allocator):
-            return self._analyze_allocator(expr)
+            return self._analyze_allocator(expr, expected_type=expected_type)
         elif isinstance(expr, (ConditionalExpr, IfExpr)):
             return self._analyze_conditional_expr(expr)
         elif isinstance(expr, QuantifiedExpr):
@@ -5449,7 +5449,7 @@ class SemanticAnalyzer:
 
         return None
 
-    def _analyze_allocator(self, expr: Allocator) -> Optional[AdaType]:
+    def _analyze_allocator(self, expr: Allocator, expected_type: Optional[AdaType] = None) -> Optional[AdaType]:
         """Analyze an allocator expression (new Type)."""
         # Resolve the type mark
         designated_type = self._resolve_type(expr.type_mark)
@@ -5465,6 +5465,10 @@ class SemanticAnalyzer:
                     f"designated type '{designated_type.name}'",
                     expr.initial_value,
                 )
+
+        # If context expects a named access type, use it (Ada context-determined resolution)
+        if expected_type and isinstance(expected_type, AccessType):
+            return expected_type
 
         # Return an anonymous access type for the allocator
         return AccessType(
