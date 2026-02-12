@@ -5388,7 +5388,7 @@ class SemanticAnalyzer:
         elif isinstance(expr, NullLiteral):
             return None  # Type determined by context
         elif isinstance(expr, BinaryExpr):
-            return self._analyze_binary_expr(expr)
+            return self._analyze_binary_expr(expr, expected_type)
         elif isinstance(expr, UnaryExpr):
             return self._analyze_unary_expr(expr)
         elif isinstance(expr, RangeExpr):
@@ -5916,10 +5916,10 @@ class SemanticAnalyzer:
 
         return symbol.ada_type
 
-    def _analyze_binary_expr(self, expr: BinaryExpr) -> Optional[AdaType]:
+    def _analyze_binary_expr(self, expr: BinaryExpr, expected_type: Optional[AdaType] = None) -> Optional[AdaType]:
         """Analyze a binary expression."""
-        left_type = self._analyze_expr(expr.left)
-        right_type = self._analyze_expr(expr.right)
+        left_type = self._analyze_expr(expr.left, expected_type=expected_type)
+        right_type = self._analyze_expr(expr.right, expected_type=expected_type)
 
         # Relational operators return Boolean (unless user-defined to return something else)
         if expr.op in (
@@ -6087,6 +6087,9 @@ class SemanticAnalyzer:
                 return left_type
             if right_type and right_type.kind == TypeKind.ARRAY:
                 return right_type
+            # If expected_type is an array and operands couldn't resolve, use it
+            if expected_type and isinstance(expected_type, ArrayType):
+                return expected_type
             # For character/string literals, default to String
             if (left_type and left_type.kind in (TypeKind.ENUMERATION, TypeKind.UNIVERSAL_INTEGER) and
                 getattr(left_type, 'name', '') == 'Character'):
