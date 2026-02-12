@@ -5437,6 +5437,8 @@ class SemanticAnalyzer:
         elif isinstance(expr, BoxExpr):
             # Box (<>) in generic instantiation context - just a placeholder
             return None
+        elif isinstance(expr, SubtypeIndication):
+            return self._resolve_subtype_indication(expr)
 
         return None
 

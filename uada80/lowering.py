@@ -4983,6 +4983,25 @@ class ASTLowering:
                           f.name.lower() == full_hier_name for f in self.builder.module.functions
                       ))):
                     call_target = full_hier_name
+                # Fallback: resolve selector through nested subprogram labels
+                # (e.g., PKG.CHK_RECTYPE1 where CHK_RECTYPE1 is nested in enclosing scope)
+                elif call_target in self._nested_subprogram_labels:
+                    call_target = self._nested_subprogram_labels[call_target]
+                else:
+                    # Try function label map with type signature and scope prefix
+                    type_sig = self._get_param_type_sig_from_symbol(sym) if sym else ""
+                    scope_prefix = ""
+                    if self.ctx and self.ctx.subprogram_name:
+                        scope_prefix = self.ctx.subprogram_name + "_"
+                    label_key = (scope_prefix, call_target, type_sig)
+                    resolved_label = self._function_label_map.get(label_key)
+                    if resolved_label:
+                        call_target = resolved_label
+                    else:
+                        label_key = ("", call_target, type_sig)
+                        resolved_label = self._function_label_map.get(label_key)
+                        if resolved_label:
+                            call_target = resolved_label
 
                 # Use proper argument handling with dope vector support
                 proc_name_lower = call_target.lower()
