@@ -380,9 +380,33 @@ class SemanticAnalyzer:
         # Extract simple name for matching (subprogram bodies use simple names)
         parent_lower = parent_name.split('.')[-1].lower()
         # Find the parent subprogram body in the AST
+        # Also collect generic formals from a separate generic spec if present
+        generic_formals_for = {}  # name -> formals list
         for cu in all_units:
-            if isinstance(cu.unit, SubprogramBody):
-                body_name = cu.unit.spec.name.lower() if isinstance(cu.unit.spec.name, str) else str(cu.unit.spec.name).lower()
+            unit = cu.unit
+            if isinstance(unit, GenericSubprogramUnit):
+                gen_name = unit.name.lower() if isinstance(unit.name, str) else str(unit.name).lower()
+                generic_formals_for[gen_name] = unit.formals
+                # If the generic wraps a body directly, handle it
+                if isinstance(unit.subprogram, SubprogramBody):
+                    body_name = unit.subprogram.spec.name.lower() if isinstance(unit.subprogram.spec.name, str) else str(unit.subprogram.spec.name).lower()
+                    if body_name == parent_lower:
+                        for clause in cu.context_clauses:
+                            if isinstance(clause, WithClause):
+                                self._analyze_with_clause(clause)
+                            elif isinstance(clause, UseClause):
+                                self._analyze_use_clause(clause)
+                        for formal in unit.formals:
+                            self._analyze_generic_formal(formal)
+                        for param_spec in unit.subprogram.spec.parameters:
+                            self._analyze_parameter_spec(param_spec, None, add_to_symbol=False)
+                        for decl in unit.subprogram.declarations:
+                            self._analyze_declaration(decl)
+                        return
+        for cu in all_units:
+            unit = cu.unit
+            if isinstance(unit, SubprogramBody):
+                body_name = unit.spec.name.lower() if isinstance(unit.spec.name, str) else str(unit.spec.name).lower()
                 if body_name == parent_lower:
                     # Analyze context clauses of the parent unit
                     for clause in cu.context_clauses:
@@ -390,11 +414,15 @@ class SemanticAnalyzer:
                             self._analyze_with_clause(clause)
                         elif isinstance(clause, UseClause):
                             self._analyze_use_clause(clause)
+                    # If there's a separate generic spec for this name, import its formals
+                    if parent_lower in generic_formals_for:
+                        for formal in generic_formals_for[parent_lower]:
+                            self._analyze_generic_formal(formal)
                     # Analyze parameters
-                    for param_spec in cu.unit.spec.parameters:
+                    for param_spec in unit.spec.parameters:
                         self._analyze_parameter_spec(param_spec, None, add_to_symbol=False)
                     # Analyze all declarations from the parent body
-                    for decl in cu.unit.declarations:
+                    for decl in unit.declarations:
                         self._analyze_declaration(decl)
                     return
 
@@ -6468,6 +6496,20 @@ class SemanticAnalyzer:
         if prefix_type is None:
             return None
 
+        # Handle dereferenced access-to-subprogram: S.all(args) where S is access function
+        if isinstance(prefix_type, AccessSubprogramType):
+            if prefix_type.is_function:
+                self._check_access_subprogram_call_expr(
+                    prefix_type, expr.indices, expr
+                )
+                return prefix_type.return_type
+            else:
+                self.error(
+                    "access-to-procedure cannot be used in an expression",
+                    expr,
+                )
+                return None
+
         # Handle implicit dereference: access-to-array types can be indexed directly
         if isinstance(prefix_type, AccessType):
             designated = prefix_type.designated_type
@@ -6576,6 +6618,10 @@ class SemanticAnalyzer:
                     if completed:
                         designated = completed
                 return designated
+            if isinstance(prefix_type, AccessSubprogramType):
+                # .all on access-to-subprogram returns the subprogram type itself
+                # (allows S.all(args) to dereference then call)
+                return prefix_type
             self.error(
                 f"'.all' can only be applied to access types, not '{prefix_type.name}'",
                 expr,
