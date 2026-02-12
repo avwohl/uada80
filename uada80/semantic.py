@@ -2786,11 +2786,13 @@ class SemanticAnalyzer:
             # Address clauses don't require static expressions (Ada RM 13.3)
             value = self._try_eval_static(decl.value)
             # for Object'Address use N; - place object at specific address
-            if sym.kind == SymbolKind.VARIABLE:
+            if sym.kind in (SymbolKind.VARIABLE, SymbolKind.CONSTANT,
+                            SymbolKind.FUNCTION, SymbolKind.PROCEDURE,
+                            SymbolKind.TASK, SymbolKind.PROTECTED):
                 if isinstance(value, int):
                     sym.explicit_address = value
             else:
-                self.error(f"Address clause only applies to variables", decl)
+                self.error(f"Address clause only applies to objects and subprograms", decl)
         elif attr == "component_size":
             value = self._eval_static_expr(decl.value)
             # for Array_Type'Component_Size use N;

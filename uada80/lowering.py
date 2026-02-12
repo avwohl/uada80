@@ -267,6 +267,11 @@ class ASTLowering:
         self._uses_tasking: bool = False
         # Track single task names (not task types) for entry call detection
         self._single_task_names: set[str] = set()
+        # Track all tagged types discovered during lowering (for vtable generation)
+        self._tagged_types: list[RecordType] = []
+        # Track actual assembly labels for primitive operations of tagged types
+        # Maps (type_name_lower, op_name_lower) -> actual_asm_label
+        self._primitive_op_labels: dict[tuple[str, str], str] = {}
 
     def _find_global_name(self, name: str) -> str:
         """Find the actual global name for a variable (may have package prefix)."""
@@ -358,25 +363,46 @@ class ASTLowering:
 
     def _generate_vtables(self) -> None:
         """Generate vtables for all tagged types in the program."""
-        # Collect all tagged types from the symbol table
         tagged_types: list[RecordType] = []
+        seen_names: set[str] = set()
 
-        def collect_tagged(scope):
-            for sym in scope.symbols.values():
-                if sym.kind == SymbolKind.TYPE:
-                    if isinstance(sym.ada_type, RecordType) and sym.ada_type.is_tagged:
-                        if not sym.ada_type.is_class_wide:
-                            tagged_types.append(sym.ada_type)
+        def collect_tagged_from_symbol(sym):
+            """Check if a symbol is a tagged type and collect it."""
+            if sym.kind == SymbolKind.TYPE and isinstance(sym.ada_type, RecordType):
+                if sym.ada_type.is_tagged and not sym.ada_type.is_class_wide:
+                    if sym.ada_type.name not in seen_names:
+                        seen_names.add(sym.ada_type.name)
+                        tagged_types.append(sym.ada_type)
 
-        # Walk all scopes
+        def collect_from_package(pkg_sym):
+            """Recursively collect tagged types from package public_symbols."""
+            if not hasattr(pkg_sym, 'public_symbols'):
+                return
+            for child_sym in pkg_sym.public_symbols.values():
+                collect_tagged_from_symbol(child_sym)
+                # Recurse into child packages
+                if child_sym.kind == SymbolKind.PACKAGE:
+                    collect_from_package(child_sym)
+
+        # Walk current scope chain (catches local tagged types)
         scope = self.symbols.current_scope
         while scope:
-            collect_tagged(scope)
+            for sym in scope.symbols.values():
+                collect_tagged_from_symbol(sym)
+                # Also search inside package symbols for tagged types
+                if sym.kind == SymbolKind.PACKAGE:
+                    collect_from_package(sym)
             scope = scope.parent
 
-        # Generate a vtable for each tagged type
+        # Also include any tagged types collected during lowering
+        for tt in self._tagged_types:
+            if not tt.is_class_wide and tt.name not in seen_names:
+                seen_names.add(tt.name)
+                tagged_types.append(tt)
+
         for tagged_type in tagged_types:
-            self._generate_vtable(tagged_type)
+            if not tagged_type.is_class_wide:
+                self._generate_vtable(tagged_type)
 
     def _generate_vtable(self, tagged_type: RecordType) -> None:
         """Generate a vtable for a tagged type.
@@ -402,38 +428,41 @@ class ASTLowering:
             parent_vtable = "0"  # Null for root tagged types
         vtable_data.append(parent_vtable)
 
-        # Build a map of operation names to their implementing type
-        # This handles inheritance: use overridden version if present,
-        # otherwise use inherited version
+        # Build vtable entries by matching primitive ops to actual IR functions.
+        # For each primitive, find the correct function label by checking
+        # the function_label_map and matching parameter types.
+        type_name_lower = tagged_type.name.lower()
         for op in primitives:
-            # Find the actual implementation - check if this type overrides it
-            impl_name = None
-            found_local = False
+            op_name_lower = op.name.lower()
+            mangled = self._mangle_operator_name(op_name_lower)
 
-            # Check if this type has its own implementation
-            for local_op in tagged_type.primitive_ops:
-                if local_op.name.lower() == op.name.lower():
-                    impl_name = f"{tagged_type.name}_{op.name}"
-                    found_local = True
-                    break
-
-            if not found_local:
-                # Use inherited implementation - walk up to find it
-                search_type = tagged_type.parent_type
-                while search_type and isinstance(search_type, RecordType):
-                    for parent_op in search_type.primitive_ops:
-                        if parent_op.name.lower() == op.name.lower():
-                            impl_name = f"{search_type.name}_{op.name}"
+            # Search for a function whose parameters reference this tagged type
+            # (or one of its ancestors). Walk the type hierarchy.
+            impl_label = None
+            search_type = tagged_type
+            while search_type and isinstance(search_type, RecordType) and not impl_label:
+                search_name = search_type.name.lower()
+                # Look through the function label map for matching functions
+                for (scope_pfx, fn_name, type_sig), label in self._function_label_map.items():
+                    if fn_name == mangled:
+                        # Check if type_sig references this type
+                        if search_name in type_sig.lower():
+                            impl_label = label
                             break
-                    if impl_name:
-                        break
-                    search_type = getattr(search_type, 'parent_type', None)
+                        # Also check class-wide reference
+                        if f"{search_name}'class" in type_sig.lower():
+                            impl_label = label
+                            break
+                search_type = getattr(search_type, 'parent_type', None)
 
-            if impl_name:
-                vtable_data.append(impl_name)
+            if impl_label:
+                # Prefix with _ for symbol mangling (codegen emits vtable data raw)
+                if not impl_label.startswith('_'):
+                    impl_label = f"_{impl_label}"
+                vtable_data.append(impl_label)
             else:
-                # Fallback to just the operation name
-                vtable_data.append(op.name)
+                # Fallback: use simple mangled name
+                vtable_data.append(f"_{mangled}")
 
         # Store vtable info in the module for codegen
         self.builder.module.vtables[vtable_name] = vtable_data
@@ -7621,6 +7650,9 @@ class ASTLowering:
 
         # Initialize tag for tagged types (vtable pointer at offset 0)
         if is_tagged:
+            # Register tagged type for vtable generation
+            if designated_type.name not in {t.name for t in self._tagged_types}:
+                self._tagged_types.append(designated_type)
             vtable_name = f"_vtable_{designated_type.name}"
             vtable_addr = MemoryLocation(
                 is_global=True, symbol_name=vtable_name, ir_type=IRType.PTR
@@ -8126,6 +8158,9 @@ class ASTLowering:
                     if base_type_name:
                         type_sym = self.symbols.lookup(base_type_name)
                         if type_sym and isinstance(type_sym.ada_type, RecordType) and type_sym.ada_type.is_tagged:
+                            # Register tagged type for vtable generation
+                            if type_sym.ada_type.name not in {t.name for t in self._tagged_types}:
+                                self._tagged_types.append(type_sym.ada_type)
                             # Get object's tag (vtable pointer at offset 0)
                             obj_tag = self.builder.new_vreg(IRType.PTR, "_obj_tag")
                             obj_mem = MemoryLocation(base=test_val, offset=0, ir_type=IRType.PTR)
