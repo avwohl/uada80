@@ -632,7 +632,7 @@ class RecordType(AdaType):
     def add_primitive(self, op: PrimitiveOperation) -> None:
         """Add a primitive operation to this tagged type."""
         # Check if this overrides a parent's operation
-        if self.parent_type and self.parent_type.is_tagged:
+        if self.parent_type and self.parent_type.is_tagged and hasattr(self.parent_type, 'primitive_ops'):
             for i, parent_op in enumerate(self.parent_type.primitive_ops):
                 if parent_op.name.lower() == op.name.lower():
                     # Override: use same slot
@@ -648,7 +648,7 @@ class RecordType(AdaType):
         result: list[PrimitiveOperation] = []
 
         # First, get parent primitives
-        if self.parent_type and self.parent_type.is_tagged:
+        if self.parent_type and self.parent_type.is_tagged and hasattr(self.parent_type, 'all_primitives'):
             result = list(self.parent_type.all_primitives())
 
         # Add interface primitives (abstract placeholders)
