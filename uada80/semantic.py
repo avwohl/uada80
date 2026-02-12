@@ -4615,14 +4615,14 @@ class SemanticAnalyzer:
 
     def _analyze_if_stmt(self, stmt: IfStmt) -> None:
         """Analyze an if statement."""
-        cond_type = self._analyze_expr(stmt.condition)
+        cond_type = self._analyze_expr(stmt.condition, expected_type=PREDEFINED_TYPES["Boolean"])
         self._check_boolean(cond_type, stmt.condition)
 
         for s in stmt.then_stmts:
             self._analyze_statement(s)
 
         for cond, stmts in stmt.elsif_parts:
-            cond_type = self._analyze_expr(cond)
+            cond_type = self._analyze_expr(cond, expected_type=PREDEFINED_TYPES["Boolean"])
             self._check_boolean(cond_type, cond)
             for s in stmts:
                 self._analyze_statement(s)
@@ -4652,7 +4652,7 @@ class SemanticAnalyzer:
 
         if stmt.iteration_scheme:
             if isinstance(stmt.iteration_scheme, WhileScheme):
-                cond_type = self._analyze_expr(stmt.iteration_scheme.condition)
+                cond_type = self._analyze_expr(stmt.iteration_scheme.condition, expected_type=PREDEFINED_TYPES["Boolean"])
                 self._check_boolean(cond_type, stmt.iteration_scheme.condition)
             elif isinstance(stmt.iteration_scheme, ForScheme):
                 # Enter scope for loop variable
@@ -4743,7 +4743,7 @@ class SemanticAnalyzer:
                 self.error(f"exit references unknown loop label '{stmt.loop_label}'", stmt)
 
         if stmt.condition:
-            cond_type = self._analyze_expr(stmt.condition)
+            cond_type = self._analyze_expr(stmt.condition, expected_type=PREDEFINED_TYPES["Boolean"])
             self._check_boolean(cond_type, stmt.condition)
 
     def _analyze_return_stmt(self, stmt: ReturnStmt) -> None:
@@ -5920,8 +5920,15 @@ class SemanticAnalyzer:
 
     def _analyze_binary_expr(self, expr: BinaryExpr, expected_type: Optional[AdaType] = None) -> Optional[AdaType]:
         """Analyze a binary expression."""
-        left_type = self._analyze_expr(expr.left, expected_type=expected_type)
-        right_type = self._analyze_expr(expr.right, expected_type=expected_type)
+        # For relational operators, don't propagate expected_type (e.g. Boolean)
+        # to operands - operand types are independent of the result type
+        is_relational = expr.op in (
+            BinaryOp.EQ, BinaryOp.NE, BinaryOp.LT,
+            BinaryOp.LE, BinaryOp.GT, BinaryOp.GE,
+        )
+        operand_expected = None if is_relational else expected_type
+        left_type = self._analyze_expr(expr.left, expected_type=operand_expected)
+        right_type = self._analyze_expr(expr.right, expected_type=operand_expected)
 
         # Relational operators return Boolean (unless user-defined to return something else)
         if expr.op in (
@@ -5940,6 +5947,7 @@ class SemanticAnalyzer:
                 }.get(expr.op)
                 if op_name:
                     overloads = self.symbols.all_overloads(op_name)
+                    matches = []
                     for candidate in overloads:
                         if candidate.kind == SymbolKind.FUNCTION and len(candidate.parameters) == 2:
                             param1_type = candidate.parameters[0].ada_type
@@ -5947,7 +5955,22 @@ class SemanticAnalyzer:
                             if (param1_type and param2_type and
                                 types_compatible(param1_type, left_type) and
                                 types_compatible(param2_type, right_type)):
-                                return candidate.return_type
+                                matches.append(candidate)
+                    if matches:
+                        # When expected_type is available (e.g. Boolean from IF condition),
+                        # prefer the operator whose return type matches it
+                        if expected_type:
+                            for m in matches:
+                                if m.return_type and types_compatible(m.return_type, expected_type):
+                                    return m.return_type
+                            # No match for expected_type - for relational ops, fall through
+                            # to predefined Boolean if that's what's expected
+                            if types_compatible(PREDEFINED_TYPES["Boolean"], expected_type):
+                                pass  # fall through to return Boolean below
+                            else:
+                                return matches[0].return_type
+                        else:
+                            return matches[0].return_type
             return PREDEFINED_TYPES["Boolean"]
 
         # Logical/bitwise operators
@@ -6064,6 +6087,8 @@ class SemanticAnalyzer:
                 }.get(expr.op)
                 if op_name:
                     overloads = self.symbols.all_overloads(op_name)
+                    # Collect all matching candidates
+                    matches = []
                     for candidate in overloads:
                         if candidate.kind == SymbolKind.FUNCTION and len(candidate.parameters) == 2:
                             param1_type = candidate.parameters[0].ada_type
@@ -6071,7 +6096,16 @@ class SemanticAnalyzer:
                             if (param1_type and param2_type and
                                 types_compatible(param1_type, left_type) and
                                 types_compatible(param2_type, right_type)):
-                                return candidate.return_type
+                                matches.append(candidate)
+                    if matches:
+                        # When expected_type is available, prefer the
+                        # operator whose return type matches it (Ada RM
+                        # 8.6 context-based overload resolution).
+                        if expected_type and len(matches) > 1:
+                            for m in matches:
+                                if m.return_type and types_compatible(m.return_type, expected_type):
+                                    return m.return_type
+                        return matches[0].return_type
                 # No user-defined operator - use common_type
                 result = common_type(left_type, right_type)
                 if result is None:
