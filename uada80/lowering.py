@@ -1806,6 +1806,11 @@ class ASTLowering:
                                         src1=value,
                                         comment=f"init {name}.{comp.name}",
                                     ))
+                    # Initialize access types to null (0)
+                    if isinstance(ada_type, AccessType):
+                        self.builder.mov(local.vreg, Immediate(0, IRType.WORD),
+                                        comment=f"init {name} to null")
+
                     # Call Initialize for controlled types
                     if ada_type and self._type_needs_finalization(ada_type):
                         self._call_initialize(local.vreg, ada_type)
@@ -5881,28 +5886,21 @@ class ASTLowering:
             last_val = self._lower_expr(expr.range_expr.high)
         elif isinstance(expr, BinaryExpr) and expr.op == BinaryOp.CONCAT:
             # String concatenation: A & B
-            # Result is 1-indexed with length = length(A) + length(B)
-            first_val = Immediate(1, IRType.WORD)
-
-            # Get lengths of both operands
+            # Lower bound comes from the left operand's index subtype (Ada RM 4.5.3)
             left_first, left_last, _ = self._get_array_dope_vector(expr.left)
             right_first, right_last, _ = self._get_array_dope_vector(expr.right)
+            first_val = left_first
 
             # Compute total length: (left_last - left_first + 1) + (right_last - right_first + 1)
-            # For most cases, first = 1, so length = last
-            if (isinstance(left_first, Immediate) and left_first.value == 1 and
-                isinstance(right_first, Immediate) and right_first.value == 1):
-                # Simple case: both start at 1, so total length = left_last + right_last
-                if isinstance(left_last, Immediate) and isinstance(right_last, Immediate):
-                    last_val = Immediate(left_last.value + right_last.value, IRType.WORD)
-                else:
-                    # Need runtime computation
-                    temp = self.builder.new_vreg(IRType.WORD, "_concat_len")
-                    self.builder.add(temp, left_last, right_last)
-                    last_val = temp
+            if (isinstance(left_first, Immediate) and isinstance(left_last, Immediate) and
+                isinstance(right_first, Immediate) and isinstance(right_last, Immediate)):
+                # Static case
+                left_len_v = left_last.value - left_first.value + 1
+                right_len_v = right_last.value - right_first.value + 1
+                total_len_v = left_len_v + right_len_v
+                last_val = Immediate(left_first.value + total_len_v - 1, IRType.WORD)
             else:
-                # General case: compute (left_last - left_first + 1) + (right_last - right_first + 1)
-                # = left_last - left_first + right_last - right_first + 2
+                # Runtime computation
                 left_len = self.builder.new_vreg(IRType.WORD, "_left_len")
                 right_len = self.builder.new_vreg(IRType.WORD, "_right_len")
                 total_len = self.builder.new_vreg(IRType.WORD, "_total_len")
@@ -5912,7 +5910,10 @@ class ASTLowering:
                 self.builder.sub(right_len, right_last, right_first)
                 self.builder.add(right_len, right_len, Immediate(1, IRType.WORD))
                 self.builder.add(total_len, left_len, right_len)
-                last_val = total_len
+                # last = first + total_length - 1
+                last_val = self.builder.new_vreg(IRType.WORD, "_concat_last")
+                self.builder.add(last_val, first_val, total_len)
+                self.builder.sub(last_val, last_val, Immediate(1, IRType.WORD))
         else:
             # Unknown expression - default to 1-indexed
             first_val = Immediate(1, IRType.WORD)
@@ -12311,7 +12312,11 @@ class ASTLowering:
                         _rec_type = _rec_type.designated_type
                     if isinstance(_rec_type, _RecordType):
                         for _comp in _rec_type.components:
-                            if _comp.name.lower() == selector.lower() and isinstance(_comp.component_type, _ArrayType):
+                            _ctype = _comp.component_type
+                            # Follow access type to designated type for access-to-array fields
+                            if isinstance(_ctype, _AccessType) and _ctype.designated_type:
+                                _ctype = _ctype.designated_type
+                            if _comp.name.lower() == selector.lower() and isinstance(_ctype, _ArrayType):
                                 # This is record.array_field(index) — redirect to _lower_indexed
                                 from uada80.ast_nodes import IndexedComponent as _IC
                                 indexed_expr = _IC(prefix=expr.name, indices=list(
