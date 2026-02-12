@@ -17519,14 +17519,22 @@ class ASTLowering:
                     return False
                 for comp in rec_type.components:
                     if comp.name.lower() == field_name.lower():
-                        if isinstance(comp.component_type, ArrayType):
+                        ct = comp.component_type
+                        if isinstance(ct, ArrayType):
                             return True
-                        if hasattr(comp.component_type, 'name'):
-                            tn = comp.component_type.name.lower() if isinstance(comp.component_type.name, str) else ''
-                            if tn in ('string', 'wide_string', 'wide_wide_string'):
+                        if hasattr(ct, 'kind') and ct.kind == TypeKind.ARRAY:
+                            return True
+                        if hasattr(ct, 'name') and isinstance(ct.name, str):
+                            tn = ct.name.lower()
+                            # Match String, String(1..N), Wide_String, etc.
+                            if tn.startswith(('string', 'wide_string', 'wide_wide_string')):
                                 return True
-                        if hasattr(comp.component_type, 'kind') and comp.component_type.kind == TypeKind.ARRAY:
-                            return True
+                        # Check base_type chain for arrays
+                        if hasattr(ct, 'base_type') and ct.base_type:
+                            if isinstance(ct.base_type, ArrayType) or (
+                                hasattr(ct.base_type, 'kind') and ct.base_type.kind == TypeKind.ARRAY
+                            ):
+                                return True
                         break
                 return False
 
