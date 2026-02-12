@@ -3032,6 +3032,16 @@ class SemanticAnalyzer:
         # Enter task body scope
         self.symbols.enter_scope(body.name)
 
+        # Re-register entries from task spec so they're visible in the body
+        if task_sym.ada_type and hasattr(task_sym.ada_type, 'entries'):
+            for entry_info in task_sym.ada_type.entries:
+                entry_sym = Symbol(
+                    name=entry_info.name,
+                    kind=SymbolKind.ENTRY,
+                    parameters=getattr(entry_info, 'parameters', []),
+                )
+                self.symbols.define(entry_sym)
+
         # Set task context flags
         old_in_task_body = self.in_task_body
         old_current_task = self.current_task
@@ -6250,7 +6260,10 @@ class SemanticAnalyzer:
                     return arg_type
 
             symbol = self.symbols.lookup(expr.prefix.name)
-            if symbol and symbol.kind in (SymbolKind.TYPE, SymbolKind.SUBTYPE):
+            if symbol and symbol.kind in (
+                SymbolKind.TYPE, SymbolKind.SUBTYPE,
+                SymbolKind.TASK_TYPE, SymbolKind.PROTECTED_TYPE,
+            ):
                 # This is a type conversion: Type(Expr)
                 if len(expr.indices) != 1:
                     self.error("type conversion takes exactly one argument", expr)
@@ -6340,7 +6353,10 @@ class SemanticAnalyzer:
                 type_key = type_name.lower() if isinstance(type_name, str) else type_name
                 if type_key in pkg_symbol.public_symbols:
                     symbol = pkg_symbol.public_symbols[type_key]
-                    if symbol.kind in (SymbolKind.TYPE, SymbolKind.SUBTYPE):
+                    if symbol.kind in (
+                        SymbolKind.TYPE, SymbolKind.SUBTYPE,
+                        SymbolKind.TASK_TYPE, SymbolKind.PROTECTED_TYPE,
+                    ):
                         # This is a type conversion: Package.Type(Expr)
                         if len(expr.indices) != 1:
                             self.error("type conversion takes exactly one argument", expr)

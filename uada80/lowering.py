@@ -4583,6 +4583,8 @@ class ASTLowering:
         # can find their generic definitions within this block's scope
         saved_body_decls = getattr(self, '_current_body_declarations', None)
         self._current_body_declarations = stmt.declarations
+        # Also push onto stack so type/package resolution in _lower_indexed works
+        self._body_declarations_stack.append(stmt.declarations)
         for decl in stmt.declarations:
             self._lower_declaration(decl)
 
@@ -4597,6 +4599,7 @@ class ASTLowering:
                 self._lower_statement(s)
 
         # Restore _current_body_declarations after block
+        self._body_declarations_stack.pop()
         self._current_body_declarations = saved_body_decls
 
         # Restore shadowed locals after block exits
