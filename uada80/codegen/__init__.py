@@ -65,6 +65,7 @@ class Z80CodeGen:
         self.current_function: Optional[IRFunction] = None
         self.emit_inline_runtime = emit_inline_runtime  # If False, use libada.lib
         self.runtime_deps: set[str] = set()  # Track needed runtime routines
+        self.defined_labels: set[str] = set()  # Track locally-defined labels
         self.module: Optional[IRModule] = None
 
     def _mangle_symbol(self, name: str) -> str:
@@ -84,6 +85,7 @@ class Z80CodeGen:
         """Generate Z80 assembly for an IR module."""
         self.output = []
         self.runtime_deps = set()
+        self.defined_labels = set()
         self.module = module
 
         # Collect runtime deps from module (set by lowering)
@@ -4018,6 +4020,12 @@ class Z80CodeGen:
 
     def _emit(self, line: str) -> None:
         """Emit a line of assembly."""
+        # Track locally-defined labels (lines starting with a label: at column 0)
+        stripped_raw = line.lstrip()
+        if stripped_raw and not stripped_raw[0].isspace() and ':' in stripped_raw:
+            label_name = stripped_raw.split(':')[0].strip()
+            if label_name:
+                self.defined_labels.add(label_name)
         # Track runtime calls in emitted lines (but not calls to local functions)
         stripped = line.strip().lower()
         if stripped.startswith("call _") and not stripped.startswith("call __"):
@@ -4060,8 +4068,18 @@ class Z80CodeGen:
             self._emit(f"    call {routine_name}")
 
     def _generate_runtime_externs(self) -> None:
-        """Generate EXTRN declarations for all needed runtime routines."""
+        """Generate EXTRN declarations for all needed runtime routines.
+
+        Filters out locally-defined symbols to avoid 'multiply defined' errors
+        in um80 (which truncates symbols to 8 chars, causing false collisions).
+        """
         if not self.runtime_deps:
+            return
+
+        # Filter out symbols that are defined locally in this compilation unit
+        extern_deps = self.runtime_deps - self.defined_labels
+
+        if not extern_deps:
             return
 
         self._emit("")
@@ -4071,7 +4089,7 @@ class Z80CodeGen:
         self._emit("; =========================================")
         self._emit("")
 
-        for name in sorted(self.runtime_deps):
+        for name in sorted(extern_deps):
             self._emit(f"    EXTRN {name}")
         self._emit("")
 

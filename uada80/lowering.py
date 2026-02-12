@@ -256,6 +256,9 @@ class ASTLowering:
         self._function_label_map: dict[tuple[str, str, str], str] = {}
         # Counter for unique task body names (same task name in different scopes)
         self._task_body_count: dict[str, int] = {}
+        # Map Ada user labels to unique assembly labels (avoids 8-char truncation collisions)
+        # Key: (scope_name, label_name_lower) -> assembly label
+        self._user_label_map: dict[tuple[str, str], str] = {}
         # Global variables (name -> value info)
         self.globals: dict[str, Any] = {}
         # Stack of package prefixes for resolving package-level variables
@@ -3039,19 +3042,27 @@ class ASTLowering:
         elif isinstance(stmt, ExtendedReturnStmt):
             self._lower_extended_return(stmt)
 
+    def _get_user_label(self, label_node) -> str:
+        """Get or create a unique assembly label for a user-defined Ada label.
+
+        Uses counter-based naming to guarantee uniqueness within um80's
+        8-character symbol limit. Maps Ada label names (scoped by function)
+        to unique assembly labels.
+        """
+        label_str = label_node if isinstance(label_node, str) else label_node.name
+        # Create a scope-qualified key for the Ada label
+        scope = self.ctx.subprogram_name if self.ctx and self.ctx.subprogram_name else ""
+        key = (scope, label_str.lower())
+        if key not in self._user_label_map:
+            self._user_label_map[key] = self._new_label(label_str.lower())
+        return self._user_label_map[key]
+
     def _lower_labeled(self, stmt: LabeledStmt) -> None:
         """Lower a labeled statement (<<Label>> stmt)."""
         if self.ctx is None:
             return
 
-        # Emit the label with scope prefix to make it unique across subprograms
-        # Use the current function name as a prefix
-        scope_prefix = ""
-        if self.ctx.subprogram_name:
-            scope_prefix = f"{self.ctx.subprogram_name}_"
-        # Handle both string and Identifier labels
-        label_str = stmt.label if isinstance(stmt.label, str) else stmt.label.name
-        label_name = f"_usr_{scope_prefix}{label_str.lower()}"
+        label_name = self._get_user_label(stmt.label)
         self.builder.label(label_name)
 
         # Lower the inner statement
@@ -3062,13 +3073,7 @@ class ASTLowering:
         if self.ctx is None:
             return
 
-        # Jump to the user-defined label with scope prefix
-        scope_prefix = ""
-        if self.ctx.subprogram_name:
-            scope_prefix = f"{self.ctx.subprogram_name}_"
-        # Handle both string and Identifier labels
-        label_str = stmt.label if isinstance(stmt.label, str) else stmt.label.name
-        label_name = f"_usr_{scope_prefix}{label_str.lower()}"
+        label_name = self._get_user_label(stmt.label)
         self.builder.jmp(Label(label_name))
 
     # =========================================================================
@@ -5125,6 +5130,40 @@ class ASTLowering:
                     label_key = ("", call_target, type_sig)
                     if label_key in self._function_label_map:
                         call_target = self._function_label_map[label_key]
+                    else:
+                        # Forward reference or nested package subprogram:
+                        # Try enclosing scope chain to construct the scoped label.
+                        # This handles calls from nested functions to sibling functions
+                        # (e.g., use PKG; call ASSIGN before PKG body defines ASSIGN).
+                        found = False
+                        ctx = self.ctx
+                        while ctx:
+                            prefix = (ctx.subprogram_name + "_") if ctx.subprogram_name else ""
+                            if prefix:
+                                candidate = f"{prefix}{call_target}"
+                                if any(v == candidate for v in self._nested_subprogram_labels.values()):
+                                    call_target = candidate
+                                    found = True
+                                    break
+                                if any(v == candidate for v in self._function_label_map.values()):
+                                    call_target = candidate
+                                    found = True
+                                    break
+                            ctx = getattr(ctx, 'enclosing_ctx', None)
+                        if not found and self.ctx:
+                            # Forward reference: use enclosing scope prefix
+                            ctx = self.ctx
+                            while ctx:
+                                enc = getattr(ctx, 'enclosing_ctx', None)
+                                if enc and enc.subprogram_name:
+                                    call_target = f"{enc.subprogram_name}_{call_target}"
+                                    break
+                                if not enc and ctx.subprogram_name:
+                                    # Top-level function calling unresolved name —
+                                    # try prefixing with own scope name
+                                    call_target = f"{ctx.subprogram_name}_{call_target}"
+                                    break
+                                ctx = enc
 
             # Get parameter modes for out/in out handling
             # First try locally-tracked modes (for nested subprograms), then symbol table
@@ -12064,6 +12103,34 @@ class ASTLowering:
                     label_key = ("", call_target, type_sig)
                     if label_key in self._function_label_map:
                         call_target = self._function_label_map[label_key]
+                    else:
+                        # Forward reference or nested package subprogram
+                        found = False
+                        ctx = self.ctx
+                        while ctx:
+                            prefix = (ctx.subprogram_name + "_") if ctx.subprogram_name else ""
+                            if prefix:
+                                candidate = f"{prefix}{call_target}"
+                                if any(v == candidate for v in self._nested_subprogram_labels.values()):
+                                    call_target = candidate
+                                    found = True
+                                    break
+                                if any(v == candidate for v in self._function_label_map.values()):
+                                    call_target = candidate
+                                    found = True
+                                    break
+                            ctx = getattr(ctx, 'enclosing_ctx', None)
+                        if not found and self.ctx:
+                            ctx = self.ctx
+                            while ctx:
+                                enc = getattr(ctx, 'enclosing_ctx', None)
+                                if enc and enc.subprogram_name:
+                                    call_target = f"{enc.subprogram_name}_{call_target}"
+                                    break
+                                if not enc and ctx.subprogram_name:
+                                    call_target = f"{ctx.subprogram_name}_{call_target}"
+                                    break
+                                ctx = enc
 
             # Check if this is a dispatching call
             is_dispatching = self._is_dispatching_call(sym, expr.args)
