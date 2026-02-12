@@ -4959,12 +4959,20 @@ class ASTLowering:
                 self._lower_text_io_call(proc_name, stmt.args, is_integer_io)
                 return
             else:
-                # For other SelectedName calls, just use the selector as the call target
-                # Ada is case-insensitive, so normalize to lowercase
+                # For other SelectedName calls, try the full hierarchical name first
+                # (for child units like FB40A00.CB40A020_0.CB40A020_1), then the selector
+                full_hier_name = self._get_hierarchical_name(stmt.name).lower().replace('.', '_')
                 call_target = stmt.name.selector.lower()
                 sym = self._resolve_overload(call_target, stmt.args)
                 if sym and sym.external_name:
                     call_target = sym.external_name.lower()
+                # Check if the full hierarchical name matches a known function
+                elif (full_hier_name in self._nested_subprogram_labels or
+                      any(k[1] == full_hier_name for k in self._function_label_map) or
+                      (self.builder.module and any(
+                          f.name.lower() == full_hier_name for f in self.builder.module.functions
+                      ))):
+                    call_target = full_hier_name
 
                 # Use proper argument handling with dope vector support
                 proc_name_lower = call_target.lower()
@@ -5165,10 +5173,23 @@ class ASTLowering:
                 elif sym.is_imported and sym.external_name:
                     call_target = sym.external_name.lower()
                 elif '.' in sym.name:
-                    # Symbol has scope prefix (e.g., "c36205a.failed" for USE'd Report.Failed)
-                    # Use just the last component to avoid wrong scope prefixing
+                    # Try full hierarchical name first (for child units like
+                    # FA11D00.CA11D011), fall back to last component (for USE'd
+                    # symbols like Report.Failed)
+                    full_name = self._mangle_operator_name(sym.name.lower()).replace('.', '_')
                     simple_name = sym.name.split('.')[-1].lower()
-                    call_target = self._mangle_operator_name(simple_name)
+                    # Check if the full name is a known function label
+                    full_is_known = (
+                        full_name in self._nested_subprogram_labels or
+                        any(k[1] == full_name for k in self._function_label_map) or
+                        (self.builder.module and any(
+                            f.name.lower() == full_name for f in self.builder.module.functions
+                        ))
+                    )
+                    if full_is_known:
+                        call_target = full_name
+                    else:
+                        call_target = self._mangle_operator_name(simple_name)
                 else:
                     call_target = self._mangle_operator_name(sym.name.lower()).replace('.', '_')
 
@@ -12230,9 +12251,21 @@ class ASTLowering:
                 elif sym.is_imported and sym.external_name:
                     call_target = sym.external_name.lower()
                 elif '.' in sym.name:
-                    # Symbol has scope prefix - use just the last component
+                    # Try full hierarchical name first (for child units),
+                    # fall back to last component (for USE'd symbols)
+                    full_name = self._mangle_operator_name(sym.name.lower()).replace('.', '_')
                     simple_name = sym.name.split('.')[-1].lower()
-                    call_target = self._mangle_operator_name(simple_name)
+                    full_is_known = (
+                        full_name in self._nested_subprogram_labels or
+                        any(k[1] == full_name for k in self._function_label_map) or
+                        (self.builder.module and any(
+                            f.name.lower() == full_name for f in self.builder.module.functions
+                        ))
+                    )
+                    if full_is_known:
+                        call_target = full_name
+                    else:
+                        call_target = self._mangle_operator_name(simple_name)
                 else:
                     call_target = self._mangle_operator_name(sym.name.lower()).replace('.', '_')
 
