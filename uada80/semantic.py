@@ -3334,9 +3334,12 @@ class SemanticAnalyzer:
         We define the symbol here so it can be referenced before the body is seen.
         """
         if stub.kind in ("procedure", "function"):
-            # Don't overwrite an existing symbol (e.g., generic spec)
+            # Don't overwrite an existing generic spec, but DO allow overloading
+            # of procedure/function stubs (the symbol table handles overload chains)
             existing = self.symbols.lookup(stub.name)
-            if existing is None:
+            if existing is None or existing.kind in (
+                SymbolKind.PROCEDURE, SymbolKind.FUNCTION
+            ):
                 # Analyze parameters from the stub's subprogram spec
                 params = []
                 for param_spec in (stub.parameters or []):
