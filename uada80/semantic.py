@@ -1110,16 +1110,23 @@ class SemanticAnalyzer:
                 type_sym = None
                 pkg_symbol = None
 
-                if isinstance(name, SelectedName):
+                # Handle T'Class attribute references
+                actual_name = name
+                is_class_wide = False
+                if isinstance(name, AttributeReference) and name.attribute.lower() == 'class':
+                    actual_name = name.prefix
+                    is_class_wide = True
+
+                if isinstance(actual_name, SelectedName):
                     # Qualified name like P.T
-                    pkg_name = self._get_hierarchical_name(name.prefix)
-                    pkg_symbol = self._resolve_hierarchical_package(name.prefix)
+                    pkg_name = self._get_hierarchical_name(actual_name.prefix)
+                    pkg_symbol = self._resolve_hierarchical_package(actual_name.prefix)
                     if pkg_symbol and pkg_symbol.kind == SymbolKind.PACKAGE:
-                        type_name = name.selector.lower() if isinstance(name.selector, str) else name.selector
+                        type_name = actual_name.selector.lower() if isinstance(actual_name.selector, str) else actual_name.selector
                         if type_name in pkg_symbol.public_symbols:
                             type_sym = pkg_symbol.public_symbols[type_name]
-                elif isinstance(name, Identifier):
-                    type_sym = self.symbols.lookup(name.name)
+                elif isinstance(actual_name, Identifier):
+                    type_sym = self.symbols.lookup(actual_name.name)
 
                 if type_sym is None or type_sym.kind not in (SymbolKind.TYPE, SymbolKind.SUBTYPE):
                     type_name = self._get_hierarchical_name(name)
