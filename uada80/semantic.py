@@ -180,6 +180,7 @@ class SemanticResult:
 
     symbols: SymbolTable
     errors: list[SemanticError] = field(default_factory=list)
+    subunit_generic_bodies: dict[str, 'SubprogramBody'] = field(default_factory=dict)
 
     @property
     def has_errors(self) -> bool:
@@ -216,6 +217,8 @@ class SemanticAnalyzer:
             self.search_paths.insert(0, adalib_dir)
         self._loaded_packages: dict[str, Symbol] = {}  # Cache of loaded packages
         self._loading_packages: set[str] = set()  # Packages currently being loaded (cycle detection)
+        # Track subunit bodies that complete generics (for cross-file generic instantiation)
+        self._subunit_generic_bodies: dict[str, SubprogramBody] = {}  # "parent.subprog" -> body
         # Set up standard prelude (ASCII package, etc.)
         self._setup_standard_prelude()
 
@@ -271,7 +274,11 @@ class SemanticAnalyzer:
                 continue
             self._analyze_compilation_unit(unit)
 
-        return SemanticResult(symbols=self.symbols, errors=self.errors)
+        return SemanticResult(
+            symbols=self.symbols,
+            errors=self.errors,
+            subunit_generic_bodies=self._subunit_generic_bodies
+        )
 
     def error(self, message: str, node: Optional[ASTNode] = None) -> None:
         """Report a semantic error."""
@@ -355,6 +362,18 @@ class SemanticAnalyzer:
         body = subunit.body
         if isinstance(body, SubprogramBody):
             self._analyze_subprogram_body(body)
+            # If this body completes a generic in the parent scope, we need to
+            # store it in a registry so instantiations can find it later.
+            body_name = body.spec.name if isinstance(body.spec.name, str) else str(body.spec.name)
+            local_sym = self.symbols.lookup_local(body_name)
+            if local_sym and local_sym.kind in (SymbolKind.GENERIC_PROCEDURE, SymbolKind.GENERIC_FUNCTION):
+                # This subunit body completes a generic - store it in registry
+                # Key format: "parent_name.subprogram_name"
+                qualified_name = f"{parent_name.lower()}.{body_name.lower()}"
+                self._subunit_generic_bodies[qualified_name] = body
+                # Also try to update the symbol if it exists
+                if hasattr(local_sym, 'generic_body'):
+                    local_sym.generic_body = body
         elif isinstance(body, PackageBody):
             self._analyze_package_body(body)
         elif isinstance(body, TaskBody):
@@ -2196,6 +2215,10 @@ class SemanticAnalyzer:
         # Process initialization statements
         for stmt in body.statements:
             self._analyze_statement(stmt)
+
+        # For generic packages, store the body on the symbol for later instantiation
+        if pkg_symbol.kind == SymbolKind.GENERIC_PACKAGE:
+            pkg_symbol.generic_body = body
 
         self.symbols.leave_scope()
 

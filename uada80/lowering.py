@@ -205,7 +205,7 @@ class ASTLowering:
         "assertion_error": 5,
     }
 
-    def __init__(self, symbols: SymbolTable) -> None:
+    def __init__(self, symbols: SymbolTable, subunit_generic_bodies: Optional[dict[str, 'SubprogramBody']] = None) -> None:
         self.symbols = symbols
         self.builder = IRBuilder()
         self.ctx: Optional[LoweringContext] = None
@@ -213,6 +213,8 @@ class ASTLowering:
         # For generic instantiation: type mappings and instance prefix
         self._generic_type_map: dict[str, str] = {}
         self._generic_prefix: Optional[str] = None
+        # Subunit generic bodies from semantic analysis
+        self._subunit_generic_bodies = subunit_generic_bodies or {}
         # Exception handling: map exception names to IDs
         # Initialize with predefined exceptions
         self._exception_ids: dict[str, int] = dict(self.PREDEFINED_EXCEPTIONS)
@@ -241,6 +243,8 @@ class ASTLowering:
         self._nested_subprograms: set[str] = set()
         # Stack of body declarations for nested scope lookup
         self._body_declarations_stack: list[list] = []
+        # Stack to track current subprogram names during lowering (for subunit body lookup)
+        self._current_subprogram_stack: list[str] = []
         # Track which outer variables each nested subprogram needs
         # Maps subprogram name -> set of outer variable names
         self._nested_outer_vars: dict[str, set[str]] = {}
@@ -657,6 +661,14 @@ class ASTLowering:
         """Lower a separate subunit (SEPARATE (parent) body)."""
         body = subunit.body
         if isinstance(body, SubprogramBody):
+            # Check if this subunit completes a generic (should not be lowered directly)
+            # Generics are lowered only during instantiation
+            parent_name = self._get_hierarchical_name(subunit.parent_unit) if hasattr(subunit, 'parent_unit') else ""
+            body_name = body.spec.name if isinstance(body.spec.name, str) else str(body.spec.name)
+            qualified_name = f"{parent_name.lower()}.{body_name.lower()}"
+            if qualified_name in self._subunit_generic_bodies:
+                # This is a generic body - skip it (will be lowered during instantiation)
+                return
             self._lower_subprogram_body(body)
         elif isinstance(body, PackageBody):
             self._lower_package_body(body)
@@ -670,6 +682,11 @@ class ASTLowering:
         sym = self.symbols.lookup(spec.name)
         if sym and sym.is_imported:
             # No body to generate for imported subprograms
+            return
+
+        # Skip generic subprogram bodies - they are templates, not concrete code
+        # They will be lowered during instantiation
+        if sym and sym.kind in (SymbolKind.GENERIC_PROCEDURE, SymbolKind.GENERIC_FUNCTION):
             return
 
         # Enter the subprogram's scope for symbol lookup
@@ -1063,6 +1080,12 @@ class ASTLowering:
 
     def _lower_package_body(self, body: PackageBody) -> None:
         """Lower a package body."""
+        # Skip generic package bodies - they are templates, not concrete code
+        # They will be lowered during instantiation
+        pkg_sym = self.symbols.lookup(body.name)
+        if pkg_sym and pkg_sym.kind == SymbolKind.GENERIC_PACKAGE:
+            return
+
         pkg_prefix = body.name + "." if body.name else ""
 
         # Push package prefix for identifier resolution
@@ -1204,6 +1227,10 @@ class ASTLowering:
                             if isinstance(body_decl, SubprogramBody) and body_decl.spec.name.lower() == match_name:
                                 generic_body = body_decl
                                 break
+                        # If no body in decl_list, check subunit registry
+                        if generic_body is None and self.ctx and self.ctx.subprogram_name:
+                            qualified_name = f"{self.ctx.subprogram_name}.{match_name}"
+                            generic_body = self._subunit_generic_bodies.get(qualified_name)
                         if inst.kind in ("procedure", "function"):
                             self._lower_generic_subprogram_from_ast(inst, decl, generic_body)
                         return
@@ -1232,14 +1259,17 @@ class ASTLowering:
         self._generic_type_map = type_map
         self._generic_prefix = inst.name
 
-        # Lower each subprogram in the generic package
-        for decl in generic_pkg.declarations:
-            if isinstance(decl, SubprogramBody):
-                # Create prefixed name for instantiated subprogram
-                original_name = decl.spec.name
-                decl.spec.name = f"{inst.name}.{original_name}"
-                self._lower_subprogram_body(decl)
-                decl.spec.name = original_name  # Restore original name
+        # Lower subprograms from the generic package body (not the spec)
+        # Generic packages have their subprogram implementations in the body
+        generic_body = getattr(generic_sym, 'generic_body', None)
+        if generic_body and isinstance(generic_body, PackageBody):
+            for decl in generic_body.declarations:
+                if isinstance(decl, SubprogramBody):
+                    # Create prefixed name for instantiated subprogram
+                    original_name = decl.spec.name
+                    decl.spec.name = f"{inst.name}.{original_name}"
+                    self._lower_subprogram_body(decl)
+                    decl.spec.name = original_name  # Restore original name
 
         # Clear the type map
         self._generic_type_map = {}
@@ -1281,13 +1311,23 @@ class ASTLowering:
         # Get the body to lower
         # The semantic analyzer stores the body on generic_sym.generic_body
         # when it sees the body that completes a generic spec.
+        body = None
         if isinstance(subprogram, SubprogramBody):
             body = subprogram
         elif hasattr(generic_sym, 'generic_body') and generic_sym.generic_body is not None:
             body = generic_sym.generic_body
         elif hasattr(subprogram, 'body'):
             body = subprogram.body
-        else:
+
+        # If no body found yet, check the subunit registry
+        # This handles separate bodies for generics nested in subprograms
+        if body is None and self.ctx and self.ctx.subprogram_name:
+            # Build qualified name: "parent.generic"
+            generic_simple_name = generic_sym.name.lower() if generic_sym else generic_name.split('.')[-1].lower()
+            qualified_name = f"{self.ctx.subprogram_name}.{generic_simple_name}"
+            body = self._subunit_generic_bodies.get(qualified_name)
+
+        if body is None:
             # Spec only - nothing to instantiate
             self._generic_type_map = {}
             self._generic_prefix = None
@@ -4903,8 +4943,22 @@ class ASTLowering:
                 else:
                     # Check symbol table for any task-typed variable
                     task_sym = self.symbols.lookup(prefix_name) if self.symbols else None
+                    # Check for direct TaskType
                     if task_sym and hasattr(task_sym, 'ada_type') and isinstance(task_sym.ada_type, TaskType):
                         if self.ctx and prefix_name in self.ctx.locals:
+                            task_id_vreg = self.ctx.locals[prefix_name].vreg
+                        else:
+                            try:
+                                task_id_vreg = self._lower_expr(prefix)
+                            except Exception:
+                                pass
+                    # Check for AccessType with TaskType designated_type (implicit dereference)
+                    elif (task_sym and hasattr(task_sym, 'ada_type') and
+                          isinstance(task_sym.ada_type, AccessType) and
+                          isinstance(task_sym.ada_type.designated_type, TaskType)):
+                        # For access-to-task, we need to dereference to get the task ID
+                        if self.ctx and prefix_name in self.ctx.locals:
+                            # Load the access value (pointer)
                             task_id_vreg = self.ctx.locals[prefix_name].vreg
                         else:
                             try:
@@ -4927,16 +4981,82 @@ class ASTLowering:
                             type_name = type_mark.name.lower()
                         elif isinstance(type_mark, SubtypeIndication) and isinstance(getattr(type_mark, 'type_mark', None), Identifier):
                             type_name = type_mark.type_mark.name.lower()
+                        # First check if it's a direct TaskType
                         if type_name and hasattr(self, '_current_body_declarations'):
                             for d in self._current_body_declarations:
                                 if isinstance(d, TaskTypeDecl) and d.name.lower() == type_name:
                                     task_id_vreg = local.vreg
                                     break
+
+                        # If not found as TaskType, check if type_name is an access-to-task
+                        if task_id_vreg is None and type_name:
+                            from uada80.ast_nodes import AccessTypeDef, DerivedTypeDef, TypeDecl
+                            # First try symbol table
+                            type_sym = self.symbols.lookup(type_name)
+                            # If not found, search local declarations
+                            if type_sym is None and hasattr(self, '_current_body_declarations'):
+                                for d in self._current_body_declarations:
+                                    if isinstance(d, TypeDecl) and d.name.lower() == type_name:
+                                        type_sym = d  # Use the TypeDecl AST node directly
+                                        break
+
+                            # Check if this is an access-to-task type
+                            is_access_to_task = False
+                            if (type_sym and hasattr(type_sym, 'ada_type') and
+                                isinstance(type_sym.ada_type, AccessType) and
+                                isinstance(type_sym.ada_type.designated_type, TaskType)):
+                                # Semantic analysis filled in designated_type correctly
+                                is_access_to_task = True
+                            elif type_sym and hasattr(type_sym, 'type_def'):
+                                # Fallback: check AST node for AccessTypeDef
+                                type_def = type_sym.type_def
+                                if isinstance(type_def, AccessTypeDef) and isinstance(type_def.designated_type, Identifier):
+                                    # Look up the designated type name
+                                    designated_name = type_def.designated_type.name.lower()
+                                    # Check if it's a task type
+                                    if hasattr(self, '_current_body_declarations'):
+                                        for d in self._current_body_declarations:
+                                            if isinstance(d, TaskTypeDecl) and d.name.lower() == designated_name:
+                                                is_access_to_task = True
+                                                break
+                                elif isinstance(type_def, DerivedTypeDef):
+                                    # For derived types, recursively check parent type
+                                    if isinstance(type_def.parent_type, Identifier):
+                                        parent_name = type_def.parent_type.name.lower()
+                                        # Recursively check parent by looking it up
+                                        parent_sym = self.symbols.lookup(parent_name)
+                                        if parent_sym is None and hasattr(self, '_current_body_declarations'):
+                                            for d in self._current_body_declarations:
+                                                if isinstance(d, TypeDecl) and d.name.lower() == parent_name:
+                                                    parent_sym = d
+                                                    break
+                                        # Check parent's type_def
+                                        if parent_sym and hasattr(parent_sym, 'type_def'):
+                                            parent_def = parent_sym.type_def
+                                            if isinstance(parent_def, AccessTypeDef) and isinstance(parent_def.designated_type, Identifier):
+                                                designated_name = parent_def.designated_type.name.lower()
+                                                if hasattr(self, '_current_body_declarations'):
+                                                    for d in self._current_body_declarations:
+                                                        if isinstance(d, TaskTypeDecl) and d.name.lower() == designated_name:
+                                                            is_access_to_task = True
+                                                            break
+
+                            if is_access_to_task:
+                                task_id_vreg = local.vreg
             else:
                 # Non-identifier prefix (indexed component, dereference, etc.)
                 # Try to determine the type of the prefix expression
                 prefix_type = self._get_expr_type(prefix)
+                # Check for direct TaskType
                 if prefix_type and isinstance(prefix_type, TaskType):
+                    prefix_name = "task"
+                    try:
+                        task_id_vreg = self._lower_expr(prefix)
+                    except Exception:
+                        pass
+                # Check for AccessType with TaskType designated_type (implicit dereference)
+                elif (prefix_type and isinstance(prefix_type, AccessType) and
+                      isinstance(prefix_type.designated_type, TaskType)):
                     prefix_name = "task"
                     try:
                         task_id_vreg = self._lower_expr(prefix)
@@ -5144,7 +5264,8 @@ class ASTLowering:
             if not is_access_subprog_call and self.ctx and call_name_lower in self.ctx.locals:
                 local_info = self.ctx.locals[call_name_lower]
                 if local_info.ada_type:
-                    from uada80.type_system import AccessSubprogramType, AccessType
+                    # AccessType is already imported at module level
+                    from uada80.type_system import AccessSubprogramType
                     if isinstance(local_info.ada_type, AccessSubprogramType):
                         is_access_subprog_call = True
                         access_subprog_type = local_info.ada_type
@@ -5155,7 +5276,8 @@ class ASTLowering:
             if not is_access_subprog_call:
                 direct_sym = self.symbols.lookup(stmt.name.name)
                 if direct_sym and direct_sym.ada_type:
-                    from uada80.type_system import AccessType, AccessSubprogramType
+                    # AccessType is already imported at module level
+                    from uada80.type_system import AccessSubprogramType
                     if isinstance(direct_sym.ada_type, AccessSubprogramType):
                         is_access_subprog_call = True
                         access_subprog_type = direct_sym.ada_type
@@ -5319,6 +5441,11 @@ class ASTLowering:
 
             # Build effective arguments list including defaults for missing parameters
             effective_args = self._build_effective_args(stmt.args, sym, proc_name_lower)
+
+            # Check if this is a deallocation (Unchecked_Deallocation) call
+            if self._is_deallocation_call(proc_name_lower):
+                self._lower_deallocation_call(stmt.args)
+                return
 
             # Check if this is a dispatching call
             is_dispatching = self._is_dispatching_call(sym, stmt.args)
@@ -17550,13 +17677,19 @@ class ASTLowering:
                         break
                 return False
 
+            def _deref_access_type(t):
+                """Follow AccessType to its designated type for implicit dereference."""
+                if isinstance(t, AccessType) and t.designated_type:
+                    return t.designated_type
+                return t
+
             if isinstance(rec_prefix, Identifier):
                 var_name = rec_prefix.name.lower()
                 # Check locals
                 if self.ctx and var_name in self.ctx.locals:
                     local = self.ctx.locals[var_name]
                     if local.ada_type:
-                        rec_type = self._resolve_local_type(local.ada_type)
+                        rec_type = _deref_access_type(self._resolve_local_type(local.ada_type))
                         if _check_record_array_field(rec_type, selector):
                             is_array_field = True
                 # Check parameters (may be byref) - use param_types to find Ada type
@@ -17565,14 +17698,14 @@ class ASTLowering:
                     if type_name_str:
                         type_sym = self.symbols.lookup(type_name_str)
                         if type_sym and type_sym.ada_type:
-                            rec_type = self._resolve_local_type(type_sym.ada_type)
+                            rec_type = _deref_access_type(self._resolve_local_type(type_sym.ada_type))
                             if _check_record_array_field(rec_type, selector):
                                 is_array_field = True
                 # Check symbol table (global variables, etc.)
                 if not is_array_field:
                     sym = self.symbols.lookup(var_name)
                     if sym and sym.ada_type:
-                        rec_type = self._resolve_local_type(sym.ada_type)
+                        rec_type = _deref_access_type(self._resolve_local_type(sym.ada_type))
                         if _check_record_array_field(rec_type, selector):
                             is_array_field = True
 
@@ -18309,5 +18442,8 @@ class ASTLowering:
 
 def lower_to_ir(program: Program, semantic_result: SemanticResult) -> IRModule:
     """Lower a program to IR."""
-    lowering = ASTLowering(semantic_result.symbols)
+    lowering = ASTLowering(
+        semantic_result.symbols,
+        subunit_generic_bodies=semantic_result.subunit_generic_bodies
+    )
     return lowering.lower(program)
