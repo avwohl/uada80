@@ -17038,7 +17038,7 @@ class ASTLowering:
             # Check symbol table first
             sym = self.symbols.lookup(expr.prefix.name)
             is_function = sym and sym.kind == SymbolKind.FUNCTION
-            is_type = sym and sym.kind == SymbolKind.TYPE
+            is_type = sym and sym.kind in (SymbolKind.TYPE, SymbolKind.SUBTYPE)
 
             # Also check if this name matches any function in the IR module
             # This handles nested functions and recursive calls where the
@@ -17335,8 +17335,9 @@ class ASTLowering:
                     # Check if the selector is a TYPE (for package-qualified type conversions)
                     # E.g., C3900010.Alert_Type(LA) is a type conversion, not a function call
                     is_pkg_type = False
+                    type_kinds = (SymbolKind.TYPE, SymbolKind.SUBTYPE)
                     sel_sym_type = self.symbols.lookup(selector)
-                    if sel_sym_type and sel_sym_type.kind == SymbolKind.TYPE:
+                    if sel_sym_type and sel_sym_type.kind in type_kinds:
                         is_pkg_type = True
                     elif not sel_sym_type:
                         # Check in package's public_symbols
@@ -17345,7 +17346,7 @@ class ASTLowering:
                             pkg_sym = self.symbols.lookup(pkg_prefix.name)
                             if pkg_sym and pkg_sym.public_symbols:
                                 child = pkg_sym.public_symbols.get(selector)
-                                if child and child.kind == SymbolKind.TYPE:
+                                if child and child.kind in type_kinds:
                                     is_pkg_type = True
                         elif isinstance(pkg_prefix, SelectedName):
                             # Multi-level package: A.B.Type(X)
@@ -17364,7 +17365,7 @@ class ASTLowering:
                                     pkg_sym = pkg_sym.public_symbols.get(part.lower())
                             if pkg_sym and pkg_sym.public_symbols:
                                 child = pkg_sym.public_symbols.get(selector)
-                                if child and child.kind == SymbolKind.TYPE:
+                                if child and child.kind in type_kinds:
                                     is_pkg_type = True
                     # Also check body declarations for local type names
                     if not is_pkg_type:
