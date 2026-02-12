@@ -7266,19 +7266,45 @@ class ASTLowering:
                     )
                     return self._lower_function_call(func_call)
 
-        # Check symbol table for function (handles top-level packages)
-        full_name = self._get_selected_name_str(expr)
-        func_sym = self.symbols.lookup(full_name)
-        if func_sym is None:
-            # Also check just the selector as a nested function
-            func_sym = self.symbols.lookup(expr.selector)
-        if func_sym is not None and getattr(func_sym, 'is_function', False):
-            # It's a parameterless function call
-            func_call = FunctionCall(
-                name=Identifier(name=full_name),
-                args=[],
-            )
-            return self._lower_function_call(func_call)
+        # Check if the prefix is a record and selector is a field - if so, skip function check
+        # This prevents record fields from being mistaken for parameterless function calls
+        # when a symbol with the same name exists in the scope
+        is_record_field = False
+        prefix_type_check = self._get_prefix_type(expr.prefix)
+        if prefix_type_check and isinstance(prefix_type_check, RecordType):
+            for comp in prefix_type_check.components:
+                if comp.name.lower() == expr.selector.lower():
+                    is_record_field = True
+                    break
+            # Also check discriminants
+            if not is_record_field and hasattr(prefix_type_check, 'discriminants'):
+                for disc in (prefix_type_check.discriminants or []):
+                    if disc.name.lower() == expr.selector.lower():
+                        is_record_field = True
+                        break
+        elif prefix_type_check and isinstance(prefix_type_check, AccessType):
+            # For access-to-record, check designated type
+            desig = prefix_type_check.designated_type
+            if isinstance(desig, RecordType):
+                for comp in desig.components:
+                    if comp.name.lower() == expr.selector.lower():
+                        is_record_field = True
+                        break
+
+        if not is_record_field:
+            # Check symbol table for function (handles top-level packages)
+            full_name = self._get_selected_name_str(expr)
+            func_sym = self.symbols.lookup(full_name)
+            if func_sym is None:
+                # Also check just the selector as a nested function
+                func_sym = self.symbols.lookup(expr.selector)
+            if func_sym is not None and getattr(func_sym, 'is_function', False):
+                # It's a parameterless function call
+                func_call = FunctionCall(
+                    name=Identifier(name=full_name),
+                    args=[],
+                )
+                return self._lower_function_call(func_call)
 
         # Handle .all dereference
         if expr.selector.lower() == "all":
@@ -17355,30 +17381,48 @@ class ASTLowering:
             from uada80.type_system import RecordType, ArrayType
             is_array_field = False
             rec_prefix = expr.prefix.prefix
+
+            def _check_record_array_field(rec_type, field_name):
+                """Check if field_name is an array field in rec_type."""
+                if not isinstance(rec_type, RecordType):
+                    return False
+                for comp in rec_type.components:
+                    if comp.name.lower() == field_name.lower():
+                        if isinstance(comp.component_type, ArrayType):
+                            return True
+                        if hasattr(comp.component_type, 'name'):
+                            tn = comp.component_type.name.lower() if isinstance(comp.component_type.name, str) else ''
+                            if tn in ('string', 'wide_string', 'wide_wide_string'):
+                                return True
+                        if hasattr(comp.component_type, 'kind') and comp.component_type.kind == TypeKind.ARRAY:
+                            return True
+                        break
+                return False
+
             if isinstance(rec_prefix, Identifier):
                 var_name = rec_prefix.name.lower()
+                # Check locals
                 if self.ctx and var_name in self.ctx.locals:
                     local = self.ctx.locals[var_name]
                     if local.ada_type:
                         rec_type = self._resolve_local_type(local.ada_type)
-                        if rec_type and isinstance(rec_type, RecordType):
-                            for comp in rec_type.components:
-                                if comp.name.lower() == selector:
-                                    if isinstance(comp.component_type, ArrayType):
-                                        is_array_field = True
-                                    # Also check if it's a known array type name
-                                    elif hasattr(comp.component_type, 'name'):
-                                        type_name = comp.component_type.name.lower() if isinstance(comp.component_type.name, str) else ''
-                                        if type_name in ('string', 'wide_string', 'wide_wide_string'):
-                                            is_array_field = True
-                                    # Also check if it has kind attribute for ARRAY
-                                    elif hasattr(comp.component_type, 'kind') and comp.component_type.kind == TypeKind.ARRAY:
-                                        is_array_field = True
-                                    break
-                        # If rec_type lookup failed but we have a record local,
-                        # also try looking up the field as a string/array type based on common patterns
-                        if not is_array_field and selector in ('s', 'string', 'str'):
-                            # Likely a string field - assume it's an array
+                        if _check_record_array_field(rec_type, selector):
+                            is_array_field = True
+                # Check parameters (may be byref) - use param_types to find Ada type
+                if not is_array_field and self.ctx and var_name in self.ctx.params:
+                    type_name_str = self.ctx.param_types.get(var_name)
+                    if type_name_str:
+                        type_sym = self.symbols.lookup(type_name_str)
+                        if type_sym and type_sym.ada_type:
+                            rec_type = self._resolve_local_type(type_sym.ada_type)
+                            if _check_record_array_field(rec_type, selector):
+                                is_array_field = True
+                # Check symbol table (global variables, etc.)
+                if not is_array_field:
+                    sym = self.symbols.lookup(var_name)
+                    if sym and sym.ada_type:
+                        rec_type = self._resolve_local_type(sym.ada_type)
+                        if _check_record_array_field(rec_type, selector):
                             is_array_field = True
 
             # If it's an array field, fall through to array indexing below
