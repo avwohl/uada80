@@ -5110,6 +5110,11 @@ class ASTLowering:
                     call_target = sym.runtime_name.lower()
                 elif sym.is_imported and sym.external_name:
                     call_target = sym.external_name.lower()
+                elif '.' in sym.name:
+                    # Symbol has scope prefix (e.g., "c36205a.failed" for USE'd Report.Failed)
+                    # Use just the last component to avoid wrong scope prefixing
+                    simple_name = sym.name.split('.')[-1].lower()
+                    call_target = self._mangle_operator_name(simple_name)
                 else:
                     call_target = self._mangle_operator_name(sym.name.lower()).replace('.', '_')
 
@@ -5158,9 +5163,20 @@ class ASTLowering:
                             ctx = getattr(ctx, 'enclosing_ctx', None)
                         if not found:
                             # Forward reference: use enclosing scope prefix
+                            # BUT only if the call target is NOT a known external/imported
+                            # function (e.g., Report.Failed imported via USE clause)
                             enc = getattr(self.ctx, 'enclosing_ctx', None)
                             if enc and enc.subprogram_name:
-                                call_target = f"{enc.subprogram_name}_{call_target}"
+                                # Check if the simple name is a known external function
+                                # (defined in the IR module already, e.g., from Report pkg)
+                                is_known_external = False
+                                if self.builder.module:
+                                    for func in self.builder.module.functions:
+                                        if func.name.lower() == call_target.lower():
+                                            is_known_external = True
+                                            break
+                                if not is_known_external:
+                                    call_target = f"{enc.subprogram_name}_{call_target}"
 
             # Get parameter modes for out/in out handling
             # First try locally-tracked modes (for nested subprograms), then symbol table
@@ -12111,6 +12127,10 @@ class ASTLowering:
                     call_target = sym.runtime_name.lower()
                 elif sym.is_imported and sym.external_name:
                     call_target = sym.external_name.lower()
+                elif '.' in sym.name:
+                    # Symbol has scope prefix - use just the last component
+                    simple_name = sym.name.split('.')[-1].lower()
+                    call_target = self._mangle_operator_name(simple_name)
                 else:
                     call_target = self._mangle_operator_name(sym.name.lower()).replace('.', '_')
 
@@ -12155,7 +12175,15 @@ class ASTLowering:
                         if not found:
                             enc = getattr(self.ctx, 'enclosing_ctx', None)
                             if enc and enc.subprogram_name:
-                                call_target = f"{enc.subprogram_name}_{call_target}"
+                                # Only prefix if not a known external function
+                                is_known_external = False
+                                if self.builder.module:
+                                    for func in self.builder.module.functions:
+                                        if func.name.lower() == call_target.lower():
+                                            is_known_external = True
+                                            break
+                                if not is_known_external:
+                                    call_target = f"{enc.subprogram_name}_{call_target}"
 
             # Check if this is a dispatching call
             is_dispatching = self._is_dispatching_call(sym, expr.args)
