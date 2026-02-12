@@ -6364,6 +6364,23 @@ class SemanticAnalyzer:
                         return left_type
                     if left_type.kind == TypeKind.MODULAR:
                         return left_type  # Bitwise for modular
+                    # Element-wise on arrays of Boolean
+                    if left_type.kind == TypeKind.ARRAY:
+                        if isinstance(left_type, ArrayType) and left_type.component_type:
+                            ct = left_type.component_type
+                            if ct.name and ct.name.lower() == 'boolean':
+                                return left_type
+                    # NOT operator also works on Boolean and arrays of Boolean
+                if op_name == 'NOT' and len(expr.indices) == 1:
+                    arg_type = self._analyze_expr(expr.indices[0])
+                    if arg_type:
+                        if arg_type.name and arg_type.name.lower() == 'boolean':
+                            return arg_type
+                        if arg_type.kind == TypeKind.MODULAR:
+                            return arg_type
+                        if arg_type.kind == TypeKind.ARRAY and isinstance(arg_type, ArrayType):
+                            if arg_type.component_type and arg_type.component_type.name and arg_type.component_type.name.lower() == 'boolean':
+                                return arg_type
                 # For concatenation
                 if op_name == '&':
                     return left_type
