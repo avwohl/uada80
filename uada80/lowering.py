@@ -1047,6 +1047,8 @@ class ASTLowering:
             elif isinstance(decl, PackageDecl):
                 # Nested package
                 self._lower_package_decl(decl)
+            elif isinstance(decl, GenericInstantiation):
+                self._lower_generic_instantiation(decl)
 
         # Process private declarations
         for decl in pkg.private_declarations:
@@ -1056,6 +1058,8 @@ class ASTLowering:
                 self._lower_package_object_decl(decl, pkg_prefix)
             elif isinstance(decl, PackageDecl):
                 self._lower_package_decl(decl)
+            elif isinstance(decl, GenericInstantiation):
+                self._lower_generic_instantiation(decl)
 
     def _lower_package_body(self, body: PackageBody) -> None:
         """Lower a package body."""
@@ -1074,6 +1078,8 @@ class ASTLowering:
                 elif isinstance(decl, PackageBody):
                     # Nested package body
                     self._lower_package_body(decl)
+                elif isinstance(decl, GenericInstantiation):
+                    self._lower_generic_instantiation(decl)
 
             # Generate package initialization function if there are init statements
             if body.statements:
@@ -17629,6 +17635,9 @@ class ASTLowering:
                                     is_pkg_type = True
                     # Also check body declarations for local type names
                     if not is_pkg_type:
+                        pkg_prefix_name = None
+                        if isinstance(expr.prefix.prefix, Identifier):
+                            pkg_prefix_name = expr.prefix.prefix.name.lower()
                         for decl_list in self._body_declarations_stack:
                             for decl in decl_list:
                                 if isinstance(decl, TypeDecl):
@@ -17636,6 +17645,16 @@ class ASTLowering:
                                     if decl_name == selector:
                                         is_pkg_type = True
                                         break
+                                # Also search inside local PackageDecl for types
+                                if isinstance(decl, PackageDecl):
+                                    pkg_name = decl.name.lower() if isinstance(decl.name, str) else str(decl.name).lower()
+                                    if pkg_prefix_name and pkg_name == pkg_prefix_name:
+                                        for pkg_decl in decl.declarations:
+                                            if isinstance(pkg_decl, TypeDecl):
+                                                td_name = pkg_decl.name.lower() if isinstance(pkg_decl.name, str) else pkg_decl.name.name.lower()
+                                                if td_name == selector:
+                                                    is_pkg_type = True
+                                                    break
                             if is_pkg_type:
                                 break
 
