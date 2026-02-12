@@ -3617,6 +3617,14 @@ class Parser:
                     constraint="private", is_limited=is_limited
                 )
 
+            # Tagged incomplete type: is tagged;  (Ada 2012 generic formal)
+            if is_tagged and self.check(TokenType.SEMICOLON):
+                self.expect(TokenType.SEMICOLON)
+                return GenericTypeDecl(
+                    name=name, is_tagged=is_tagged, is_abstract=is_abstract,
+                    constraint="incomplete", is_limited=is_limited
+                )
+
             # Derived type: is [abstract] new Parent [with private]
             if self.match(TokenType.NEW):
                 parent = self.parse_name()
