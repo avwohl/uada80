@@ -2917,7 +2917,23 @@ class Parser:
                 self.advance()  # consume NOT
                 self.advance()  # consume NULL
             is_access = self.match(TokenType.ACCESS)
-            type_mark = self.parse_name()
+            # Handle "access function/procedure" (anonymous access-to-subprogram)
+            if is_access and self.check(TokenType.FUNCTION, TokenType.PROCEDURE):
+                is_function = self.match(TokenType.FUNCTION)
+                if not is_function:
+                    self.advance()  # consume PROCEDURE
+                params = []
+                if self.match(TokenType.LEFT_PAREN):
+                    params = self.parse_formal_parameters()
+                    self.expect(TokenType.RIGHT_PAREN)
+                return_type = None
+                if is_function:
+                    self.expect(TokenType.RETURN)
+                    return_type = self._parse_return_type()
+                # Use the return type or a dummy as the type_mark
+                type_mark = return_type if return_type else Identifier(name="__access_subprogram__", span=None)
+            else:
+                type_mark = self.parse_name()
 
             default_value = None
             if self.match(TokenType.ASSIGN):
@@ -3394,6 +3410,9 @@ class Parser:
 
             self.expect(TokenType.COLON)
 
+            # Ada 2012: aliased can come before or after mode
+            is_aliased = self.match(TokenType.ALIASED)
+
             # Parse mode
             mode = "in"
             is_access_param = False
@@ -3405,7 +3424,9 @@ class Parser:
             elif self.match(TokenType.OUT):
                 mode = "out"
 
-            is_aliased = self.match(TokenType.ALIASED)
+            # Also check for aliased after mode (both orderings accepted)
+            if not is_aliased:
+                is_aliased = self.match(TokenType.ALIASED)
 
             # Check for anonymous access parameter types
             # e.g., X : access T, X : access constant T, X : not null access T

@@ -581,7 +581,7 @@ class RecordType(AdaType):
                     if comp.name.lower() == name.lower():
                         return comp
         # Check parent type for derived records
-        if self.parent_type:
+        if self.parent_type and hasattr(self.parent_type, 'get_component'):
             return self.parent_type.get_component(name)
         return None
 

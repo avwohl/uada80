@@ -1419,6 +1419,21 @@ class SemanticAnalyzer:
         self.symbols.leave_scope()
         self.current_package = old_package
 
+    def _fixup_access_designated(self, old_type: 'AdaType', new_type: 'AdaType') -> None:
+        """Update access types in current scope that reference old_type as designated_type."""
+        scope = self.symbols.current_scope
+        while scope:
+            for sym in scope.symbols.values():
+                if isinstance(sym, list):
+                    syms = sym
+                else:
+                    syms = [sym]
+                for s in syms:
+                    if s.kind == SymbolKind.TYPE and isinstance(s.ada_type, AccessType):
+                        if s.ada_type.designated_type is old_type:
+                            s.ada_type.designated_type = new_type
+            scope = scope.parent
+
     def _fixup_access_types(self, pkg_symbol: Symbol, pkg: PackageDecl) -> None:
         """Fix up access types whose designated_type was None or incomplete.
 
@@ -1570,6 +1585,9 @@ class SemanticAnalyzer:
                     # Private, tagged private, etc.
                     type_kind = TypeKind.PRIVATE
                     type_sym.ada_type = AdaType(kind=type_kind, name=formal.name)
+                    # Propagate is_tagged from generic formal declaration
+                    if getattr(formal, 'is_tagged', False):
+                        type_sym.ada_type.is_tagged = True
 
                 type_sym.ada_type.is_generic_formal = True
                 self.symbols.define(type_sym)
@@ -2444,9 +2462,13 @@ class SemanticAnalyzer:
                                 )
                             )
 
+                old_type = existing.ada_type
                 existing.ada_type = ada_type
                 existing.definition = decl
                 decl.ada_type = ada_type  # Store on AST for lowering
+                # Fix up access types that referenced the old incomplete/private type
+                if old_type is not ada_type:
+                    self._fixup_access_designated(old_type, ada_type)
                 # Fall through to handle enum literals if applicable
             else:
                 self.error(f"type '{decl.name}' is already defined", decl)
@@ -3623,7 +3645,15 @@ class SemanticAnalyzer:
             )
 
         # Handle tagged type derivation with record extension and interfaces
-        if isinstance(parent, RecordType) and parent.is_tagged:
+        # Also handle when parent is a generic formal tagged private type
+        # (not a RecordType instance but has a record extension)
+        parent_is_tagged_record = isinstance(parent, RecordType) and parent.is_tagged
+        parent_is_tagged_private = (
+            not isinstance(parent, RecordType) and
+            getattr(parent, 'is_tagged', False) and
+            type_def.record_extension is not None
+        )
+        if parent_is_tagged_record or parent_is_tagged_private:
             # Build components from record extension
             components: list[RecordComponent] = []
             if type_def.record_extension:
@@ -3645,11 +3675,11 @@ class SemanticAnalyzer:
                     interfaces.append(iface_type)
 
             # Propagate controlled type status from parent
-            is_controlled = parent.is_controlled or parent.needs_finalization()
-            is_limited_controlled = parent.is_limited_controlled
+            is_controlled = getattr(parent, 'is_controlled', False) or (hasattr(parent, 'needs_finalization') and parent.needs_finalization())
+            is_limited_controlled = getattr(parent, 'is_limited_controlled', False)
 
             # Propagate limited status from parent or from explicit declaration
-            is_limited = getattr(type_def, 'is_limited', False) or parent.is_limited or parent.is_limited_type()
+            is_limited = getattr(type_def, 'is_limited', False) or getattr(parent, 'is_limited', False) or (hasattr(parent, 'is_limited_type') and parent.is_limited_type())
 
             result = RecordType(
                 name=name,
@@ -3666,9 +3696,12 @@ class SemanticAnalyzer:
                 result.is_private_extension = True
             return result
 
-        # Handle private extension from interface type
+        # Handle private extension from interface or tagged private type
         # e.g., type Object is new Point with private;
-        if isinstance(parent, InterfaceType) and getattr(type_def, 'is_private_extension', False):
+        # Also handles generic formal tagged private parent with private extension
+        if getattr(type_def, 'is_private_extension', False) and (
+            isinstance(parent, InterfaceType) or getattr(parent, 'is_tagged', False)
+        ):
             result = RecordType(
                 name=name,
                 is_tagged=True,
@@ -6447,9 +6480,14 @@ class SemanticAnalyzer:
         if isinstance(prefix_type, AccessType):
             designated = prefix_type.designated_type
             # If designated type is incomplete/private, try to get the completed type
-            if designated and designated.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE):
+            if designated and (
+                designated.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE)
+                or not isinstance(designated, RecordType)
+            ):
                 completed = self.symbols.lookup_type(designated.name)
-                if completed:
+                if completed and isinstance(completed, RecordType):
+                    designated = completed
+                elif completed and completed.kind not in (TypeKind.INCOMPLETE, TypeKind.PRIVATE):
                     designated = completed
             if isinstance(designated, RecordType):
                 comp = designated.get_component(expr.selector)
@@ -6467,6 +6505,27 @@ class SemanticAnalyzer:
                     expr,
                 )
                 return None
+            # Even if designated type isn't a RecordType, if it has a base_type
+            # chain that leads to a record, follow it (e.g., derived types)
+            if designated and hasattr(designated, 'base_type') and designated.base_type:
+                base = designated.base_type
+                if isinstance(base, RecordType):
+                    comp = base.get_component(expr.selector)
+                    if comp is not None:
+                        return self._resolve_private_type(comp.component_type)
+            # For tagged non-record designated types, try prefix notation
+            if designated and getattr(designated, 'is_tagged', False):
+                prim_type = self._find_prefix_notation_primitive(designated, expr.selector)
+                if prim_type is not None:
+                    return None if prim_type is self._PROCEDURE_FOUND else prim_type
+            # Access to protected type - implicit dereference for operations
+            if isinstance(designated, ProtectedType):
+                selector_lower = expr.selector.lower() if isinstance(expr.selector, str) else expr.selector.lower()
+                for op in designated.operations:
+                    if op.name.lower() == selector_lower:
+                        if op.kind == "function" and op.return_type:
+                            return op.return_type
+                        return None
 
         # Protected type operation access (Counter.Increment, Counter.Value)
         if isinstance(prefix_type, ProtectedType):
