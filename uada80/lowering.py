@@ -1094,7 +1094,8 @@ class ASTLowering:
         self.builder.set_block(entry)
 
         # Create a temporary context for lowering statements
-        self.ctx = LoweringContext(function=func)
+        # Set subprogram_name so user labels are properly scoped per init function
+        self.ctx = LoweringContext(function=func, subprogram_name=init_func_name)
 
         # Process pending package-level variable initializations
         if hasattr(self, '_pending_pkg_inits') and self._pending_pkg_inits:
@@ -5130,11 +5131,13 @@ class ASTLowering:
                     label_key = ("", call_target, type_sig)
                     if label_key in self._function_label_map:
                         call_target = self._function_label_map[label_key]
-                    else:
-                        # Forward reference or nested package subprogram:
+                    elif self.ctx and getattr(self.ctx, 'enclosing_ctx', None):
+                        # Forward reference in a nested function:
                         # Try enclosing scope chain to construct the scoped label.
                         # This handles calls from nested functions to sibling functions
                         # (e.g., use PKG; call ASSIGN before PKG body defines ASSIGN).
+                        # Only applies when we're inside a nested function (has enclosing_ctx),
+                        # NOT for top-level functions calling external runtime functions.
                         found = False
                         ctx = self.ctx
                         while ctx:
@@ -5150,20 +5153,11 @@ class ASTLowering:
                                     found = True
                                     break
                             ctx = getattr(ctx, 'enclosing_ctx', None)
-                        if not found and self.ctx:
+                        if not found:
                             # Forward reference: use enclosing scope prefix
-                            ctx = self.ctx
-                            while ctx:
-                                enc = getattr(ctx, 'enclosing_ctx', None)
-                                if enc and enc.subprogram_name:
-                                    call_target = f"{enc.subprogram_name}_{call_target}"
-                                    break
-                                if not enc and ctx.subprogram_name:
-                                    # Top-level function calling unresolved name —
-                                    # try prefixing with own scope name
-                                    call_target = f"{ctx.subprogram_name}_{call_target}"
-                                    break
-                                ctx = enc
+                            enc = getattr(self.ctx, 'enclosing_ctx', None)
+                            if enc and enc.subprogram_name:
+                                call_target = f"{enc.subprogram_name}_{call_target}"
 
             # Get parameter modes for out/in out handling
             # First try locally-tracked modes (for nested subprograms), then symbol table
@@ -12103,8 +12097,8 @@ class ASTLowering:
                     label_key = ("", call_target, type_sig)
                     if label_key in self._function_label_map:
                         call_target = self._function_label_map[label_key]
-                    else:
-                        # Forward reference or nested package subprogram
+                    elif self.ctx and getattr(self.ctx, 'enclosing_ctx', None):
+                        # Forward reference in nested function
                         found = False
                         ctx = self.ctx
                         while ctx:
@@ -12120,17 +12114,10 @@ class ASTLowering:
                                     found = True
                                     break
                             ctx = getattr(ctx, 'enclosing_ctx', None)
-                        if not found and self.ctx:
-                            ctx = self.ctx
-                            while ctx:
-                                enc = getattr(ctx, 'enclosing_ctx', None)
-                                if enc and enc.subprogram_name:
-                                    call_target = f"{enc.subprogram_name}_{call_target}"
-                                    break
-                                if not enc and ctx.subprogram_name:
-                                    call_target = f"{ctx.subprogram_name}_{call_target}"
-                                    break
-                                ctx = enc
+                        if not found:
+                            enc = getattr(self.ctx, 'enclosing_ctx', None)
+                            if enc and enc.subprogram_name:
+                                call_target = f"{enc.subprogram_name}_{call_target}"
 
             # Check if this is a dispatching call
             is_dispatching = self._is_dispatching_call(sym, expr.args)
