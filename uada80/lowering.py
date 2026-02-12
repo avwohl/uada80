@@ -92,6 +92,7 @@ from uada80.ast_nodes import (
     TaskBody,
     EntryDecl,
     SubtypeIndication,
+    RangeConstraint,
     ArrayTypeDef,
     ActualParameter,
     IndexConstraint,
@@ -1564,13 +1565,11 @@ class ASTLowering:
                 has_dynamic_bounds = False
                 if array_def.index_subtypes:
                     for idx_range in array_def.index_subtypes:
-                        if isinstance(idx_range, RangeExpr):
-                            low = self._eval_static_expr(idx_range.low)
-                            high = self._eval_static_expr(idx_range.high)
-                            if low is None or high is None:
-                                has_dynamic_bounds = True
-                            else:
-                                bounds.append((low, high))
+                        low, high = self._extract_index_bounds(idx_range)
+                        if low is None or high is None:
+                            has_dynamic_bounds = True
+                        else:
+                            bounds.append((low, high))
                 # Only create ArrayType if all bounds are static
                 if not has_dynamic_bounds and bounds:
                     comp_type = IntegerType(name="Integer", size_bits=16)
@@ -1641,13 +1640,11 @@ class ASTLowering:
                         if type_def.index_subtypes:
                             # Handle all dimensions for multi-dimensional arrays
                             for idx_range in type_def.index_subtypes:
-                                if isinstance(idx_range, RangeExpr):
-                                    low = self._eval_static_expr(idx_range.low)
-                                    high = self._eval_static_expr(idx_range.high)
-                                    if low is None or high is None:
-                                        has_dynamic_bounds = True
-                                    else:
-                                        bounds.append((low, high))
+                                low, high = self._extract_index_bounds(idx_range)
+                                if low is None or high is None:
+                                    has_dynamic_bounds = True
+                                else:
+                                    bounds.append((low, high))
                         # Resolve component type - may be record, array, or scalar
                         comp_type = self._resolve_local_type(type_def.component_type)
                         if comp_type is None:
@@ -12105,13 +12102,11 @@ class ASTLowering:
             has_dynamic_bounds = False
             if type_node.index_subtypes:
                 for idx_range in type_node.index_subtypes:
-                    if isinstance(idx_range, RangeExpr):
-                        low = self._eval_static_expr(idx_range.low)
-                        high = self._eval_static_expr(idx_range.high)
-                        if low is None or high is None:
-                            has_dynamic_bounds = True
-                        else:
-                            bounds.append((low, high))
+                    low, high = self._extract_index_bounds(idx_range)
+                    if low is None or high is None:
+                        has_dynamic_bounds = True
+                    else:
+                        bounds.append((low, high))
             # Only create ArrayType if all bounds are static
             if not has_dynamic_bounds and bounds:
                 comp_type = IntegerType(name="Integer", size_bits=16)
@@ -12221,18 +12216,20 @@ class ASTLowering:
                             has_dynamic_bounds = False
                             if type_def.index_subtypes:
                                 idx_range = type_def.index_subtypes[0]
-                                if isinstance(idx_range, RangeExpr):
-                                    low = self._eval_static_expr(idx_range.low)
-                                    high = self._eval_static_expr(idx_range.high)
-                                    if low is None or high is None:
-                                        has_dynamic_bounds = True
+                                low, high = self._extract_index_bounds(idx_range)
+                                if low is not None and high is not None:
+                                    bounds.append((low, high))
+                                elif low is None and high is None:
+                                    if isinstance(idx_range, SubtypeIndication):
+                                        # Check if it's an unconstrained array (has BoxConstraint)
+                                        from uada80.ast_nodes import BoxConstraint
+                                        if isinstance(idx_range.constraint, BoxConstraint):
+                                            is_unconstrained = True
+                                        elif idx_range.constraint is None:
+                                            # SubtypeIndication with no constraint = unconstrained
+                                            has_dynamic_bounds = True
                                     else:
-                                        bounds.append((low, high))
-                                elif isinstance(idx_range, SubtypeIndication):
-                                    # Check if it's an unconstrained array (has BoxConstraint)
-                                    from uada80.ast_nodes import BoxConstraint
-                                    if isinstance(idx_range.constraint, BoxConstraint):
-                                        is_unconstrained = True
+                                        has_dynamic_bounds = True
                             # Resolve component type
                             comp_type = IntegerType(name="Integer", size_bits=16)
                             if type_def.component_type:
@@ -18431,11 +18428,7 @@ class ASTLowering:
             if type_mark.index_subtypes:
                 total_elem_count = 1
                 for idx_range in type_mark.index_subtypes:
-                    first = None
-                    last = None
-                    if isinstance(idx_range, RangeExpr):
-                        first = self._eval_static_expr(idx_range.low)
-                        last = self._eval_static_expr(idx_range.high)
+                    first, last = self._extract_index_bounds(idx_range)
                     if first is not None and last is not None:
                         total_elem_count *= (last - first + 1)
                 # Get element size
@@ -18514,11 +18507,9 @@ class ASTLowering:
                                                     # Calculate array size
                                                     elem_count = 1
                                                     for idx_range in field_typedef.index_subtypes:
-                                                        if isinstance(idx_range, RangeExpr):
-                                                            first = self._eval_static_expr(idx_range.low)
-                                                            last = self._eval_static_expr(idx_range.high)
-                                                            if first is not None and last is not None:
-                                                                elem_count *= (last - first + 1)
+                                                        first, last = self._extract_index_bounds(idx_range)
+                                                        if first is not None and last is not None:
+                                                            elem_count *= (last - first + 1)
                                                     field_size = elem_count * 2  # Each element is 2 bytes
                                                 break
                                 # Multiply by number of names in this component
@@ -18531,18 +18522,7 @@ class ASTLowering:
                         if isinstance(type_def, ArrayTypeDef) and type_def.index_subtypes:
                             total_elem_count = 1
                             for idx_range in type_def.index_subtypes:
-                                first = None
-                                last = None
-                                # Handle RangeExpr (has 'low' and 'high' attributes)
-                                if isinstance(idx_range, RangeExpr):
-                                    first = self._eval_static_expr(idx_range.low)
-                                    last = self._eval_static_expr(idx_range.high)
-                                else:
-                                    # Check for 'low'/'high' or 'first'/'last' attributes
-                                    first = self._eval_static_expr(getattr(idx_range, 'low', None) or
-                                                                   getattr(idx_range, 'first', None))
-                                    last = self._eval_static_expr(getattr(idx_range, 'high', None) or
-                                                                  getattr(idx_range, 'last', None))
+                                first, last = self._extract_index_bounds(idx_range)
                                 if first is not None and last is not None:
                                     total_elem_count *= (last - first + 1)
                             # Get element size
@@ -18648,6 +18628,25 @@ class ASTLowering:
                     return 1  # Enumeration fits in a byte
 
         return size
+
+    def _extract_index_bounds(self, idx_range) -> tuple[int | None, int | None]:
+        """Extract (low, high) bounds from an index range AST node.
+
+        Handles both RangeExpr (1..10) and SubtypeIndication with
+        RangeConstraint (Integer range 1..10).
+        Returns (None, None) if bounds can't be statically determined.
+        """
+        if isinstance(idx_range, RangeExpr):
+            low = self._eval_static_expr(idx_range.low)
+            high = self._eval_static_expr(idx_range.high)
+            return (low, high)
+        if isinstance(idx_range, SubtypeIndication):
+            if isinstance(idx_range.constraint, RangeConstraint):
+                rng = idx_range.constraint.range_expr
+                low = self._eval_static_expr(rng.low)
+                high = self._eval_static_expr(rng.high)
+                return (low, high)
+        return (None, None)
 
     def _eval_static_expr(self, expr) -> int | None:
         """Evaluate a static expression to an integer value."""
