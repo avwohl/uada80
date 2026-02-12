@@ -11950,6 +11950,15 @@ class ASTLowering:
                     if local.ada_type:
                         # ada_type might be AST node or AdaType - resolve it
                         return self._resolve_local_type(local.ada_type)
+                # Also check enclosing contexts (for nested subprograms)
+                enc = getattr(self.ctx, 'enclosing_ctx', None)
+                while enc:
+                    name = expr.name.lower()
+                    if name in enc.locals:
+                        local = enc.locals[name]
+                        if local.ada_type:
+                            return self._resolve_local_type(local.ada_type)
+                    enc = getattr(enc, 'enclosing_ctx', None)
             # Then check symbol table
             sym = self.symbols.lookup(expr.name)
             if sym and sym.ada_type:
@@ -11958,6 +11967,22 @@ class ASTLowering:
             # Result type depends on operator and operand types
             left_type = self._get_expr_type(expr.left)
             return left_type  # Simplified: assume result is same as left operand
+        elif isinstance(expr, TypeConversion):
+            # Type conversion result is the target type
+            return self._resolve_local_type(expr.type_mark)
+        elif isinstance(expr, IndexedComponent):
+            # Check if this is a type conversion: Package.Type(Expr)
+            # The parser can't distinguish Type(X) from Array(X), so we check
+            # if the prefix resolves to a type name.
+            if isinstance(expr.prefix, SelectedName):
+                target_type = self._resolve_local_type(expr.prefix)
+                if target_type:
+                    return target_type
+            elif isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.kind in (SymbolKind.TYPE, SymbolKind.SUBTYPE):
+                    if sym.ada_type:
+                        return sym.ada_type
         elif isinstance(expr, FunctionCall):
             if isinstance(expr.name, Identifier):
                 sym = self.symbols.lookup(expr.name.name)
@@ -12013,6 +12038,23 @@ class ASTLowering:
             sym = self.symbols.lookup(selector)
             if sym and sym.ada_type:
                 return sym.ada_type
+            # Fallback: look up the prefix as a package and search its public_symbols.
+            # During lowering, the scope stack may not include USE'd package scopes,
+            # so types like C3900010.Alert_Type can't be found by regular lookup.
+            prefix_name = None
+            if isinstance(type_node.prefix, Identifier):
+                prefix_name = type_node.prefix.name.lower()
+            elif isinstance(type_node.prefix, SelectedName):
+                prefix_name = self._get_hierarchical_name(type_node.prefix).lower()
+            if prefix_name:
+                scope = self.symbols.current_scope
+                while scope is not None:
+                    pkg_sym = scope.lookup_local(prefix_name)
+                    if pkg_sym and hasattr(pkg_sym, 'public_symbols') and pkg_sym.public_symbols:
+                        type_sym = pkg_sym.public_symbols.get(selector)
+                        if type_sym and type_sym.ada_type:
+                            return type_sym.ada_type
+                    scope = scope.parent
             return None
         # If it's an Identifier, look up the type name
         if isinstance(type_node, Identifier):
@@ -12150,6 +12192,11 @@ class ASTLowering:
                             base_type=base_type,
                         )
             return base_type
+        # Handle IndexedComponent as discriminant-constrained type, e.g. R(4)
+        # The parser treats "R(4)" as IndexedComponent(prefix=Identifier('R'), indices=[4])
+        # but in type context this is a discriminant constraint, not array indexing.
+        if isinstance(type_node, IndexedComponent):
+            return self._resolve_local_type(type_node.prefix)
         return None
 
     def _get_array_bounds_from_expr(self, expr) -> Optional[list[tuple[int, int]]]:
@@ -12591,14 +12638,66 @@ class ASTLowering:
             # Check for overloaded function - use unique label if available
             # Use type signature from resolved symbol to match definition
             type_sig = self._get_param_type_sig_from_symbol(sym)
-            # For nested subprograms, check the simple nested label map first
-            # (doesn't require type signature matching since nested can't be overloaded)
-            # But skip if it would create self-recursion in a generic instantiation
+            # If sym is None but we can determine argument types, build a type sig
+            # from the actual argument types. This handles the case where symbol lookup
+            # fails during lowering (e.g., use-visible overloaded functions from nested
+            # packages) but we can still determine which overload to call.
+            if not type_sig and expr.args:
+                arg_type_names = []
+                for arg in expr.args:
+                    arg_expr = arg.value if hasattr(arg, 'value') else arg
+                    arg_type = self._get_expr_type(arg_expr)
+                    if arg_type:
+                        arg_type_names.append(arg_type.name.lower())
+                if arg_type_names:
+                    arg_sig = ",".join(arg_type_names)
+                    # Search the function label map for entries matching this function
+                    # name and argument signature. We don't know the return type, so
+                    # look for any entry where the function name and param part match.
+                    for key in self._function_label_map:
+                        key_name = key[1]  # function name
+                        key_sig = key[2]   # type signature string
+                        if key_name == call_target and (key_sig.startswith(arg_sig + "->") or key_sig == arg_sig):
+                            type_sig = key_sig
+                            break
             generic_orig = getattr(self, '_generic_original_name', None)
             current_func_label = None
             if self.ctx and self.ctx.subprogram_name and self.builder.function:
                 current_func_label = self.builder.function.name
-            if call_target in self._nested_subprogram_labels:
+            # When we have a type signature, try the function label map first
+            # (it handles overloaded functions correctly, unlike _nested_subprogram_labels
+            # which only stores the last registered overload for each name).
+            _resolved_via_label_map = False
+            if type_sig and call_target in self._nested_subprogram_labels:
+                scope_prefix = ""
+                if self.ctx and self.ctx.subprogram_name:
+                    scope_prefix = self.ctx.subprogram_name + "_"
+                # Try label map with scope prefix first
+                for _prefix in [scope_prefix, ""]:
+                    label_key = (_prefix, call_target, type_sig)
+                    resolved_label = self._function_label_map.get(label_key)
+                    if resolved_label and not (generic_orig and current_func_label and resolved_label == current_func_label):
+                        call_target = resolved_label
+                        _resolved_via_label_map = True
+                        break
+                # Also try with enclosing context scope prefixes
+                if not _resolved_via_label_map and self.ctx:
+                    enc = getattr(self.ctx, 'enclosing_ctx', None)
+                    while enc and not _resolved_via_label_map:
+                        enc_prefix = (enc.subprogram_name + "_") if enc.subprogram_name else ""
+                        if enc_prefix:
+                            label_key = (enc_prefix, call_target, type_sig)
+                            resolved_label = self._function_label_map.get(label_key)
+                            if resolved_label and not (generic_orig and current_func_label and resolved_label == current_func_label):
+                                call_target = resolved_label
+                                _resolved_via_label_map = True
+                        enc = getattr(enc, 'enclosing_ctx', None)
+                if not _resolved_via_label_map:
+                    # Type sig didn't match any label map entry — fall back to nested labels
+                    resolved = self._nested_subprogram_labels[call_target]
+                    if not (generic_orig and current_func_label and resolved == current_func_label):
+                        call_target = resolved
+            elif call_target in self._nested_subprogram_labels:
                 resolved = self._nested_subprogram_labels[call_target]
                 if generic_orig and current_func_label and resolved == current_func_label:
                     pass  # Skip: would create self-recursion in generic body
@@ -17783,7 +17882,7 @@ class ASTLowering:
 
             # Check if this is a record field that is an array (not a function call)
             # E.g., X.Values(2) where X is a record with array field Values
-            from uada80.type_system import RecordType, ArrayType
+            from uada80.type_system import RecordType, ArrayType, AccessType as _AccTChk
             is_array_field = False
             rec_prefix = expr.prefix.prefix
 
@@ -17794,6 +17893,9 @@ class ASTLowering:
                 for comp in rec_type.components:
                     if comp.name.lower() == field_name.lower():
                         ct = comp.component_type
+                        # Follow access type to designated type (implicit dereference)
+                        if isinstance(ct, _AccTChk) and ct.designated_type:
+                            ct = ct.designated_type
                         if isinstance(ct, ArrayType):
                             return True
                         if hasattr(ct, 'kind') and ct.kind == TypeKind.ARRAY:

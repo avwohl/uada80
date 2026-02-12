@@ -4714,13 +4714,22 @@ class SemanticAnalyzer:
         # Track loop label for exit validation
         self.loop_labels.append(stmt.label.lower() if stmt.label else None)
 
+        # Create a symbol for the loop label if present (like block labels)
+        loop_label_symbol = None
+        if stmt.label:
+            loop_label_symbol = Symbol(
+                name=stmt.label,
+                kind=SymbolKind.LABEL,
+            )
+            self.symbols.define(loop_label_symbol)
+
         if stmt.iteration_scheme:
             if isinstance(stmt.iteration_scheme, WhileScheme):
                 cond_type = self._analyze_expr(stmt.iteration_scheme.condition, expected_type=PREDEFINED_TYPES["Boolean"])
                 self._check_boolean(cond_type, stmt.iteration_scheme.condition)
             elif isinstance(stmt.iteration_scheme, ForScheme):
-                # Enter scope for loop variable
-                self.symbols.enter_scope()
+                # Enter scope for loop variable (named if loop has a label)
+                self.symbols.enter_scope(stmt.label if stmt.label else None)
                 iterator = stmt.iteration_scheme.iterator
                 iter_type = self._analyze_expr(iterator.iterable)
 
@@ -4758,6 +4767,11 @@ class SemanticAnalyzer:
             self._analyze_statement(s)
 
         if isinstance(stmt.iteration_scheme, ForScheme):
+            # Collect loop scope symbols for prefix access (LP.I)
+            if loop_label_symbol:
+                loop_label_symbol.public_symbols = {}
+                for sym in self.symbols.current_scope_symbols():
+                    loop_label_symbol.public_symbols[sym.name.lower()] = sym
             self.symbols.leave_scope()
 
         self.loop_labels.pop()

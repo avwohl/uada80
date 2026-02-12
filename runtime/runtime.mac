@@ -1361,6 +1361,52 @@ _str_cmp_done:
     RET
 
 ; ============================================================
+; _memcmp - Compare two memory blocks byte-by-byte
+; Input: Stack: ptr1 (IX+8), ptr2 (IX+6), size (IX+4)
+; Output: HL = 0 if equal, 1 if different
+; Destroys: A, BC, DE, HL
+; ============================================================
+    PUBLIC _memcmp
+_memcmp:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+    PUSH BC
+    ; HL = ptr1, DE = ptr2, BC = size
+    LD L, (IX+8)
+    LD H, (IX+9)
+    LD E, (IX+6)
+    LD D, (IX+7)
+    LD C, (IX+4)
+    LD B, (IX+5)
+    LD A, B
+    OR C
+    JR Z, _memcmp_eq
+_memcmp_lp:
+    LD A, (HL)
+    PUSH HL
+    EX DE, HL
+    CP (HL)
+    EX DE, HL
+    POP HL
+    JR NZ, _memcmp_ne
+    INC HL
+    INC DE
+    DEC BC
+    LD A, B
+    OR C
+    JR NZ, _memcmp_lp
+_memcmp_eq:
+    LD HL, 0
+    JR _memcmp_dn
+_memcmp_ne:
+    LD HL, 1
+_memcmp_dn:
+    POP BC
+    POP IX
+    RET
+
+; ============================================================
 ; _int_to_str - Convert integer to string
 ; Input: Stack: value (16-bit signed at IX+4)
 ; Output: HL = pointer to null-terminated string in static buffer
