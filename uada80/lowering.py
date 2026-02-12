@@ -8414,6 +8414,10 @@ class ASTLowering:
         if isinstance(expr, Identifier):
             # Get the address of the variable
             name = expr.name.lower()
+            # Check named numbers first — convert to float64 literal
+            if name in self.ctx.named_numbers:
+                val = self.ctx.named_numbers[name]
+                return self._lower_float64_literal(float(val))
             if name in self.ctx.locals:
                 local = self.ctx.locals[name]
                 result = self.builder.new_vreg(IRType.PTR, f"_addr_{name}")
@@ -8427,6 +8431,9 @@ class ASTLowering:
                 return result
             # Could be a global
             sym = self.symbols.lookup(name)
+            if sym and sym.kind == SymbolKind.CONSTANT and sym.value is not None:
+                # Constant — convert to float64 literal
+                return self._lower_float64_literal(float(sym.value))
             if sym:
                 result = self.builder.new_vreg(IRType.PTR, f"_addr_{name}")
                 self.builder.emit(IRInstr(
