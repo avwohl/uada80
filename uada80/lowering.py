@@ -12112,6 +12112,22 @@ class ASTLowering:
                         else:
                             call_target = self._mangle_operator_name(sym.name.lower())
 
+                    # Resolve nested subprogram labels (e.g., C34018A.G -> c34018a_g)
+                    if call_target in self._nested_subprogram_labels:
+                        call_target = self._nested_subprogram_labels[call_target]
+                    else:
+                        type_sig = self._get_param_type_sig_from_symbol(sym) if sym else ""
+                        scope_prefix = ""
+                        if self.ctx and self.ctx.subprogram_name:
+                            scope_prefix = self.ctx.subprogram_name + "_"
+                        label_key = (scope_prefix, call_target, type_sig)
+                        if label_key in self._function_label_map:
+                            call_target = self._function_label_map[label_key]
+                        else:
+                            label_key = ("", call_target, type_sig)
+                            if label_key in self._function_label_map:
+                                call_target = self._function_label_map[label_key]
+
                     # Push arguments in reverse order
                     stack_slots = 0
                     if expr.args:
@@ -12832,13 +12848,18 @@ class ASTLowering:
                     prefix_type = sym.ada_type
 
                 # Also check local type declarations (for locally declared enums)
-                if prefix_type is None and hasattr(self, '_current_body_declarations'):
+                # Search the full body declarations stack (not just current block)
+                if prefix_type is None and hasattr(self, '_body_declarations_stack'):
                     from uada80.ast_nodes import EnumerationTypeDef
-                    for d in self._current_body_declarations:
-                        if isinstance(d, TypeDecl) and d.name.lower() == type_name:
-                            if isinstance(d.type_def, EnumerationTypeDef) and d.type_def.literals:
-                                enum_literals = d.type_def.literals
-                                break
+                    for decl_list in reversed(self._body_declarations_stack):
+                        for d in decl_list:
+                            if isinstance(d, TypeDecl) and d.name.lower() == type_name:
+                                if isinstance(d.type_def, EnumerationTypeDef) and d.type_def.literals:
+                                    enum_literals = d.type_def.literals
+                                if enum_literals:
+                                    break
+                        if enum_literals:
+                            break
 
             # Check if it's an enumeration type (but not Boolean which has special handling)
             from uada80.type_system import EnumerationType
@@ -12968,14 +12989,18 @@ class ASTLowering:
                     prefix_type = sym.ada_type
 
                 # Also check local type declarations (for locally declared enums)
-                if prefix_type is None and hasattr(self, '_current_body_declarations'):
+                # Search the full body declarations stack (not just current block)
+                if prefix_type is None and hasattr(self, '_body_declarations_stack'):
                     from uada80.ast_nodes import EnumerationTypeDef
-                    for d in self._current_body_declarations:
-                        if isinstance(d, TypeDecl) and d.name.lower() == type_name:
-                            if isinstance(d.type_def, EnumerationTypeDef) and d.type_def.literals:
-                                # Build EnumerationType-like info for local enum
-                                enum_literals = d.type_def.literals
-                                break
+                    for decl_list in reversed(self._body_declarations_stack):
+                        for d in decl_list:
+                            if isinstance(d, TypeDecl) and d.name.lower() == type_name:
+                                if isinstance(d.type_def, EnumerationTypeDef) and d.type_def.literals:
+                                    enum_literals = d.type_def.literals
+                                if enum_literals:
+                                    break
+                        if enum_literals:
+                            break
 
             # Check if it's a Float64 type (Long_Float)
             if self._is_float64_type(prefix_type):
