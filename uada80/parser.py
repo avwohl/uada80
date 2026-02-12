@@ -472,11 +472,32 @@ class Parser:
                     if self.check(TokenType.RIGHT_PAREN):
                         # Empty aggregate - null record
                         expr = Aggregate(components=[], span=self.make_span(start))
+                    elif self.check(TokenType.NULL) and self.peek(1) and self.peek(1).type == TokenType.RECORD:
+                        # null record aggregate
+                        self.advance()  # consume NULL
+                        self.advance()  # consume RECORD
+                        expr = Aggregate(components=[], span=self.make_span(start))
                     else:
                         components = self.parse_aggregate_components()
-                        if len(components) == 1 and components[0].choices is None:
-                            # Single positional component - extract as expression
-                            expr = components[0].value
+                        if len(components) == 1 and not components[0].choices:
+                            first_expr = components[0].value
+                            # Check for extension aggregate: (Base_Expr with ...)
+                            if self.check(TokenType.WITH):
+                                self.advance()  # consume WITH
+                                if self.check(TokenType.NULL) and self.peek(1) and self.peek(1).type == TokenType.RECORD:
+                                    self.advance()  # consume NULL
+                                    self.advance()  # consume RECORD
+                                    ext_components = []
+                                else:
+                                    ext_components = self.parse_aggregate_components()
+                                expr = ExtensionAggregate(
+                                    ancestor_part=first_expr,
+                                    components=ext_components,
+                                    span=self.make_span(start),
+                                )
+                            else:
+                                # Single positional component - extract as expression
+                                expr = first_expr
                         else:
                             # Multiple components or named - it's an aggregate
                             expr = Aggregate(components=components, span=self.make_span(start))
@@ -605,6 +626,11 @@ class Parser:
             self.advance()  # consume '=>'
             value = self.parse_expression()
             return ActualParameter(name="others", value=value)
+
+        # Handle BOX (<>) in generic instantiation contexts
+        if self.check(TokenType.BOX):
+            self.advance()  # consume <>
+            return ActualParameter(name=None, value=BoxExpr(span=self.make_span(self.current)))
 
         # Positional parameter
         value = self.parse_expression()
@@ -882,6 +908,29 @@ class Parser:
 
         if self.match(TokenType.NULL):
             return NullLiteral(span=self.make_span(start))
+
+        # Ada 2012 if expression without parens (e.g., as a function argument)
+        if self.check(TokenType.IF):
+            self.advance()  # consume IF
+            condition = self.parse_expression()
+            self.expect(TokenType.THEN)
+            then_expr = self.parse_expression()
+            elsif_parts = []
+            while self.match(TokenType.ELSIF):
+                elsif_cond = self.parse_expression()
+                self.expect(TokenType.THEN)
+                elsif_expr = self.parse_expression()
+                elsif_parts.append((elsif_cond, elsif_expr))
+            else_expr = None
+            if self.match(TokenType.ELSE):
+                else_expr = self.parse_expression()
+            return IfExpr(
+                condition=condition,
+                then_expr=then_expr,
+                elsif_parts=elsif_parts,
+                else_expr=else_expr,
+                span=self.make_span(start),
+            )
 
         # Ada 2012 raise expression: raise Exception [with "message"]
         if self.match(TokenType.RAISE):
@@ -1360,6 +1409,12 @@ class Parser:
     def parse_aggregate_components(self) -> list[ComponentAssociation]:
         """Parse aggregate component associations."""
         components = []
+
+        # Handle null record aggregate: (null record)
+        if self.check(TokenType.NULL) and self.peek(1) and self.peek(1).type == TokenType.RECORD:
+            self.advance()  # consume NULL
+            self.advance()  # consume RECORD
+            return components  # Empty component list = null record
 
         if self.match(TokenType.OTHERS):
             self.expect(TokenType.ARROW)
@@ -3559,6 +3614,13 @@ class Parser:
         # Parse generic unit
         if self.match(TokenType.PACKAGE):
             name = self.parse_dotted_name()  # Support child packages like Ada.Direct_IO
+            # Generic package renaming: generic package X renames Y;
+            if self.match(TokenType.RENAMES):
+                renames_target = self.parse_name()
+                self.expect(TokenType.SEMICOLON)
+                pkg = PackageDecl(name=name, renames=renames_target, is_generic=True, span=self.make_span(start))
+                pkg.generic_formals = formals
+                return pkg
             pkg = self.parse_package_specification(name, start)
             pkg.generic_formals = formals
             pkg.is_generic = True  # Mark as generic even if no formals
@@ -3945,6 +4007,12 @@ class Parser:
         entries = []
         declarations = []
         interfaces = []
+        discriminants = []
+
+        # Parse optional discriminant part for task types
+        if is_type and self.match(TokenType.LEFT_PAREN):
+            discriminants = self.parse_discriminant_specifications()
+            self.expect(TokenType.RIGHT_PAREN)
 
         # Check for task spec
         if self.match(TokenType.IS):
@@ -3984,6 +4052,7 @@ class Parser:
 
         return TaskTypeDecl(
             name=name,
+            discriminants=discriminants,
             entries=entries,
             declarations=declarations,
             interfaces=interfaces,
@@ -4175,6 +4244,12 @@ class Parser:
 
         items = []
         interfaces = []
+        discriminants = []
+
+        # Parse optional discriminant part for protected types
+        if is_type and self.match(TokenType.LEFT_PAREN):
+            discriminants = self.parse_discriminant_specifications()
+            self.expect(TokenType.RIGHT_PAREN)
 
         # Check for protected spec
         if self.match(TokenType.IS):
@@ -4196,6 +4271,15 @@ class Parser:
                 elif self.match(TokenType.ENTRY):
                     entry = self.parse_entry_declaration()
                     items.append(entry)
+                elif self.check(TokenType.PRAGMA):
+                    # Skip pragmas in protected spec
+                    self.advance()  # consume PRAGMA
+                    self.expect_identifier()  # pragma name
+                    if self.match(TokenType.LEFT_PAREN):
+                        while not self.check(TokenType.RIGHT_PAREN, TokenType.EOF):
+                            self.advance()
+                        self.expect(TokenType.RIGHT_PAREN)
+                    self.expect(TokenType.SEMICOLON)
                 else:
                     break
 
@@ -4216,7 +4300,7 @@ class Parser:
 
         self.expect(TokenType.SEMICOLON)
 
-        return ProtectedTypeDecl(name=name, items=items, interfaces=interfaces, span=self.make_span(start))
+        return ProtectedTypeDecl(name=name, discriminants=discriminants, items=items, interfaces=interfaces, span=self.make_span(start))
 
     def parse_protected_body_impl(self, name: str, start: Token) -> ProtectedBody:
         """Parse protected body implementation after PROTECTED BODY name has been consumed.

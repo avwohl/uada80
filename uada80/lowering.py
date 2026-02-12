@@ -75,6 +75,7 @@ from uada80.ast_nodes import (
     Allocator,
     Dereference,
     ConditionalExpr,
+    IfExpr,
     QuantifiedExpr,
     MembershipTest,
     CaseExpr,
@@ -7422,7 +7423,7 @@ class ASTLowering:
         if isinstance(expr, Slice):
             return self._lower_slice(expr)
 
-        if isinstance(expr, ConditionalExpr):
+        if isinstance(expr, (ConditionalExpr, IfExpr)):
             return self._lower_conditional_expr(expr)
 
         if isinstance(expr, QuantifiedExpr):

@@ -172,6 +172,30 @@ class NullLiteral(Expr):
 
 
 @dataclass
+class BoxExpr(Expr):
+    """Box expression (<>) used in generic formal package instantiations.
+
+    Indicates "any valid instantiation" for a generic formal parameter.
+    Example: with package P is new G (<>);
+    """
+
+    pass
+
+
+@dataclass
+class IfExpr(Expr):
+    """If expression (Ada 2012).
+
+    Example: (if X > 0 then X else -X)
+    """
+
+    condition: Expr = None
+    then_expr: Expr = None
+    elsif_parts: list = None  # list of (condition, expr) tuples
+    else_expr: Expr = None
+
+
+@dataclass
 class TargetName(Expr):
     """Target name '@' (Ada 2022).
 

@@ -38,6 +38,7 @@ from uada80.ast_nodes import (
     TypeConversion,
     QualifiedExpr,
     ConditionalExpr,
+    IfExpr,
     # Choices for case statements
     Choice,
     ExprChoice,
@@ -397,7 +398,7 @@ class ASTOptimizer:
             return self._optimize_function_call(expr)
         elif isinstance(expr, RangeExpr):
             return self._optimize_range(expr)
-        elif isinstance(expr, ConditionalExpr):
+        elif isinstance(expr, (ConditionalExpr, IfExpr)):
             return self._optimize_conditional_expr(expr)
         elif isinstance(expr, TypeConversion):
             return self._optimize_type_conversion(expr)

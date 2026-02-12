@@ -88,6 +88,7 @@ from uada80.ast_nodes import (
     QualifiedExpr,
     Allocator,
     ConditionalExpr,
+    IfExpr,
     QuantifiedExpr,
     DeclareExpr,
     CaseExpr,
@@ -97,6 +98,7 @@ from uada80.ast_nodes import (
     Slice,
     Dereference,
     TargetName,
+    BoxExpr,
     RaiseExpr,
     # Type definitions
     TypeDef,
@@ -5357,7 +5359,7 @@ class SemanticAnalyzer:
             return self._analyze_container_aggregate(expr)
         elif isinstance(expr, Allocator):
             return self._analyze_allocator(expr)
-        elif isinstance(expr, ConditionalExpr):
+        elif isinstance(expr, (ConditionalExpr, IfExpr)):
             return self._analyze_conditional_expr(expr)
         elif isinstance(expr, QuantifiedExpr):
             return self._analyze_quantified_expr(expr)
@@ -5375,6 +5377,9 @@ class SemanticAnalyzer:
             return self._analyze_target_name(expr)
         elif isinstance(expr, RaiseExpr):
             return self._analyze_raise_expr(expr)
+        elif isinstance(expr, BoxExpr):
+            # Box (<>) in generic instantiation context - just a placeholder
+            return None
 
         return None
 
