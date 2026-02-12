@@ -1843,11 +1843,17 @@ class SemanticAnalyzer:
         from uada80.ast_nodes import GenericObjectDecl
         for formal in generic_decl.generic_formals:
             formal_name = getattr(formal, 'name', None) or getattr(formal, 'type_name', None)
-            if not formal_name or formal_name.lower() not in formal_to_actual:
+            if not formal_name:
                 continue
-            actual = formal_to_actual[formal_name.lower()]
-            # Unwrap ActualParameter to get the raw expression
-            actual_expr = getattr(actual, 'value', actual)
+            if formal_name.lower() in formal_to_actual:
+                actual = formal_to_actual[formal_name.lower()]
+                # Unwrap ActualParameter to get the raw expression
+                actual_expr = getattr(actual, 'value', actual)
+            elif isinstance(formal, GenericObjectDecl) and getattr(formal, 'default_value', None):
+                # Use the default value when no actual is provided
+                actual_expr = formal.default_value
+            else:
+                continue
             if isinstance(formal, GenericTypeDecl):
                 # Type formal: create a type symbol with the actual type
                 type_name = formal.name
@@ -6638,6 +6644,19 @@ class SemanticAnalyzer:
             for entry in prefix_type.entries:
                 if entry.name.lower() == selector_lower:
                     return None  # Entry calls are statements
+            # Before rejecting, check if this is an expanded name for a local
+            # declaration within the current task body (e.g., L.R where R is a
+            # local variable in task L's body)
+            prefix_name = None
+            if isinstance(expr.prefix, Identifier):
+                prefix_name = expr.prefix.name.lower()
+            if prefix_name:
+                local_sym = self.symbols.lookup(expr.selector)
+                if local_sym and local_sym.kind in (
+                    SymbolKind.VARIABLE, SymbolKind.CONSTANT,
+                    SymbolKind.TYPE, SymbolKind.FUNCTION, SymbolKind.PROCEDURE,
+                ):
+                    return local_sym.ada_type
             self.error(
                 f"task type '{prefix_type.name}' has no entry '{expr.selector}'",
                 expr,
