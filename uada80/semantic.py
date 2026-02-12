@@ -3416,7 +3416,7 @@ class SemanticAnalyzer:
 
     def _build_real_type(
         self, name: str, type_def: RealTypeDef
-    ) -> FloatType:
+    ) -> "AdaType":
         """Build a floating-point or fixed-point type."""
         digits = 6  # Default precision
         range_first = None
@@ -3441,21 +3441,24 @@ class SemanticAnalyzer:
             except (TypeError, ValueError):
                 pass
 
-        # Determine the type kind based on is_floating
-        type_kind = TypeKind.FLOAT if type_def.is_floating else TypeKind.FIXED
+        # Create FixedType for fixed-point, FloatType for floating-point
+        if not type_def.is_floating:
+            return FixedType(
+                name=name,
+                size_bits=32,
+                delta=delta_value if delta_value is not None else 0.0,
+                range_first=range_first if range_first is not None else 0.0,
+                range_last=range_last if range_last is not None else 0.0,
+                digits=digits if type_def.digits_expr else None,
+            )
 
-        result = FloatType(
+        return FloatType(
             name=name,
-            kind=type_kind,
             size_bits=32 if digits <= 6 else 64,
             digits=digits,
             range_first=range_first,
             range_last=range_last,
         )
-        # Store delta value for fixed-point types
-        if delta_value is not None:
-            result.delta_value = delta_value
-        return result
 
     def _build_enumeration_type(
         self, name: str, type_def: EnumerationTypeDef
@@ -3766,6 +3769,21 @@ class SemanticAnalyzer:
                 modulus=parent.modulus,
             )
 
+        # Handle derivation from fixed type (check before FloatType)
+        if isinstance(parent, FixedType) or (
+            isinstance(parent, FloatType) and parent.kind == TypeKind.FIXED
+        ):
+            delta = getattr(parent, "delta", 0.0)
+            return FixedType(
+                name=name,
+                size_bits=parent.size_bits,
+                delta=delta,
+                range_first=parent.range_first,
+                range_last=parent.range_last,
+                digits=parent.digits,
+                base_type=parent if isinstance(parent, FixedType) else None,
+            )
+
         # Handle derivation from float type
         if isinstance(parent, FloatType):
             return FloatType(
@@ -3774,18 +3792,6 @@ class SemanticAnalyzer:
                 digits=parent.digits,
                 range_first=parent.range_first,
                 range_last=parent.range_last,
-                base_type=parent,
-            )
-
-        # Handle derivation from fixed type
-        if isinstance(parent, FixedType):
-            return FixedType(
-                name=name,
-                size_bits=parent.size_bits,
-                delta=parent.delta,
-                range_first=parent.range_first,
-                range_last=parent.range_last,
-                digits=parent.digits,
                 base_type=parent,
             )
 
@@ -7250,9 +7256,10 @@ class SemanticAnalyzer:
                     return type_obj.digits
 
                 # Fixed-point type attributes
+                if attr == "delta" and isinstance(type_obj, FixedType):
+                    return type_obj.delta
                 if attr == "delta" and hasattr(type_obj, "delta_value"):
-                    # Return as integer representation (not ideal, but works for static)
-                    return 1  # Placeholder - fixed point not fully supported
+                    return type_obj.delta_value
                 if attr == "fore" and hasattr(type_obj, "kind"):
                     return 2  # Typical default fore value
                 if attr == "aft" and hasattr(type_obj, "kind"):

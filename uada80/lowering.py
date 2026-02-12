@@ -11781,6 +11781,11 @@ class ASTLowering:
                     name=Identifier(actual_name),
                     args=expr.args
                 )
+            elif func_name in self._generic_type_map:
+                # This is a generic formal object used as a value (not a subprogram)
+                # Lower it as an identifier reference instead of a function call
+                actual_name = self._generic_type_map[func_name]
+                return self._lower_identifier(Identifier(name=actual_name))
 
         # Check for Unchecked_Conversion instantiation call
         sym = self.symbols.lookup(func_name)
