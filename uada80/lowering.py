@@ -239,6 +239,8 @@ class ASTLowering:
         # Track parameter default values for all subprograms
         # Maps subprogram name (lowercase) -> list of default value expressions (None if no default)
         self._subprogram_param_defaults: dict[str, list] = {}
+        # Track return types for functions (needed for attributes like F'First)
+        self._subprogram_return_types: dict[str, Any] = {}
         # Track which subprograms are nested (need static link at call sites)
         self._nested_subprograms: set[str] = set()
         # Stack of body declarations for nested scope lookup
@@ -689,15 +691,25 @@ class ASTLowering:
         if sym and sym.kind in (SymbolKind.GENERIC_PROCEDURE, SymbolKind.GENERIC_FUNCTION):
             return
 
+        # Resolve return type BEFORE entering scope (local types like STR
+        # are visible in enclosing scope, not inside the function's scope)
+        resolved_return_type = None
+        if spec.is_function and spec.return_type:
+            if sym and sym.return_type:
+                resolved_return_type = sym.return_type
+            else:
+                # Use _resolve_local_type which checks _body_declarations_stack
+                # (needed for types declared in enclosing DECLARE blocks)
+                resolved_return_type = self._resolve_local_type(spec.return_type)
+
         # Enter the subprogram's scope for symbol lookup
         # This mirrors what the semantic analyzer does
         self.symbols.enter_scope(spec.name)
 
         # Determine return type
         return_type = IRType.VOID
-        if spec.is_function and spec.return_type:
-            if sym and sym.return_type:
-                return_type = self._ada_type_to_ir(sym.return_type)
+        if resolved_return_type:
+            return_type = self._ada_type_to_ir(resolved_return_type)
 
         # Save builder state (for nested function support)
         old_function = self.builder.function
@@ -787,6 +799,9 @@ class ASTLowering:
         # Store unconstrained info (from ctx.unconstrained_params) for call sites
         unconstrained_list = [pname in self.ctx.unconstrained_params for pname in param_names]
         self._subprogram_unconstrained_params[spec.name.lower()] = unconstrained_list
+        # Store return type for functions (used for attribute lookups like F'First)
+        if resolved_return_type:
+            self._subprogram_return_types[spec.name.lower()] = resolved_return_type
 
         # Add outer variable pointer parameters AFTER regular params
         # (they are pushed before regular args at call site, so end up at higher offsets)
@@ -3192,7 +3207,14 @@ class ASTLowering:
         8-character symbol limit. Maps Ada label names (scoped by function)
         to unique assembly labels.
         """
-        label_str = label_node if isinstance(label_node, str) else label_node.name
+        if isinstance(label_node, str):
+            label_str = label_node
+        elif isinstance(label_node, SelectedName):
+            # GOTO Pkg.Label — use just the selector (label name)
+            # The prefix is a scope qualifier, already handled by the scope key
+            label_str = label_node.selector if isinstance(label_node.selector, str) else label_node.selector.name
+        else:
+            label_str = label_node.name
         # Create a scope-qualified key for the Ada label
         scope = self.ctx.subprogram_name if self.ctx and self.ctx.subprogram_name else ""
         key = (scope, label_str.lower())
@@ -13102,8 +13124,16 @@ class ASTLowering:
                 # Get the type - either from a TYPE symbol or from a VARIABLE symbol
                 if sym.kind == SymbolKind.TYPE:
                     ada_type = sym.ada_type
+                elif sym.kind == SymbolKind.FUNCTION and sym.return_type:
+                    # For functions, use the return type for attributes
+                    ada_type = sym.return_type
                 elif sym.ada_type:
                     ada_type = sym.ada_type
+
+            # Fallback: check locally-tracked subprogram return types
+            # (for local functions declared in DECLARE blocks not in symbol table)
+            if ada_type is None and var_name in self._subprogram_return_types:
+                ada_type = self._subprogram_return_types[var_name]
 
             if ada_type:
                 # Handle array attributes
@@ -13151,29 +13181,13 @@ class ASTLowering:
                                 self.builder.add(result, temp, Immediate(1, IRType.WORD))
                                 return result
                         else:
-                            # Not a parameter - fall back to strlen for strings
-                            if attr == "length":
-                                # Get pointer to string and call strlen
-                                # _str_len expects HL = string pointer, returns length in HL
-                                str_ptr = self._lower_expr(expr.prefix)
-                                # Store to HL for the call
-                                self.builder.emit(IRInstr(
-                                    OpCode.MOV,
-                                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
-                                    str_ptr,
-                                    comment="set HL for _str_len"
-                                ))
-                                self.builder.call(Label("_str_len"), comment="String'Length")
-                                result = self.builder.new_vreg(IRType.WORD, "_strlen")
-                                self.builder.emit(IRInstr(
-                                    OpCode.MOV, result,
-                                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
-                                    comment="capture String'Length result from HL"
-                                ))
-                                return result
+                            # Not a parameter - use index type bounds
+                            # Get the index type's first bound (default 1 for String)
+                            index_first = 1
+                            if ada_type.index_types and hasattr(ada_type.index_types[0], 'low'):
+                                index_first = ada_type.index_types[0].low
                             if attr == "first":
-                                # Unconstrained strings are 1-indexed in Ada
-                                return Immediate(1, IRType.WORD)
+                                return Immediate(index_first, IRType.WORD)
 
                 # Handle scalar type attributes (Integer'First, etc.)
                 if attr == "first" and hasattr(ada_type, "low"):
@@ -13299,6 +13313,33 @@ class ASTLowering:
                             comment=f"{var_name}'Address"
                         ))
                     return result
+
+        # Handle array/scalar attributes on non-Identifier prefixes (function calls, etc.)
+        # e.g., Concat1(X)'First, Pkg.Func'Last
+        if not isinstance(expr.prefix, Identifier) and attr in ("first", "last", "length"):
+            ada_type = self._get_expr_type(expr.prefix)
+            if ada_type and isinstance(ada_type, ArrayType):
+                if ada_type.is_constrained and ada_type.bounds:
+                    dim = 0
+                    if expr.args:
+                        dim_arg = expr.args[0]
+                        if isinstance(dim_arg, IntegerLiteral):
+                            dim = dim_arg.value - 1
+                    if dim < len(ada_type.bounds):
+                        low, high = ada_type.bounds[dim]
+                        if attr == "first":
+                            return Immediate(low, IRType.WORD)
+                        if attr == "last":
+                            return Immediate(high, IRType.WORD)
+                        if attr == "length":
+                            return Immediate(high - low + 1, IRType.WORD)
+                elif not ada_type.is_constrained:
+                    # Unconstrained - use index type bounds for 'First
+                    index_first = 1
+                    if ada_type.index_types and hasattr(ada_type.index_types[0], 'low'):
+                        index_first = ada_type.index_types[0].low
+                    if attr == "first":
+                        return Immediate(index_first, IRType.WORD)
 
         # Handle 'Access on SelectedName (package-qualified subprograms/variables)
         # e.g., C3A0012_0.Log_Calc_Fast'Access
