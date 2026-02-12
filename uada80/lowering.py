@@ -4418,6 +4418,12 @@ class ASTLowering:
                         low_val, high_val = bounds[0]  # First dimension
                         low = Immediate(low_val, IRType.WORD)
                         high = Immediate(high_val, IRType.WORD)
+                    elif (isinstance(iterator.iterable.prefix, Identifier) and self.ctx and
+                          iterator.iterable.prefix.name.lower() in self.ctx.unconstrained_params):
+                        # Unconstrained array parameter - use dope vector bounds
+                        pname = iterator.iterable.prefix.name.lower()
+                        low = self.ctx.params.get(f"{pname}'first", Immediate(1, IRType.WORD))
+                        high = self.ctx.params.get(f"{pname}'last", Immediate(1, IRType.WORD))
                     else:
                         # Fallback
                         low = Immediate(1, IRType.WORD)
