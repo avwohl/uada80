@@ -1265,7 +1265,9 @@ class Parser:
                 is_reverse = True
             iterable = self.parse_range_or_expression()
         elif self.match(TokenType.OF):
-            # for all X of Array => ...
+            # for all X of [reverse] Array => ...
+            if self.match(TokenType.REVERSE):
+                is_reverse = True
             iterable = self.parse_expression()
         else:
             raise ParseError("Expected 'in' or 'of' in quantified expression", self.current)
@@ -4052,9 +4054,20 @@ class Parser:
 
             # Parse entries and other declarations
             while not self.check(TokenType.END, TokenType.EOF):
-                if self.match(TokenType.ENTRY):
+                # Skip 'overriding' / 'not overriding' indicator (Ada 2005)
+                if self.match(TokenType.OVERRIDING):
+                    pass
+                elif self.check(TokenType.NOT) and self.peek(1) and self.peek(1).type == TokenType.OVERRIDING:
+                    self.advance()  # consume NOT
+                    self.advance()  # consume OVERRIDING
+                elif self.match(TokenType.ENTRY):
                     entry = self.parse_entry_declaration()
                     entries.append(entry)
+                elif self.check(TokenType.PROCEDURE, TokenType.FUNCTION):
+                    # Procedure/function declarations in task types (Ada 2005 interfaces)
+                    spec = self.parse_subprogram_specification()
+                    self.expect(TokenType.SEMICOLON)
+                    entries.append(spec)
                 elif self.check(TokenType.PRAGMA):
                     # Skip pragmas in task spec
                     self.advance()
@@ -4197,7 +4210,14 @@ class Parser:
 
             items = []
             while not self.check(TokenType.END, TokenType.EOF):
-                if self.check(TokenType.PROCEDURE, TokenType.FUNCTION):
+                # Skip 'overriding' / 'not overriding' indicator (Ada 2005)
+                if self.match(TokenType.OVERRIDING):
+                    continue
+                elif self.check(TokenType.NOT) and self.peek(1) and self.peek(1).type == TokenType.OVERRIDING:
+                    self.advance()  # consume NOT
+                    self.advance()  # consume OVERRIDING
+                    continue
+                elif self.check(TokenType.PROCEDURE, TokenType.FUNCTION):
                     item = self.parse_subprogram()
                     items.append(item)
                 elif self.match(TokenType.ENTRY):
@@ -4289,7 +4309,13 @@ class Parser:
 
             # Parse public part
             while not self.check(TokenType.PRIVATE, TokenType.END, TokenType.EOF):
-                if self.check(TokenType.PROCEDURE, TokenType.FUNCTION):
+                # Skip 'overriding' / 'not overriding' indicator (Ada 2005)
+                if self.match(TokenType.OVERRIDING):
+                    pass  # Just consume and continue
+                elif self.check(TokenType.NOT) and self.peek(1) and self.peek(1).type == TokenType.OVERRIDING:
+                    self.advance()  # consume NOT
+                    self.advance()  # consume OVERRIDING
+                elif self.check(TokenType.PROCEDURE, TokenType.FUNCTION):
                     spec = self.parse_subprogram_specification()
                     self.expect(TokenType.SEMICOLON)
                     items.append(spec)
