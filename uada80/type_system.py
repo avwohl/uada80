@@ -1191,6 +1191,12 @@ def types_compatible(t1: AdaType, t2: AdaType) -> bool:
         if is_derived_from(t1, t2.name) or is_derived_from(t2, t1.name):
             return True
 
+    # Derived type compatibility: allow implicit conversion between parent and derived
+    # This handles inherited operations (e.g., type T is new Parent; X : T := Create(30);
+    # where Create returns Parent but is inherited by T)
+    if is_derived_from(t1, t2.name) or is_derived_from(t2, t1.name):
+        return True
+
     # Interface compatibility: a tagged type is compatible with interfaces it implements
     if isinstance(t2, InterfaceType) and isinstance(t1, RecordType):
         if t1.is_tagged and t1.implements_interface(t2):
