@@ -6534,6 +6534,15 @@ class SemanticAnalyzer:
                         if op.kind == "function" and op.return_type:
                             return op.return_type
                         return None
+                for entry in designated.entries:
+                    if entry.name.lower() == selector_lower:
+                        return None
+            # Access to task type - implicit dereference for entries
+            if isinstance(designated, TaskType):
+                selector_lower = expr.selector.lower() if isinstance(expr.selector, str) else expr.selector.lower()
+                for entry in designated.entries:
+                    if entry.name.lower() == selector_lower:
+                        return None
 
         # Protected type operation access (Counter.Increment, Counter.Value)
         if isinstance(prefix_type, ProtectedType):
@@ -6546,6 +6555,10 @@ class SemanticAnalyzer:
                         return op.return_type
                     # For procedures and entries, return None (statement context)
                     return None
+            # Also check entries (protected entries are like operations)
+            for entry in prefix_type.entries:
+                if entry.name.lower() == selector_lower:
+                    return None  # Entry calls are statements
             # Check if it's a component access (shouldn't be allowed from outside)
             self.error(
                 f"protected type '{prefix_type.name}' has no visible operation '{expr.selector}'",
