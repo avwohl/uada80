@@ -1416,11 +1416,15 @@ class ASTLowering:
                     # Package-level rename: always need a stub
                     self._lower_subprogram_renaming(decl, alias_name)
                 elif alias_name and self.ctx:
-                    # Local rename: generate stub if target is a local function
-                    # (so external callers can link to it)
-                    target_lower = alias_name.lower().replace('.', '_')
-                    if (target_lower in self._nested_subprogram_labels or
-                        any(k[1] == target_lower for k in self._function_label_map)):
+                    # Local rename: generate a forwarding stub for local targets
+                    # (not library/runtime targets like Ada.Text_IO.Put)
+                    alias_lower = alias_name.lower()
+                    is_library = ('.' in alias_name and any(
+                        alias_lower.startswith(p) for p in (
+                            'ada.', 'system.', 'interfaces.', 'text_io.',
+                        )
+                    ))
+                    if not is_library:
                         self._lower_subprogram_renaming(decl, alias_name)
         elif isinstance(decl, TypeDecl):
             self._lower_type_decl(decl)
@@ -5055,6 +5059,13 @@ class ASTLowering:
                     selector = alias_name.split(".")[-1].lower()
                     self._lower_text_io_call(selector, stmt.args, False)
                     return
+                else:
+                    # Non-Text_IO renaming: redirect to alias target
+                    stmt = ProcedureCallStmt(
+                        name=Identifier(alias_name),
+                        args=stmt.args,
+                        span=getattr(stmt, 'span', None),
+                    )
 
             # Check if this is an access-to-subprogram call (indirect call)
             # Must check BEFORE _resolve_overload, since parameters/variables with

@@ -5832,8 +5832,9 @@ class SemanticAnalyzer:
         if prefix_type is None:
             return None
 
-        # Prefix must be an access type
-        if not isinstance(prefix_type, AccessType):
+        # Prefix must be an access type (AccessType or AccessSubprogramType)
+        from uada80.type_system import AccessSubprogramType
+        if not isinstance(prefix_type, (AccessType, AccessSubprogramType)):
             self.error(
                 f"dereference prefix must be an access type, got '{prefix_type.name}'",
                 expr.prefix,
@@ -5841,6 +5842,9 @@ class SemanticAnalyzer:
             return None
 
         # Return the designated type, resolving incomplete/private types
+        if isinstance(prefix_type, AccessSubprogramType):
+            # For access-to-subprogram, .all returns the subprogram type itself
+            return prefix_type
         designated = prefix_type.designated_type
         if designated and designated.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE):
             # Try to find the completed type
