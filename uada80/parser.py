@@ -477,6 +477,12 @@ class Parser:
                         self.advance()  # consume NULL
                         self.advance()  # consume RECORD
                         expr = Aggregate(components=[], span=self.make_span(start))
+                    elif self.check(TokenType.IF):
+                        # If expression inside qualified expression
+                        expr = self.parse_expression()
+                    elif self.check(TokenType.CASE):
+                        # Case expression inside qualified expression
+                        expr = self.parse_expression()
                     else:
                         components = self.parse_aggregate_components()
                         if len(components) == 1 and not components[0].choices:
@@ -929,6 +935,25 @@ class Parser:
                 then_expr=then_expr,
                 elsif_parts=elsif_parts,
                 else_expr=else_expr,
+                span=self.make_span(start),
+            )
+
+        # Ada 2012 case expression without parens (e.g., as a function argument)
+        if self.check(TokenType.CASE):
+            self.advance()  # consume CASE
+            selector = self.parse_expression()
+            self.expect(TokenType.IS)
+            alternatives = []
+            while self.match(TokenType.WHEN):
+                choices = self.parse_choice_list()
+                self.expect(TokenType.ARROW)
+                result_expr = self.parse_expression()
+                alternatives.append(CaseExprAlternative(choices=choices, result_expr=result_expr))
+                if not self.check(TokenType.WHEN) and not self.check(TokenType.RIGHT_PAREN):
+                    self.match(TokenType.COMMA)
+            return CaseExpr(
+                selector=selector,
+                alternatives=alternatives,
                 span=self.make_span(start),
             )
 
@@ -4286,11 +4311,24 @@ class Parser:
             # Private part
             if self.match(TokenType.PRIVATE):
                 while not self.check(TokenType.END, TokenType.EOF):
-                    decl = self.parse_declaration()
-                    if decl:
-                        items.append(decl)
+                    if self.match(TokenType.ENTRY):
+                        entry = self.parse_entry_declaration()
+                        items.append(entry)
+                    elif self.check(TokenType.PRAGMA):
+                        # Skip pragmas
+                        self.advance()
+                        self.expect_identifier()
+                        if self.match(TokenType.LEFT_PAREN):
+                            while not self.check(TokenType.RIGHT_PAREN, TokenType.EOF):
+                                self.advance()
+                            self.expect(TokenType.RIGHT_PAREN)
+                        self.expect(TokenType.SEMICOLON)
                     else:
-                        break
+                        decl = self.parse_declaration()
+                        if decl:
+                            items.append(decl)
+                        else:
+                            break
 
             self.expect(TokenType.END)
             if self.check(TokenType.IDENTIFIER):
