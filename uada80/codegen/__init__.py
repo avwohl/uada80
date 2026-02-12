@@ -6878,6 +6878,18 @@ class Z80CodeGen:
                     # Emit as raw assembly (already formatted)
                     self.output.append(f"        {line}")
 
+    @staticmethod
+    def _ix_in_range(offset: int, size: int = 2) -> bool:
+        """Check if IX displacement fits in signed 8 bits for all bytes."""
+        return -128 <= offset and offset + size - 1 <= 127
+
+    def _ix_addr_to_hl(self, offset: int) -> None:
+        """Compute IX + offset into HL. Clobbers DE."""
+        self._emit_instr("push", "ix")
+        self._emit_instr("pop", "hl")
+        self._emit_instr("ld", "de", str(offset))
+        self._emit_instr("add", "hl", "de")
+
     def _load_to_hl(self, value: IRValue) -> None:
         """Load a value into hl."""
         if isinstance(value, Immediate):
@@ -6887,8 +6899,16 @@ class Z80CodeGen:
             if value.is_atomic:
                 self._emit_instr("di")  # Disable interrupts
             offset = self._vreg_offset(value)
-            self._emit_instr("ld", "l", f"(ix{offset:+d})")
-            self._emit_instr("ld", "h", f"(ix{offset+1:+d})")
+            if self._ix_in_range(offset, 2):
+                self._emit_instr("ld", "l", f"(ix{offset:+d})")
+                self._emit_instr("ld", "h", f"(ix{offset+1:+d})")
+            else:
+                # Large offset: compute address in HL, then load word
+                self._ix_addr_to_hl(offset)
+                self._emit_instr("ld", "a", "(hl)")
+                self._emit_instr("inc", "hl")
+                self._emit_instr("ld", "h", "(hl)")
+                self._emit_instr("ld", "l", "a")
             if value.is_atomic:
                 self._emit_instr("ei")  # Enable interrupts
         elif isinstance(value, Label):
@@ -6903,8 +6923,17 @@ class Z80CodeGen:
             if value.is_atomic:
                 self._emit_instr("di")  # Disable interrupts
             offset = self._vreg_offset(value)
-            self._emit_instr("ld", "e", f"(ix{offset:+d})")
-            self._emit_instr("ld", "d", f"(ix{offset+1:+d})")
+            if self._ix_in_range(offset, 2):
+                self._emit_instr("ld", "e", f"(ix{offset:+d})")
+                self._emit_instr("ld", "d", f"(ix{offset+1:+d})")
+            else:
+                # Large offset: save HL, compute address, load word into DE
+                self._emit_instr("push", "hl")
+                self._ix_addr_to_hl(offset)
+                self._emit_instr("ld", "e", "(hl)")
+                self._emit_instr("inc", "hl")
+                self._emit_instr("ld", "d", "(hl)")
+                self._emit_instr("pop", "hl")
             if value.is_atomic:
                 self._emit_instr("ei")  # Enable interrupts
         elif isinstance(value, Label):
@@ -6919,7 +6948,14 @@ class Z80CodeGen:
             if value.is_atomic:
                 self._emit_instr("di")  # Disable interrupts
             offset = self._vreg_offset(value)
-            self._emit_instr("ld", "a", f"(ix{offset:+d})")
+            if self._ix_in_range(offset, 1):
+                self._emit_instr("ld", "a", f"(ix{offset:+d})")
+            else:
+                # Large offset: save HL, compute address, load byte
+                self._emit_instr("push", "hl")
+                self._ix_addr_to_hl(offset)
+                self._emit_instr("ld", "a", "(hl)")
+                self._emit_instr("pop", "hl")
             if value.is_atomic:
                 self._emit_instr("ei")  # Enable interrupts
 
@@ -6929,8 +6965,17 @@ class Z80CodeGen:
         if dst.is_atomic:
             self._emit_instr("di")  # Disable interrupts
         offset = self._vreg_offset(dst)
-        self._emit_instr("ld", f"(ix{offset:+d})", "l")
-        self._emit_instr("ld", f"(ix{offset+1:+d})", "h")
+        if self._ix_in_range(offset, 2):
+            self._emit_instr("ld", f"(ix{offset:+d})", "l")
+            self._emit_instr("ld", f"(ix{offset+1:+d})", "h")
+        else:
+            # Large offset: save value, compute address, store
+            self._emit_instr("push", "hl")      # save value
+            self._ix_addr_to_hl(offset)          # HL = address (clobbers DE)
+            self._emit_instr("pop", "de")        # DE = value
+            self._emit_instr("ld", "(hl)", "e")
+            self._emit_instr("inc", "hl")
+            self._emit_instr("ld", "(hl)", "d")
         if dst.is_atomic:
             self._emit_instr("ei")  # Enable interrupts
 
@@ -6940,7 +6985,14 @@ class Z80CodeGen:
         if dst.is_atomic:
             self._emit_instr("di")  # Disable interrupts
         offset = self._vreg_offset(dst)
-        self._emit_instr("ld", f"(ix{offset:+d})", "a")
+        if self._ix_in_range(offset, 1):
+            self._emit_instr("ld", f"(ix{offset:+d})", "a")
+        else:
+            # Large offset: save HL, compute address, store byte
+            self._emit_instr("push", "hl")
+            self._ix_addr_to_hl(offset)
+            self._emit_instr("ld", "(hl)", "a")
+            self._emit_instr("pop", "hl")
         if dst.is_atomic:
             self._emit_instr("ei")  # Enable interrupts
 
@@ -6995,8 +7047,15 @@ class Z80CodeGen:
             self._emit_instr("ex", "de", "hl")
         else:
             # Load from stack-relative address
-            self._emit_instr("ld", "l", f"(ix{mem.offset:+d})")
-            self._emit_instr("ld", "h", f"(ix{mem.offset+1:+d})")
+            if self._ix_in_range(mem.offset, 2):
+                self._emit_instr("ld", "l", f"(ix{mem.offset:+d})")
+                self._emit_instr("ld", "h", f"(ix{mem.offset+1:+d})")
+            else:
+                self._ix_addr_to_hl(mem.offset)
+                self._emit_instr("ld", "a", "(hl)")
+                self._emit_instr("inc", "hl")
+                self._emit_instr("ld", "h", "(hl)")
+                self._emit_instr("ld", "l", "a")
 
         self._store_from_hl(instr.dst)
 
@@ -7041,17 +7100,37 @@ class Z80CodeGen:
         elif mem.is_frame_offset:
             # Store to frame-relative location (ix + offset)
             self._load_to_hl(instr.src1)
-            if mem.ir_type == IRType.BYTE or mem.ir_type == IRType.BOOL:
-                # Byte store
-                self._emit_instr("ld", f"(ix{mem.offset:+d})", "l")
+            is_byte = mem.ir_type == IRType.BYTE or mem.ir_type == IRType.BOOL
+            size = 1 if is_byte else 2
+            if self._ix_in_range(mem.offset, size):
+                if is_byte:
+                    self._emit_instr("ld", f"(ix{mem.offset:+d})", "l")
+                else:
+                    self._emit_instr("ld", f"(ix{mem.offset:+d})", "l")
+                    self._emit_instr("ld", f"(ix{mem.offset+1:+d})", "h")
             else:
-                # Word store
-                self._emit_instr("ld", f"(ix{mem.offset:+d})", "l")
-                self._emit_instr("ld", f"(ix{mem.offset+1:+d})", "h")
+                # Large offset: value in HL, compute address
+                self._emit_instr("push", "hl")      # save value
+                self._ix_addr_to_hl(mem.offset)      # HL = address
+                self._emit_instr("pop", "de")        # DE = value
+                if is_byte:
+                    self._emit_instr("ld", "(hl)", "e")
+                else:
+                    self._emit_instr("ld", "(hl)", "e")
+                    self._emit_instr("inc", "hl")
+                    self._emit_instr("ld", "(hl)", "d")
         else:
             self._load_to_hl(instr.src1)
-            self._emit_instr("ld", f"(ix{mem.offset:+d})", "l")
-            self._emit_instr("ld", f"(ix{mem.offset+1:+d})", "h")
+            if self._ix_in_range(mem.offset, 2):
+                self._emit_instr("ld", f"(ix{mem.offset:+d})", "l")
+                self._emit_instr("ld", f"(ix{mem.offset+1:+d})", "h")
+            else:
+                self._emit_instr("push", "hl")
+                self._ix_addr_to_hl(mem.offset)
+                self._emit_instr("pop", "de")
+                self._emit_instr("ld", "(hl)", "e")
+                self._emit_instr("inc", "hl")
+                self._emit_instr("ld", "(hl)", "d")
 
         # Atomic access: re-enable interrupts after store
         if mem.is_atomic:
@@ -7654,41 +7733,98 @@ class Z80CodeGen:
         """Load a 48-bit float value into the primary accumulator (bc'de'hl')."""
         if isinstance(value, VReg):
             offset = self._vreg_offset(value)
-            # Load 6 bytes from stack into alternate registers
-            self._emit_instr("ld", "l", f"(ix{offset:+d})")
-            self._emit_instr("ld", "h", f"(ix{offset+1:+d})")
-            self._emit_instr("ld", "e", f"(ix{offset+2:+d})")
-            self._emit_instr("ld", "d", f"(ix{offset+3:+d})")
-            self._emit_instr("ld", "c", f"(ix{offset+4:+d})")
-            self._emit_instr("ld", "b", f"(ix{offset+5:+d})")
-            # Exchange to alternate set
+            if self._ix_in_range(offset, 6):
+                self._emit_instr("ld", "l", f"(ix{offset:+d})")
+                self._emit_instr("ld", "h", f"(ix{offset+1:+d})")
+                self._emit_instr("ld", "e", f"(ix{offset+2:+d})")
+                self._emit_instr("ld", "d", f"(ix{offset+3:+d})")
+                self._emit_instr("ld", "c", f"(ix{offset+4:+d})")
+                self._emit_instr("ld", "b", f"(ix{offset+5:+d})")
+            else:
+                # Large offset: compute address, read 6 bytes via pointer
+                self._ix_addr_to_hl(offset)
+                self._emit_instr("ld", "c", "(hl)")    # C = byte 0
+                self._emit_instr("inc", "hl")
+                self._emit_instr("ld", "b", "(hl)")    # B = byte 1
+                self._emit_instr("inc", "hl")
+                self._emit_instr("push", "bc")          # push b1:b0
+                self._emit_instr("ld", "c", "(hl)")    # C = byte 2
+                self._emit_instr("inc", "hl")
+                self._emit_instr("ld", "b", "(hl)")    # B = byte 3
+                self._emit_instr("inc", "hl")
+                self._emit_instr("push", "bc")          # push b3:b2
+                self._emit_instr("ld", "c", "(hl)")    # C = byte 4
+                self._emit_instr("inc", "hl")
+                self._emit_instr("ld", "b", "(hl)")    # B = byte 5
+                # B=b5, C=b4 (correct for B and C registers)
+                self._emit_instr("pop", "de")           # E=b2, D=b3
+                self._emit_instr("pop", "hl")           # L=b0, H=b1
             self._emit_instr("exx")
 
     def _load_float_to_secondary(self, value: IRValue) -> None:
         """Load a 48-bit float value into the secondary operand (BCDEHL)."""
         if isinstance(value, VReg):
             offset = self._vreg_offset(value)
-            # Load 6 bytes from stack into main registers
-            self._emit_instr("ld", "l", f"(ix{offset:+d})")
-            self._emit_instr("ld", "h", f"(ix{offset+1:+d})")
-            self._emit_instr("ld", "e", f"(ix{offset+2:+d})")
-            self._emit_instr("ld", "d", f"(ix{offset+3:+d})")
-            self._emit_instr("ld", "c", f"(ix{offset+4:+d})")
-            self._emit_instr("ld", "b", f"(ix{offset+5:+d})")
+            if self._ix_in_range(offset, 6):
+                self._emit_instr("ld", "l", f"(ix{offset:+d})")
+                self._emit_instr("ld", "h", f"(ix{offset+1:+d})")
+                self._emit_instr("ld", "e", f"(ix{offset+2:+d})")
+                self._emit_instr("ld", "d", f"(ix{offset+3:+d})")
+                self._emit_instr("ld", "c", f"(ix{offset+4:+d})")
+                self._emit_instr("ld", "b", f"(ix{offset+5:+d})")
+            else:
+                # Same approach as primary but no EXX
+                self._ix_addr_to_hl(offset)
+                self._emit_instr("ld", "c", "(hl)")
+                self._emit_instr("inc", "hl")
+                self._emit_instr("ld", "b", "(hl)")
+                self._emit_instr("inc", "hl")
+                self._emit_instr("push", "bc")
+                self._emit_instr("ld", "c", "(hl)")
+                self._emit_instr("inc", "hl")
+                self._emit_instr("ld", "b", "(hl)")
+                self._emit_instr("inc", "hl")
+                self._emit_instr("push", "bc")
+                self._emit_instr("ld", "c", "(hl)")
+                self._emit_instr("inc", "hl")
+                self._emit_instr("ld", "b", "(hl)")
+                self._emit_instr("pop", "de")
+                self._emit_instr("pop", "hl")
 
     def _store_float_from_primary(self, dst: VReg) -> None:
         """Store the primary accumulator (bc'de'hl') to a vreg."""
         offset = self._vreg_offset(dst)
-        # Switch to alternate set to access result
         self._emit_instr("exx")
-        # Store 6 bytes to stack
-        self._emit_instr("ld", f"(ix{offset:+d})", "l")
-        self._emit_instr("ld", f"(ix{offset+1:+d})", "h")
-        self._emit_instr("ld", f"(ix{offset+2:+d})", "e")
-        self._emit_instr("ld", f"(ix{offset+3:+d})", "d")
-        self._emit_instr("ld", f"(ix{offset+4:+d})", "c")
-        self._emit_instr("ld", f"(ix{offset+5:+d})", "b")
-        # Switch back to main set
+        if self._ix_in_range(offset, 6):
+            self._emit_instr("ld", f"(ix{offset:+d})", "l")
+            self._emit_instr("ld", f"(ix{offset+1:+d})", "h")
+            self._emit_instr("ld", f"(ix{offset+2:+d})", "e")
+            self._emit_instr("ld", f"(ix{offset+3:+d})", "d")
+            self._emit_instr("ld", f"(ix{offset+4:+d})", "c")
+            self._emit_instr("ld", f"(ix{offset+5:+d})", "b")
+        else:
+            # Large offset: push values, compute address, pop and store
+            self._emit_instr("push", "bc")       # save b5:b4
+            self._emit_instr("push", "de")       # save b3:b2
+            self._emit_instr("push", "hl")       # save b1:b0
+            self._ix_addr_to_hl(offset)          # HL = destination (clobbers DE)
+            # Pop and store b0:b1
+            self._emit_instr("pop", "de")        # E=b0, D=b1
+            self._emit_instr("ld", "(hl)", "e")
+            self._emit_instr("inc", "hl")
+            self._emit_instr("ld", "(hl)", "d")
+            self._emit_instr("inc", "hl")
+            # Pop and store b2:b3
+            self._emit_instr("pop", "de")        # E=b2, D=b3
+            self._emit_instr("ld", "(hl)", "e")
+            self._emit_instr("inc", "hl")
+            self._emit_instr("ld", "(hl)", "d")
+            self._emit_instr("inc", "hl")
+            # Pop and store b4:b5
+            self._emit_instr("pop", "de")        # E=b4, D=b5
+            self._emit_instr("ld", "(hl)", "e")
+            self._emit_instr("inc", "hl")
+            self._emit_instr("ld", "(hl)", "d")
         self._emit_instr("exx")
 
     def _gen_fadd(self, instr: IRInstr) -> None:
