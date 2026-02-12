@@ -2777,10 +2777,12 @@ class SemanticAnalyzer:
             if sym.kind == SymbolKind.TYPE and sym.ada_type:
                 sym.ada_type.alignment = value
         elif attr == "address":
-            value = self._eval_static_expr(decl.value)
+            # Address clauses don't require static expressions (Ada RM 13.3)
+            value = self._try_eval_static(decl.value)
             # for Object'Address use N; - place object at specific address
             if sym.kind == SymbolKind.VARIABLE:
-                sym.explicit_address = value
+                if isinstance(value, int):
+                    sym.explicit_address = value
             else:
                 self.error(f"Address clause only applies to variables", decl)
         elif attr == "component_size":
@@ -2972,9 +2974,12 @@ class SemanticAnalyzer:
 
         if existing is not None and existing.ada_type and existing.ada_type.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE):
             # Completing an incomplete/private type - update the existing symbol
+            old_type = existing.ada_type
             existing.kind = SymbolKind.TASK_TYPE
             existing.ada_type = task_type
             existing.definition = decl
+            # Fix up access types that referenced the old incomplete type
+            self._fixup_access_designated(old_type, task_type)
         else:
             sym_kind = SymbolKind.TASK if is_single else SymbolKind.TASK_TYPE
             symbol = Symbol(
@@ -3144,9 +3149,12 @@ class SemanticAnalyzer:
 
         if existing is not None and existing.ada_type and existing.ada_type.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE):
             # Completing an incomplete/private type - update the existing symbol
+            old_type = existing.ada_type
             existing.kind = SymbolKind.PROTECTED_TYPE
             existing.ada_type = prot_type
             existing.definition = decl
+            # Fix up access types that referenced the old incomplete type
+            self._fixup_access_designated(old_type, prot_type)
         else:
             symbol = Symbol(
                 name=decl.name,
@@ -6541,6 +6549,18 @@ class SemanticAnalyzer:
             # Check if it's a component access (shouldn't be allowed from outside)
             self.error(
                 f"protected type '{prefix_type.name}' has no visible operation '{expr.selector}'",
+                expr,
+            )
+            return None
+
+        # Task type entry access (Task_Obj.Entry_Name)
+        if isinstance(prefix_type, TaskType):
+            selector_lower = expr.selector.lower() if isinstance(expr.selector, str) else expr.selector.lower()
+            for entry in prefix_type.entries:
+                if entry.name.lower() == selector_lower:
+                    return None  # Entry calls are statements
+            self.error(
+                f"task type '{prefix_type.name}' has no entry '{expr.selector}'",
                 expr,
             )
             return None
