@@ -11282,7 +11282,21 @@ class ASTLowering:
         if op == UnaryOp.MINUS:
             self.builder.neg(result, operand)
         elif op == UnaryOp.NOT:
-            self.builder.not_(result, operand)
+            # For boolean-like types (2-value enumerations including derived Boolean),
+            # use XOR 1 for logical NOT (0↔1). Bitwise NOT gives 0xFFFE/0xFFFF.
+            operand_type = self._get_expr_type(expr.operand)
+            is_boolean_like = False
+            if operand_type:
+                from uada80.type_system import EnumerationType, is_derived_from
+                if isinstance(operand_type, EnumerationType):
+                    if operand_type.name == "Boolean" or is_derived_from(operand_type, "Boolean"):
+                        is_boolean_like = True
+                    elif len(operand_type.literals) == 2:
+                        is_boolean_like = True
+            if is_boolean_like:
+                self.builder.xor(result, operand, Immediate(1, IRType.WORD))
+            else:
+                self.builder.not_(result, operand)
         elif op == UnaryOp.ABS:
             # ABS: if negative, negate; otherwise keep same
             cond = self.builder.new_vreg(IRType.BOOL, "_abs_cond")
