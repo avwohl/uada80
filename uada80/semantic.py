@@ -3636,7 +3636,8 @@ class SemanticAnalyzer:
                 comp_type = IntegerType(name="_unknown", size_bits=16, low=0, high=0)
             for comp_name in comp_decl.names:
                 components.append(
-                    RecordComponent(name=comp_name, component_type=comp_type)
+                    RecordComponent(name=comp_name, component_type=comp_type,
+                                   default_value=comp_decl.default_value)
                 )
 
         # Build variant part if present
@@ -3661,7 +3662,8 @@ class SemanticAnalyzer:
                         comp_type = IntegerType(name="_unknown", size_bits=16, low=0, high=0)
                     for comp_name in comp_decl.names:
                         var_components.append(
-                            RecordComponent(name=comp_name, component_type=comp_type)
+                            RecordComponent(name=comp_name, component_type=comp_type,
+                                           default_value=comp_decl.default_value)
                         )
                 # Extract choice values (simplified - stores the choice AST nodes)
                 variants.append(VariantInfo(choices=variant.choices, components=var_components))
@@ -3783,7 +3785,8 @@ class SemanticAnalyzer:
                         comp_type = IntegerType(name="_unknown", size_bits=16, low=0, high=0)
                     for comp_name in comp_decl.names:
                         components.append(
-                            RecordComponent(name=comp_name, component_type=comp_type)
+                            RecordComponent(name=comp_name, component_type=comp_type,
+                                           default_value=comp_decl.default_value)
                         )
 
             # Resolve interfaces
@@ -3842,7 +3845,8 @@ class SemanticAnalyzer:
                     comp_type = IntegerType(name="_unknown", size_bits=16, low=0, high=0)
                 for comp_name in comp_decl.names:
                     components.append(
-                        RecordComponent(name=comp_name, component_type=comp_type)
+                        RecordComponent(name=comp_name, component_type=comp_type,
+                                       default_value=comp_decl.default_value)
                     )
 
             # Resolve additional interfaces
@@ -4292,6 +4296,8 @@ class SemanticAnalyzer:
                             literals=base_type.literals.copy(),
                             positions=base_type.positions.copy(),
                             base_type=base_type,
+                            first=low,
+                            last=high,
                         )
 
         return base_type

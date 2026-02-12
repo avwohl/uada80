@@ -1752,6 +1752,28 @@ class ASTLowering:
                             ))
                             disc_offset += 2  # Each discriminant is 2 bytes
 
+                    # Initialize vtable pointer for tagged record types
+                    if isinstance(ada_type, RecordType) and ada_type.is_tagged:
+                        # Register tagged type for vtable generation
+                        if ada_type.name not in {t.name for t in self._tagged_types}:
+                            self._tagged_types.append(ada_type)
+                        vtable_name = f"_vtable_{ada_type.name}"
+                        vtable_addr = MemoryLocation(
+                            is_global=True, symbol_name=vtable_name, ir_type=IRType.PTR
+                        )
+                        # Get address of local variable
+                        frame_offset = -(self.ctx.locals_size - local.stack_offset)
+                        tag_base = self.builder.new_vreg(IRType.PTR, f"_{name}_tag_addr")
+                        self.builder.emit(IRInstr(
+                            OpCode.LEA,
+                            dst=tag_base,
+                            src1=MemoryLocation(offset=frame_offset, ir_type=IRType.PTR, is_frame_offset=True),
+                        ))
+                        tag_loc = MemoryLocation(base=tag_base, offset=0, ir_type=IRType.PTR)
+                        vtable_val = self.builder.new_vreg(IRType.PTR, "_vtable_addr")
+                        self.builder.lea(vtable_val, vtable_addr, comment=f"vtable addr for {ada_type.name}")
+                        self.builder.store(tag_loc, vtable_val, comment=f"init {name} tag (vtable ptr)")
+
                     # For record types with component defaults, initialize each component
                     if isinstance(ada_type, RecordType) and ada_type.components:
                         has_defaults = any(c.default_value is not None for c in ada_type.components)

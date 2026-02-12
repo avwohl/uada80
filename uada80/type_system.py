@@ -184,6 +184,9 @@ class EnumerationType(AdaType):
     positions: dict[str, int] = field(default_factory=dict)
     base_type: Optional["EnumerationType"] = None  # For derived enumeration types
     is_derived: bool = False  # True for "type X is new Y", False for "subtype X is Y"
+    # Explicit range bounds for constrained subtypes (e.g., subtype MIDWEEK is WEEKDAY range WED..WED)
+    first: Optional[int] = None
+    last: Optional[int] = None
 
     def __post_init__(self) -> None:
         self.kind = TypeKind.ENUMERATION
@@ -206,10 +209,14 @@ class EnumerationType(AdaType):
 
     @property
     def low(self) -> int:
+        if self.first is not None:
+            return self.first
         return min(self.positions.values()) if self.positions else 0
 
     @property
     def high(self) -> int:
+        if self.last is not None:
+            return self.last
         return max(self.positions.values()) if self.positions else 0
 
     def pos(self, literal: str) -> int:
