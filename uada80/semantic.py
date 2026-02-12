@@ -5425,7 +5425,7 @@ class SemanticAnalyzer:
         elif isinstance(expr, BinaryExpr):
             return self._analyze_binary_expr(expr, expected_type)
         elif isinstance(expr, UnaryExpr):
-            return self._analyze_unary_expr(expr)
+            return self._analyze_unary_expr(expr, expected_type=expected_type)
         elif isinstance(expr, RangeExpr):
             return self._analyze_range_expr(expr)
         elif isinstance(expr, IndexedComponent):
@@ -6184,9 +6184,12 @@ class SemanticAnalyzer:
 
         return left_type
 
-    def _analyze_unary_expr(self, expr: UnaryExpr) -> Optional[AdaType]:
+    def _analyze_unary_expr(self, expr: UnaryExpr, expected_type=None) -> Optional[AdaType]:
         """Analyze a unary expression."""
-        operand_type = self._analyze_expr(expr.operand)
+        # For NOT, pass Boolean as expected type to help resolve overloaded operands
+        if expr.op == UnaryOp.NOT and expected_type is None:
+            expected_type = PREDEFINED_TYPES.get("Boolean")
+        operand_type = self._analyze_expr(expr.operand, expected_type=expected_type)
 
         if expr.op == UnaryOp.NOT:
             # For modular types, NOT is bitwise complement
@@ -6769,6 +6772,7 @@ class SemanticAnalyzer:
                 if local_sym and local_sym.kind in (
                     SymbolKind.VARIABLE, SymbolKind.CONSTANT,
                     SymbolKind.TYPE, SymbolKind.FUNCTION, SymbolKind.PROCEDURE,
+                    SymbolKind.LABEL,
                 ):
                     return local_sym.ada_type
             self.error(
