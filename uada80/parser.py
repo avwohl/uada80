@@ -2277,6 +2277,7 @@ class Parser:
             TokenType.EXCEPTION,
             TokenType.OR,
             TokenType.AND,  # For parallel blocks: parallel do ... and do ...
+            TokenType.THEN,  # For asynchronous select: then abort
             TokenType.EOF,
         ):
             stmt = self.parse_statement()
@@ -2696,11 +2697,11 @@ class Parser:
 
             # Component type may be prefixed with "aliased" and/or "not null"
             is_aliased = self.match(TokenType.ALIASED)
-            # Handle "not null" exclusion on component type
-            if self.check(TokenType.NOT) and self.peek(1).type == TokenType.NULL and self.peek(2).type != TokenType.ACCESS:
-                self.advance()  # consume NOT
-                self.advance()  # consume NULL
-            component_type = self.parse_name()
+            # Handle anonymous access types in array component type
+            if self.check(TokenType.ACCESS) or (self.check(TokenType.NOT) and self.peek(1).type == TokenType.NULL):
+                component_type = self._parse_access_type_indication()
+            else:
+                component_type = self.parse_name()
             # Check for range constraint: array (...) of Integer range Low..High
             constraint = None
             if self.match(TokenType.RANGE):
@@ -2999,7 +3000,11 @@ class Parser:
                 self.advance()  # consume NOT
                 self.advance()  # consume NULL
             is_access = self.match(TokenType.ACCESS)
-            # Handle "access function/procedure" (anonymous access-to-subprogram)
+            # Handle "access [constant] [protected] function/procedure" (anonymous access-to-subprogram)
+            is_access_constant = False
+            if is_access:
+                is_access_constant = self.match(TokenType.CONSTANT)
+                self.match(TokenType.PROTECTED)  # access [constant] protected
             if is_access and self.check(TokenType.FUNCTION, TokenType.PROCEDURE):
                 is_function = self.match(TokenType.FUNCTION)
                 if not is_function:
