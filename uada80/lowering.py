@@ -11608,11 +11608,18 @@ class ASTLowering:
             sym = self.symbols.lookup(type_node.name)
             if sym and sym.ada_type:
                 return sym.ada_type
-            # Check local type/subtype declarations from current body
+            # Check local type/subtype declarations from current body and stack
+            all_decl_lists = []
             if hasattr(self, '_current_body_declarations') and self._current_body_declarations:
+                all_decl_lists.append(self._current_body_declarations)
+            if hasattr(self, '_body_declarations_stack'):
+                for decl_list in self._body_declarations_stack:
+                    if decl_list not in all_decl_lists:
+                        all_decl_lists.append(decl_list)
+            for decl_list in all_decl_lists:
                 from uada80.ast_nodes import ModularTypeDef, RecordTypeDef
                 from uada80.type_system import RecordType, RecordComponent, IntegerType
-                for d in self._current_body_declarations:
+                for d in decl_list:
                     # Handle subtype declarations (e.g., subtype Short is Integer range ...)
                     if isinstance(d, SubtypeDecl) and d.name.lower() == type_name:
                         if d.ada_type:
@@ -12527,13 +12534,22 @@ class ASTLowering:
                 if attr == "tag":
                     from uada80.type_system import RecordType
                     if isinstance(ada_type, RecordType) and ada_type.is_tagged:
-                        # Get the tag (vtable pointer) from the object
-                        obj_val = self._lower_expr(expr.prefix)
-                        result = self.builder.new_vreg(IRType.PTR, "_tag")
-                        # Tag is at offset 0 in tagged record
-                        self.builder.emit(IRInstr(OpCode.LOAD, result, obj_val,
-                                                  comment="get tag (vtable ptr)"))
-                        return result
+                        # Check if prefix is a type name (Type'Tag = vtable address)
+                        # vs an object (obj'Tag = load vtable ptr from offset 0)
+                        is_type_prefix = (
+                            sym and sym.kind in (SymbolKind.TYPE, SymbolKind.SUBTYPE)
+                        )
+                        if is_type_prefix:
+                            # Type'Tag returns the vtable address for that type
+                            vtable_name = f"_vtable_{ada_type.name}"
+                            return Label(vtable_name)
+                        else:
+                            # Object'Tag: load vtable pointer from offset 0
+                            obj_val = self._lower_expr(expr.prefix)
+                            result = self.builder.new_vreg(IRType.PTR, "_tag")
+                            self.builder.emit(IRInstr(OpCode.LOAD, result, obj_val,
+                                                      comment="get tag (vtable ptr)"))
+                            return result
 
                 # Handle 'Range attribute (returns low bound for use in for loops)
                 if attr == "range":
