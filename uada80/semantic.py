@@ -283,6 +283,17 @@ class SemanticAnalyzer:
 
     def _analyze_compilation_unit(self, unit: CompilationUnit) -> None:
         """Analyze a compilation unit."""
+        # Track which package is being analyzed (for child package deferral)
+        # Must be set BEFORE processing with clauses, since with clauses
+        # may reference child packages that depend on parent's public symbols
+        analyzing = getattr(self, '_analyzing_units', None)
+        if analyzing is None:
+            self._analyzing_units = analyzing = set()
+        pkg_name_lower = None
+        if isinstance(unit.unit, PackageDecl):
+            pkg_name_lower = unit.unit.name.lower() if isinstance(unit.unit.name, str) else str(unit.unit.name).lower()
+            analyzing.add(pkg_name_lower)
+
         # Process context clauses (with, use)
         for clause in unit.context_clauses:
             if isinstance(clause, WithClause):
@@ -295,6 +306,8 @@ class SemanticAnalyzer:
             self._analyze_subprogram_body(unit.unit)
         elif isinstance(unit.unit, PackageDecl):
             self._analyze_package_decl(unit.unit)
+            if pkg_name_lower:
+                analyzing.discard(pkg_name_lower)
         elif isinstance(unit.unit, PackageBody):
             self._analyze_package_body(unit.unit)
         elif isinstance(unit.unit, GenericInstantiation):
@@ -565,7 +578,17 @@ class SemanticAnalyzer:
         analyzed = getattr(self, '_analyzed_units', None)
         if analyzed is None:
             self._analyzed_units = analyzed = set()
+        # Track packages currently being analyzed to prevent premature child analysis
+        analyzing = getattr(self, '_analyzing_units', None)
+        if analyzing is None:
+            self._analyzing_units = analyzing = set()
         pkg_name_lower = pkg_name.lower()
+        # If this is a child package (has dot), check if parent is currently being analyzed.
+        # If so, defer - the parent's public symbols aren't complete yet.
+        if '.' in pkg_name_lower:
+            parent_name = pkg_name_lower.rsplit('.', 1)[0]
+            if parent_name in analyzing:
+                return None
         # Also match by child name for hierarchical names like FA11D00.CA11D011
         child_name = pkg_name_lower.split(".")[-1] if "." in pkg_name_lower else None
         for cu in all_units:
