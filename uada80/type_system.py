@@ -1054,8 +1054,15 @@ def is_derived_from(t: AdaType, root_name: str) -> bool:
         is_derived_from(My_Bool, "Boolean") -> True if type My_Bool is new Boolean
         is_derived_from(Integer, "Boolean") -> False
     """
-    # Direct match
-    if t.name.lower() == root_name.lower():
+    # Direct match (also handle qualified names like "PKG.PARENT" vs "PARENT")
+    t_lower = t.name.lower()
+    root_lower = root_name.lower()
+    if t_lower == root_lower:
+        return True
+    # Match last component of dotted name (e.g., "pkg.parent" matches "parent")
+    if '.' in t_lower and t_lower.rsplit('.', 1)[1] == root_lower:
+        return True
+    if '.' in root_lower and root_lower.rsplit('.', 1)[1] == t_lower:
         return True
 
     # Check if it's a derived type with a base_type we can follow (scalar types)
