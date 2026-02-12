@@ -1566,8 +1566,14 @@ class SemanticAnalyzer:
                     type_sym.ada_type.is_generic_formal = True
                     self.symbols.define(type_sym)
                     sym = type_sym
+                elif isinstance(formal.definition, AccessTypeDef):
+                    # Create an AccessType for the formal
+                    type_sym.ada_type = self._build_access_type(formal.name, formal.definition)
+                    type_sym.ada_type.is_generic_formal = True
+                    self.symbols.define(type_sym)
+                    sym = type_sym
                 else:
-                    # Other type definitions (access, etc.) - fall through to constraint handling
+                    # Other type definitions - fall through to constraint handling
                     pass
 
             if not hasattr(type_sym, 'ada_type') or type_sym.ada_type is None:
@@ -1970,6 +1976,7 @@ class SemanticAnalyzer:
                     ada_type=param_type,
                     mode=param_spec.mode,
                 )
+                param_symbol.default_value = param_spec.default_value
                 gen_symbol.parameters.append(param_symbol)
                 # Also define parameter in current scope for body analysis
                 self.symbols.define(param_symbol)
@@ -6328,7 +6335,8 @@ class SemanticAnalyzer:
                 # For concatenation
                 if op_name == '&':
                     return left_type
-                return left_type
+                # For non-built-in types, fall through to user-defined operator lookup
+                # (don't return left_type blindly - let the function overload check handle it)
 
             # Also handle unary + and - with single argument
             if op_name in {'+', '-'} and len(expr.indices) == 1:
