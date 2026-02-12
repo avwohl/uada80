@@ -306,39 +306,35 @@ class SemanticAnalyzer:
 
     def _analyze_subunit(self, subunit: Subunit) -> None:
         """Analyze a separate subunit (SEPARATE (parent) body)."""
-        # Extract parent unit name
+        # Extract parent unit name and resolve parent symbol
         if isinstance(subunit.parent_unit, Identifier):
             parent_name = subunit.parent_unit.name
+            parent_sym = self.symbols.lookup(parent_name)
         elif isinstance(subunit.parent_unit, SelectedName):
-            # Build dotted name from SelectedName
-            parts = []
-            node = subunit.parent_unit
-            while isinstance(node, SelectedName):
-                parts.append(node.selector)
-                node = node.prefix
-            if isinstance(node, Identifier):
-                parts.append(node.name)
-            parts.reverse()
-            parent_name = '.'.join(parts)
+            # Dotted name like CA2004A0M.CA2004A1 — use hierarchical resolution
+            parent_sym = self._resolve_hierarchical_package(subunit.parent_unit)
+            # For scope entry, use the final selector name
+            parent_name = subunit.parent_unit.selector if isinstance(subunit.parent_unit.selector, str) else str(subunit.parent_unit.selector)
         else:
             parent_name = str(subunit.parent_unit)
+            parent_sym = self.symbols.lookup(parent_name)
 
         # Enter the parent scope so the body can see parent declarations
-        parent_sym = self.symbols.lookup(parent_name)
-        entered_scope = False
+        entered_scopes = []
         if parent_sym and parent_sym.kind == SymbolKind.PACKAGE:
             self.symbols.enter_scope(parent_name)
-            entered_scope = True
+            entered_scopes.append(parent_name)
             # Import parent's symbols into this scope
             for sym_name, sym_val in parent_sym.public_symbols.items():
                 try:
                     self.symbols.define(sym_val)
                 except Exception:
                     pass
-        elif parent_sym and parent_sym.kind in (SymbolKind.PROCEDURE, SymbolKind.FUNCTION):
+        elif parent_sym and parent_sym.kind in (SymbolKind.PROCEDURE, SymbolKind.FUNCTION,
+                                                 SymbolKind.GENERIC_PROCEDURE, SymbolKind.GENERIC_FUNCTION):
             # Parent is a subprogram - find nested declarations from its AST
             self.symbols.enter_scope(parent_name)
-            entered_scope = True
+            entered_scopes.append(parent_name)
             # Search the parent's AST for nested package specs and other declarations
             self._import_subprogram_locals(parent_name)
 
@@ -353,8 +349,8 @@ class SemanticAnalyzer:
         elif isinstance(body, ProtectedBody):
             self._analyze_protected_body(body)
 
-        # Leave the parent scope
-        if entered_scope:
+        # Leave the parent scope(s)
+        for _ in entered_scopes:
             self.symbols.leave_scope()
 
     def _import_subprogram_locals(self, parent_name: str) -> None:
@@ -368,7 +364,8 @@ class SemanticAnalyzer:
         all_units = getattr(self, '_all_units', None)
         if not all_units:
             return
-        parent_lower = parent_name.lower()
+        # Extract simple name for matching (subprogram bodies use simple names)
+        parent_lower = parent_name.split('.')[-1].lower()
         # Find the parent subprogram body in the AST
         for cu in all_units:
             if isinstance(cu.unit, SubprogramBody):
@@ -4008,6 +4005,9 @@ class SemanticAnalyzer:
                 parameters=[],
                 definition=sym.definition,
             )
+            # Preserve intrinsic flag so inherited operators use inline code
+            if getattr(sym, 'is_intrinsic', False):
+                inherited_sym.is_intrinsic = True
 
             # Copy parameters, substituting types as needed
             for param in sym.parameters:
