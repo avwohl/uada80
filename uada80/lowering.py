@@ -5756,6 +5756,22 @@ class ASTLowering:
                 outer_param_name = f"_outer_{name}"
                 if outer_param_name in self.ctx.params:
                     ptr_vreg = self.ctx.params[outer_param_name]
+                    # For record types: memcpy from source to outer var
+                    if target_type and isinstance(target_type, RecordType):
+                        size = target_type.size_bytes()
+                        src_addr = self._get_record_base(stmt.value)
+                        if src_addr is None:
+                            src_addr = value
+                        self._emit_memcpy(ptr_vreg, src_addr, size, f"copy record to outer {name}")
+                        return
+                    # For array types: memcpy
+                    if target_type and isinstance(target_type, ArrayType) and target_type.size_bytes() > 2:
+                        size = target_type.size_bytes()
+                        src_addr = self._get_expr_address(stmt.value)
+                        if src_addr is None:
+                            src_addr = value
+                        self._emit_memcpy(ptr_vreg, src_addr, size, f"copy array to outer {name}")
+                        return
                     self.builder.emit(IRInstr(
                         OpCode.STORE,
                         dst=MemoryLocation(offset=0, ir_type=IRType.WORD, base=ptr_vreg),
@@ -5878,6 +5894,19 @@ class ASTLowering:
                     if local.ada_type:
                         # Resolve the type (may be AST node or AdaType)
                         return self._resolve_local_type(local.ada_type)
+            # Check for outer-scope variable type (nested subprogram)
+            if self.ctx:
+                outer_param_name = f"_outer_{target.name.lower()}"
+                if outer_param_name in self.ctx.params:
+                    # Look up type from enclosing context
+                    enc = getattr(self.ctx, 'enclosing_ctx', None)
+                    while enc:
+                        if target.name.lower() in enc.locals:
+                            local = enc.locals[target.name.lower()]
+                            if local.ada_type:
+                                return self._resolve_local_type(local.ada_type)
+                            break
+                        enc = getattr(enc, 'enclosing_ctx', None)
             # Then check symbol table
             sym = self.symbols.lookup(target.name)
             if sym:
@@ -9302,6 +9331,12 @@ class ASTLowering:
                     src1=param_vreg,
                 ))
                 return addr
+
+            # Check for outer-scope variable (nested subprogram accessing enclosing record)
+            outer_param_name = f"_outer_{name}"
+            if outer_param_name in self.ctx.params:
+                # The outer param IS the address of the record
+                return self.ctx.params[outer_param_name]
 
             # Check for global records
             sym = self.symbols.lookup(name)
@@ -13881,6 +13916,8 @@ class ASTLowering:
             sym = self.symbols.lookup(type_expr.name)
             if sym and sym.kind in (SymbolKind.TYPE, SymbolKind.SUBTYPE):
                 return sym.ada_type
+            # Fallback: search _body_declarations_stack and package declarations
+            return self._resolve_local_type(type_expr)
         elif isinstance(type_expr, SubtypeIndication):
             if type_expr.type_mark:
                 return self._resolve_type(type_expr.type_mark)
@@ -15899,6 +15936,34 @@ class ASTLowering:
                                 bounds=bounds if bounds and not has_dynamic_bounds else None,
                                 is_constrained=not is_unconstrained and bool(bounds) and not has_dynamic_bounds,
                             )
+            # Search inside PackageDecl declarations for types made visible via use clauses.
+            # When a type like LPRIV0 is declared inside PACKAGE P and "use P" is active,
+            # the type may not be in the symbol table during lowering. Search the package
+            # spec's public and private declarations in the declaration stack.
+            # Prefer private (full) type definitions over public (incomplete) stubs.
+            for decl_list in all_decl_lists:
+                for d in decl_list:
+                    if isinstance(d, PackageDecl):
+                        found_type = None
+                        # Search public declarations first
+                        for pkg_decl in (d.declarations or []):
+                            if isinstance(pkg_decl, TypeDecl) and pkg_decl.name.lower() == type_name:
+                                if pkg_decl.ada_type:
+                                    found_type = pkg_decl.ada_type
+                            if isinstance(pkg_decl, SubtypeDecl) and pkg_decl.name.lower() == type_name:
+                                if hasattr(pkg_decl, 'ada_type') and pkg_decl.ada_type:
+                                    found_type = pkg_decl.ada_type
+                        # Search private declarations (prefer full type over incomplete)
+                        for pkg_decl in (d.private_declarations or []):
+                            if isinstance(pkg_decl, TypeDecl) and pkg_decl.name.lower() == type_name:
+                                if pkg_decl.ada_type and pkg_decl.ada_type.size_bits > 0:
+                                    found_type = pkg_decl.ada_type
+                            if isinstance(pkg_decl, SubtypeDecl) and pkg_decl.name.lower() == type_name:
+                                if hasattr(pkg_decl, 'ada_type') and pkg_decl.ada_type and pkg_decl.ada_type.size_bits > 0:
+                                    found_type = pkg_decl.ada_type
+                        if found_type is not None:
+                            return found_type
+
             # Fallback: search enclosing package's public_symbols via _package_prefix_stack.
             # When lowering a package body, types declared in the package spec aren't in
             # _body_declarations_stack or the lowering-time scope. Look them up via the
