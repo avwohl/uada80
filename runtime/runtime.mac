@@ -476,61 +476,54 @@ _rem16_zero:
 ; ============================================================
     PUBLIC _raise_constraint_error
 _raise_constraint_error:
-    ; Print error message using BDOS
-    LD DE, _ce_msg
-    LD C, 9             ; BDOS print string
-    CALL 5
-
-    ; Exit to CP/M
-    JP 0                ; Warm boot
-
-_ce_msg:
-    DB 'Constraint_Error$'
+    ; Constraint_Error = 1
+    LD HL, 1
+    LD (_exc_current), HL
+    LD HL, 0
+    LD (_exc_message), HL
+    JP _exc_do_raise
 
 ; ============================================================
-; _raise_program_error - Handle program error
+; _raise_program_error - Raise Program_Error via exception handler
 ; Input: None
 ; Output: Does not return
 ; ============================================================
     PUBLIC _raise_program_error
 _raise_program_error:
-    LD DE, _pe_msg
-    LD C, 9
-    CALL 5
-    JP 0
-
-_pe_msg:
-    DB 'Program_Error$'
+    ; Program_Error = 2
+    LD HL, 2
+    LD (_exc_current), HL
+    LD HL, 0
+    LD (_exc_message), HL
+    JP _exc_do_raise
 
 ; ============================================================
-; _raise_storage_error - Handle storage error
+; _raise_storage_error - Raise Storage_Error via exception handler
 ; Input: None
 ; Output: Does not return
 ; ============================================================
     PUBLIC _raise_storage_error
 _raise_storage_error:
-    LD DE, _se_msg
-    LD C, 9
-    CALL 5
-    JP 0
-
-_se_msg:
-    DB 'Storage_Error$'
+    ; Storage_Error = 3
+    LD HL, 3
+    LD (_exc_current), HL
+    LD HL, 0
+    LD (_exc_message), HL
+    JP _exc_do_raise
 
 ; ============================================================
-; _raise_tasking_error - Raise Tasking_Error and terminate
+; _raise_tasking_error - Raise Tasking_Error via exception handler
 ; Input: None
 ; Output: Does not return
 ; ============================================================
     PUBLIC _raise_tasking_error
 _raise_tasking_error:
-    LD DE, _te_msg
-    LD C, 9
-    CALL 5
-    JP 0
-
-_te_msg:
-    DB 'Tasking_Error$'
+    ; Tasking_Error = 4
+    LD HL, 4
+    LD (_exc_current), HL
+    LD HL, 0
+    LD (_exc_message), HL
+    JP _exc_do_raise
 
 ; ============================================================
 ; Text_IO Support
@@ -1459,10 +1452,15 @@ _i2s_loop:
     OR L
     JR NZ, _i2s_loop
 
-    ; Add minus sign if needed
+    ; Add sign/space prefix
     POP AF                  ; restore sign flag
-    JR Z, _i2s_done
+    JR Z, _i2s_pos
     LD A, '-'
+    LD (DE), A
+    DEC DE
+    JR _i2s_done
+_i2s_pos:
+    LD A, ' '               ; Ada requires leading space for non-negative
     LD (DE), A
     DEC DE
 
@@ -2219,6 +2217,14 @@ _ev_loop:
     ; DE = search string pointer
     ; HL = table entry string pointer
 
+    ; Skip leading spaces in search string (Ada RM allows them)
+_ev_skip_lead:
+    LD A, (DE)
+    CP ' '
+    JR NZ, _ev_cmp
+    INC DE
+    JR _ev_skip_lead
+
     ; Compare strings (case-insensitive)
 _ev_cmp:
     LD A, (DE)              ; Get search char
@@ -2233,7 +2239,7 @@ _ev_no_upper1:
 
     LD A, (HL)              ; Get table char (already uppercase)
     CP C
-    JR NZ, _ev_next_entry   ; Mismatch
+    JR NZ, _ev_chk_trail    ; Mismatch - maybe trailing spaces?
 
     ; Characters match - check if end of both strings
     OR A                    ; Was it null terminator?
@@ -2242,6 +2248,23 @@ _ev_no_upper1:
     INC HL
     INC DE
     JR _ev_cmp
+
+_ev_chk_trail:
+    ; Table entry ended (null) but search string has more chars
+    ; Check if remaining search chars are all spaces
+    OR A                    ; Is table char null?
+    JR NZ, _ev_next_entry   ; No, real mismatch
+    ; Table ended - check if search has only trailing spaces
+_ev_trail_sp:
+    LD A, C                 ; C = current search char (uppercased)
+    OR A
+    JR Z, _ev_found         ; Search also ended - match!
+    CP ' '
+    JR NZ, _ev_next_entry   ; Not a space - real mismatch
+    INC DE
+    LD A, (DE)
+    LD C, A                 ; Load next search char into C
+    JR _ev_trail_sp
 
 _ev_next_entry:
     ; Strings don't match - skip to end of this entry
@@ -2259,15 +2282,23 @@ _ev_skip_str:
     DJNZ _ev_loop           ; Next entry
 
 _ev_not_found:
-    ; Not found - return 0
-    LD HL, 0
-    JR _ev_done
+    ; Not found - raise Constraint_Error per Ada semantics
+    POP IX
+    JP _raise_constraint_error
 
 _ev_found:
     ; Match found!
-    ; HL points to the null terminator
+    ; HL points to the null terminator (or was already at it)
     POP DE                  ; Discard saved table position
     POP BC                  ; Discard saved count
+    ; Find the null terminator if not already there
+_ev_find_null:
+    LD A, (HL)
+    OR A
+    JR Z, _ev_got_null
+    INC HL
+    JR _ev_find_null
+_ev_got_null:
     INC HL                  ; Skip null to get value byte
     LD L, (HL)              ; Get value
     LD H, 0
@@ -3086,6 +3117,165 @@ _mul16_hlhl:
     LD D, H
     LD E, L             ; DE = HL
     JR _mul16_hlde      ; Use same routine
+
+; ============================================================
+; _char_to_lower - Convert character to lowercase
+; Input: Stack: character (word at IX+4)
+; Output: HL = lowered character
+; ============================================================
+    PUBLIC _char_to_lower
+    PUBLIC _to_lower
+_char_to_lower:
+_to_lower:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+    LD L, (IX+4)
+    LD H, 0
+    LD A, L
+    CP 'A'
+    JR C, _ctl_done         ; < 'A', no change
+    CP 'Z'+1
+    JR NC, _ctl_done        ; > 'Z', no change
+    ADD A, 32               ; 'A'->'a'
+    LD L, A
+_ctl_done:
+    POP IX
+    RET
+
+; ============================================================
+; _char_to_upper - Convert character to uppercase
+; Input: Stack: character (word at IX+4)
+; Output: HL = uppercased character
+; ============================================================
+    PUBLIC _char_to_upper
+    PUBLIC _to_upper
+_char_to_upper:
+_to_upper:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+    LD L, (IX+4)
+    LD H, 0
+    LD A, L
+    CP 'a'
+    JR C, _ctu_done         ; < 'a', no change
+    CP 'z'+1
+    JR NC, _ctu_done        ; > 'z', no change
+    SUB 32                  ; 'a'->'A'
+    LD L, A
+_ctu_done:
+    POP IX
+    RET
+
+; ============================================================
+; _str_to_lower - Convert string to lowercase (returns new copy)
+; Input: Stack: data_ptr (IX+4), first (IX+6), last (IX+8)
+; Output: HL = pointer to new lowered string data
+; Allocates heap memory for the result.
+; ============================================================
+    PUBLIC _str_to_lower
+_str_to_lower:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+    ; Get parameters
+    LD E, (IX+6)
+    LD D, (IX+7)        ; DE = first index
+    LD L, (IX+8)
+    LD H, (IX+9)        ; HL = last index
+    ; Calculate length = last - first + 1
+    OR A
+    SBC HL, DE           ; HL = last - first
+    INC HL               ; HL = length
+    LD A, H
+    OR L
+    JR Z, _stl_empty     ; empty string
+    PUSH HL              ; save length
+    ; Allocate memory for the copy
+    CALL _heap_alloc     ; HL = new buffer ptr
+    POP BC               ; BC = length
+    PUSH HL              ; save new buffer start for return
+    ; HL = dest, source = data_ptr from stack
+    LD D, H
+    LD E, L              ; DE = dest ptr
+    LD L, (IX+4)
+    LD H, (IX+5)        ; HL = source data_ptr
+    ; Now: HL = source, DE = dest, BC = length
+_stl_loop:
+    LD A, (HL)
+    CP 'A'
+    JR C, _stl_nolow
+    CP 'Z'+1
+    JR NC, _stl_nolow
+    ADD A, 32            ; A-Z -> a-z
+_stl_nolow:
+    LD (DE), A
+    INC HL
+    INC DE
+    DEC BC
+    LD A, B
+    OR C
+    JR NZ, _stl_loop
+    ; Return the buffer start
+    POP HL               ; HL = new buffer start
+    POP IX
+    RET
+_stl_empty:
+    LD HL, 0             ; return null for empty string
+    POP IX
+    RET
+
+; ============================================================
+; _str_to_upper - Convert string to uppercase (returns new copy)
+; Input: Stack: data_ptr (IX+4), first (IX+6), last (IX+8)
+; Output: HL = pointer to new uppercased string data
+; ============================================================
+    PUBLIC _str_to_upper
+_str_to_upper:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+    LD E, (IX+6)
+    LD D, (IX+7)        ; DE = first index
+    LD L, (IX+8)
+    LD H, (IX+9)        ; HL = last index
+    OR A
+    SBC HL, DE
+    INC HL               ; HL = length
+    LD A, H
+    OR L
+    JR Z, _stu_empty
+    PUSH HL              ; save length
+    CALL _heap_alloc     ; HL = new buffer
+    POP BC               ; BC = length
+    PUSH HL              ; save new buffer start
+    LD D, H
+    LD E, L              ; DE = dest
+    LD L, (IX+4)
+    LD H, (IX+5)        ; HL = source data_ptr
+_stu_loop:
+    LD A, (HL)
+    CP 'a'
+    JR C, _stu_noup
+    CP 'z'+1
+    JR NC, _stu_noup
+    SUB 32               ; a-z -> A-Z
+_stu_noup:
+    LD (DE), A
+    INC HL
+    INC DE
+    DEC BC
+    LD A, B
+    OR C
+    JR NZ, _stu_loop
+    POP HL               ; HL = new buffer start
+    POP IX
+    RET
+_stu_empty:
+    LD HL, 0
+    POP IX
+    RET
 
 ; ============================================================
 ; Data Segment (all DSEG declarations consolidated here)

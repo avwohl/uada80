@@ -6371,6 +6371,12 @@ _fimg_pos:
         call    _int_to_str
         pop     de
         ; HL = pointer to integer string
+        ; Skip leading space from _int_to_str (float image handles sign separately)
+        ld      a, (hl)
+        cp      ' '
+        jr      nz, _fimg_no_skip
+        inc     hl
+_fimg_no_skip:
 
         ; Copy integer string to buffer
         ld      de, (_fimg_ptr)

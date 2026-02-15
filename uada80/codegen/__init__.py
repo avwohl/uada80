@@ -167,9 +167,13 @@ class Z80CodeGen:
                 self._emit(f"    DB {len(entries)}  ; count")
                 for name, value in entries:
                     # Store uppercase name (null-terminated) followed by value byte
-                    # MACRO-80 uses "" to represent a single quote inside a string
-                    escaped = name.upper().replace('"', '""')
-                    self._emit(f'    DB "{escaped}", 0, {value}')
+                    if len(name) == 1 and (ord(name) < 32 or ord(name) > 126 or name == '"'):
+                        # Control chars and double-quote: emit as numeric byte
+                        self._emit(f'    DB {ord(name)}, 0, {value}')
+                    else:
+                        # MACRO-80 uses "" to represent a double quote inside a string
+                        escaped = name.upper().replace('"', '""')
+                        self._emit(f'    DB "{escaped}", 0, {value}')
             self._emit("")
 
         # Generate code
@@ -6756,6 +6760,11 @@ class Z80CodeGen:
                 for operand in [instr.dst, instr.src1, instr.src2]:
                     if isinstance(operand, VReg) and operand.id not in param_ids:
                         vregs.add(operand.id)
+                    elif isinstance(operand, MemoryLocation):
+                        if isinstance(operand.base, VReg) and operand.base.id not in param_ids:
+                            vregs.add(operand.base.id)
+                        if isinstance(operand.addr_vreg, VReg) and operand.addr_vreg.id not in param_ids:
+                            vregs.add(operand.addr_vreg.id)
 
         # Allocate stack slots for local vregs (negative offsets)
         # Start AFTER the space reserved for local variables (func.locals_size)
@@ -7123,15 +7132,16 @@ class Z80CodeGen:
             self._emit_instr("ld", f"({self._mangle_symbol(mem.symbol_name)})", "hl")
         elif mem.base is not None:
             # Store to computed address: base + offset
-            # Load value into de first
-            self._load_to_de(instr.src1)
-            # Load address into hl
+            # Load base address into HL first (may clobber DE via _ix_addr_to_hl)
             self._load_to_hl(mem.base)
             if mem.offset != 0:
-                self._emit_instr("push", "de")  # Save value
+                # Add offset (clobbers DE, but value isn't loaded yet)
                 self._emit_instr("ld", "de", str(mem.offset))
                 self._emit_instr("add", "hl", "de")
-                self._emit_instr("pop", "de")  # Restore value
+            # Save target address, load value, restore target address
+            self._emit_instr("push", "hl")
+            self._load_to_de(instr.src1)
+            self._emit_instr("pop", "hl")
             # Store to (hl) - check for byte vs word
             if mem.ir_type == IRType.BYTE or mem.ir_type == IRType.BOOL:
                 # Byte store - only store low byte

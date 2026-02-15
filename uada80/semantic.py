@@ -326,37 +326,56 @@ class SemanticAnalyzer:
 
     def _analyze_subunit(self, subunit: Subunit) -> None:
         """Analyze a separate subunit (SEPARATE (parent) body)."""
-        # Extract parent unit name and resolve parent symbol
+        # Extract parent unit name and build ancestor chain for nested subunits
+        full_chain = []  # Full chain: [root, ..., immediate_parent]
         if isinstance(subunit.parent_unit, Identifier):
-            parent_name = subunit.parent_unit.name
-            parent_sym = self.symbols.lookup(parent_name)
+            full_chain = [subunit.parent_unit.name]
         elif isinstance(subunit.parent_unit, SelectedName):
-            # Dotted name like CA2004A0M.CA2004A1 — use hierarchical resolution
-            parent_sym = self._resolve_hierarchical_package(subunit.parent_unit)
-            # For scope entry, use the final selector name
-            parent_name = subunit.parent_unit.selector if isinstance(subunit.parent_unit.selector, str) else str(subunit.parent_unit.selector)
+            # Dotted name like CA2004A0M.CA2004A3 — extract full chain
+            node = subunit.parent_unit
+            while isinstance(node, SelectedName):
+                sel = node.selector if isinstance(node.selector, str) else str(node.selector)
+                full_chain.insert(0, sel)
+                node = node.prefix
+            if isinstance(node, Identifier):
+                full_chain.insert(0, node.name)
         else:
-            parent_name = str(subunit.parent_unit)
-            parent_sym = self.symbols.lookup(parent_name)
+            full_chain = [str(subunit.parent_unit)]
 
-        # Enter the parent scope so the body can see parent declarations
+        parent_name = full_chain[-1] if full_chain else str(subunit.parent_unit)
+
+        # Enter scopes incrementally from root to immediate parent.
+        # Each scope import makes the next name in the chain visible.
         entered_scopes = []
-        if parent_sym and parent_sym.kind == SymbolKind.PACKAGE:
-            self.symbols.enter_scope(parent_name)
-            entered_scopes.append(parent_name)
-            # Import parent's symbols into this scope
-            for sym_name, sym_val in parent_sym.public_symbols.items():
-                try:
-                    self.symbols.define(sym_val)
-                except Exception:
-                    pass
-        elif parent_sym and parent_sym.kind in (SymbolKind.PROCEDURE, SymbolKind.FUNCTION,
-                                                 SymbolKind.GENERIC_PROCEDURE, SymbolKind.GENERIC_FUNCTION):
-            # Parent is a subprogram - find nested declarations from its AST
-            self.symbols.enter_scope(parent_name)
-            entered_scopes.append(parent_name)
-            # Search the parent's AST for nested package specs and other declarations
-            self._import_subprogram_locals(parent_name)
+        for i, name in enumerate(full_chain):
+            sym = self.symbols.lookup(name)
+            if sym and sym.kind == SymbolKind.PACKAGE:
+                self.symbols.enter_scope(name)
+                entered_scopes.append(name)
+                for sym_name, sym_val in sym.public_symbols.items():
+                    try:
+                        self.symbols.define(sym_val)
+                    except Exception:
+                        pass
+                if hasattr(sym, 'private_symbols') and sym.private_symbols:
+                    for sym_name, sym_val in sym.private_symbols.items():
+                        try:
+                            self.symbols.define(sym_val)
+                        except Exception:
+                            pass
+                # For the immediate parent package, also import body locals
+                if i == len(full_chain) - 1:
+                    self._import_package_body_locals(name)
+            elif sym and sym.kind in (SymbolKind.PROCEDURE, SymbolKind.FUNCTION,
+                                       SymbolKind.GENERIC_PROCEDURE, SymbolKind.GENERIC_FUNCTION):
+                self.symbols.enter_scope(name)
+                entered_scopes.append(name)
+                self._import_subprogram_locals(name)
+            elif sym is None and i > 0:
+                # Name not found in symbol table yet — this can happen for nested
+                # declarations that were imported by a previous _import_subprogram_locals.
+                # Try looking up as a package or subprogram that's now in scope.
+                pass
 
         # Analyze the body
         body = subunit.body
@@ -445,6 +464,68 @@ class SemanticAnalyzer:
                         self._analyze_declaration(decl)
                     return
 
+    def _import_package_body_locals(self, parent_name: str) -> None:
+        """Import body-local declarations from a package body for subunit analysis.
+
+        When a subunit is separated from a package body, the subunit can see
+        declarations in the package body (Ada LRM 10.1.3).
+        """
+        all_units = getattr(self, '_all_units', None)
+        if not all_units:
+            return
+        parent_lower = parent_name.split('.')[-1].lower()
+        for cu in all_units:
+            unit = cu.unit
+            # Check for direct package body
+            if isinstance(unit, PackageBody):
+                body_name = unit.name.lower() if isinstance(unit.name, str) else str(unit.name).lower()
+                if body_name == parent_lower:
+                    for decl in unit.declarations:
+                        self._analyze_declaration(decl)
+                    return
+            # Check for subunit containing a package body
+            if isinstance(unit, Subunit) and isinstance(unit.body, PackageBody):
+                body_name = unit.body.name.lower() if isinstance(unit.body.name, str) else str(unit.body.name).lower()
+                if body_name == parent_lower:
+                    for decl in unit.body.declarations:
+                        self._analyze_declaration(decl)
+                    return
+
+    def _merge_runtime_names(self, old_sym: Symbol, new_sym: Symbol) -> None:
+        """Merge runtime_name from old built-in symbols to new adalib-loaded symbols.
+
+        When adalib specs replace built-in symbol table entries, the new symbols
+        lack runtime_name. This copies runtime_name from matching old symbols,
+        and preserves children from old that don't exist in new.
+        """
+        if not old_sym or not new_sym:
+            return
+        # Copy runtime_name on the symbols themselves
+        if old_sym.runtime_name and not new_sym.runtime_name:
+            new_sym.runtime_name = old_sym.runtime_name
+        # Merge public_symbols
+        if old_sym.public_symbols:
+            if not new_sym.public_symbols:
+                new_sym.public_symbols = {}
+            for key, old_child in old_sym.public_symbols.items():
+                new_child = new_sym.public_symbols.get(key)
+                if new_child:
+                    # Copy runtime_name to the new symbol and its overload chain
+                    old_cur = old_child
+                    new_cur = new_child
+                    while old_cur and new_cur:
+                        if old_cur.runtime_name and not new_cur.runtime_name:
+                            new_cur.runtime_name = old_cur.runtime_name
+                        old_cur = old_cur.overloaded_next
+                        new_cur = new_cur.overloaded_next
+                    # Recurse into child packages
+                    if old_child.kind == SymbolKind.PACKAGE and new_child.kind == SymbolKind.PACKAGE:
+                        self._merge_runtime_names(old_child, new_child)
+                else:
+                    # Preserve old child if new doesn't have it
+                    # This keeps built-in runtime-linked children available
+                    new_sym.public_symbols[key] = old_child
+
     def _analyze_with_clause(self, clause: WithClause) -> None:
         """Analyze a with clause.
 
@@ -510,10 +591,13 @@ class SemanticAnalyzer:
                         loaded_inter = self._load_external_package(intermediate)
                         if loaded_inter:
                             self.symbols.define(loaded_inter)
-                            # Update parent's child reference
+                            # Update parent's child reference, preserving runtime_name
                             inter_parts = intermediate.rsplit(".", 1)
                             parent_sym = self.symbols.lookup(inter_parts[0])
                             if parent_sym:
+                                old_child = parent_sym.public_symbols.get(inter_parts[1].lower())
+                                if old_child:
+                                    self._merge_runtime_names(old_child, loaded_inter)
                                 parent_sym.public_symbols[inter_parts[1].lower()] = loaded_inter
 
                 # Also register the full hierarchical name for direct lookup
@@ -530,6 +614,9 @@ class SemanticAnalyzer:
                             if len(parts) == 2:
                                 parent_sym = self.symbols.lookup(parts[0])
                                 if parent_sym:
+                                    old_child = parent_sym.public_symbols.get(parts[1].lower())
+                                    if old_child:
+                                        self._merge_runtime_names(old_child, loaded_full)
                                     parent_sym.public_symbols[parts[1].lower()] = loaded_full
                         elif not self._find_package_in_ast(full_name):
                             # Try to resolve the child package from the root's public_symbols
@@ -1228,7 +1315,7 @@ class SemanticAnalyzer:
                 pkg_symbol = self._resolve_hierarchical_package(name)
                 if pkg_symbol is None:
                     self.error(f"package '{pkg_name}' not found", name)
-                elif pkg_symbol.kind != SymbolKind.PACKAGE:
+                elif pkg_symbol.kind not in (SymbolKind.PACKAGE, SymbolKind.GENERIC_PACKAGE):
                     self.error(f"'{pkg_name}' is not a package", name)
                 else:
                     self.symbols.add_use_clause(pkg_symbol)
@@ -1665,8 +1752,31 @@ class SemanticAnalyzer:
                     type_sym.ada_type = AdaType(kind=type_kind, name=formal.name)
                 else:
                     # Private, tagged private, etc.
-                    type_kind = TypeKind.PRIVATE
-                    type_sym.ada_type = AdaType(kind=type_kind, name=formal.name)
+                    # If the formal has known discriminants, create a RecordType
+                    # so that discriminant access (e.g., Obj.D) works.
+                    formal_discs = getattr(formal, 'discriminants', [])
+                    if formal_discs:
+                        disc_components = []
+                        for disc_spec in formal_discs:
+                            disc_type = self._resolve_type(disc_spec.type_mark)
+                            if disc_type is None:
+                                disc_type = PREDEFINED_TYPES.get("Integer", AdaType(kind=TypeKind.INTEGER, name="Integer"))
+                            for dname in disc_spec.names:
+                                disc_components.append(RecordComponent(
+                                    name=dname,
+                                    component_type=disc_type,
+                                    is_discriminant=True,
+                                    default_value=disc_spec.default_value,
+                                ))
+                        type_sym.ada_type = RecordType(
+                            name=formal.name,
+                            components=[],
+                            discriminants=disc_components,
+                            is_tagged=getattr(formal, 'is_tagged', False),
+                        )
+                    else:
+                        type_kind = TypeKind.PRIVATE
+                        type_sym.ada_type = AdaType(kind=type_kind, name=formal.name)
                     # Propagate is_tagged from generic formal declaration
                     if getattr(formal, 'is_tagged', False):
                         type_sym.ada_type.is_tagged = True
@@ -1874,14 +1984,26 @@ class SemanticAnalyzer:
                 named_actuals[ap.name.lower()] = ap
             else:
                 positional_actuals.append(ap)
-        pos_idx = 0
+        # Expand multi-name GenericObjectDecl formals (e.g., "A, B : Integer")
+        # into individual (name, formal) pairs so each gets its own actual.
+        from uada80.ast_nodes import GenericObjectDecl as _GOD_map
+        expanded_formals: list[tuple[str, object]] = []
         for formal in generic_decl.generic_formals:
-            formal_name = getattr(formal, 'name', None) or getattr(formal, 'type_name', None)
-            if formal_name and formal_name.lower() in named_actuals:
+            if isinstance(formal, _GOD_map):
+                names = getattr(formal, 'names', None) or [formal.name]
+                for n in names:
+                    expanded_formals.append((n, formal))
+            else:
+                fname = getattr(formal, 'name', None) or getattr(formal, 'type_name', None)
+                if fname:
+                    expanded_formals.append((fname, formal))
+
+        pos_idx = 0
+        for formal_name, formal in expanded_formals:
+            if formal_name.lower() in named_actuals:
                 formal_to_actual[formal_name.lower()] = named_actuals[formal_name.lower()]
             elif pos_idx < len(positional_actuals):
-                if formal_name:
-                    formal_to_actual[formal_name.lower()] = positional_actuals[pos_idx]
+                formal_to_actual[formal_name.lower()] = positional_actuals[pos_idx]
                 pos_idx += 1
 
         # Enter the package scope to define its contents
@@ -1920,14 +2042,23 @@ class SemanticAnalyzer:
                     self.symbols.define(type_sym)
             elif isinstance(formal, GenericObjectDecl):
                 # Object formal: create a variable symbol with the actual's type
-                # Handle multi-name formals (e.g., "X, Y : Integer")
+                # Handle multi-name formals (e.g., "A, B : Integer") - each name
+                # gets its own actual from formal_to_actual.
                 names = getattr(formal, 'names', None) or [formal.name]
                 for obj_name in names:
-                    actual_type = self._analyze_expr(actual_expr)
+                    obj_key = obj_name.lower()
+                    if obj_key in formal_to_actual:
+                        obj_actual = formal_to_actual[obj_key]
+                        obj_actual_expr = getattr(obj_actual, 'value', obj_actual)
+                    elif getattr(formal, 'default_value', None):
+                        obj_actual_expr = formal.default_value
+                    else:
+                        obj_actual_expr = actual_expr
+                    actual_type = self._analyze_expr(obj_actual_expr)
                     # Evaluate static value of the actual for constants
                     static_value = None
                     if formal.mode == "in":
-                        static_value = self._try_eval_static(actual_expr)
+                        static_value = self._try_eval_static(obj_actual_expr)
                     obj_sym = Symbol(
                         name=obj_name,
                         kind=SymbolKind.VARIABLE,
@@ -1947,6 +2078,18 @@ class SemanticAnalyzer:
         # Export public symbols to the package
         for name, sym in self.symbols.current_scope.symbols.items():
             inst_symbol.public_symbols[name] = sym
+
+        # Fix up self-referential package renamings inside generic instances.
+        # When a generic contains "package X renames Generic_Name", the
+        # renaming initially gets kind=GENERIC_PACKAGE. In the instance,
+        # it should be kind=PACKAGE and point to the instance's symbols.
+        generic_name_lower = generic_sym.name.lower() if generic_sym else None
+        for sym_name, sym in list(inst_symbol.public_symbols.items()):
+            if (sym.kind == SymbolKind.GENERIC_PACKAGE and
+                    getattr(sym, 'alias_for', None) and
+                    sym.alias_for.lower() == generic_name_lower):
+                sym.kind = SymbolKind.PACKAGE
+                sym.public_symbols = inst_symbol.public_symbols
 
         # Fix up access types with incomplete designated types
         # (forward-declared types are now complete after all declarations processed)
@@ -2552,8 +2695,11 @@ class SemanticAnalyzer:
                                     name=disc_name,
                                     component_type=disc_type,
                                     is_discriminant=True,
+                                    default_value=disc_spec.default_value,
                                 )
                             )
+                    # Recompute layout after adding discriminants
+                    ada_type.size_bits = ada_type._compute_size()
 
                 old_type = existing.ada_type
                 existing.ada_type = ada_type
@@ -2590,8 +2736,11 @@ class SemanticAnalyzer:
                                 name=disc_name,
                                 component_type=disc_type,
                                 is_discriminant=True,
+                                default_value=disc_spec.default_value,
                             )
                         )
+                # Recompute layout after adding discriminants
+                ada_type.size_bits = ada_type._compute_size()
 
             # Store the analyzed type on the AST node for lowering to access
             decl.ada_type = ada_type
@@ -2860,13 +3009,13 @@ class SemanticAnalyzer:
         attr = decl.attribute.lower()
 
         if attr == "size":
-            value = self._eval_static_expr(decl.value)
+            value = self._eval_static_int(decl.value)
             if sym.kind == SymbolKind.TYPE and sym.ada_type:
                 sym.ada_type.size_bits = value
             elif sym.kind == SymbolKind.VARIABLE:
                 sym.explicit_size = value
         elif attr == "alignment":
-            value = self._eval_static_expr(decl.value)
+            value = self._eval_static_int(decl.value)
             if sym.kind == SymbolKind.TYPE and sym.ada_type:
                 sym.ada_type.alignment = value
         elif attr == "address":
@@ -2881,7 +3030,7 @@ class SemanticAnalyzer:
             else:
                 self.error(f"Address clause only applies to objects and subprograms", decl)
         elif attr == "component_size":
-            value = self._eval_static_expr(decl.value)
+            value = self._eval_static_int(decl.value)
             # for Array_Type'Component_Size use N;
             if sym.kind == SymbolKind.TYPE and sym.ada_type:
                 from uada80.type_system import ArrayType
@@ -2927,9 +3076,9 @@ class SemanticAnalyzer:
 
         # Process each component clause
         for comp_clause in decl.component_clauses:
-            position = self._eval_static_expr(comp_clause.position)
-            first_bit = self._eval_static_expr(comp_clause.first_bit)
-            last_bit = self._eval_static_expr(comp_clause.last_bit)
+            position = self._eval_static_int(comp_clause.position)
+            first_bit = self._eval_static_int(comp_clause.first_bit)
+            last_bit = self._eval_static_int(comp_clause.last_bit)
 
             # Find the component in the record type
             found = False
@@ -2995,7 +3144,7 @@ class SemanticAnalyzer:
 
         # Process each value assignment
         for idx, (lit_name, lit_value) in enumerate(decl.values):
-            value = self._eval_static_expr(lit_value)
+            value = self._eval_static_int(lit_value)
 
             # Update the position value for this literal
             # EnumerationType.positions is a dict mapping literal name to value
@@ -3121,13 +3270,27 @@ class SemanticAnalyzer:
         # Enter task body scope
         self.symbols.enter_scope(body.name)
 
-        # Re-register entries from task spec so they're visible in the body
-        if task_sym.ada_type and hasattr(task_sym.ada_type, 'entries'):
+        # Re-register entries from task spec so they're visible in the body.
+        # Use the original entry declarations from the task type definition
+        # to get proper parameter symbols with names, types, and modes.
+        if task_sym.definition and hasattr(task_sym.definition, 'entries'):
+            for entry_decl in task_sym.definition.entries:
+                self._analyze_entry_decl(entry_decl)
+        elif task_sym.ada_type and hasattr(task_sym.ada_type, 'entries'):
+            # Fallback: reconstruct parameter symbols from EntryInfo types
             for entry_info in task_sym.ada_type.entries:
+                params = []
+                for i, ptype in enumerate(entry_info.parameter_types):
+                    param_sym = Symbol(
+                        name=f"p{i}",
+                        kind=SymbolKind.PARAMETER,
+                        ada_type=ptype,
+                    )
+                    params.append(param_sym)
                 entry_sym = Symbol(
                     name=entry_info.name,
                     kind=SymbolKind.ENTRY,
-                    parameters=getattr(entry_info, 'parameters', []),
+                    parameters=params,
                 )
                 self.symbols.define(entry_sym)
 
@@ -3501,8 +3664,8 @@ class SemanticAnalyzer:
         low = 0
         high = 0
         if type_def.range_constraint:
-            low = self._eval_static_expr(type_def.range_constraint.low)
-            high = self._eval_static_expr(type_def.range_constraint.high)
+            low = self._eval_static_int(type_def.range_constraint.low)
+            high = self._eval_static_int(type_def.range_constraint.high)
 
         return IntegerType(name=name, size_bits=0, low=low, high=high)
 
@@ -3510,7 +3673,7 @@ class SemanticAnalyzer:
         self, name: str, type_def: ModularTypeDef
     ) -> ModularType:
         """Build a modular (unsigned wraparound) type."""
-        modulus = self._eval_static_expr(type_def.modulus)
+        modulus = self._eval_static_int(type_def.modulus)
         if modulus <= 0:
             self.error(f"modulus must be positive, got {modulus}", type_def.modulus)
             modulus = 256  # Default to byte
@@ -3526,7 +3689,7 @@ class SemanticAnalyzer:
         delta_value = None
 
         if type_def.is_floating and type_def.digits_expr:
-            digits = self._eval_static_expr(type_def.digits_expr)
+            digits = self._eval_static_int(type_def.digits_expr)
 
         # Handle fixed-point delta expression
         if not type_def.is_floating and type_def.delta_expr:
@@ -3598,10 +3761,31 @@ class SemanticAnalyzer:
                     bounds.append((0, 0))  # Placeholder for dynamic bounds
                 index_types.append(PREDEFINED_TYPES["Integer"])
             else:
-                # Type or subtype mark
+                # Type or subtype mark (e.g., INTEGER RANGE -2..2, COLOR RANGE RED..BLUE)
                 idx_type = self._resolve_type(idx_subtype)
                 if idx_type:
                     index_types.append(idx_type)
+                # Extract bounds from SubtypeIndication with RangeConstraint
+                if (isinstance(idx_subtype, SubtypeIndication) and
+                        idx_subtype.constraint and
+                        isinstance(idx_subtype.constraint, RangeConstraint)):
+                    rc = idx_subtype.constraint.range_expr
+                    low = self._try_eval_static(rc.low)
+                    high = self._try_eval_static(rc.high)
+                    self._analyze_expr(rc.low)
+                    self._analyze_expr(rc.high)
+                    if low is not None and high is not None:
+                        bounds.append((low, high))
+                    else:
+                        bounds.append((0, 0))
+                elif idx_type:
+                    # Try to get bounds from the resolved type itself
+                    if hasattr(idx_type, 'low') and hasattr(idx_type, 'high') and idx_type.low is not None and idx_type.high is not None:
+                        bounds.append((idx_type.low, idx_type.high))
+                    elif hasattr(idx_type, 'first') and hasattr(idx_type, 'last') and idx_type.first is not None and idx_type.last is not None:
+                        bounds.append((idx_type.first, idx_type.last))
+                    elif hasattr(idx_type, 'positions') and idx_type.positions:
+                        bounds.append((0, len(idx_type.positions) - 1))
 
         return ArrayType(
             name=name,
@@ -3756,6 +3940,30 @@ class SemanticAnalyzer:
         # In Ada, the derived type has the same literals but is a distinct type.
         # The literals are overloaded to work with both parent and derived types.
         if isinstance(parent, EnumerationType):
+            first_pos = None
+            last_pos = None
+            # Apply explicit RANGE constraint if present
+            # e.g., type T is new ENUM range E3..E4
+            if type_def.constraint and isinstance(type_def.constraint, RangeExpr):
+                low_expr = type_def.constraint.low
+                high_expr = type_def.constraint.high
+                # Resolve enum literal positions
+                if isinstance(low_expr, Identifier):
+                    pos = parent.positions.get(low_expr.name)
+                    if pos is not None:
+                        first_pos = pos
+                if first_pos is None:
+                    v = self._try_eval_static(low_expr)
+                    if isinstance(v, int):
+                        first_pos = v
+                if isinstance(high_expr, Identifier):
+                    pos = parent.positions.get(high_expr.name)
+                    if pos is not None:
+                        last_pos = pos
+                if last_pos is None:
+                    v = self._try_eval_static(high_expr)
+                    if isinstance(v, int):
+                        last_pos = v
             return EnumerationType(
                 name=name,
                 size_bits=parent.size_bits,
@@ -3763,6 +3971,8 @@ class SemanticAnalyzer:
                 positions=parent.positions.copy(),
                 base_type=parent,  # Link to parent for type info (e.g., operations)
                 is_derived=True,  # Mark as derived type - distinct from parent
+                first=first_pos if isinstance(first_pos, int) else None,
+                last=last_pos if isinstance(last_pos, int) else None,
             )
 
         # Handle tagged type derivation with record extension and interfaces
@@ -4251,23 +4461,38 @@ class SemanticAnalyzer:
             # If base is unconstrained array, create constrained version
             if isinstance(base_type, ArrayType) and not base_type.is_constrained:
                 # Extract bounds from indices (could be range or discrete values)
-                if type_mark.indices and len(type_mark.indices) == 1:
-                    idx = type_mark.indices[0]
-                    if isinstance(idx, RangeExpr):
-                        low = self._try_eval_static(idx.low)
-                        high = self._try_eval_static(idx.high)
-                        # Ensure low and high are actual integers
-                        if isinstance(low, int) and isinstance(high, int):
-                            return ArrayType(
-                                name=f"{base_type.name}({low}..{high})",
-                                kind=base_type.kind,
-                                size_bits=(high - low + 1) * (base_type.component_type.size_bits if base_type.component_type else 8),
-                                component_type=base_type.component_type,
-                                index_types=base_type.index_types,
-                                bounds=[(low, high)],
-                                is_constrained=True,
-                                base_type=base_type,
-                            )
+                if type_mark.indices:
+                    all_bounds = []
+                    all_static = True
+                    for idx in type_mark.indices:
+                        if isinstance(idx, RangeExpr):
+                            low = self._try_eval_static(idx.low)
+                            high = self._try_eval_static(idx.high)
+                            if isinstance(low, int) and isinstance(high, int):
+                                all_bounds.append((low, high))
+                            else:
+                                all_static = False
+                                break
+                        else:
+                            all_static = False
+                            break
+                    if all_static and all_bounds:
+                        # Compute total size
+                        total_elements = 1
+                        for low, high in all_bounds:
+                            total_elements *= max(0, high - low + 1)
+                        comp_bits = base_type.component_type.size_bits if base_type.component_type else 8
+                        name_parts = ", ".join(f"{l}..{h}" for l, h in all_bounds)
+                        return ArrayType(
+                            name=f"{base_type.name}({name_parts})",
+                            kind=base_type.kind,
+                            size_bits=total_elements * comp_bits,
+                            component_type=base_type.component_type,
+                            index_types=base_type.index_types,
+                            bounds=all_bounds,
+                            is_constrained=True,
+                            base_type=base_type,
+                        )
             return base_type
 
         base_type = self._resolve_type(type_mark)
@@ -5209,6 +5434,38 @@ class SemanticAnalyzer:
                 matches.append((candidate, exact_matches))
 
         if not matches:
+            # Second pass: context-dependent resolution.
+            # When an argument is an overloaded function call, its result type
+            # depends on which overload is chosen. Re-analyze each argument
+            # using the candidate's parameter type as the expected type.
+            for candidate in overloads:
+                num_params = len(candidate.parameters)
+                if len(args) < num_params - sum(1 for p in candidate.parameters if p.default_value is not None):
+                    continue
+                if len(args) > num_params:
+                    continue
+                all_match = True
+                exact_matches = 0
+                for i, arg in enumerate(args):
+                    if i >= num_params:
+                        all_match = False
+                        break
+                    param = candidate.parameters[i]
+                    arg_expr = arg.value if hasattr(arg, 'value') else arg
+                    if param.ada_type is None:
+                        continue
+                    # Re-analyze with expected type context
+                    ctx_type = self._analyze_expr(arg_expr, expected_type=param.ada_type)
+                    if ctx_type is None:
+                        continue
+                    if not types_compatible(param.ada_type, ctx_type):
+                        all_match = False
+                        break
+                    if ctx_type.name == param.ada_type.name:
+                        exact_matches += 1
+                if all_match:
+                    matches.append((candidate, exact_matches))
+        if not matches:
             return None  # No match found, will report error later
 
         if len(matches) == 1:
@@ -5257,6 +5514,9 @@ class SemanticAnalyzer:
         if len(candidates) <= 1:
             return None  # No overloads to resolve
 
+        # Check if any arguments use named association
+        has_named = any(hasattr(a, 'name') and a.name for a in args)
+
         # Score each candidate
         best_score = -1
         best_sym = None
@@ -5264,14 +5524,46 @@ class SemanticAnalyzer:
         for cand in candidates:
             score = 0
             match = True
-            for i, (param, arg_type) in enumerate(zip(cand.parameters, arg_types)):
-                if arg_type is None or param.ada_type is None:
-                    continue
-                if types_compatible(param.ada_type, arg_type):
-                    score += 1
-                else:
+            if has_named:
+                # Map args to params by name or position
+                cand_params = cand.parameters if cand.parameters else []
+                param_arg_types = [None] * len(cand_params)
+                valid_mapping = True
+                for i, arg in enumerate(args):
+                    arg_name = getattr(arg, 'name', None)
+                    if arg_name:
+                        found = False
+                        for pi, p in enumerate(cand_params):
+                            if p.name.lower() == arg_name.lower():
+                                param_arg_types[pi] = arg_types[i]
+                                found = True
+                                break
+                        if not found:
+                            valid_mapping = False
+                            break
+                    elif i < len(cand_params):
+                        param_arg_types[i] = arg_types[i]
+                if not valid_mapping:
                     match = False
-                    break
+                else:
+                    for pi, param in enumerate(cand_params):
+                        at = param_arg_types[pi]
+                        if at is None or param.ada_type is None:
+                            continue
+                        if types_compatible(param.ada_type, at):
+                            score += 1
+                        else:
+                            match = False
+                            break
+            else:
+                for i, (param, arg_type) in enumerate(zip(cand.parameters, arg_types)):
+                    if arg_type is None or param.ada_type is None:
+                        continue
+                    if types_compatible(param.ada_type, arg_type):
+                        score += 1
+                    else:
+                        match = False
+                        break
             if match:
                 if score > best_score:
                     best_score = score
@@ -5279,6 +5571,33 @@ class SemanticAnalyzer:
                     tied_candidates = [cand]
                 elif score == best_score:
                     tied_candidates.append(cand)
+
+        # If no match found, try context-dependent resolution (second pass)
+        if best_sym is None and len(candidates) > 1:
+            for cand in candidates:
+                score = 0
+                match = True
+                for i, arg in enumerate(zip(cand.parameters, args)):
+                    param = arg[0]
+                    arg_node = arg[1]
+                    if param.ada_type is None:
+                        continue
+                    arg_expr = arg_node.value if hasattr(arg_node, 'value') else arg_node
+                    ctx_type = self._analyze_expr(arg_expr, expected_type=param.ada_type)
+                    if ctx_type is None:
+                        continue
+                    if not types_compatible(param.ada_type, ctx_type):
+                        match = False
+                        break
+                    if ctx_type.name == param.ada_type.name:
+                        score += 1
+                if match:
+                    if score > best_score:
+                        best_score = score
+                        best_sym = cand
+                        tied_candidates = [cand]
+                    elif score == best_score:
+                        tied_candidates.append(cand)
 
         # If there's a tie and expected_type is available, prefer matching return type
         if expected_type and len(tied_candidates) > 1:
@@ -5488,7 +5807,7 @@ class SemanticAnalyzer:
         elif isinstance(expr, UnaryExpr):
             return self._analyze_unary_expr(expr, expected_type=expected_type)
         elif isinstance(expr, RangeExpr):
-            return self._analyze_range_expr(expr)
+            return self._analyze_range_expr(expr, expected_type=expected_type)
         elif isinstance(expr, IndexedComponent):
             return self._analyze_indexed_component(expr, expected_type=expected_type)
         elif isinstance(expr, SelectedName):
@@ -5916,8 +6235,12 @@ class SemanticAnalyzer:
             )
             return None
 
-        # Analyze the range expression
-        self._analyze_expr(expr.range_expr)
+        # Analyze the range expression with the array's index type as context
+        # so overloaded functions in bounds get resolved to the correct type
+        index_expected = None
+        if isinstance(prefix_type, ArrayType) and prefix_type.index_types:
+            index_expected = prefix_type.index_types[0]
+        self._analyze_expr(expr.range_expr, expected_type=index_expected)
 
         # Slice of an array returns the unconstrained base type
         # Follow base_type chain to get the root unconstrained array type
@@ -6162,10 +6485,21 @@ class SemanticAnalyzer:
                 # Right operand must be integer type
                 if right_type.kind not in (TypeKind.INTEGER, TypeKind.MODULAR,
                                            TypeKind.UNIVERSAL_INTEGER):
-                    self.error(
-                        f"exponent must be integer type, got '{right_type.name}'",
-                        expr,
-                    )
+                    # The right operand may be an overloaded call that could
+                    # resolve to Integer given the right context.  Re-analyze
+                    # with Integer as expected_type before emitting an error.
+                    int_type = PREDEFINED_TYPES.get("Integer")
+                    if int_type:
+                        retry = self._analyze_expr(expr.right, expected_type=int_type)
+                        if retry and retry.kind in (TypeKind.INTEGER, TypeKind.MODULAR,
+                                                     TypeKind.UNIVERSAL_INTEGER):
+                            right_type = retry
+                    if right_type.kind not in (TypeKind.INTEGER, TypeKind.MODULAR,
+                                               TypeKind.UNIVERSAL_INTEGER):
+                        self.error(
+                            f"exponent must be integer type, got '{right_type.name}'",
+                            expr,
+                        )
                 # Result type is the left operand type
                 return left_type
             return left_type
@@ -6320,10 +6654,10 @@ class SemanticAnalyzer:
 
         return operand_type
 
-    def _analyze_range_expr(self, expr: RangeExpr) -> Optional[AdaType]:
+    def _analyze_range_expr(self, expr: RangeExpr, expected_type=None) -> Optional[AdaType]:
         """Analyze a range expression."""
-        low_type = self._analyze_expr(expr.low)
-        high_type = self._analyze_expr(expr.high)
+        low_type = self._analyze_expr(expr.low, expected_type=expected_type)
+        high_type = self._analyze_expr(expr.high, expected_type=expected_type)
 
         if low_type and high_type:
             result = common_type(low_type, high_type)
@@ -6380,34 +6714,35 @@ class SemanticAnalyzer:
                           'AND', 'OR', 'XOR', '=', '/=', '<', '>', '<=', '>='}
 
             # Handle unary operators (including unary + and -)
+            # First try built-in type rules; if they don't match, fall through
+            # to function overload resolution which handles user-defined operators.
             if op_name in UNARY_OPS and len(expr.indices) == 1:
                 # Unary operator call: "ABS"(X) -> abs X, "+"(X) -> +X, "-"(X) -> -X
                 arg_type = self._analyze_expr(expr.indices[0])
                 if arg_type is None:
                     return None
-                # Check that the type supports this operator
+                # Check that the type supports this built-in operator
+                builtin_match = False
                 if op_name == 'ABS':
                     if arg_type.kind in (TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.FLOAT, TypeKind.FIXED,
                                          TypeKind.UNIVERSAL_INTEGER, TypeKind.UNIVERSAL_REAL):
-                        return arg_type
-                    self.error(f"operator 'abs' not defined for type '{arg_type.name}'", expr)
-                    return None
+                        builtin_match = True
                 elif op_name in ('+', '-'):
                     # Unary + and - are valid for numeric types
                     if arg_type.is_numeric():
-                        return arg_type
-                    self.error(f"operator '{op_name.lower()}' not defined for type '{arg_type.name}'", expr)
-                    return None
+                        builtin_match = True
                 elif op_name == 'NOT':
                     if arg_type.name and arg_type.name.lower() == 'boolean':
-                        return arg_type
-                    if arg_type.kind == TypeKind.MODULAR:
-                        return arg_type  # Bitwise not for modular types
-                    if arg_type.kind == TypeKind.ARRAY:
+                        builtin_match = True
+                    elif arg_type.kind == TypeKind.MODULAR:
+                        builtin_match = True  # Bitwise not for modular types
+                    elif arg_type.kind == TypeKind.ARRAY:
                         # Array of Boolean - element-wise not
-                        return arg_type
-                    self.error(f"operator 'not' not defined for type '{arg_type.name}'", expr)
-                    return None
+                        builtin_match = True
+                if builtin_match:
+                    return arg_type
+                # Built-in type check failed - fall through to function
+                # overload resolution below (handles user-defined operators)
 
             if op_name in BINARY_OPS and len(expr.indices) == 2:
                 # Binary operator call: "+"(A, B) -> A + B
@@ -6480,14 +6815,30 @@ class SemanticAnalyzer:
 
             # Check if prefix is a function call
             # The parser creates IndexedComponent for F(X) which could be
-            # a function call rather than array indexing
-            if symbol and symbol.kind == SymbolKind.FUNCTION:
+            # a function call rather than array indexing.
+            # Also check overload chain: an enum literal may share a name
+            # with an inherited function (Ada RM 8.6 overloading).
+            symbol_is_func = symbol and symbol.kind == SymbolKind.FUNCTION
+            if not symbol_is_func and symbol:
+                cur = symbol.overloaded_next
+                while cur is not None:
+                    if cur.kind == SymbolKind.FUNCTION:
+                        symbol_is_func = True
+                        break
+                    cur = cur.overloaded_next
+            if symbol_is_func:
                 # Collect all overloads and find a matching one
-                args = [ActualParameter(span=None, name=None, value=idx) for idx in expr.indices]
-                arg_types = [self._analyze_expr(idx) for idx in expr.indices]
+                # Use actual_params when available to preserve named associations
+                if expr.actual_params:
+                    args = expr.actual_params
+                else:
+                    args = [ActualParameter(span=None, name=None, value=idx) for idx in expr.indices]
+                arg_types = [self._analyze_expr(a.value if hasattr(a, 'value') else a) for a in args]
                 overloads = self.symbols.all_overloads(expr.prefix.name)
                 best_match = None
                 derived_match = None
+                # Check if any arguments use named association
+                has_named = any(hasattr(a, 'name') and a.name for a in args)
                 for candidate in overloads:
                     if candidate.kind != SymbolKind.FUNCTION:
                         continue
@@ -6497,14 +6848,48 @@ class SemanticAnalyzer:
                     # Check if argument types are compatible
                     all_match = True
                     all_derived = True
-                    for i, param in enumerate(cand_params):
-                        if arg_types[i] and param.ada_type:
-                            if not types_compatible(param.ada_type, arg_types[i]):
-                                all_match = False
-                                # Check derived type relationship as fallback
-                                if not (is_derived_from(arg_types[i], param.ada_type.name) or
-                                        is_derived_from(param.ada_type, arg_types[i].name)):
-                                    all_derived = False
+                    # Build param→arg mapping considering named associations
+                    if has_named:
+                        # Map args to params by name or position
+                        param_arg_types = [None] * len(cand_params)
+                        valid_mapping = True
+                        for i, arg in enumerate(args):
+                            arg_name = getattr(arg, 'name', None)
+                            if arg_name:
+                                # Named: find matching param
+                                found = False
+                                for pi, p in enumerate(cand_params):
+                                    if p.name.lower() == arg_name.lower():
+                                        param_arg_types[pi] = arg_types[i]
+                                        found = True
+                                        break
+                                if not found:
+                                    valid_mapping = False
+                                    break
+                            else:
+                                # Positional
+                                param_arg_types[i] = arg_types[i]
+                        if not valid_mapping:
+                            all_match = False
+                            all_derived = False
+                        else:
+                            for pi, param in enumerate(cand_params):
+                                at = param_arg_types[pi]
+                                if at and param.ada_type:
+                                    if not types_compatible(param.ada_type, at):
+                                        all_match = False
+                                        if not (is_derived_from(at, param.ada_type.name) or
+                                                is_derived_from(param.ada_type, at.name)):
+                                            all_derived = False
+                    else:
+                        for i, param in enumerate(cand_params):
+                            if arg_types[i] and param.ada_type:
+                                if not types_compatible(param.ada_type, arg_types[i]):
+                                    all_match = False
+                                    # Check derived type relationship as fallback
+                                    if not (is_derived_from(arg_types[i], param.ada_type.name) or
+                                            is_derived_from(param.ada_type, arg_types[i].name)):
+                                        all_derived = False
                     if all_match:
                         if expected_type and candidate.return_type and types_compatible(candidate.return_type, expected_type):
                             # Exact return type match - use immediately
@@ -7175,19 +7560,25 @@ class SemanticAnalyzer:
             # Expected exceptions for non-static expressions
             return None
 
-    def _eval_static_expr(self, expr: Expr) -> int:
-        """Evaluate a static expression to an integer value."""
+    def _eval_static_expr(self, expr: Expr):
+        """Evaluate a static expression to a numeric value (int or float)."""
         result = self._eval_static_impl(expr, report_errors=True)
         return result if result is not None else 0
 
-    def _eval_static_impl(self, expr: Expr, report_errors: bool = True) -> Optional[int]:
-        """Implementation of static expression evaluation."""
+    def _eval_static_int(self, expr: Expr) -> int:
+        """Evaluate a static expression to an integer value."""
+        result = self._eval_static_impl(expr, report_errors=True)
+        if result is None:
+            return 0
+        return int(result)
+
+    def _eval_static_impl(self, expr: Expr, report_errors: bool = True):
+        """Implementation of static expression evaluation. Returns int or float."""
         if isinstance(expr, IntegerLiteral):
             return expr.value
 
         if isinstance(expr, RealLiteral):
-            # Return truncated integer value for real literals in integer contexts
-            return int(expr.value)
+            return expr.value  # Preserve float precision
 
         if isinstance(expr, CharacterLiteral):
             # Character literals are static - return their position value
@@ -7275,7 +7666,12 @@ class SemanticAnalyzer:
             if expr.op == BinaryOp.MUL:
                 return left * right
             if expr.op == BinaryOp.DIV:
-                return left // right if right != 0 else 0
+                if right == 0:
+                    return 0
+                # Use real division if either operand is float, integer division otherwise
+                if isinstance(left, float) or isinstance(right, float):
+                    return left / right
+                return int(left / right)  # Ada truncates toward zero
             if expr.op == BinaryOp.MOD:
                 return left % right if right != 0 else 0
             if expr.op == BinaryOp.REM:
@@ -7402,10 +7798,16 @@ class SemanticAnalyzer:
                     if op_upper == '*':
                         return left * right
                     if op_upper == '/':
+                        if right == 0:
+                            return None
                         return left // right if isinstance(left, int) else left / right
                     if op_upper == 'MOD':
+                        if right == 0:
+                            return None
                         return left % right
                     if op_upper == 'REM':
+                        if right == 0:
+                            return None
                         return left % right
                     if op_upper == '**':
                         return left ** right
@@ -7516,11 +7918,40 @@ class SemanticAnalyzer:
                 if attr == "machine_emin":
                     return -126  # IEEE single precision min exponent
 
-                # 'Width for enumeration types
+                # 'Width
                 if attr == "width":
+                    from uada80.type_system import IntegerType, ModularType
+                    # Character types: Image is "'X'" = 3 chars
+                    if hasattr(type_obj, 'name') and type_obj.name in ("Character", "CHARACTER"):
+                        return 3
+                    if hasattr(type_obj, 'base_type') and type_obj.base_type:
+                        bt = type_obj.base_type
+                        while bt:
+                            if hasattr(bt, 'name') and bt.name in ("Character", "CHARACTER"):
+                                return 3
+                            bt = getattr(bt, 'base_type', None)
                     if hasattr(type_obj, "literals") and type_obj.literals:
-                        # Width is the maximum length of any literal image
-                        return max(len(lit) for lit in type_obj.literals)
+                        # Check for character-like types (all single-char literals)
+                        if all(len(lit) == 1 for lit in type_obj.literals):
+                            return 3
+                        # Enum: max length of literal names in range
+                        first_pos = getattr(type_obj, 'first', None)
+                        last_pos = getattr(type_obj, 'last', None)
+                        if first_pos is None:
+                            first_pos = 0
+                        if last_pos is None:
+                            last_pos = len(type_obj.literals) - 1
+                        if first_pos > last_pos:
+                            return 0
+                        return max(len(type_obj.literals[i])
+                                   for i in range(first_pos, min(last_pos + 1, len(type_obj.literals))))
+                    if isinstance(type_obj, IntegerType):
+                        low, high = type_obj.low, type_obj.high
+                        if low > high:
+                            return 0
+                        return max(1 + len(str(abs(low))), 1 + len(str(abs(high))))
+                    if isinstance(type_obj, ModularType):
+                        return 1 + len(str(type_obj.modulus - 1))
                     return 0
 
             # Handle 'Pos and 'Val for enumeration types

@@ -145,6 +145,12 @@ class Scope:
                     symbol.overloaded_next = existing
                     self.symbols[name_lower] = symbol
                     return
+                # Function/procedure can coexist with enum literal (Ada RM 8.6)
+                # Enum literals are essentially parameterless functions
+                if is_enum_literal(existing):
+                    symbol.overloaded_next = existing
+                    self.symbols[name_lower] = symbol
+                    return
             # Entry overloading (Ada allows entries to be overloaded like subprograms)
             elif symbol.kind == SymbolKind.ENTRY:
                 if existing.kind == SymbolKind.ENTRY:
@@ -153,11 +159,17 @@ class Scope:
                     self.symbols[name_lower] = symbol
                     return
             # Enumeration literal overloading (Ada allows same literal in different enum types)
-            elif is_enum_literal(symbol) and is_enum_literal(existing):
-                # Add to overload chain
-                symbol.overloaded_next = existing
-                self.symbols[name_lower] = symbol
-                return
+            elif is_enum_literal(symbol):
+                if is_enum_literal(existing):
+                    # Add to overload chain
+                    symbol.overloaded_next = existing
+                    self.symbols[name_lower] = symbol
+                    return
+                # Enum literal can coexist with function/procedure (Ada RM 8.6)
+                if existing.kind in (SymbolKind.PROCEDURE, SymbolKind.FUNCTION):
+                    symbol.overloaded_next = existing
+                    self.symbols[name_lower] = symbol
+                    return
             # Not overloadable - this is an error caught by semantic analyzer
             # For now, just replace (semantic analyzer will report the error)
 
@@ -6504,6 +6516,18 @@ class SymbolTable:
             # Check public symbols in the target package
             if selector_lower in target.public_symbols:
                 return target.public_symbols[selector_lower]
+            # For the STANDARD package (Ada's implicit root), also search
+            # the root scope where library-level declarations are defined.
+            # STANDARD.X should find any library-level entity X.
+            if prefix.lower() == "standard":
+                # Find the root scope (level 0) and look up there
+                scope: Optional[Scope] = self.current_scope
+                while scope is not None and scope.parent is not None:
+                    scope = scope.parent
+                if scope is not None:
+                    sym = scope.lookup_local(selector_lower)
+                    if sym is not None:
+                        return sym
             return None
 
         # Block label prefix (labeled blocks can be used as prefixes)

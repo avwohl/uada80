@@ -3743,7 +3743,9 @@ class Parser:
                 self.expect(TokenType.SEMICOLON)
                 return GenericTypeDecl(
                     name=name, is_tagged=is_tagged, is_abstract=is_abstract,
-                    constraint="private", is_limited=is_limited
+                    constraint="private", is_limited=is_limited,
+                    discriminants=discriminants,
+                    has_unknown_discriminants=has_unknown_discriminant,
                 )
 
             # Tagged incomplete type: is tagged;  (Ada 2012 generic formal)

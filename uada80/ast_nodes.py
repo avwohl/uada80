@@ -943,6 +943,8 @@ class GenericTypeDecl(GenericFormal):
     is_limited: bool = False
     parent_type: Optional[Expr] = None  # For derived types
     with_private: bool = False  # For "new Parent with private"
+    discriminants: list = field(default_factory=list)  # Known discriminants
+    has_unknown_discriminants: bool = False  # (<>) unknown discriminants
 
 
 @dataclass

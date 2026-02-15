@@ -316,13 +316,35 @@ class ArrayType(AdaType):
             self.size_bits = self._compute_size()
 
     def _compute_size(self) -> int:
-        """Compute array size in bits."""
+        """Compute array size in bits.
+
+        On Z80, non-string non-packed array elements are stored as 16-bit words
+        minimum (the codegen uses ld hl,(addr) / ld (addr),hl for element access).
+        Character arrays (strings) remain at 1 byte per element.
+        """
         if not self.is_constrained or not self.component_type:
             return 0  # Unknown size for unconstrained
         total_elements = 1
         for low, high in self.bounds:
             total_elements *= (high - low + 1)
-        return total_elements * self.component_type.size_bits
+        element_bits = self.component_type.size_bits
+        if not self.is_packed:
+            # String arrays (Character component) stay at 8 bits per element
+            comp_name = getattr(self.component_type, 'name', '').lower()
+            if comp_name != 'character':
+                element_bits = max(16, element_bits)
+        return total_elements * element_bits
+
+    def element_size_bytes(self) -> int:
+        """Return element size in bytes, accounting for Z80 16-bit word minimum."""
+        if not self.component_type:
+            return 2
+        element_bits = self.component_type.size_bits
+        if not self.is_packed:
+            comp_name = getattr(self.component_type, 'name', '').lower()
+            if comp_name != 'character':
+                element_bits = max(16, element_bits)
+        return (element_bits + 7) // 8
 
     def dimensions(self) -> int:
         """Return number of dimensions."""

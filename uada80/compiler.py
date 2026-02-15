@@ -215,7 +215,9 @@ class Compiler:
             return result
 
         # Phase 6: Peephole optimization (optional, uses upeepz80)
-        if self.peephole_optimize and Z80PeepholeOptimizer is not None:
+        # Skip for very large output to avoid excessive compile times
+        asm_lines = asm.count('\n')
+        if self.peephole_optimize and Z80PeepholeOptimizer is not None and asm_lines <= 10000:
             try:
                 peephole = Z80PeepholeOptimizer()
                 asm = peephole.optimize(asm)
@@ -402,7 +404,9 @@ class Compiler:
             return result
 
         # Phase 6: Peephole optimization (uses upeepz80)
-        if self.peephole_optimize and Z80PeepholeOptimizer is not None:
+        # Skip for very large output to avoid excessive compile times
+        asm_lines = asm.count('\n')
+        if self.peephole_optimize and Z80PeepholeOptimizer is not None and asm_lines <= 10000:
             try:
                 peephole = Z80PeepholeOptimizer()
                 asm = peephole.optimize(asm)
