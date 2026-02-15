@@ -3050,6 +3050,10 @@ _exp16:
     LD C, (IX+8)
     LD B, (IX+9)        ; BC = exponent
 
+    ; Check for negative exponent (Ada requires Constraint_Error)
+    BIT 7, B
+    JP NZ, _raise_constraint_error
+
     ; Handle special case: exp == 0 -> return 1
     LD A, B
     OR C

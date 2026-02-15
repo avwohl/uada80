@@ -4549,6 +4549,22 @@ class SemanticAnalyzer:
                             first=enum_low,
                             last=enum_high,
                         )
+                # Handle FixedType with float bounds from range constraint
+                if isinstance(base_type, FixedType):
+                    low = self._try_eval_static(range_expr.low)
+                    high = self._try_eval_static(range_expr.high)
+                    if low is not None and high is not None:
+                        flow = float(low)
+                        fhigh = float(high)
+                        return FixedType(
+                            name=base_type.name,
+                            size_bits=base_type.size_bits,
+                            delta=base_type.delta,
+                            range_first=flow,
+                            range_last=fhigh,
+                            small=base_type.small,
+                            base_type=base_type,
+                        )
 
         return base_type
 

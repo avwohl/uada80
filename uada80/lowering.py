@@ -2924,6 +2924,12 @@ class ASTLowering:
                     dynamic_low = None
                     dynamic_high = None
                     if has_dynamic_constraint and constraint_range:
+                        # Set fixed-point context before lowering constraint bounds
+                        # so RealLiteral bounds (e.g., 7.00) are scaled correctly
+                        _old_fx_delta_constraint = getattr(self, '_fixed_point_context_delta', None)
+                        from uada80.type_system import FixedType as _FxTypeC
+                        if isinstance(ada_type, _FxTypeC):
+                            self._fixed_point_context_delta = getattr(ada_type, 'delta', None) or getattr(ada_type, 'small', None)
                         if isinstance(constraint_range, AttributeReference) and constraint_range.attribute.upper() == 'RANGE':
                             # X'RANGE(N) -> X'FIRST(N) .. X'LAST(N)
                             first_ref = AttributeReference(
@@ -2941,6 +2947,7 @@ class ASTLowering:
                         elif hasattr(constraint_range, 'low') and hasattr(constraint_range, 'high'):
                             dynamic_low = self._lower_expr(constraint_range.low)
                             dynamic_high = self._lower_expr(constraint_range.high)
+                        self._fixed_point_context_delta = _old_fx_delta_constraint
 
                     # For record/array aggregates, write directly to the local variable
                     if isinstance(decl.init_expr, Aggregate) and ada_type:
@@ -6552,6 +6559,31 @@ class ASTLowering:
                     # Other attributes - default range
                     low = Immediate(1, IRType.WORD)
                     high = Immediate(10, IRType.WORD)
+            elif isinstance(iterator.iterable, SubtypeIndication):
+                # FOR I IN Type_Name RANGE low..high LOOP
+                si = iterator.iterable
+                if (si.constraint and isinstance(si.constraint, RangeConstraint)
+                        and hasattr(si.constraint, 'range_expr')):
+                    low = self._lower_expr(si.constraint.range_expr.low)
+                    high = self._lower_expr(si.constraint.range_expr.high)
+                elif isinstance(si.type_mark, (Identifier, SelectedName)):
+                    # SubtypeIndication without range constraint — use type's range
+                    iter_type = None
+                    if isinstance(si.type_mark, Identifier):
+                        sym = self.symbols.lookup(si.type_mark.name)
+                        if sym and sym.ada_type:
+                            iter_type = sym.ada_type
+                    else:
+                        iter_type = self._resolve_local_type(si.type_mark)
+                    if iter_type is not None and hasattr(iter_type, 'low') and hasattr(iter_type, 'high'):
+                        low = Immediate(iter_type.low, IRType.WORD)
+                        high = Immediate(iter_type.high, IRType.WORD)
+                    else:
+                        low = Immediate(1, IRType.WORD)
+                        high = Immediate(10, IRType.WORD)
+                else:
+                    low = Immediate(1, IRType.WORD)
+                    high = Immediate(10, IRType.WORD)
             elif isinstance(iterator.iterable, (Identifier, SelectedName)):
                 # FOR E IN Type_Name LOOP — iterate over discrete type range
                 iter_type = None
@@ -6593,22 +6625,13 @@ class ASTLowering:
             self.builder.mov(low_vreg, low)
             self.builder.mov(high_vreg, high)
 
-            cond_label = self._new_label("for_cond")
             body_label = self._new_label("for_body")
             inc_label = self._new_label("for_inc")
 
-            self.builder.jmp(Label(cond_label))
-
-            # Condition check
-            cond_block = self.builder.new_block(cond_label)
-            self.builder.set_block(cond_block)
-
-            cond = self.builder.new_vreg(IRType.BOOL, "_cond")
-            if stmt.iteration_scheme.iterator.is_reverse:
-                self.builder.cmp_ge(cond, loop_var, low_vreg)
-            else:
-                self.builder.cmp_le(cond, loop_var, high_vreg)
-            self.builder.jz(cond, Label(end_label))
+            # Null range check: skip if low > high
+            null_cond = self.builder.new_vreg(IRType.BOOL, "_null")
+            self.builder.cmp_gt(null_cond, low_vreg, high_vreg)
+            self.builder.jnz(null_cond, Label(end_label))
 
             # Body
             body_block = self.builder.new_block(body_label)
@@ -6617,17 +6640,26 @@ class ASTLowering:
             for s in stmt.statements:
                 self._lower_statement(s)
 
-            # Increment/decrement
+            # Check if we've reached the last bound BEFORE incrementing
+            # This prevents overflow when loop_var == INTEGER'LAST (or FIRST)
             inc_block = self.builder.new_block(inc_label)
             self.builder.set_block(inc_block)
 
+            done_cond = self.builder.new_vreg(IRType.BOOL, "_done")
+            if stmt.iteration_scheme.iterator.is_reverse:
+                self.builder.cmp_eq(done_cond, loop_var, low_vreg)
+            else:
+                self.builder.cmp_eq(done_cond, loop_var, high_vreg)
+            self.builder.jnz(done_cond, Label(end_label))
+
+            # Increment/decrement
             one = Immediate(1, IRType.WORD)
             if stmt.iteration_scheme.iterator.is_reverse:
                 self.builder.sub(loop_var, loop_var, one)
             else:
                 self.builder.add(loop_var, loop_var, one)
 
-            self.builder.jmp(Label(cond_label))
+            self.builder.jmp(Label(body_label))
 
         # End block
         end_block = self.builder.new_block(end_label)
@@ -11513,6 +11545,17 @@ class ASTLowering:
         elif hasattr(target_type, 'first') and hasattr(target_type, 'last'):
             low_bound = target_type.first
             high_bound = target_type.last
+
+        # For FixedType, convert float range bounds to scaled integer bounds
+        from uada80.type_system import FixedType as _FxType
+        if isinstance(target_type, _FxType) and low_bound is None:
+            rf = getattr(target_type, 'range_first', None)
+            rl = getattr(target_type, 'range_last', None)
+            if rf is not None and rl is not None:
+                delta = getattr(target_type, 'delta', None) or getattr(target_type, 'small', None)
+                if delta and delta > 0:
+                    low_bound = round(rf / delta)
+                    high_bound = round(rl / delta)
 
         if low_bound is None or high_bound is None:
             return  # No bounds to check
@@ -16715,6 +16758,23 @@ class ASTLowering:
                                         first=low,
                                         last=high,
                                     )
+                            # Handle FixedType with float bounds
+                            from uada80.type_system import FixedType as _FxTypeR
+                            if isinstance(inner, _FxTypeR):
+                                try:
+                                    flow = float(self._evaluate_static_expr(range_expr.low))
+                                    fhigh = float(self._evaluate_static_expr(range_expr.high))
+                                    return _FxTypeR(
+                                        name=inner.name,
+                                        size_bits=inner.size_bits,
+                                        delta=inner.delta,
+                                        range_first=flow,
+                                        range_last=fhigh,
+                                        small=inner.small,
+                                        base_type=inner,
+                                    )
+                                except (TypeError, ValueError):
+                                    pass
                     # Handle index constraint for unconstrained arrays
                     elif isinstance(inner, ArrayType) and not inner.is_constrained:
                         if hasattr(constraint, 'ranges') and constraint.ranges:

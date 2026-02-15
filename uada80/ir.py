@@ -197,6 +197,7 @@ class OpCode(Enum):
     EXC_POP = auto()  # pop exception handler (normal exit)
     EXC_RAISE = auto()  # raise exception (src1=exc_id, src2=message_ptr or None)
     EXC_RERAISE = auto()  # re-raise current exception
+    EXC_UNWIND = auto()  # restore handler chain by N links (src1=count), preserves HL/SP
 
     # 48-bit floating point operations (z88dk math48 format)
     FADD = auto()  # dst = src1 + src2 (float)

@@ -6904,6 +6904,8 @@ class Z80CodeGen:
             self._gen_exc_raise(instr)
         elif op == OpCode.EXC_RERAISE:
             self._gen_exc_reraise(instr)
+        elif op == OpCode.EXC_UNWIND:
+            self._gen_exc_unwind(instr)
         # Floating point operations
         elif op == OpCode.FADD:
             self._gen_fadd(instr)
@@ -7432,19 +7434,28 @@ class Z80CodeGen:
         """Generate comparison instruction that only sets flags (no result storage).
 
         Used for membership tests and other conditional jumps where we just
-        need to set the Z, S, and c flags for subsequent JL/JG/JZ/etc.
+        need to set the Z and C flags for subsequent JL/JG/JZ/etc.
+        XOR with 0x8000 converts signed comparison to unsigned so that
+        carry flag alone gives the correct signed less-than result.
         """
         # Load both operands
         self._load_to_hl(instr.src1)
         self._load_to_de(instr.src2)
+
+        # XOR both with 0x8000 for correct signed comparison
+        self._emit_instr("ld", "a", "h")
+        self._emit_instr("xor", "80h")
+        self._emit_instr("ld", "h", "a")
+        self._emit_instr("ld", "a", "d")
+        self._emit_instr("xor", "80h")
+        self._emit_instr("ld", "d", "a")
 
         # Compare hl with de (hl - de), setting flags
         self._emit_instr("or", "a")  # Clear carry
         self._emit_instr("sbc", "hl", "de")
         # Flags are now set:
         # - Z: set if hl == de
-        # - S: set if hl < de (signed)
-        # - C: set if hl < de (unsigned, borrow)
+        # - C: set if src1 < src2 (signed)
 
     def _gen_cmp(self, instr: IRInstr) -> None:
         """Generate comparison instruction."""
@@ -7454,49 +7465,53 @@ class Z80CodeGen:
         self._load_to_hl(instr.src1)
         self._load_to_de(instr.src2)
 
-        # Compare hl with de
-        self._emit_instr("or", "a")  # Clear carry
-        self._emit_instr("sbc", "hl", "de")
-
         # Set result based on comparison type
         op = instr.opcode
-        if op == OpCode.CMP_EQ:
-            # Result = 1 if Z flag set
-            self._emit_instr("ld", "hl", "0")
-            self._emit_instr("jr", "nz", "$+3")
-            self._emit_instr("inc", "l")
-        elif op == OpCode.CMP_NE:
-            # Result = 1 if Z flag not set
-            self._emit_instr("ld", "hl", "0")
-            self._emit_instr("jr", "z", "$+3")
-            self._emit_instr("inc", "l")
-        elif op == OpCode.CMP_LT:
-            # Result = 1 if S flag set (negative result, signed)
-            self._emit_instr("ld", "hl", "0")
-            self._emit_instr("jp", "p", "$+4")
-            self._emit_instr("inc", "l")
-        elif op == OpCode.CMP_GE:
-            # Result = 1 if S flag not set (non-negative, signed)
-            self._emit_instr("ld", "hl", "0")
-            self._emit_instr("jp", "m", "$+4")
-            self._emit_instr("inc", "l")
-        elif op == OpCode.CMP_GT:
-            # GT: not (LT or EQ) - more complex
-            # Layout: LD hl,1 (3) | JP m,$+7 (3) | JR z,$+4 (2) | JR $+3 (2) | DEC L (1)
-            # JP m at X+3 should jump to DEC L at X+10, so $+7
-            self._emit_instr("ld", "hl", "1")
-            self._emit_instr("jp", "m", "$+7")
-            self._emit_instr("jr", "z", "$+4")
-            self._emit_instr("jr", "$+3")
-            self._emit_instr("dec", "l")
-        elif op == OpCode.CMP_LE:
-            # LE: LT or EQ
-            # Layout: LD hl,0 (3) | JP m,$+5 (3) | JR nz,$+3 (2) | INC L (1)
-            # JP m at X+3 should jump to INC L at X+8, so $+5
-            self._emit_instr("ld", "hl", "0")
-            self._emit_instr("jp", "m", "$+5")
-            self._emit_instr("jr", "nz", "$+3")
-            self._emit_instr("inc", "l")
+        if op in (OpCode.CMP_EQ, OpCode.CMP_NE):
+            # EQ/NE only need the zero flag — no sign/overflow issues
+            self._emit_instr("or", "a")  # Clear carry
+            self._emit_instr("sbc", "hl", "de")
+            if op == OpCode.CMP_EQ:
+                self._emit_instr("ld", "hl", "0")
+                self._emit_instr("jr", "nz", "$+3")
+                self._emit_instr("inc", "l")
+            else:
+                self._emit_instr("ld", "hl", "0")
+                self._emit_instr("jr", "z", "$+3")
+                self._emit_instr("inc", "l")
+        else:
+            # Signed comparisons: XOR both with 0x8000 to convert to unsigned
+            # This avoids the S-flag-only bug when overflow occurs
+            # (e.g., 32767 vs -32768)
+            self._emit_instr("ld", "a", "h")
+            self._emit_instr("xor", "80h")
+            self._emit_instr("ld", "h", "a")
+            self._emit_instr("ld", "a", "d")
+            self._emit_instr("xor", "80h")
+            self._emit_instr("ld", "d", "a")
+            self._emit_instr("or", "a")  # Clear carry
+            self._emit_instr("sbc", "hl", "de")
+            # Now carry=1 iff src1 < src2 (signed), zero=1 iff equal
+            if op == OpCode.CMP_LT:
+                self._emit_instr("ld", "hl", "0")
+                self._emit_instr("jr", "nc", "$+3")
+                self._emit_instr("inc", "l")
+            elif op == OpCode.CMP_GE:
+                self._emit_instr("ld", "hl", "0")
+                self._emit_instr("jr", "c", "$+3")
+                self._emit_instr("inc", "l")
+            elif op == OpCode.CMP_LE:
+                # LE = LT or EQ = carry or zero
+                self._emit_instr("ld", "hl", "0")
+                self._emit_instr("jr", "c", "$+4")
+                self._emit_instr("jr", "nz", "$+3")
+                self._emit_instr("inc", "l")
+            elif op == OpCode.CMP_GT:
+                # GT = not LE = not carry and not zero
+                self._emit_instr("ld", "hl", "1")
+                self._emit_instr("jr", "c", "$+4")
+                self._emit_instr("jr", "nz", "$+3")
+                self._emit_instr("dec", "l")
 
         self._store_from_hl(instr.dst)
 
@@ -7525,32 +7540,42 @@ class Z80CodeGen:
             self._emit_instr("jp", "nz", instr.dst.name)
 
     def _gen_jl(self, instr: IRInstr) -> None:
-        """Generate JL (jump if less, signed) - after CMP which did SBC hl,de."""
+        """Generate JL (jump if less, signed) - after CMP with XOR trick.
+        After XOR 0x8000 + SBC, carry = signed less-than."""
         if isinstance(instr.dst, Label):
             self._track_runtime_dep(instr.dst.name)
-            self._emit_instr("jp", "m", instr.dst.name)
+            self._emit_instr("jp", "c", instr.dst.name)
 
     def _gen_jle(self, instr: IRInstr) -> None:
-        """Generate JLE (jump if less or equal, signed) - after CMP."""
+        """Generate JLE (jump if less or equal, signed) - after CMP with XOR trick.
+        LE = carry OR zero."""
         if isinstance(instr.dst, Label):
             self._track_runtime_dep(instr.dst.name)
             self._emit_instr("jp", "z", instr.dst.name)
-            self._emit_instr("jp", "m", instr.dst.name)
+            self._emit_instr("jp", "c", instr.dst.name)
 
     def _gen_jg(self, instr: IRInstr) -> None:
-        """Generate JG (jump if greater, signed) - after CMP.
-        Greater means not zero AND not negative (positive non-zero)."""
+        """Generate JG (jump if greater, signed) - after CMP with XOR trick.
+        Greater = not carry AND not zero.
+        Use JLE to skip (LE = C or Z), then unconditional jump to target."""
         if isinstance(instr.dst, Label):
             self._track_runtime_dep(instr.dst.name)
-            # Skip if equal (Z=1). JP z is 3 bytes, next JP p is 3 bytes.
-            self._emit_instr("jp", "z", "$+6")  # Skip over next JP p
-            self._emit_instr("jp", "p", instr.dst.name)  # Jump if positive
+            if not hasattr(self, '_jg_counter'):
+                self._jg_counter = 0
+            skip_label = f"__jg_skip_{self._jg_counter}"
+            self._jg_counter += 1
+            # If carry or zero, skip the jump (not GT)
+            self._emit_instr("jp", "c", skip_label)
+            self._emit_instr("jp", "z", skip_label)
+            self._emit_instr("jp", instr.dst.name)  # Jump if GT
+            self._emit(f"{skip_label}:")
 
     def _gen_jge(self, instr: IRInstr) -> None:
-        """Generate JGE (jump if greater or equal, signed) - after CMP."""
+        """Generate JGE (jump if greater or equal, signed) - after CMP with XOR trick.
+        GE = not carry."""
         if isinstance(instr.dst, Label):
             self._track_runtime_dep(instr.dst.name)
-            self._emit_instr("jp", "p", instr.dst.name)
+            self._emit_instr("jp", "nc", instr.dst.name)
 
     def _gen_jc(self, instr: IRInstr) -> None:
         """Generate JC (jump if carry, unsigned less) - after CMP."""
@@ -7760,6 +7785,44 @@ class Z80CodeGen:
         self._emit_instr("ld", "hl", "10")
         self._emit_instr("add", "hl", "sp")
         self._emit_instr("ld", "sp", "hl")
+
+    def _gen_exc_unwind(self, instr: IRInstr) -> None:
+        """Restore exception handler chain before function return.
+
+        Walks the handler chain N times (N = immediate in src1) to restore
+        _exc_handler to its state before the function's handlers were pushed.
+        Unlike EXC_POP, this does NOT modify SP (the frame pointer restore
+        handles stack cleanup) and preserves HL (which may hold a return value).
+        """
+        if not instr.src1:
+            return
+        count = instr.src1
+        if isinstance(count, Immediate):
+            count = count.value
+        elif isinstance(count, VReg):
+            # Shouldn't happen, but handle gracefully
+            return
+        if count <= 0:
+            return
+
+        self._emit(f"    ; unwind {count} exception handler(s) before return")
+        self._emit_instr("push", "hl")  # save return value
+
+        # Load current handler
+        self._emit_instr("ld", "hl", "(_exc_handler)")
+
+        for i in range(count):
+            # Follow prev link: prev_handler = *(hl)
+            self._emit_instr("ld", "e", "(hl)")
+            self._emit_instr("inc", "hl")
+            self._emit_instr("ld", "d", "(hl)")
+            if i < count - 1:
+                # More links to follow: DE = prev, set HL = DE for next iteration
+                self._emit_instr("ex", "de", "hl")
+
+        # DE now holds the final prev_handler pointer
+        self._emit_instr("ld", "(_exc_handler)", "de")
+        self._emit_instr("pop", "hl")  # restore return value
 
     def _gen_exc_raise(self, instr: IRInstr) -> None:
         """Generate raise exception.
