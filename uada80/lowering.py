@@ -10273,6 +10273,46 @@ class ASTLowering:
             size = 2  # Default to word size
             is_tagged = False
 
+        # For unconstrained array types with an initial value (e.g., new String'(Id)),
+        # we need to determine the size at runtime from the initial value.
+        dynamic_size = None  # If set, use this vreg instead of static size
+        dynamic_init_val = None  # Pre-lowered initial value for dynamic case
+        dynamic_init_addr = None  # Data address for memcpy
+        if (size == 0 and designated_type and isinstance(designated_type, ArrayType)
+                and not designated_type.is_constrained and expr.initial_value):
+            init_expr = expr.initial_value
+            # Handle qualified expression wrapper
+            if isinstance(init_expr, Aggregate) and len(init_expr.components) == 1:
+                comp = init_expr.components[0]
+                if not comp.choices:
+                    init_expr = comp.value
+
+            if isinstance(init_expr, StringLiteral):
+                # String literal: size is known at compile time
+                size = len(init_expr.value)
+            elif isinstance(init_expr, Identifier):
+                # Could be an unconstrained array parameter (dope vector)
+                param_name = init_expr.name.lower()
+                if param_name in self.ctx.unconstrained_params:
+                    # Unconstrained param: compute length from dope vector vregs
+                    first_key = f"{param_name}'first"
+                    last_key = f"{param_name}'last"
+                    data_vreg = self.ctx.params.get(param_name)
+                    first_param = self.ctx.params.get(first_key)
+                    last_param = self.ctx.params.get(last_key)
+                    if data_vreg and first_param and last_param:
+                        # length = last - first + 1
+                        len_vreg = self.builder.new_vreg(IRType.WORD, "_alloc_len")
+                        self.builder.sub(len_vreg, last_param, first_param)
+                        self.builder.add(len_vreg, len_vreg, Immediate(1, IRType.WORD))
+                        dynamic_size = len_vreg
+                        dynamic_init_addr = data_vreg
+                else:
+                    # Constrained string variable: use its known size
+                    local = self.ctx.locals.get(param_name)
+                    if local and local.size > 0:
+                        size = local.size
+
         # Check for custom storage pool
         # Access types can have a storage pool specified via representation clause
         storage_pool = None
@@ -10284,7 +10324,7 @@ class ASTLowering:
                     storage_pool = access_sym.ada_type.storage_pool
 
         # Allocate using storage pool
-        size_val = Immediate(size, IRType.WORD)
+        size_val = dynamic_size if dynamic_size is not None else Immediate(size, IRType.WORD)
 
         if storage_pool:
             # Use custom storage pool
@@ -10349,7 +10389,11 @@ class ASTLowering:
             self.builder.store(tag_loc, vtable_val, comment="init tag (vtable ptr)")
 
         # If there's an initial value, store it
-        if expr.initial_value:
+        if dynamic_init_addr is not None:
+            # Dynamic unconstrained array: copy from pre-captured source address
+            self._emit_dynamic_memcpy(result, dynamic_init_addr, dynamic_size,
+                                      "copy unconstrained array to heap alloc")
+        elif expr.initial_value:
             # Handle single-component aggregate as simple value (e.g., Integer'(42))
             init_expr = expr.initial_value
             if isinstance(init_expr, Aggregate) and len(init_expr.components) == 1:
@@ -10369,7 +10413,7 @@ class ASTLowering:
                     self._emit_memcpy(dst, init_val, size - data_offset, "copy record to heap alloc")
                 else:
                     self._emit_memcpy(result, init_val, size, "copy record to heap alloc")
-            elif designated_type and isinstance(designated_type, ArrayType) and size > 2:
+            elif designated_type and isinstance(designated_type, ArrayType) and size > 0:
                 if data_offset != 0:
                     dst = self.builder.new_vreg(IRType.PTR, "_alloc_data")
                     self.builder.add(dst, result, Immediate(data_offset, IRType.WORD))
@@ -10547,6 +10591,23 @@ class ASTLowering:
             for _ in range(3):
                 temp = self.builder.new_vreg(IRType.WORD, "_discard")
                 self.builder.pop(temp)
+
+    def _emit_dynamic_memcpy(self, dst, src, size_vreg, comment: str = "") -> None:
+        """Emit memory copy with runtime-determined size.
+
+        Like _emit_memcpy but size is a vreg rather than a compile-time constant.
+        Always calls runtime _memcpy.
+        """
+        if self.ctx is None:
+            return
+        # Stack layout: IX+4=count, IX+6=src, IX+8=dest
+        self.builder.push(dst)
+        self.builder.push(src)
+        self.builder.push(size_vreg)
+        self.builder.call(Label("_memcpy"), comment=f"dynamic memcpy {comment}")
+        for _ in range(3):
+            temp = self.builder.new_vreg(IRType.WORD, "_discard")
+            self.builder.pop(temp)
 
     def _emit_range_check(self, value, target_type, comment: str = "") -> None:
         """Emit runtime range check for type conversion or assignment.
@@ -10841,6 +10902,73 @@ class ASTLowering:
             self.builder.push(int_val)
             self.builder.call(Label("_f64_itof"))
             # Pop arguments (2 words = 4 bytes)
+            discard = self.builder.new_vreg(IRType.WORD, "_pop_discard")
+            self.builder.pop(discard)
+            self.builder.pop(discard)
+            return result_ptr
+
+        # Handle Float64 -> Float64 conversion (derived/parent types, same representation)
+        if source_is_float64 and target_is_float64:
+            return self._lower_float64_operand(expr.operand)
+
+        # Handle Float64 -> Fixed-point conversion
+        if source_is_float64 and target_type and getattr(target_type, 'kind', None) == TypeKind.FIXED:
+            from uada80.type_system import FixedType as _FixedType
+            delta = getattr(target_type, 'delta', None) or getattr(target_type, 'small', None)
+            if delta:
+                # Convert float to integer first, then scale for fixed-point
+                float_ptr = self._lower_float64_operand(expr.operand)
+                result = self.builder.new_vreg(IRType.WORD, "_f64_to_fx")
+                self.builder.push(float_ptr)
+                self.builder.call(Label("_f64_ftoi"))
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="result from _f64_ftoi for fixed"
+                ))
+                self.builder.emit(IRInstr(
+                    OpCode.ADD,
+                    MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+                    Immediate(2, IRType.WORD),
+                    comment="clean up 1 argument"
+                ))
+                # Scale: stored = round(value / delta)
+                if delta < 1.0:
+                    scale = round(1.0 / delta)
+                    if scale != 1:
+                        scaled = self.builder.new_vreg(IRType.WORD, "_fx_scale")
+                        self.builder.mul(scaled, result, Immediate(scale, IRType.WORD))
+                        return scaled
+                return result
+
+        # Handle Fixed-point -> Float64 conversion
+        if target_is_float64 and source_type and getattr(source_type, 'kind', None) == TypeKind.FIXED:
+            from uada80.type_system import FixedType as _FixedType
+            delta = getattr(source_type, 'delta', None) or getattr(source_type, 'small', None)
+            operand_val = self._lower_expr(expr.operand)
+            # Unscale: value = stored * delta
+            if delta and delta < 1.0:
+                scale = round(1.0 / delta)
+                if scale != 1:
+                    unscaled = self.builder.new_vreg(IRType.WORD, "_fx_unscale")
+                    self.builder.div(unscaled, operand_val, Immediate(scale, IRType.WORD))
+                    operand_val = unscaled
+            # Convert integer to float64
+            result_ptr = self.builder.new_vreg(IRType.PTR, "_fx_to_f64")
+            self.builder.emit(IRInstr(
+                OpCode.SUB,
+                MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+                MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+                Immediate(8, IRType.WORD),
+                comment="allocate 8 bytes for float64 from fixed"
+            ))
+            self.builder.emit(IRInstr(
+                OpCode.MOV, result_ptr,
+                MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.PTR),
+            ))
+            self.builder.push(result_ptr)
+            self.builder.push(operand_val)
+            self.builder.call(Label("_f64_itof"))
             discard = self.builder.new_vreg(IRType.WORD, "_pop_discard")
             self.builder.pop(discard)
             self.builder.pop(discard)
@@ -11428,17 +11556,24 @@ class ASTLowering:
         return result
 
     def _is_float64_type(self, ada_type) -> bool:
-        """Check if a type is a floating point type.
+        """Check if a type is a floating point type that uses Float64 runtime.
 
-        On Z80, all floating point types (Float, Long_Float, Long_Long_Float) use
-        the Float64 runtime since we don't have a separate 32-bit float implementation.
+        On Z80, predefined float types (Float, Long_Float, Long_Long_Float) use
+        the Float64 runtime. Derived types from these also use Float64.
+        Independent float type declarations (TYPE F IS DIGITS 3) use fixed-point.
         """
         if ada_type is None:
             return False
         from uada80.type_system import FloatType
         if isinstance(ada_type, FloatType):
-            # All floating point types use Float64 runtime on Z80
-            return ada_type.name in ('Float', 'Long_Float', 'Long_Long_Float')
+            # Predefined float types use Float64 runtime
+            if ada_type.name in ('Float', 'Long_Float', 'Long_Long_Float'):
+                return True
+            # Follow base_type chain for derived float types
+            if hasattr(ada_type, 'base_type') and ada_type.base_type is not None:
+                return self._is_float64_type(ada_type.base_type)
+            # Independent float type (DIGITS N) without base_type → not Float64
+            return False
         return False
 
     def _lower_float64_operand(self, expr):
@@ -11455,6 +11590,9 @@ class ASTLowering:
 
         if isinstance(expr, RealLiteral):
             return self._lower_float64_literal(expr.value)
+
+        if isinstance(expr, IntegerLiteral):
+            return self._lower_float64_literal(float(expr.value))
 
         if isinstance(expr, Identifier):
             # Get the address of the variable
@@ -13163,11 +13301,35 @@ class ASTLowering:
                 positional_offset += 2
 
         # Handle others clause - fill remaining fields/elements
-        if others_value is not None and field_info:
+        if others_value is not None:
             others_val = self._lower_expr(others_value)
-            # For records, fill unassigned fields
-            # This would require tracking which fields were assigned
-            # For now, skip - the explicit assignments should cover it
+            if isinstance(agg_type, ArrayType):
+                # For arrays: fill all elements from positional_offset to end
+                element_size = 2  # default
+                if agg_type.component_type:
+                    es = agg_type.component_type.size_bytes()
+                    if es and es > 0:
+                        element_size = es
+                total_elements = size // element_size if element_size > 0 else 0
+                # positional_offset tracks bytes written positionally
+                filled_elements = positional_offset // element_size if element_size > 0 else 0
+                if filled_elements < total_elements:
+                    # Generate loop to fill remaining elements
+                    loop_idx = self.builder.new_vreg(IRType.WORD, "_oth_idx")
+                    self.builder.mov(loop_idx, Immediate(filled_elements * element_size, IRType.WORD))
+                    loop_end_off = total_elements * element_size
+                    loop_start = self.builder.new_label("agg_others_loop")
+                    loop_end = self.builder.new_label("agg_others_end")
+                    self.builder.label(loop_start)
+                    self.builder.cmp(loop_idx, Immediate(loop_end_off, IRType.WORD))
+                    self.builder.jge(loop_end)
+                    addr_reg = self.builder.new_vreg(IRType.PTR, "_oth_addr")
+                    self.builder.add(addr_reg, agg_addr, loop_idx)
+                    mem = MemoryLocation(base=addr_reg, offset=0, ir_type=IRType.WORD)
+                    self.builder.store(mem, others_val)
+                    self.builder.add(loop_idx, loop_idx, Immediate(element_size, IRType.WORD))
+                    self.builder.jmp(loop_start)
+                    self.builder.label(loop_end)
 
         return agg_addr
 
@@ -14163,8 +14325,16 @@ class ASTLowering:
                 right_ptr = self._get_composite_ptr(expr.right)
                 return self._lower_record_comparison(op, left_ptr, right_ptr, left_type)
 
+        # Set fixed-point context for RealLiteral operands in binary expressions
+        old_fx_delta = getattr(self, '_fixed_point_context_delta', None)
+        if is_fixed:
+            fx_type = left_type if isinstance(left_type, _FixedType) else right_type
+            delta = getattr(fx_type, 'delta', None) or getattr(fx_type, 'small', None)
+            if delta:
+                self._fixed_point_context_delta = delta
         left = self._lower_expr(expr.left)
         right = self._lower_expr(expr.right)
+        self._fixed_point_context_delta = old_fx_delta
 
         result = self.builder.new_vreg(IRType.WORD, "_tmp")
 

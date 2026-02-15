@@ -555,11 +555,18 @@ class RecordType(AdaType):
                     comp.offset_bits = total_bits
                     total_bits += comp.component_type.size_bits
             else:
-                # Non-packed: align to byte boundary
-                if total_bits % 8 != 0:
-                    total_bits = ((total_bits + 7) // 8) * 8
+                # Non-packed: align to word boundary (16 bits on Z80)
+                # Z80 codegen always uses 16-bit loads for record fields,
+                # so each non-Character field needs at least 16 bits.
+                if total_bits % 16 != 0:
+                    total_bits = ((total_bits + 15) // 16) * 16
                 comp.offset_bits = total_bits
-                total_bits += comp.component_type.size_bits
+                comp_size = comp.component_type.size_bits
+                # Ensure minimum 16-bit slot for non-packed fields
+                # (Z80 uses ld hl,(addr) which reads 2 bytes)
+                if comp_size < 16:
+                    comp_size = 16
+                total_bits += comp_size
 
         # Add variant part (size = max of all variants)
         if self.variant_part:

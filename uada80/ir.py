@@ -287,6 +287,7 @@ class IRFunction:
     blocks: list[BasicBlock] = field(default_factory=list)
     entry_block: Optional[BasicBlock] = None
     forwarding_target: Optional[str] = None  # For renaming stubs: jp _target
+    enum_return_value: Optional[int] = None  # For enum literal renamings: ld hl, N; ret
 
     def new_block(self, label: str) -> BasicBlock:
         """Create a new basic block."""
