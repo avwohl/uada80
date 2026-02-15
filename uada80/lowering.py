@@ -913,6 +913,13 @@ class ASTLowering:
                 self.ctx.params[param_name] = ptr_vreg
                 self.ctx.byref_params[param_name] = True  # Mark as byref for stores
                 func.params.append(ptr_vreg)
+                # Store ada_type from enclosing context for _get_expr_type
+                enc = getattr(self.ctx, 'enclosing_ctx', None)
+                while enc:
+                    if var_name in enc.locals and enc.locals[var_name].ada_type:
+                        self.ctx.param_ada_types[param_name] = self._resolve_local_type(enc.locals[var_name].ada_type)
+                        break
+                    enc = getattr(enc, 'enclosing_ctx', None)
 
         # Store declarations for later lookup (used by _get_field_offset)
         # Push to stack for nested scope lookup
@@ -5894,6 +5901,18 @@ class ASTLowering:
                     if local.ada_type:
                         # Resolve the type (may be AST node or AdaType)
                         return self._resolve_local_type(local.ada_type)
+            # Check parameters (for byref params like OUT/IN OUT)
+            if self.ctx:
+                name = target.name.lower()
+                if name in self.ctx.params:
+                    param_type_name = self.ctx.param_types.get(name)
+                    if param_type_name:
+                        type_sym = self.symbols.lookup(param_type_name)
+                        if type_sym and type_sym.ada_type:
+                            return type_sym.ada_type
+                    # Fallback: use stored AdaType
+                    if name in self.ctx.param_ada_types:
+                        return self.ctx.param_ada_types[name]
             # Check for outer-scope variable type (nested subprogram)
             if self.ctx:
                 outer_param_name = f"_outer_{target.name.lower()}"
@@ -10548,6 +10567,14 @@ class ASTLowering:
                     self._emit_memcpy(result, init_addr, size, "copy array to heap alloc")
             else:
                 init_val = self._lower_expr(init_expr)
+                # Emit range check for qualified allocators (e.g., new TA'(val))
+                # where TA has constrained range
+                if designated_type and (hasattr(designated_type, 'low') or hasattr(designated_type, 'first')):
+                    self._emit_range_check(init_val, designated_type, "allocator range check")
+                # Also check against the access type's designated subtype constraints
+                # (e.g., TYPE AT2_6 IS ACCESS INTEGER RANGE 2..6)
+                if hasattr(expr, '_access_designated_type') and expr._access_designated_type:
+                    self._emit_range_check(init_val, expr._access_designated_type, "access subtype range check")
                 mem = MemoryLocation(base=result, offset=data_offset, ir_type=IRType.WORD)
                 self.builder.store(mem, init_val)
         elif designated_type and isinstance(designated_type, RecordType):
@@ -10564,9 +10591,22 @@ class ASTLowering:
             # Initialize discriminants from subtype constraints or defaults
             disc_values = self._get_allocator_disc_values(expr.type_mark, designated_type)
             if disc_values:
-                for disc, disc_val in zip(designated_type.discriminants, disc_values):
+                # Look up discriminant range constraints from AST TypeDecl
+                disc_range_exprs = self._get_disc_range_exprs(expr.type_mark, designated_type)
+                for idx, (disc, disc_val) in enumerate(zip(designated_type.discriminants, disc_values)):
                     disc_offset = disc.offset_bits // 8
                     value = self._lower_expr(disc_val)
+                    # Emit range check for discriminant value against its declared subtype
+                    range_info = disc_range_exprs[idx] if idx < len(disc_range_exprs) else None
+                    if range_info is not None:
+                        low_expr, high_expr = range_info
+                        low_vreg = self._lower_expr(low_expr)
+                        high_vreg = self._lower_expr(high_expr)
+                        self._emit_dynamic_range_check(value, low_vreg, high_vreg,
+                                                       f"allocator disc {disc.name} range check")
+                    elif disc.component_type:
+                        self._emit_range_check(value, disc.component_type,
+                                               f"allocator disc {disc.name} range check")
                     self.builder.store(
                         MemoryLocation(base=result, offset=disc_offset, ir_type=IRType.WORD),
                         value,
@@ -10583,6 +10623,124 @@ class ASTLowering:
                         value,
                         comment=f"init {comp.name} default",
                     )
+                elif isinstance(comp.component_type, RecordType):
+                    # Recursively initialize nested record components with their defaults
+                    comp_base_offset = comp.offset_bits // 8
+                    nested_type = comp.component_type
+                    # Initialize nested discriminants with their defaults
+                    for sub_disc in nested_type.discriminants:
+                        if sub_disc.default_value is not None:
+                            sub_offset = comp_base_offset + sub_disc.offset_bits // 8
+                            value = self._lower_expr(sub_disc.default_value)
+                            self.builder.store(
+                                MemoryLocation(base=result, offset=sub_offset, ir_type=IRType.WORD),
+                                value,
+                                comment=f"init {comp.name}.{sub_disc.name} default",
+                            )
+                    # Initialize nested component defaults
+                    for sub_comp in nested_type.components:
+                        if sub_comp.default_value is not None:
+                            sub_offset = comp_base_offset + sub_comp.offset_bits // 8
+                            value = self._lower_expr(sub_comp.default_value)
+                            self.builder.store(
+                                MemoryLocation(base=result, offset=sub_offset, ir_type=IRType.WORD),
+                                value,
+                                comment=f"init {comp.name}.{sub_comp.name} default",
+                            )
+
+        return result
+
+    def _get_disc_range_exprs(self, type_mark, designated_type):
+        """Get discriminant range constraint expressions from the type's AST declaration.
+
+        Returns a list of (low_expr, high_expr) tuples (one per discriminant) for
+        runtime range checking. Falls back to None entries when no range constraint
+        can be found for a discriminant.
+        """
+        num_discs = len(designated_type.discriminants) if designated_type.discriminants else 0
+        result = [None] * num_discs
+
+        # Get the base type name
+        base_name = None
+        if isinstance(type_mark, Identifier):
+            base_name = type_mark.name.lower()
+        elif isinstance(type_mark, IndexedComponent) and isinstance(type_mark.prefix, Identifier):
+            base_name = type_mark.prefix.name.lower()
+        elif isinstance(type_mark, IndexedComponent) and isinstance(type_mark.prefix, SelectedName):
+            base_name = type_mark.prefix.selector.lower()
+
+        if not base_name:
+            return result
+
+        # Search _body_declarations_stack for the TypeDecl
+        all_decl_lists = []
+        if hasattr(self, '_current_body_declarations') and self._current_body_declarations:
+            all_decl_lists.append(self._current_body_declarations)
+        if hasattr(self, '_body_declarations_stack'):
+            for dl in self._body_declarations_stack:
+                if dl not in all_decl_lists:
+                    all_decl_lists.append(dl)
+
+        def _get_range_from_subtype(subtype_name):
+            """Find the SubtypeDecl for a name and return (low_expr, high_expr) or None."""
+            sn = subtype_name.lower()
+            for dl in all_decl_lists:
+                for d in dl:
+                    if isinstance(d, SubtypeDecl) and d.name.lower() == sn:
+                        si = d.subtype_indication
+                        if isinstance(si, SubtypeIndication) and si.constraint:
+                            if isinstance(si.constraint, RangeConstraint):
+                                rng = si.constraint.range_expr
+                                if isinstance(rng, RangeExpr):
+                                    return (rng.low, rng.high)
+                        return None
+            return None
+
+        def _process_type_decl(td):
+            """Extract disc range info from a TypeDecl."""
+            if td.discriminants:
+                idx = 0
+                for disc_spec in td.discriminants:
+                    # Get the discriminant's type_mark name
+                    disc_type_name = None
+                    if isinstance(disc_spec.type_mark, Identifier):
+                        disc_type_name = disc_spec.type_mark.name
+                    elif isinstance(disc_spec.type_mark, SelectedName):
+                        disc_type_name = disc_spec.type_mark.selector
+
+                    range_info = None
+                    if disc_type_name:
+                        # First try to get range from the subtype declaration
+                        range_info = _get_range_from_subtype(disc_type_name)
+                        if range_info is None:
+                            # Try resolving the type - it might have static bounds
+                            resolved = self._resolve_local_type(disc_spec.type_mark)
+                            if resolved:
+                                low = getattr(resolved, 'low', None)
+                                high = getattr(resolved, 'high', None)
+                                if isinstance(low, int) and isinstance(high, int):
+                                    if not (low <= -32768 and high >= 32767):
+                                        range_info = (
+                                            IntegerLiteral(value=low, text=str(low)),
+                                            IntegerLiteral(value=high, text=str(high)),
+                                        )
+
+                    for _ in disc_spec.names:
+                        if idx < len(result):
+                            result[idx] = range_info
+                        idx += 1
+
+        for decl_list in all_decl_lists:
+            for d in decl_list:
+                if isinstance(d, TypeDecl) and d.name.lower() == base_name:
+                    _process_type_decl(d)
+                    return result
+                # Also search inside packages
+                if isinstance(d, PackageDecl):
+                    for pkg_decl in list(d.declarations or []) + list(d.private_declarations or []):
+                        if isinstance(pkg_decl, TypeDecl) and pkg_decl.name.lower() == base_name:
+                            _process_type_decl(pkg_decl)
+                            return result
 
         return result
 
@@ -10603,6 +10761,12 @@ class ASTLowering:
                 indexed = type_mark.type_mark
                 if indexed.indices and designated_type.discriminants:
                     return list(indexed.indices)
+
+        # Case 1b: type_mark is an IndexedComponent (e.g., new TB(A => 0))
+        # The indices are the discriminant values
+        if isinstance(type_mark, IndexedComponent):
+            if type_mark.indices and designated_type and designated_type.discriminants:
+                return list(type_mark.indices)
 
         # Case 2: type_mark is an Identifier for a constrained subtype
         if isinstance(type_mark, Identifier):
@@ -13928,6 +14092,10 @@ class ASTLowering:
                 return sym.ada_type
             # Fallback: search package public_symbols
             return self._resolve_local_type(type_expr)
+        elif isinstance(type_expr, IndexedComponent):
+            # Discriminant constraint: TB(A => 0) parsed as IndexedComponent(prefix=TB)
+            # Resolve the prefix as the base record type
+            return self._resolve_type(type_expr.prefix)
         return None
 
     def _lower_identifier(self, expr: Identifier):
@@ -15550,12 +15718,27 @@ class ASTLowering:
                 # Also check enclosing contexts (for nested subprograms)
                 enc = getattr(self.ctx, 'enclosing_ctx', None)
                 while enc:
-                    name = expr.name.lower()
-                    if name in enc.locals:
-                        local = enc.locals[name]
+                    ename = expr.name.lower()
+                    if ename in enc.locals:
+                        local = enc.locals[ename]
                         if local.ada_type:
                             return self._resolve_local_type(local.ada_type)
+                    if ename in getattr(enc, 'params', {}):
+                        pt = getattr(enc, 'param_types', {}).get(ename)
+                        if pt:
+                            ts = self.symbols.lookup(pt)
+                            if ts and ts.ada_type:
+                                return ts.ada_type
+                        pat = getattr(enc, 'param_ada_types', {}).get(ename)
+                        if pat:
+                            return pat
                     enc = getattr(enc, 'enclosing_ctx', None)
+                # Fallback: check for outer-scope variable via _outer_ params
+                outer_param_name = f"_outer_{expr.name.lower()}"
+                if outer_param_name in self.ctx.params:
+                    # Look up type from param_ada_types (set during outer var setup)
+                    if outer_param_name in self.ctx.param_ada_types:
+                        return self.ctx.param_ada_types[outer_param_name]
             # Then check symbol table
             sym = self.symbols.lookup(expr.name)
             if sym and sym.ada_type:

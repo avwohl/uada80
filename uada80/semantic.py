@@ -4531,17 +4531,63 @@ class SemanticAnalyzer:
                             base_type=base_type,
                         )
                     elif isinstance(base_type, EnumerationType):
+                        # For enumeration subtypes, the bounds must be enum
+                        # position values, not raw character codes.
+                        # _try_eval_static returns ord(ch) for CharacterLiteral,
+                        # but if the character is a literal in a user-defined
+                        # enum type with non-standard ordering, we need its
+                        # actual position in that type.
+                        enum_low = self._resolve_enum_bound(
+                            range_expr.low, low, base_type)
+                        enum_high = self._resolve_enum_bound(
+                            range_expr.high, high, base_type)
                         return EnumerationType(
                             name=base_type.name,
                             size_bits=base_type.size_bits,
                             literals=base_type.literals.copy(),
                             positions=base_type.positions.copy(),
                             base_type=base_type,
-                            first=low,
-                            last=high,
+                            first=enum_low,
+                            last=enum_high,
                         )
 
         return base_type
+
+    def _resolve_enum_bound(self, expr: Expr, static_val: int,
+                            enum_type: "EnumerationType") -> int:
+        """Resolve a range bound to an enumeration position value.
+
+        When _try_eval_static evaluates a CharacterLiteral, it returns
+        ord(ch) (the ASCII code). But for user-defined enumeration types
+        that include character literals with non-standard ordering (e.g.,
+        type T is ('S', 'Q', 'P', 'M', 'R')), the bound must be the
+        position of that character in the enumeration type, not its ASCII
+        code.
+
+        For regular Identifier enum literals (e.g., May, Jun), the static
+        evaluator already returns the correct position value.
+        """
+        # Unwrap QualifiedExpr (e.g., T'('P')) to get the inner expression
+        inner = expr
+        while isinstance(inner, QualifiedExpr):
+            inner = inner.expr
+        # Also unwrap TypeConversion
+        while isinstance(inner, TypeConversion):
+            inner = inner.expr
+
+        if isinstance(inner, CharacterLiteral):
+            # Look up the character in the enum type's positions dict
+            # Positions dict uses "'X'" format for character literals
+            char_key = f"'{inner.value}'"
+            if char_key in enum_type.positions:
+                return enum_type.positions[char_key]
+            # Also try bare character value
+            if inner.value in enum_type.positions:
+                return enum_type.positions[inner.value]
+
+        # For Identifier enum literals, the static_val is already the
+        # correct position value
+        return static_val
 
     def _get_identifier_name(self, expr: Expr) -> Optional[str]:
         """Get the name from an identifier expression."""
