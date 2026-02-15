@@ -1244,6 +1244,76 @@ class ASTLowering:
                 self.ctx.params[name.lower()] = vreg
                 self.ctx.function.params.append(vreg)
 
+    def _register_body_stub_params(self, stub: BodyStub) -> None:
+        """Register parameter metadata for a procedure/function body stub.
+
+        When a subprogram body is separate, it's lowered as a top-level function
+        from the subunit.  But the call site in the enclosing scope needs to know
+        which parameters are byref (IN OUT, OUT) so it passes addresses instead
+        of values.  This method mirrors the parameter registration done in
+        _lower_subprogram_body (lines 867-893) but without actually creating
+        parameter vregs — just the metadata dictionaries.
+        """
+        stub_name = stub.name.lower()
+        param_modes = []
+        param_names = []
+        param_defaults = []
+        byref_list = []
+        unconstrained_list = []
+        ada_types_list = []
+        ndims_list = []
+
+        for param_spec in stub.parameters:
+            mode = param_spec.mode or "in"
+            is_byref = mode in ("out", "in out")
+
+            # Resolve param type for record/unconstrained detection
+            param_type = None
+            type_name_str = None
+            if param_spec.type_mark:
+                type_name = param_spec.type_mark
+                if isinstance(type_name, Identifier):
+                    type_name_str = type_name.name
+                elif isinstance(type_name, SelectedName):
+                    type_name_str = type_name.selector
+                else:
+                    type_name_str = str(type_name)
+                type_sym = self.symbols.lookup(type_name_str)
+                if type_sym and type_sym.ada_type:
+                    param_type = type_sym.ada_type
+                if param_type is None:
+                    param_type = self._resolve_local_type(type_name)
+
+            is_unconstrained = (
+                param_type and
+                isinstance(param_type, ArrayType) and
+                not param_type.is_constrained
+            )
+            from uada80.type_system import RecordType as RecordTypeClass
+            is_record = param_type and isinstance(param_type, RecordTypeClass)
+
+            default_val = getattr(param_spec, 'default_value', None)
+            for pname in param_spec.names:
+                pname_lower = pname.lower() if isinstance(pname, str) else pname.name.lower()
+                param_modes.append(mode)
+                param_names.append(pname_lower)
+                param_defaults.append(default_val)
+                byref_list.append(is_byref or is_record)
+                unconstrained_list.append(bool(is_unconstrained))
+                ada_types_list.append(param_type)
+                if is_unconstrained and param_type:
+                    ndims_list.append(len(param_type.index_types) if hasattr(param_type, 'index_types') and param_type.index_types else 1)
+                else:
+                    ndims_list.append(1)
+
+        self._subprogram_param_modes[stub_name] = param_modes
+        self._subprogram_param_names[stub_name] = param_names
+        self._subprogram_param_defaults[stub_name] = param_defaults
+        self._subprogram_byref_params[stub_name] = byref_list
+        self._subprogram_unconstrained_params[stub_name] = unconstrained_list
+        self._subprogram_param_ada_types[stub_name] = ada_types_list
+        self._subprogram_param_ndims[stub_name] = ndims_list
+
     def _lower_package_decl(self, pkg: PackageDecl) -> None:
         """Lower a package declaration."""
         # Skip generic packages - they are templates, not concrete code
@@ -2425,6 +2495,13 @@ class ASTLowering:
             if subunit_body:
                 self._lowered_subunit_package_bodies.add(stub_name)
                 self._lower_nested_package_body(subunit_body)
+        elif isinstance(decl, BodyStub) and decl.kind in ("procedure", "function"):
+            # Procedure/function body stub (IS SEPARATE) — the actual body is
+            # lowered as a top-level function from the subunit.  But we need to
+            # register the parameter metadata (byref params, modes, names, etc.)
+            # so that call sites within this scope can correctly pass IN OUT
+            # parameters by reference.
+            self._register_body_stub_params(decl)
         elif isinstance(decl, UseClause):
             # Process use clauses so package symbols become visible in the
             # lowering scope.  This is needed for _get_expr_type and
@@ -6704,6 +6781,16 @@ class ASTLowering:
         # Normal return: finalize all controlled objects before returning
         self._generate_finalizations()
 
+        # Pop any active exception handlers before returning.
+        # When a return exits from inside a begin..exception block, the
+        # _exc_handler chain must be restored so the caller's handlers
+        # are correctly linked. The stack deallocation from EXC_POP is
+        # harmless because ret will restore SP from the frame pointer.
+        if self.ctx and self.ctx.exception_handler_stack:
+            for handler_count, _end_label in self.ctx.exception_handler_stack:
+                for _ in range(handler_count):
+                    self.builder.emit(IRInstr(OpCode.EXC_POP))
+
         if stmt.value:
             value = self._lower_expr(stmt.value)
             self.builder.ret(value)
@@ -7069,12 +7156,17 @@ class ASTLowering:
 
                 # Use proper argument handling with dope vector support
                 proc_name_lower = call_target.lower()
+                # For SelectedName calls, also try the selector name as a fallback
+                # key for parameter metadata (e.g., "p" when call_target is "ca1014a0m_p")
+                selector_lower = stmt.name.selector.lower() if isinstance(stmt.name, SelectedName) else proc_name_lower
                 effective_args = self._build_effective_args(stmt.args, sym, proc_name_lower)
 
                 # Get parameter modes for out/in out handling
                 param_modes = []
                 if proc_name_lower in self._subprogram_param_modes:
                     param_modes = self._subprogram_param_modes[proc_name_lower]
+                elif selector_lower in self._subprogram_param_modes:
+                    param_modes = self._subprogram_param_modes[selector_lower]
                 elif sym and sym.parameters:
                     param_modes = [p.mode for p in sym.parameters]
 
@@ -7082,6 +7174,8 @@ class ASTLowering:
                 byref_params = []
                 if proc_name_lower in self._subprogram_byref_params:
                     byref_params = self._subprogram_byref_params[proc_name_lower]
+                elif selector_lower in self._subprogram_byref_params:
+                    byref_params = self._subprogram_byref_params[selector_lower]
 
                 # Push arguments in reverse order with proper dope vector handling
                 stack_slots = 0
@@ -11163,13 +11257,46 @@ class ASTLowering:
         After the call, the OUT/IN OUT parameters may have been modified by the callee.
         We must check that the new value satisfies the actual parameter's subtype constraint.
         This is the 'after call' check required by Ada RM 6.4.1.
-
-        NOTE: Currently disabled due to codegen issues with frame temporaries.
-        The after-call check generates IR that corrupts the Z80 stack frame
-        when temporaries are allocated between call cleanup and handler restoration.
-        TODO: Implement using direct frame loads instead of _lower_expr.
         """
-        pass  # Disabled for now
+        if self.ctx is None:
+            return
+        for idx, arg in enumerate(effective_args):
+            if idx >= len(param_modes):
+                break
+            mode = param_modes[idx]
+            if mode not in ("out", "in out"):
+                continue
+            # Get the actual variable's type (the constraint to check against)
+            actual_type = self._get_actual_arg_type(arg)
+            if actual_type is None or not self._type_needs_range_check(actual_type):
+                continue
+            # Load the current value of the actual parameter (after the call modified it)
+            try:
+                value = self._lower_expr(arg)
+                self._emit_range_check(value, actual_type,
+                                       f"out param {idx} after-call check")
+            except Exception:
+                pass  # Skip check if we can't load the argument
+
+    def _get_actual_arg_type(self, arg):
+        """Get the Ada type of an actual argument expression.
+
+        Returns the argument's constrained subtype for after-call checks.
+        """
+        if self.ctx is None:
+            return None
+        from uada80.parser import Identifier
+        if isinstance(arg, Identifier):
+            name = arg.name.lower()
+            # Check locals
+            if name in self.ctx.locals:
+                local = self.ctx.locals[name]
+                return getattr(local, 'ada_type', None)
+            # Check symbol table
+            var_sym = self.symbols.lookup(name)
+            if var_sym:
+                return getattr(var_sym, 'ada_type', None)
+        return None
 
     def _lower_conditional_expr(self, expr: ConditionalExpr):
         """Lower a conditional expression (if Cond then A else B).
@@ -22401,6 +22528,11 @@ class ASTLowering:
                                 is_function = True
                                 break
                         elif isinstance(decl, SubprogramDecl):
+                            decl_name = decl.name if isinstance(decl.name, str) else str(decl.name)
+                            if decl_name.lower() == func_name:
+                                is_function = True
+                                break
+                        elif isinstance(decl, BodyStub) and decl.kind in ("function", "procedure"):
                             decl_name = decl.name if isinstance(decl.name, str) else str(decl.name)
                             if decl_name.lower() == func_name:
                                 is_function = True
