@@ -1609,8 +1609,13 @@ class SemanticAnalyzer:
         for decl in pkg.declarations:
             if isinstance(decl, TypeDecl) and isinstance(decl.type_def, AccessTypeDef):
                 access_decls[decl.name.lower()] = decl
+        for decl in getattr(pkg, 'private_declarations', []):
+            if isinstance(decl, TypeDecl) and isinstance(decl.type_def, AccessTypeDef):
+                access_decls[decl.name.lower()] = decl
 
-        for sym_name, sym in list(pkg_symbol.public_symbols.items()):
+        all_symbols = list(pkg_symbol.public_symbols.items())
+        all_symbols += list(getattr(pkg_symbol, 'private_symbols', {}).items())
+        for sym_name, sym in all_symbols:
             if sym.kind == SymbolKind.TYPE and isinstance(sym.ada_type, AccessType):
                 acc = sym.ada_type
                 needs_fixup = (
@@ -3964,6 +3969,17 @@ class SemanticAnalyzer:
                     v = self._try_eval_static(high_expr)
                     if isinstance(v, int):
                         last_pos = v
+            # If explicit constraint couldn't be evaluated, inherit parent's bounds
+            if first_pos is None and parent.first is not None:
+                first_pos = parent.first
+            elif first_pos is None and not (type_def.constraint and isinstance(type_def.constraint, RangeExpr)):
+                # No constraint at all - inherit parent's low bound
+                first_pos = parent.low
+            if last_pos is None and parent.last is not None:
+                last_pos = parent.last
+            elif last_pos is None and not (type_def.constraint and isinstance(type_def.constraint, RangeExpr)):
+                # No constraint at all - inherit parent's high bound
+                last_pos = parent.high
             return EnumerationType(
                 name=name,
                 size_bits=parent.size_bits,

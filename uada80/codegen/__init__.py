@@ -111,7 +111,7 @@ class Z80CodeGen:
         if main_entry:
             self._emit("; CP/M entry point - execution starts here")
             self._emit("    CSEG")
-            self._emit("_start:")
+            self._emit("__main:")
             # Call package initialization functions first
             if module.init_functions:
                 for init_func in module.init_functions:
@@ -328,11 +328,11 @@ class Z80CodeGen:
         self._emit("")
         self._emit("_exc_check_handler:")
         self._emit("    ; hl points to handler frame")
-        self._emit("    ; Frame: +0=prev, +2=sp, +4=addr, +6=exc_id")
+        self._emit("    ; Frame: +0=prev, +2=sp, +4=ix, +6=addr, +8=exc_id")
         self._emit("    push hl  ; save frame pointer")
         self._emit("")
-        self._emit("    ; Get exception ID this handler catches (+6)")
-        self._emit("    ld de, 6")
+        self._emit("    ; Get exception ID this handler catches (+8)")
+        self._emit("    ld de, 8")
         self._emit("    add hl, de")
         self._emit("    ld e, (hl)")
         self._emit("    inc hl")
@@ -367,7 +367,7 @@ class Z80CodeGen:
         self._emit("    ; Found matching handler")
         self._emit("    pop hl  ; restore frame pointer")
         self._emit("")
-        self._emit("    ; Get previous handler and update chain")
+        self._emit("    ; Get previous handler and update chain (+0)")
         self._emit("    ld e, (hl)")
         self._emit("    inc hl")
         self._emit("    ld d, (hl)")
@@ -380,7 +380,15 @@ class Z80CodeGen:
         self._emit("    ld d, (hl)")
         self._emit("    inc hl")
         self._emit("")
-        self._emit("    ; Get handler address (+4)")
+        self._emit("    ; Restore IX from +4")
+        self._emit("    ld c, (hl)")
+        self._emit("    inc hl")
+        self._emit("    ld b, (hl)")
+        self._emit("    inc hl")
+        self._emit("    push bc")
+        self._emit("    pop ix  ; restore frame pointer register")
+        self._emit("")
+        self._emit("    ; Get handler address (+6)")
         self._emit("    ld a, (hl)")
         self._emit("    inc hl")
         self._emit("    ld h, (hl)")
@@ -6693,6 +6701,16 @@ class Z80CodeGen:
             self._emit("")
             return
 
+        # Handle enum literal renaming: function that returns a constant value
+        if hasattr(func, 'enum_return_value') and func.enum_return_value is not None:
+            mangled_name = self._mangle_symbol(func.name)
+            self._emit(f"; Enum literal renaming: {func.name} -> {func.enum_return_value}")
+            self._emit(f"{mangled_name}:")
+            self._emit_instr("ld", f"hl, {func.enum_return_value}")
+            self._emit_instr("ret", "")
+            self._emit("")
+            return
+
         # Allocate registers
         self.reg_alloc = self._allocate_registers(func)
 
@@ -6870,10 +6888,13 @@ class Z80CodeGen:
         elif op == OpCode.NOP:
             self._emit_instr("nop")
         elif op == OpCode.GETSP:
-            # Get current stack pointer into destination register
-            dst = self._resolve_operand(instr.dst)
-            self._emit_instr(f"ld {dst},0")
-            self._emit_instr(f"add {dst},sp")
+            # Get current stack pointer into HL, then store to dst vreg
+            self._emit_instr("ld", "hl", "0")
+            self._emit_instr("add", "hl", "sp")
+            if isinstance(instr.dst, VReg):
+                self._store_from_hl(instr.dst)
+            else:
+                pass  # discard if no valid destination
         # Exception handling
         elif op == OpCode.EXC_PUSH:
             self._gen_exc_push(instr)
@@ -7641,11 +7662,12 @@ class Z80CodeGen:
     #   _exc_current:  currently raised exception ID
     #   _exc_message:  exception message pointer (or 0)
     #
-    # Handler frame structure (8 bytes):
+    # Handler frame structure (10 bytes):
     #   +0: previous handler pointer (2 bytes)
     #   +2: saved sp (2 bytes)
-    #   +4: handler address (2 bytes)
-    #   +6: exception ID to catch (2 bytes, 0 = catch all)
+    #   +4: saved IX (2 bytes)
+    #   +6: handler address (2 bytes)
+    #   +8: exception ID to catch (2 bytes, 0 = catch all)
 
     def _gen_exc_push(self, instr: IRInstr) -> None:
         """Generate exception handler push.
@@ -7670,8 +7692,9 @@ class Z80CodeGen:
         if isinstance(instr.src1, Immediate):
             exc_id = instr.src1.value
 
-        # Allocate 8 bytes for handler frame on stack
-        self._emit_instr("ld", "hl", "-8")
+        # Allocate 10 bytes for handler frame on stack
+        # Frame: +0=prev, +2=sp, +4=ix, +6=addr, +8=exc_id
+        self._emit_instr("ld", "hl", "-10")
         self._emit_instr("add", "hl", "sp")
         self._emit_instr("ld", "sp", "hl")
 
@@ -7682,9 +7705,9 @@ class Z80CodeGen:
         self._emit_instr("ld", "(hl)", "d")
         self._emit_instr("inc", "hl")
 
-        # Store saved sp at +2 (sp before the frame allocation + 8)
+        # Store saved sp at +2 (sp before the frame allocation + 10)
         self._emit_instr("push", "hl")  # Save hl
-        self._emit_instr("ld", "hl", "10")  # 8 bytes + 2 for push hl
+        self._emit_instr("ld", "hl", "12")  # 10 bytes + 2 for push hl
         self._emit_instr("add", "hl", "sp")
         self._emit_instr("ld", "d", "h")
         self._emit_instr("ld", "e", "l")
@@ -7694,14 +7717,22 @@ class Z80CodeGen:
         self._emit_instr("ld", "(hl)", "d")
         self._emit_instr("inc", "hl")
 
-        # Store handler address at +4
+        # Store saved IX at +4
+        self._emit_instr("push", "ix")
+        self._emit_instr("pop", "de")  # de = IX
+        self._emit_instr("ld", "(hl)", "e")
+        self._emit_instr("inc", "hl")
+        self._emit_instr("ld", "(hl)", "d")
+        self._emit_instr("inc", "hl")
+
+        # Store handler address at +6
         self._emit_instr("ld", "de", handler_addr)
         self._emit_instr("ld", "(hl)", "e")
         self._emit_instr("inc", "hl")
         self._emit_instr("ld", "(hl)", "d")
         self._emit_instr("inc", "hl")
 
-        # Store exception ID at +6
+        # Store exception ID at +8
         self._emit_instr("ld", "de", str(exc_id))
         self._emit_instr("ld", "(hl)", "e")
         self._emit_instr("inc", "hl")
@@ -7725,8 +7756,8 @@ class Z80CodeGen:
         # Restore _exc_handler
         self._emit_instr("ld", "(_exc_handler)", "de")
 
-        # Deallocate frame (8 bytes)
-        self._emit_instr("ld", "hl", "8")
+        # Deallocate frame (10 bytes)
+        self._emit_instr("ld", "hl", "10")
         self._emit_instr("add", "hl", "sp")
         self._emit_instr("ld", "sp", "hl")
 

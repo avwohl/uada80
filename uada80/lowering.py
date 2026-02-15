@@ -258,6 +258,8 @@ class ASTLowering:
         # Track parameter default values for all subprograms
         # Maps subprogram name (lowercase) -> list of default value expressions (None if no default)
         self._subprogram_param_defaults: dict[str, list] = {}
+        # Track Ada types for each parameter (for aggregate type resolution)
+        self._subprogram_param_ada_types: dict[str, list] = {}
         # Track return types for functions (needed for attributes like F'First)
         self._subprogram_return_types: dict[str, Any] = {}
         # Track which subprograms are nested (need static link at call sites)
@@ -885,6 +887,9 @@ class ASTLowering:
         # Store unconstrained info (from ctx.unconstrained_params) for call sites
         unconstrained_list = [pname in self.ctx.unconstrained_params for pname in param_names]
         self._subprogram_unconstrained_params[spec.name.lower()] = unconstrained_list
+        # Store Ada types for each parameter (for aggregate resolved_type)
+        ada_types_list = [self.ctx.param_ada_types.get(pname) for pname in param_names]
+        self._subprogram_param_ada_types[spec.name.lower()] = ada_types_list
         # Store ndims per unconstrained array param for multi-dim dope vectors
         ndims_list = []
         for pname in param_names:
@@ -3056,13 +3061,6 @@ class ASTLowering:
         if not target_label and raw_target_dotted in self._nested_subprogram_labels:
             target_label = self._nested_subprogram_labels[raw_target_dotted]
 
-        # 1a. For simple (non-qualified) names not yet lowered (forward reference),
-        # compute the expected label using the enclosing scope prefix.
-        # e.g., "procedure R renames P" inside procedure C83007A: P -> c83007a_p
-        if not target_label and len(parts) == 1 and self.ctx and self.ctx.subprogram_name:
-            expected = f"{self.ctx.subprogram_name}_{target_name_lower}"
-            target_label = expected
-
         # 1b. For package-qualified targets (e.g., pkg_op_eq), try just the function name
         if not target_label and len(parts) > 1:
             func_part = parts[-1]
@@ -3071,36 +3069,61 @@ class ASTLowering:
                 target_label = self._nested_subprogram_labels[func_part]
             elif raw_func_part in self._nested_subprogram_labels:
                 target_label = self._nested_subprogram_labels[raw_func_part]
-            elif self.ctx and self.ctx.subprogram_name:
-                # The target function may not be lowered yet (forward reference).
-                # For package-qualified targets, use the full target name (not just func part)
-                # e.g., NEW_NESTED_GENERICS."=" -> cc3019c2m_new_nested_generics_=
-                expected = f"{self.ctx.subprogram_name}_{raw_target_underscore}"
-                target_label = expected
 
         # 2. Check function label map for scoped lookups
         if not target_label:
-            scope_prefix = ""
-            if self.ctx and self.ctx.subprogram_name:
-                scope_prefix = self.ctx.subprogram_name + "_"
-            # Try with current scope prefix first
+            # For package-qualified targets, also try just the function part
+            func_part = parts[-1] if len(parts) > 1 else target_name_lower
             for key, label in self._function_label_map.items():
-                if key[1] == target_name_lower:
+                if key[1] == target_name_lower or key[1] == func_part:
                     target_label = label
                     break
 
         # 3. Look up semantic symbol for external_name
+        # Also detect enum literal targets: generate a return-value function
+        # instead of a JP forwarding stub (enum literals have no function label)
+        # Do this BEFORE forward-reference guessing (step 4) so external functions
+        # from imported packages (like Report.Ident_Int) are resolved correctly.
+        enum_literal_value = None
         if not target_label:
             sem_sym = self.symbols.lookup(alias_name)
-            if sem_sym and sem_sym.external_name:
+            if sem_sym and sem_sym.is_constant and sem_sym.ada_type and sem_sym.ada_type.kind == TypeKind.ENUMERATION and sem_sym.value is not None:
+                enum_literal_value = sem_sym.value
+            elif sem_sym and sem_sym.external_name:
                 target_label = sem_sym.external_name.lower()
             elif sem_sym and sem_sym.alias_for:
                 actual = self.symbols.lookup(sem_sym.alias_for)
-                if actual and actual.external_name:
+                if actual and actual.is_constant and actual.ada_type and actual.ada_type.kind == TypeKind.ENUMERATION and actual.value is not None:
+                    enum_literal_value = actual.value
+                elif actual and actual.external_name:
                     target_label = actual.external_name.lower()
 
+        # 4. For simple (non-qualified) names not yet lowered (forward reference),
+        # compute the expected label using the enclosing scope prefix.
+        # e.g., "procedure R renames P" inside procedure C83007A: P -> c83007a_p
+        # Only after semantic lookup failed (step 3) to avoid wrong labels for
+        # imported functions.
+        if not target_label and enum_literal_value is None and len(parts) == 1 and self.ctx and self.ctx.subprogram_name:
+            expected = f"{self.ctx.subprogram_name}_{target_name_lower}"
+            target_label = expected
+
+        # 3a. Fallback enum literal detection: search visible declarations
+        # for an enum type containing the literal name (handles scoped symbols
+        # not reachable via global symbol table lookup)
+        if not target_label and enum_literal_value is None and hasattr(decl, 'is_function') and decl.is_function:
+            literal_name = raw_parts_clean[-1].lower()
+            # Search body declarations stack for enum types with this literal
+            enum_literal_value = self._find_enum_literal_in_decls(literal_name)
+
+        # 3b. For package-qualified forward references where the target is in
+        # a sibling package (same compilation unit), compute expected label
+        if not target_label and enum_literal_value is None and len(parts) > 1 and self.ctx and self.ctx.subprogram_name:
+            # e.g., NEW_NESTED_GENERICS."=" -> cc3019c2m_new_nested_generics_op_eq
+            expected = f"{self.ctx.subprogram_name}_{target_name_lower}"
+            target_label = expected
+
         # 4. Fallback: just use the mangled name
-        if not target_label:
+        if not target_label and enum_literal_value is None:
             target_label = target_name_lower
 
         stub_name = self._mangle_operator_name(decl.name.lower())
@@ -3124,12 +3147,55 @@ class ASTLowering:
         old_function = self.builder.function
         old_block = self.builder.block
 
-        func = self.builder.new_function(stub_name, IRType.VOID)
-        func.forwarding_target = target_label
+        if enum_literal_value is not None:
+            # Enum literal renaming: generate a function that returns the value
+            func = self.builder.new_function(stub_name, IRType.WORD)
+            func.enum_return_value = enum_literal_value
+        else:
+            func = self.builder.new_function(stub_name, IRType.VOID)
+            func.forwarding_target = target_label
 
         # Restore builder state
         self.builder.function = old_function
         self.builder.block = old_block
+
+    def _find_enum_literal_in_decls(self, literal_name: str) -> Optional[int]:
+        """Search current declarations for an enum literal with the given name.
+
+        Returns the literal's position value, or None if not found.
+        """
+        def search_decl(decl) -> Optional[int]:
+            if isinstance(decl, TypeDecl):
+                type_def = getattr(decl, 'type_def', None)
+                if type_def and hasattr(type_def, 'literals') and type_def.literals:
+                    for i, lit in enumerate(type_def.literals):
+                        name = lit if isinstance(lit, str) else getattr(lit, 'name', str(lit))
+                        if name.lower() == literal_name:
+                            return i
+            elif isinstance(decl, PackageDecl):
+                for sub in (decl.declarations or []):
+                    val = search_decl(sub)
+                    if val is not None:
+                        return val
+            elif isinstance(decl, BlockStmt):
+                for sub in (decl.declarations or []):
+                    val = search_decl(sub)
+                    if val is not None:
+                        return val
+            return None
+
+        # Search body declarations stack (most recent first)
+        for decls in reversed(self._body_declarations_stack):
+            for d in (decls or []):
+                val = search_decl(d)
+                if val is not None:
+                    return val
+        if hasattr(self, '_current_body_declarations') and self._current_body_declarations:
+            for d in self._current_body_declarations:
+                val = search_decl(d)
+                if val is not None:
+                    return val
+        return None
 
     def _lower_generic_renaming(self, decl: RenamingDecl) -> None:
         """Lower a general renaming declaration.
@@ -4222,6 +4288,7 @@ class ASTLowering:
         old_ctx = self.ctx
         old_function = self.builder.function
         old_block = self.builder.block
+        old_body_declarations = getattr(self, '_current_body_declarations', None)
 
         # Create the task body procedure name with scope uniqueification
         base_name = decl.name.lower()
@@ -4262,6 +4329,10 @@ class ASTLowering:
             self.ctx.task_id = task_id_vreg
 
         # Lower local declarations
+        # Set task body declarations for type/enum lookup within task
+        self._body_declarations_stack.append(decl.declarations)
+        self._current_body_declarations = decl.declarations
+
         for d in decl.declarations:
             self._lower_declaration(d)
 
@@ -4279,6 +4350,11 @@ class ASTLowering:
 
         # Return (though task terminate doesn't return)
         self.builder.ret()
+
+        # Restore task body declarations
+        if self._body_declarations_stack:
+            self._body_declarations_stack.pop()
+        self._current_body_declarations = old_body_declarations
 
         # Restore context and builder state
         self.ctx = old_ctx
@@ -4507,6 +4583,8 @@ class ASTLowering:
         scope = self.ctx.subprogram_name if self.ctx and self.ctx.subprogram_name else ""
         if hasattr(self, '_nested_body_prefix_stack') and self._nested_body_prefix_stack:
             scope = scope + "." + self._nested_body_prefix_stack[-1]
+        if self._generic_prefix:
+            scope = scope + ".g." + self._generic_prefix
         key = (scope, label_str.lower())
         if key not in self._user_label_map:
             self._user_label_map[key] = self._new_label(label_str.lower())
@@ -6876,11 +6954,18 @@ class ASTLowering:
 
                     if arg_is_unconstrained:
                         ndims = self._get_param_ndims(sym, forward_idx, proc_name_lower)
+                        # Set resolved_type on aggregate args from formal param type
+                        if isinstance(arg, Aggregate) and not getattr(arg, 'resolved_type', None):
+                            param_type = self._get_param_type(sym, forward_idx, proc_name_lower)
+                            if param_type:
+                                arg.resolved_type = param_type
+                        # Lower expression FIRST (may call functions/modify stack)
+                        ptr_val = self._lower_expr(arg)
+                        # THEN get bounds and push them
                         all_bounds = self._get_array_dope_vector_multidim(arg, ndims)
                         for dim_first, dim_last in reversed(all_bounds):
                             self.builder.push(dim_last)
                             self.builder.push(dim_first)
-                        ptr_val = self._lower_expr(arg)
                         self.builder.push(ptr_val)
                         stack_slots += 1 + 2 * len(all_bounds)
                     elif param_mode in ("out", "in out") or is_byref:
@@ -7221,11 +7306,18 @@ class ASTLowering:
 
                 if arg_is_unconstrained:
                     ndims = self._get_param_ndims(sym, forward_idx, proc_name_lower)
+                    # Set resolved_type on aggregate args from formal param type
+                    if isinstance(arg, Aggregate) and not getattr(arg, 'resolved_type', None):
+                        param_type = self._get_param_type(sym, forward_idx, proc_name_lower)
+                        if param_type:
+                            arg.resolved_type = param_type
+                    # Lower expression FIRST (may call functions/modify stack)
+                    ptr_val = self._lower_expr(arg)
+                    # THEN get bounds and push them
                     all_bounds = self._get_array_dope_vector_multidim(arg, ndims)
                     for dim_first, dim_last in reversed(all_bounds):
                         self.builder.push(dim_last)
                         self.builder.push(dim_first)
-                    ptr_val = self._lower_expr(arg)
                     self.builder.push(ptr_val)
                     stack_slots += 1 + 2 * len(all_bounds)
                 elif param_mode in ("out", "in out") or is_byref:
@@ -7637,6 +7729,25 @@ class ASTLowering:
 
         return False
 
+    def _get_param_type(self, sym: Optional[Symbol], arg_idx: int,
+                        subprogram_name: Optional[str] = None):
+        """Get the Ada type of a parameter at the given index."""
+        if sym and sym.parameters and arg_idx < len(sym.parameters):
+            param = sym.parameters[arg_idx]
+            return getattr(param, 'ada_type', None)
+        # Check locally tracked param types (for nested subprograms)
+        if subprogram_name:
+            sub_lower = subprogram_name.lower()
+            if sub_lower in self._subprogram_param_ada_types:
+                type_list = self._subprogram_param_ada_types[sub_lower]
+                if arg_idx < len(type_list):
+                    return type_list[arg_idx]
+            # Fallback: look up subprogram in symbol table
+            sub_sym = self.symbols.lookup(subprogram_name)
+            if sub_sym and sub_sym.parameters and arg_idx < len(sub_sym.parameters):
+                return getattr(sub_sym.parameters[arg_idx], 'ada_type', None)
+        return None
+
     def _get_array_dope_vector(self, expr) -> tuple:
         """Get the dope vector (first, last, ptr) for an array expression.
 
@@ -7730,6 +7841,40 @@ class ASTLowering:
                 last_val = self.builder.new_vreg(IRType.WORD, "_concat_last")
                 self.builder.add(last_val, first_val, total_len)
                 self.builder.sub(last_val, last_val, Immediate(1, IRType.WORD))
+        elif isinstance(expr, Aggregate):
+            # Array aggregate: get bounds from the resolved array type
+            agg_type = getattr(expr, 'resolved_type', None)
+            num_elems = len(expr.components) if expr.components else 0
+            if isinstance(agg_type, ArrayType) and agg_type.index_types:
+                idx = agg_type.index_types[0]
+                if hasattr(idx, 'low') and idx.low is not None and hasattr(idx, 'high') and idx.high is not None:
+                    # Sanity check: bounds should match element count for positional aggregates
+                    span = idx.high - idx.low + 1
+                    if num_elems > 0 and span == num_elems:
+                        first_val = Immediate(idx.low, IRType.WORD)
+                        last_val = Immediate(idx.high, IRType.WORD)
+                    elif num_elems > 0 and span != num_elems:
+                        # Range doesn't match element count — use first + count
+                        first_val = Immediate(idx.low, IRType.WORD)
+                        last_val = Immediate(idx.low + num_elems - 1, IRType.WORD)
+                    else:
+                        first_val = Immediate(idx.low, IRType.WORD)
+                        last_val = Immediate(idx.high, IRType.WORD)
+                elif agg_type.is_constrained and agg_type.bounds:
+                    low, high = agg_type.bounds[0]
+                    first_val = Immediate(low, IRType.WORD)
+                    last_val = Immediate(high, IRType.WORD)
+                else:
+                    # Unconstrained — use index subtype's first + element count
+                    idx_first = getattr(idx, 'low', 1) if idx else 1
+                    if idx_first is None:
+                        idx_first = 1
+                    first_val = Immediate(idx_first, IRType.WORD)
+                    last_val = Immediate(idx_first + num_elems - 1, IRType.WORD) if num_elems > 0 else Immediate(0, IRType.WORD)
+            else:
+                # Not an array aggregate or no type info — count elements
+                first_val = Immediate(1, IRType.WORD)
+                last_val = Immediate(num_elems, IRType.WORD) if num_elems > 0 else Immediate(0, IRType.WORD)
         else:
             # Unknown expression - default to 1-indexed
             first_val = Immediate(1, IRType.WORD)
@@ -11348,10 +11493,40 @@ class ASTLowering:
                 # Constant — convert to float64 literal
                 return self._lower_float64_literal(float(sym.value))
             if sym:
+                # Search module globals for the correct qualified label name
+                global_label = f"_{name}"
+                if self.builder.module:
+                    found = False
+                    # Try current package prefix first
+                    for pkg_prefix in reversed(self._package_prefix_stack):
+                        search_prefix = f"{pkg_prefix}_".lower()
+                        for gname in self.builder.module.globals:
+                            if gname.lower().startswith(search_prefix):
+                                var_part = gname[len(pkg_prefix) + 1:]
+                                if var_part.lower() == name.lower():
+                                    global_label = f"_{gname}"
+                                    found = True
+                                    break
+                        if found:
+                            break
+                    if not found:
+                        # Try exact match without prefix
+                        for gname in self.builder.module.globals:
+                            if gname.lower() == name.lower():
+                                global_label = f"_{gname}"
+                                found = True
+                                break
+                    if not found:
+                        # Search all globals ending with _<name> (cross-package ref)
+                        suffix = f"_{name}".lower()
+                        for gname in self.builder.module.globals:
+                            if gname.lower().endswith(suffix):
+                                global_label = f"_{gname}"
+                                break
                 result = self.builder.new_vreg(IRType.PTR, f"_addr_{name}")
                 self.builder.emit(IRInstr(
                     OpCode.LEA, result,
-                    Label(f"_{name}"),
+                    Label(global_label),
                     comment=f"address of global {name}"
                 ))
                 return result
@@ -14718,8 +14893,14 @@ class ASTLowering:
         # Push argument
         self.builder.push(operand_val)
 
-        # Call the operator function
-        self.builder.call(Label(sym.name), comment=f"user-defined unary {sym.name}")
+        # Call the operator function - mangle operator name for assembly
+        op_func_name = self._mangle_operator_name(sym.name.lower())
+
+        # Check for nested subprogram label (includes scope prefix)
+        if op_func_name in self._nested_subprogram_labels:
+            op_func_name = self._nested_subprogram_labels[op_func_name]
+
+        self.builder.call(Label(op_func_name), comment=f"user-defined unary {sym.name}")
 
         # Clean up stack (1 argument)
         temp = self.builder.new_vreg(IRType.WORD, "_discard")
@@ -15079,9 +15260,22 @@ class ASTLowering:
             # Qualified expression Type'(expr) has the qualified type
             return self._resolve_local_type(expr.type_mark)
         elif isinstance(expr, BinaryExpr):
-            # Result type depends on operator and operand types
+            # Comparison operators always return Boolean
+            if expr.op in (BinaryOp.EQ, BinaryOp.NE, BinaryOp.LT, BinaryOp.LE,
+                           BinaryOp.GT, BinaryOp.GE):
+                return PREDEFINED_TYPES.get("Boolean")
+            # Short-circuit boolean operators return Boolean
+            if expr.op in (BinaryOp.AND_THEN, BinaryOp.OR_ELSE):
+                return PREDEFINED_TYPES.get("Boolean")
+            # AND/OR/XOR on Boolean return Boolean; on other types return operand type
+            if expr.op in (BinaryOp.AND, BinaryOp.OR, BinaryOp.XOR):
+                left_type = self._get_expr_type(expr.left)
+                if left_type and hasattr(left_type, 'name') and left_type.name == "Boolean":
+                    return PREDEFINED_TYPES.get("Boolean")
+                return left_type
+            # Arithmetic/concatenation: result is same type as left operand
             left_type = self._get_expr_type(expr.left)
-            return left_type  # Simplified: assume result is same as left operand
+            return left_type
         elif isinstance(expr, TypeConversion):
             # Type conversion result is the target type
             return self._resolve_local_type(expr.type_mark)
@@ -15159,9 +15353,16 @@ class ASTLowering:
                 return PREDEFINED_TYPES.get("String")
             elif attr_name in ("pos", "width"):
                 return PREDEFINED_TYPES.get("Integer")
-            elif attr_name in ("val", "succ", "pred", "first", "last", "min", "max"):
-                # Returns the prefix type
+            elif attr_name in ("val", "succ", "pred", "min", "max"):
+                # Returns the prefix type (scalar type)
                 return self._get_expr_type(expr.prefix) if hasattr(expr, 'prefix') else None
+            elif attr_name in ("first", "last"):
+                # For arrays, 'First/'Last returns the index type (Integer), not array type
+                # For scalar types, returns the prefix type
+                prefix_type = self._get_expr_type(expr.prefix) if hasattr(expr, 'prefix') else None
+                if prefix_type and isinstance(prefix_type, ArrayType):
+                    return PREDEFINED_TYPES.get("Integer")
+                return prefix_type
         return None
 
     def _resolve_selected_package(self, expr) -> Optional[Symbol]:
@@ -16365,6 +16566,59 @@ class ASTLowering:
         """Lower an attribute reference."""
         attr = expr.attribute.lower()
 
+        # Handle T'BASE'attr - resolve base type first, then apply outer attribute
+        if (isinstance(expr.prefix, AttributeReference) and
+                expr.prefix.attribute.lower() == "base"):
+            # Get the type from the inner prefix (e.g., T in T'BASE)
+            inner_prefix = expr.prefix.prefix
+            base_type = None
+            if isinstance(inner_prefix, Identifier):
+                sym = self.symbols.lookup(inner_prefix.name)
+                if sym and sym.kind in (SymbolKind.TYPE, SymbolKind.SUBTYPE) and sym.ada_type:
+                    base_type = sym.ada_type
+                    # Follow base_type chain to get the unconstrained base type
+                    while hasattr(base_type, 'base_type') and base_type.base_type:
+                        base_type = base_type.base_type
+                elif sym and sym.ada_type:
+                    base_type = sym.ada_type
+                    while hasattr(base_type, 'base_type') and base_type.base_type:
+                        base_type = base_type.base_type
+            if base_type is None:
+                # Try resolving as a local type
+                base_type = self._resolve_local_type(inner_prefix)
+                if base_type:
+                    while hasattr(base_type, 'base_type') and base_type.base_type:
+                        base_type = base_type.base_type
+            if base_type is not None:
+                from uada80.type_system import EnumerationType
+                if attr == "size":
+                    return Immediate(base_type.size_bits, IRType.WORD)
+                elif attr == "first":
+                    if isinstance(base_type, EnumerationType):
+                        return Immediate(0, IRType.WORD)
+                    elif hasattr(base_type, 'low') and base_type.low is not None:
+                        return Immediate(base_type.low, IRType.WORD)
+                elif attr == "last":
+                    if isinstance(base_type, EnumerationType) and base_type.literals:
+                        return Immediate(len(base_type.literals) - 1, IRType.WORD)
+                    elif hasattr(base_type, 'high') and base_type.high is not None:
+                        return Immediate(base_type.high, IRType.WORD)
+                elif attr == "width":
+                    if isinstance(base_type, EnumerationType) and base_type.literals:
+                        max_width = max(len(lit) for lit in base_type.literals)
+                        return Immediate(max_width, IRType.WORD)
+                    elif hasattr(base_type, 'low') and hasattr(base_type, 'high'):
+                        # Width of integer type = max digits of values in range
+                        import math
+                        low = base_type.low if base_type.low is not None else 0
+                        high = base_type.high if base_type.high is not None else 0
+                        max_abs = max(abs(low), abs(high))
+                        width = len(str(max_abs))
+                        if low < 0:
+                            width += 1  # Account for minus sign
+                        return Immediate(width, IRType.WORD)
+                # Fallback: return 0
+                return Immediate(0, IRType.WORD)
 
         if isinstance(expr.prefix, Identifier):
             # First check local variables (higher priority)
@@ -16538,10 +16792,16 @@ class ASTLowering:
                 from uada80.type_system import EnumerationType
                 if isinstance(ada_type, EnumerationType):
                     if attr == "first" and ada_type.literals:
-                        # Return position of first literal (always 0)
+                        # Return position of first literal in this (sub)type's range
+                        first_pos = getattr(ada_type, 'first', None)
+                        if first_pos is not None:
+                            return Immediate(first_pos, IRType.WORD)
                         return Immediate(0, IRType.WORD)
                     if attr == "last" and ada_type.literals:
-                        # Return position of last literal
+                        # Return position of last literal in this (sub)type's range
+                        last_pos = getattr(ada_type, 'last', None)
+                        if last_pos is not None:
+                            return Immediate(last_pos, IRType.WORD)
                         return Immediate(len(ada_type.literals) - 1, IRType.WORD)
 
                 # Handle 'Modulus attribute for modular types
@@ -16727,7 +16987,42 @@ class ASTLowering:
 
         if attr == "val" and expr.args:
             # Type'Val(N) - returns the enumeration value at position N
+            # Raises Constraint_Error if N is out of range
             arg_value = self._lower_expr(expr.args[0])
+
+            # Add range check for enumeration types only:
+            # N must be in [0..Type'Last_Position]
+            # For non-enum types (integer, fixed-point), 'Val is identity and
+            # range is too complex to check statically here.
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.ada_type:
+                    ada_type = sym.ada_type
+                    low_val = 0
+                    high_val = None
+                    if isinstance(ada_type, EnumerationType):
+                        low_val = ada_type.low if hasattr(ada_type, 'low') else 0
+                        if ada_type.literals:
+                            high_val = len(ada_type.literals) - 1
+                        elif hasattr(ada_type, 'high') and ada_type.high is not None:
+                            high_val = ada_type.high
+                    if high_val is not None and self.ctx:
+                        # Check arg >= low
+                        if low_val != 0:
+                            ok_low = self._new_label("val_lo_ok")
+                            cond_lo = self.builder.new_vreg(IRType.BOOL, "_val_lo")
+                            self.builder.cmp_ge(cond_lo, arg_value, Immediate(low_val, IRType.WORD))
+                            self.builder.jz(cond_lo, Label("_raise_constraint_error"))
+                            lo_block = self.builder.new_block(ok_low)
+                            self.builder.set_block(lo_block)
+                        # Check arg <= high
+                        ok_hi = self._new_label("val_hi_ok")
+                        cond_hi = self.builder.new_vreg(IRType.BOOL, "_val_hi")
+                        self.builder.cmp_le(cond_hi, arg_value, Immediate(high_val, IRType.WORD))
+                        self.builder.jz(cond_hi, Label("_raise_constraint_error"))
+                        hi_block = self.builder.new_block(ok_hi)
+                        self.builder.set_block(hi_block)
+
             return arg_value  # For enums, position IS the value
 
         if attr == "succ" and expr.args:

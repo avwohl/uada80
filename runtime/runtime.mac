@@ -2429,10 +2429,11 @@ _exc_do_raise:
     ; DE = handler frame pointer
     ; HL = exception ID to match
 _exc_search:
-    ; Get exception ID from handler frame (offset 6)
+    ; Get exception ID from handler frame (offset 8)
+    ; Frame: +0=prev, +2=sp, +4=ix, +6=addr, +8=exc_id
     PUSH HL                 ; save exception ID
-    LD HL, 6
-    ADD HL, DE              ; HL = &handler_frame[6]
+    LD HL, 8
+    ADD HL, DE              ; HL = &handler_frame[8]
     LD C, (HL)
     INC HL
     LD B, (HL)              ; BC = handler's exception ID
@@ -2470,25 +2471,39 @@ _exc_next:
     JR _exc_search
 
 _exc_found:
-    ; Found a matching handler at DE
-    ; Get stack pointer from frame (offset 2)
-    LD HL, 2
-    ADD HL, DE
+    ; Found a matching handler at DE (frame pointer)
+    ; Frame: +0=prev, +2=sp, +4=ix, +6=addr, +8=exc_id
+
+    ; Update _exc_handler to previous handler (+0)
+    EX DE, HL               ; HL = frame pointer
+    LD E, (HL)
+    INC HL
+    LD D, (HL)              ; DE = previous handler
+    INC HL                  ; HL now at offset 2
+    LD (_exc_handler), DE
+
+    ; Get saved sp (+2)
     LD E, (HL)
     INC HL
     LD D, (HL)              ; DE = saved SP
+    INC HL                  ; HL now at offset 4
 
-    ; Get handler address from frame (offset 4)
+    ; Restore IX from +4
+    LD C, (HL)
     INC HL
+    LD B, (HL)              ; BC = saved IX
+    INC HL                  ; HL now at offset 6
+    PUSH BC
+    POP IX                  ; Restore frame pointer register
+
+    ; Get handler address (+6)
     LD C, (HL)
     INC HL
     LD B, (HL)              ; BC = handler address
 
-    ; Restore stack pointer
+    ; Restore stack pointer and jump to handler
     EX DE, HL               ; HL = saved SP
     LD SP, HL
-
-    ; Jump to handler (BC)
     PUSH BC
     RET                     ; Pop BC into PC, jump to handler
 
