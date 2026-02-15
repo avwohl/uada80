@@ -7505,17 +7505,17 @@ class ASTLowering:
                 ada_type = self._resolve_local_type(local.ada_type) if local.ada_type else None
                 from uada80.type_system import RecordType as _RT_addr
                 if isinstance(ada_type, _RT_addr):
-                    # Compute field offset and return address
-                    offset = 0
-                    if ada_type.is_tagged:
-                        offset = 2  # skip vtable pointer
-                    for comp in ada_type.components:
-                        if comp.name.lower() == sel_name:
-                            break
-                        comp_size = 2
-                        if comp.component_type and hasattr(comp.component_type, 'size_bits') and comp.component_type.size_bits:
-                            comp_size = (comp.component_type.size_bits + 7) // 8
-                        offset += comp_size
+                    # Get field offset from type system (properly aligned)
+                    target_comp = ada_type.get_component(sel_name)
+                    if target_comp and target_comp.offset_bits is not None:
+                        offset = target_comp.offset_bits // 8
+                    else:
+                        # Fallback: check discriminants
+                        offset = 0
+                        for disc in ada_type.discriminants:
+                            if disc.name.lower() == sel_name:
+                                offset = disc.offset_bits // 8 if disc.offset_bits else 0
+                                break
                     base_addr = self.builder.new_vreg(IRType.PTR, f"_{prefix_name}_addr")
                     frame_offset = -(local.stack_offset + local.size)
                     self.builder.emit(IRInstr(
@@ -16847,14 +16847,18 @@ class ASTLowering:
                         max_width = max(len(lit) for lit in base_type.literals)
                         return Immediate(max_width, IRType.WORD)
                     elif hasattr(base_type, 'low') and hasattr(base_type, 'high'):
-                        # Width of integer type = max digits of values in range
-                        import math
+                        # Width = max over all V of Image(V)'Length
+                        # Image of non-negative integer has leading space: " 10"
+                        # Image of negative integer has leading '-': "-10"
                         low = base_type.low if base_type.low is not None else 0
                         high = base_type.high if base_type.high is not None else 0
-                        max_abs = max(abs(low), abs(high))
-                        width = len(str(max_abs))
-                        if low < 0:
-                            width += 1  # Account for minus sign
+                        # Positive side: leading space + digits
+                        pos_width = len(str(max(abs(high), 0))) + 1 if high >= 0 else 0
+                        # Negative side: '-' + digits
+                        neg_width = len(str(abs(low))) + 1 if low < 0 else 0
+                        width = max(pos_width, neg_width)
+                        if width == 0:
+                            width = 2  # At least " 0"
                         return Immediate(width, IRType.WORD)
                 # Fallback: return 0
                 return Immediate(0, IRType.WORD)
@@ -22575,6 +22579,17 @@ class ASTLowering:
                                 # Multiply by number of names in this component
                                 num_fields = len(comp.names) if hasattr(comp, 'names') and isinstance(comp.names, list) else 1
                                 total += field_size * num_fields
+                        # Add variant part (max variant size)
+                        if hasattr(type_def, 'variant_part') and type_def.variant_part:
+                            max_variant_size = 0
+                            for variant in type_def.variant_part.variants:
+                                variant_size = 0
+                                for vcomp in variant.components:
+                                    num_vfields = len(vcomp.names) if hasattr(vcomp, 'names') and isinstance(vcomp.names, list) else 1
+                                    variant_size += num_vfields * 2
+                                if variant_size > max_variant_size:
+                                    max_variant_size = variant_size
+                            total += max_variant_size
                         return max(total, 2)
                     elif hasattr(type_def, 'record_extension') and type_def.record_extension:
                         # Derived type with record extension (type Dog is new Animal with record...)
