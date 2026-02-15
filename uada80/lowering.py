@@ -7152,13 +7152,13 @@ class ASTLowering:
                 else:
                     self.builder.call(Label(call_target))
 
-                # After-call constraint check for OUT/IN OUT parameters
-                self._emit_param_out_checks(sym, effective_args, param_modes, proc_name_lower)
-
                 # Clean up stack (use stack_slots which accounts for dope vectors)
                 for _ in range(stack_slots):
                     temp = self.builder.new_vreg(IRType.WORD, "_discard")
                     self.builder.pop(temp)
+
+                # After-call constraint check for OUT/IN OUT parameters
+                self._emit_param_out_checks(sym, effective_args, param_modes, proc_name_lower)
                 return
 
         if isinstance(stmt.name, Identifier):
@@ -7519,10 +7519,6 @@ class ASTLowering:
                 # Static call (using external name for imported procedures)
                 self.builder.call(Label(call_target))
 
-            # After-call constraint check for OUT/IN OUT parameters
-            # The callee may have written a value that violates the actual variable's constraint
-            self._emit_param_out_checks(sym, effective_args, param_modes, proc_name_lower)
-
             # Clean up stack (use stack_slots which accounts for dope vectors)
             # Also add outer variable addresses if any
             outer_var_slots = 0
@@ -7534,6 +7530,10 @@ class ASTLowering:
                 for _ in range(total_slots):
                     temp = self.builder.new_vreg(IRType.WORD, "_discard")
                     self.builder.pop(temp)
+
+            # After-call constraint check for OUT/IN OUT parameters
+            # The callee may have written a value that violates the actual variable's constraint
+            self._emit_param_out_checks(sym, effective_args, param_modes, proc_name_lower)
 
     def _get_arg_address(self, arg):
         """Get the address of an argument for pass-by-reference.
@@ -11163,24 +11163,13 @@ class ASTLowering:
         After the call, the OUT/IN OUT parameters may have been modified by the callee.
         We must check that the new value satisfies the actual parameter's subtype constraint.
         This is the 'after call' check required by Ada RM 6.4.1.
+
+        NOTE: Currently disabled due to codegen issues with frame temporaries.
+        The after-call check generates IR that corrupts the Z80 stack frame
+        when temporaries are allocated between call cleanup and handler restoration.
+        TODO: Implement using direct frame loads instead of _lower_expr.
         """
-        if self.ctx is None or not effective_args:
-            return
-        for forward_idx, arg in enumerate(effective_args):
-            param_mode = param_modes[forward_idx] if forward_idx < len(param_modes) else "in"
-            if param_mode not in ("out", "in out"):
-                continue
-            # Get the actual parameter's type (the variable being passed)
-            actual_type = self._get_expr_type(arg)
-            if actual_type is None or not self._type_needs_range_check(actual_type):
-                continue
-            # Read the current value of the actual variable (it may have been modified)
-            try:
-                current_val = self._lower_expr(arg)
-                self._emit_range_check(current_val, actual_type,
-                                       f"after-call range check for out param {forward_idx}")
-            except Exception:
-                pass  # Skip if we can't lower the expression
+        pass  # Disabled for now
 
     def _lower_conditional_expr(self, expr: ConditionalExpr):
         """Lower a conditional expression (if Cond then A else B).
@@ -17246,9 +17235,6 @@ class ASTLowering:
                 comment="capture function return from HL"
             ))
 
-            # After-call constraint check for OUT/IN OUT parameters
-            self._emit_param_out_checks(sym, effective_exprs, param_modes, func_name_lower)
-
             # Clean up stack (callee may not clean up on Z80)
             total_slots = stack_slots + outer_var_slots
             if total_slots > 0:
@@ -17256,6 +17242,9 @@ class ASTLowering:
                 for _ in range(total_slots):
                     temp = self.builder.new_vreg(IRType.WORD, "_discard")
                     self.builder.pop(temp)
+
+            # After-call constraint check for OUT/IN OUT parameters
+            self._emit_param_out_checks(sym, effective_exprs, param_modes, func_name_lower)
 
             # Skip the duplicate MOV emission below since we already captured HL
             return result
@@ -17384,20 +17373,24 @@ class ASTLowering:
             # Get the type from the inner prefix (e.g., T in T'BASE)
             inner_prefix = expr.prefix.prefix
             base_type = None
+            orig_type = None  # Keep original (possibly constrained) type for Width
             if isinstance(inner_prefix, Identifier):
                 sym = self.symbols.lookup(inner_prefix.name)
                 if sym and sym.kind in (SymbolKind.TYPE, SymbolKind.SUBTYPE) and sym.ada_type:
+                    orig_type = sym.ada_type
                     base_type = sym.ada_type
                     # Follow base_type chain to get the unconstrained base type
                     while hasattr(base_type, 'base_type') and base_type.base_type:
                         base_type = base_type.base_type
                 elif sym and sym.ada_type:
+                    orig_type = sym.ada_type
                     base_type = sym.ada_type
                     while hasattr(base_type, 'base_type') and base_type.base_type:
                         base_type = base_type.base_type
             if base_type is None:
                 # Try resolving as a local type
-                base_type = self._resolve_local_type(inner_prefix)
+                orig_type = self._resolve_local_type(inner_prefix)
+                base_type = orig_type
                 if base_type:
                     while hasattr(base_type, 'base_type') and base_type.base_type:
                         base_type = base_type.base_type
@@ -17406,25 +17399,55 @@ class ASTLowering:
                 if attr == "size":
                     return Immediate(base_type.size_bits, IRType.WORD)
                 elif attr == "first":
+                    # Use orig_type to respect subtype ranges
+                    attr_type = orig_type if orig_type is not None else base_type
                     if isinstance(base_type, EnumerationType):
-                        return Immediate(0, IRType.WORD)
+                        first_pos = getattr(attr_type, 'first', None)
+                        return Immediate(first_pos if first_pos is not None else 0, IRType.WORD)
+                    elif hasattr(attr_type, 'low') and attr_type.low is not None:
+                        return Immediate(attr_type.low, IRType.WORD)
                     elif hasattr(base_type, 'low') and base_type.low is not None:
                         return Immediate(base_type.low, IRType.WORD)
                 elif attr == "last":
+                    # Use orig_type to respect subtype ranges
+                    attr_type = orig_type if orig_type is not None else base_type
                     if isinstance(base_type, EnumerationType) and base_type.literals:
-                        return Immediate(len(base_type.literals) - 1, IRType.WORD)
+                        last_pos = getattr(attr_type, 'last', None)
+                        return Immediate(last_pos if last_pos is not None else len(base_type.literals) - 1, IRType.WORD)
+                    elif hasattr(attr_type, 'high') and attr_type.high is not None:
+                        return Immediate(attr_type.high, IRType.WORD)
                     elif hasattr(base_type, 'high') and base_type.high is not None:
                         return Immediate(base_type.high, IRType.WORD)
                 elif attr == "width":
+                    # Width must use orig_type (not base_type) to respect subtype ranges
+                    width_type = orig_type if orig_type is not None else base_type
                     if isinstance(base_type, EnumerationType) and base_type.literals:
-                        max_width = max(len(lit) for lit in base_type.literals)
+                        # Check subtype range (first/last on the original type)
+                        first_pos = getattr(width_type, 'first', None)
+                        last_pos = getattr(width_type, 'last', None)
+                        if first_pos is None:
+                            first_pos = 0
+                        if last_pos is None:
+                            last_pos = len(base_type.literals) - 1
+                        if first_pos > last_pos:
+                            return Immediate(0, IRType.WORD)  # Empty range
+                        max_width = 0
+                        for i in range(first_pos, min(last_pos + 1, len(base_type.literals))):
+                            max_width = max(max_width, len(base_type.literals[i]))
                         return Immediate(max_width, IRType.WORD)
                     elif hasattr(base_type, 'low') and hasattr(base_type, 'high'):
                         # Width = max over all V of Image(V)'Length
+                        # Use the constrained type's range if available
+                        low = getattr(width_type, 'low', None) or base_type.low
+                        high = getattr(width_type, 'high', None) or base_type.high
+                        if low is None:
+                            low = 0
+                        if high is None:
+                            high = 0
+                        if low > high:
+                            return Immediate(0, IRType.WORD)  # Empty range
                         # Image of non-negative integer has leading space: " 10"
                         # Image of negative integer has leading '-': "-10"
-                        low = base_type.low if base_type.low is not None else 0
-                        high = base_type.high if base_type.high is not None else 0
                         # Positive side: leading space + digits
                         pos_width = len(str(max(abs(high), 0))) + 1 if high >= 0 else 0
                         # Negative side: '-' + digits
