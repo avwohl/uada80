@@ -2726,6 +2726,15 @@ class ASTLowering:
                         from uada80.type_system import FixedType as _FxType
                         if isinstance(ada_type, _FxType):
                             self._fixed_point_context_delta = getattr(ada_type, 'delta', None) or getattr(ada_type, 'small', None)
+                        # Propagate type for enum literal disambiguation
+                        if not getattr(decl.init_expr, 'resolved_type', None):
+                            if ada_type:
+                                decl.init_expr.resolved_type = ada_type
+                            elif decl.type_mark:
+                                # For SelectedName type marks like P.HEX, resolve to actual type
+                                resolved_from_mark = self._resolve_local_type(decl.type_mark)
+                                if resolved_from_mark:
+                                    decl.init_expr.resolved_type = resolved_from_mark
                         init_value = self._lower_expr(decl.init_expr)
                         self._fixed_point_context_delta = old_fx_delta
                         # Range check on initialization value
@@ -4042,6 +4051,11 @@ class ASTLowering:
         # Enter package scope for symbol visibility
         self.symbols.enter_scope(decl.name)
 
+        # Push package declarations onto body_declarations_stack so enum literal
+        # lookup in _lower_identifier can find type declarations from this package
+        all_pkg_decls = list(decl.declarations) + list(decl.private_declarations)
+        self._body_declarations_stack.append(all_pkg_decls)
+
         # Lower initializers and declarations for package variables (visible part)
         for pkg_decl in decl.declarations:
             if isinstance(pkg_decl, ObjectDecl):
@@ -4070,6 +4084,9 @@ class ASTLowering:
             elif isinstance(pkg_decl, GenericInstantiation):
                 self._lower_generic_instantiation(pkg_decl)
 
+        # Pop package declarations from body_declarations_stack
+        self._body_declarations_stack.pop()
+
         # Leave package scope
         self.symbols.leave_scope()
 
@@ -4086,6 +4103,12 @@ class ASTLowering:
 
             # Handle initialization
             if decl.init_expr:
+                # Propagate the variable's type to the init expression for
+                # enum literal disambiguation (e.g., 'C' in HEX vs ROMAN_DIGITS)
+                if local.ada_type and not getattr(decl.init_expr, 'resolved_type', None):
+                    resolved = self._resolve_local_type(local.ada_type)
+                    if resolved:
+                        decl.init_expr.resolved_type = resolved
                 value = self._lower_expr(decl.init_expr)
                 self.builder.mov(local.vreg, value, comment=f"init {full_name}")
 
@@ -7089,13 +7112,26 @@ class ASTLowering:
                         self.builder.push(ptr_val)
                         stack_slots += 1 + 2 * len(all_bounds)
                     elif param_mode in ("out", "in out") or is_byref:
+                        # For IN OUT params, check actual value against formal type BEFORE call
+                        if param_mode == "in out":
+                            formal_type = self._get_formal_param_type(sym, forward_idx, proc_name_lower)
+                            if formal_type and self._type_needs_range_check(formal_type):
+                                try:
+                                    check_val = self._lower_expr(arg)
+                                    self._emit_range_check(check_val, formal_type,
+                                                           f"in out param {forward_idx} before-call check")
+                                except Exception:
+                                    pass
                         # Pass address of the argument
                         addr = self._get_arg_address(arg)
                         self.builder.push(addr)
                         stack_slots += 1
                     else:
-                        # Pass value
+                        # Pass value — emit constraint check against formal param type
                         val = self._lower_expr(arg)
+                        formal_type = self._get_formal_param_type(sym, forward_idx, proc_name_lower)
+                        self._emit_param_in_check(val, formal_type,
+                                                  f"in param {forward_idx} constraint check")
                         self.builder.push(val)
                         stack_slots += 1
 
@@ -7115,6 +7151,9 @@ class ASTLowering:
                     ))
                 else:
                     self.builder.call(Label(call_target))
+
+                # After-call constraint check for OUT/IN OUT parameters
+                self._emit_param_out_checks(sym, effective_args, param_modes, proc_name_lower)
 
                 # Clean up stack (use stack_slots which accounts for dope vectors)
                 for _ in range(stack_slots):
@@ -7441,13 +7480,26 @@ class ASTLowering:
                     self.builder.push(ptr_val)
                     stack_slots += 1 + 2 * len(all_bounds)
                 elif param_mode in ("out", "in out") or is_byref:
+                    # For IN OUT params, check actual value against formal type BEFORE call
+                    if param_mode == "in out":
+                        formal_type = self._get_formal_param_type(sym, forward_idx, proc_name_lower)
+                        if formal_type and self._type_needs_range_check(formal_type):
+                            try:
+                                check_val = self._lower_expr(arg)
+                                self._emit_range_check(check_val, formal_type,
+                                                       f"in out param {forward_idx} before-call check")
+                            except Exception:
+                                pass
                     # Pass address of the argument
                     addr = self._get_arg_address(arg)
                     self.builder.push(addr)
                     stack_slots += 1
                 else:
-                    # Pass value
+                    # Pass value — emit constraint check against formal param type
                     value = self._lower_expr(arg)
+                    formal_type = self._get_formal_param_type(sym, forward_idx, proc_name_lower)
+                    self._emit_param_in_check(value, formal_type,
+                                              f"in param {forward_idx} constraint check")
                     self.builder.push(value)
                     stack_slots += 1
 
@@ -7466,6 +7518,10 @@ class ASTLowering:
             else:
                 # Static call (using external name for imported procedures)
                 self.builder.call(Label(call_target))
+
+            # After-call constraint check for OUT/IN OUT parameters
+            # The callee may have written a value that violates the actual variable's constraint
+            self._emit_param_out_checks(sym, effective_args, param_modes, proc_name_lower)
 
             # Clean up stack (use stack_slots which accounts for dope vectors)
             # Also add outer variable addresses if any
@@ -9992,6 +10048,22 @@ class ASTLowering:
                 selector_lower = selector.lower()
                 member_sym = pkg_sym.public_symbols.get(selector_lower)
                 if member_sym and member_sym.kind in (SymbolKind.VARIABLE, SymbolKind.CONSTANT):
+                    # Enum literal: is_constant with EnumerationType — return position value
+                    if member_sym.is_constant and member_sym.ada_type and isinstance(member_sym.ada_type, EnumerationType):
+                        pos = member_sym.ada_type.positions.get(selector)
+                        if pos is None:
+                            # Try case-insensitive lookup
+                            for lit, p in member_sym.ada_type.positions.items():
+                                if lit.lower() == selector_lower:
+                                    pos = p
+                                    break
+                        if pos is not None:
+                            return Immediate(pos, IRType.WORD)
+                        # Character enum literal: selector may be like 'C'
+                        char_key = f"'{selector}'" if len(selector) == 1 else selector
+                        pos = member_sym.ada_type.positions.get(char_key)
+                        if pos is not None:
+                            return Immediate(pos, IRType.WORD)
                     # True constant with known value - return immediate
                     if member_sym.kind == SymbolKind.CONSTANT and member_sym.is_constant and member_sym.value is not None:
                         return Immediate(int(member_sym.value), IRType.WORD)
@@ -10010,6 +10082,44 @@ class ASTLowering:
                 for global_name in self.builder.module.globals:
                     if global_name.lower() == direct_name.lower():
                         return self._load_global(global_name)
+
+        # Fallback for package-qualified enum literals (e.g., P.BLUE, P.'C')
+        # When the package symbol table is gone (transient scopes), look up
+        # enum literals from package declarations in the AST
+        if isinstance(expr.prefix, Identifier):
+            pkg_name_lower = expr.prefix.name.lower()
+            selector = expr.selector
+            selector_lower = selector.lower()
+            from uada80.ast_nodes import EnumerationTypeDef
+            # Search for the PackageDecl in declaration stacks
+            decl_lists_to_search = []
+            if hasattr(self, '_current_body_declarations') and self._current_body_declarations is not None:
+                decl_lists_to_search.append(self._current_body_declarations)
+            if hasattr(self, '_body_declarations_stack'):
+                for dl in reversed(self._body_declarations_stack):
+                    if dl not in decl_lists_to_search:
+                        decl_lists_to_search.append(dl)
+            # Check resolved_type for disambiguation when same literal in multiple types
+            resolved = getattr(expr, 'resolved_type', None)
+            resolved_name = getattr(resolved, 'name', '').lower() if resolved else ''
+            for dl in decl_lists_to_search:
+                for d in dl:
+                    if isinstance(d, PackageDecl) and d.name and d.name.lower() == pkg_name_lower:
+                        # Found the package — search its type declarations for enum literal
+                        # If resolved_type matches a specific type, prefer that type
+                        first_match = None
+                        for pkg_decl in d.declarations:
+                            if isinstance(pkg_decl, TypeDecl) and pkg_decl.type_def:
+                                if isinstance(pkg_decl.type_def, EnumerationTypeDef) and pkg_decl.type_def.literals:
+                                    for i, lit in enumerate(pkg_decl.type_def.literals):
+                                        if lit.lower() == selector_lower:
+                                            if resolved_name and pkg_decl.name.lower() == resolved_name:
+                                                return Immediate(i, IRType.WORD)
+                                            if first_match is None:
+                                                first_match = i
+                        if first_match is not None:
+                            return Immediate(first_match, IRType.WORD)
+                        break  # Found the package, no need to search more
 
         # Handle .all dereference
         if expr.selector.lower() == "all":
@@ -10283,6 +10393,17 @@ class ASTLowering:
             # (e.g., type Parent is (E1, E2, 'A', E3) where 'A' has position 2)
             char_val = expr.value  # e.g., 'A'
             char_name_quoted = f"'{char_val}'"  # e.g., "'A'" for symbol table lookups
+
+            # If resolved_type is set and is an EnumerationType, use it to
+            # disambiguate when the same char appears in multiple enum types
+            from uada80.type_system import EnumerationType as _EnumType
+            resolved = getattr(expr, 'resolved_type', None)
+            if resolved and isinstance(resolved, _EnumType):
+                pos = resolved.positions.get(char_val)
+                if pos is None:
+                    pos = resolved.positions.get(char_name_quoted)
+                if pos is not None:
+                    return Immediate(pos, IRType.WORD)
 
             # Check local and enclosing type declarations for enum containing this char literal
             char_decl_lists = []
@@ -10974,6 +11095,92 @@ class ASTLowering:
         too_high = self.builder.new_vreg(IRType.BOOL, "_too_high")
         self.builder.cmp_gt(too_high, value, high_vreg)
         self.builder.jnz(too_high, Label("_raise_constraint_error"))
+
+    def _get_formal_param_type(self, sym, forward_idx, proc_name_lower):
+        """Get the Ada type of a formal parameter for constraint checking.
+
+        Returns the formal parameter's type (AdaType) or None if not available.
+        This is used to emit constraint checks when passing arguments.
+        """
+        # Try symbol parameters first
+        if sym and sym.parameters and forward_idx < len(sym.parameters):
+            param = sym.parameters[forward_idx]
+            return getattr(param, 'ada_type', None)
+        # Fallback to locally tracked param ada types
+        if proc_name_lower:
+            sub_lower = proc_name_lower.lower()
+            if sub_lower in self._subprogram_param_ada_types:
+                type_list = self._subprogram_param_ada_types[sub_lower]
+                if forward_idx < len(type_list):
+                    return type_list[forward_idx]
+            # Further fallback: look up subprogram in symbol table
+            sub_sym = self.symbols.lookup(proc_name_lower)
+            if sub_sym and sub_sym.parameters and forward_idx < len(sub_sym.parameters):
+                return getattr(sub_sym.parameters[forward_idx], 'ada_type', None)
+        return None
+
+    def _type_needs_range_check(self, ada_type):
+        """Check if an Ada type has a constrained range that needs checking.
+
+        Returns True for subtypes with constrained ranges (not the full base type range).
+        E.g., subtype Positive is Integer range 1..Integer'Last needs a check,
+        but Integer itself does not (it covers the full word range).
+        """
+        if ada_type is None:
+            return False
+        from uada80.type_system import IntegerType, EnumerationType, ModularType
+        if isinstance(ada_type, IntegerType):
+            # Skip if full 16-bit range (no check needed)
+            if ada_type.low <= -32768 and ada_type.high >= 32767:
+                return False
+            return True
+        if isinstance(ada_type, EnumerationType):
+            # Only check if explicitly constrained subtype (has first/last bounds)
+            if ada_type.first is not None and ada_type.last is not None:
+                return True
+            return False
+        if isinstance(ada_type, ModularType):
+            # Check if the modular range is constrained
+            if ada_type.modulus <= 1 or ada_type.modulus >= 65536:
+                return False
+            return True
+        return False
+
+    def _emit_param_in_check(self, value, formal_type, comment=""):
+        """Emit constraint check for an IN or IN OUT parameter before a call.
+
+        Checks that the actual parameter value satisfies the formal parameter's
+        subtype constraint. Raises Constraint_Error if out of range.
+        """
+        if formal_type is None or self.ctx is None:
+            return
+        if self._type_needs_range_check(formal_type):
+            self._emit_range_check(value, formal_type, comment)
+
+    def _emit_param_out_checks(self, sym, effective_args, param_modes, proc_name_lower):
+        """Emit constraint checks for OUT/IN OUT parameters after a call returns.
+
+        After the call, the OUT/IN OUT parameters may have been modified by the callee.
+        We must check that the new value satisfies the actual parameter's subtype constraint.
+        This is the 'after call' check required by Ada RM 6.4.1.
+        """
+        if self.ctx is None or not effective_args:
+            return
+        for forward_idx, arg in enumerate(effective_args):
+            param_mode = param_modes[forward_idx] if forward_idx < len(param_modes) else "in"
+            if param_mode not in ("out", "in out"):
+                continue
+            # Get the actual parameter's type (the variable being passed)
+            actual_type = self._get_expr_type(arg)
+            if actual_type is None or not self._type_needs_range_check(actual_type):
+                continue
+            # Read the current value of the actual variable (it may have been modified)
+            try:
+                current_val = self._lower_expr(arg)
+                self._emit_range_check(current_val, actual_type,
+                                       f"after-call range check for out param {forward_idx}")
+            except Exception:
+                pass  # Skip if we can't lower the expression
 
     def _lower_conditional_expr(self, expr: ConditionalExpr):
         """Lower a conditional expression (if Cond then A else B).
@@ -16072,6 +16279,30 @@ class ASTLowering:
                         if type_sym and type_sym.ada_type:
                             return type_sym.ada_type
                     scope = scope.parent
+                # Fallback: search AST declarations for the package type
+                decl_lists = []
+                if hasattr(self, '_current_body_declarations') and self._current_body_declarations:
+                    decl_lists.append(self._current_body_declarations)
+                if hasattr(self, '_body_declarations_stack'):
+                    for dl in reversed(self._body_declarations_stack):
+                        if dl not in decl_lists:
+                            decl_lists.append(dl)
+                from uada80.ast_nodes import EnumerationTypeDef as _EnumTD
+                for dl in decl_lists:
+                    for d in dl:
+                        if isinstance(d, PackageDecl) and d.name and d.name.lower() == prefix_name:
+                            all_pkg_decls = list(d.declarations) + list(getattr(d, 'private_declarations', []) or [])
+                            for pkg_decl in all_pkg_decls:
+                                if isinstance(pkg_decl, TypeDecl) and pkg_decl.name.lower() == selector:
+                                    if isinstance(pkg_decl.type_def, _EnumTD) and pkg_decl.type_def.literals:
+                                        return EnumerationType(
+                                            name=pkg_decl.name,
+                                            size_bits=16,
+                                            literals=pkg_decl.type_def.literals,
+                                        )
+                                    # For non-enum types, just return None (no need to create type obj)
+                                    return None
+                            break
             return None
         # If it's an Identifier, look up the type name
         if isinstance(type_node, Identifier):
@@ -16958,13 +17189,26 @@ class ASTLowering:
                         self.builder.push(ptr_val)
                         stack_slots += 1 + 2 * len(all_bounds)
                     elif param_mode in ("out", "in out") or is_byref:
+                        # For IN OUT params, check actual value against formal type BEFORE call
+                        if param_mode == "in out":
+                            formal_type = self._get_formal_param_type(sym, forward_idx, func_name_lower)
+                            if formal_type and self._type_needs_range_check(formal_type):
+                                try:
+                                    check_val = self._lower_expr(arg_value)
+                                    self._emit_range_check(check_val, formal_type,
+                                                           f"in out param {forward_idx} before-call check")
+                                except Exception:
+                                    pass
                         # Pass address of the argument
                         addr = self._get_arg_address(arg_value)
                         self.builder.push(addr)
                         stack_slots += 1
                     else:
-                        # Regular argument - pass by value
+                        # Regular argument - pass by value with constraint check
                         value = self._lower_expr(arg_value)
+                        formal_type = self._get_formal_param_type(sym, forward_idx, func_name_lower)
+                        self._emit_param_in_check(value, formal_type,
+                                                  f"in param {forward_idx} constraint check")
                         self.builder.push(value)
                         stack_slots += 1
 
@@ -17001,6 +17245,9 @@ class ASTLowering:
                 MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
                 comment="capture function return from HL"
             ))
+
+            # After-call constraint check for OUT/IN OUT parameters
+            self._emit_param_out_checks(sym, effective_exprs, param_modes, func_name_lower)
 
             # Clean up stack (callee may not clean up on Z80)
             total_slots = stack_slots + outer_var_slots
