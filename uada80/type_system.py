@@ -531,12 +531,19 @@ class RecordType(AdaType):
         elif self.is_tagged and not self.is_class_wide:
             total_bits = 16  # Tag is 16-bit pointer on Z80
 
-        # Add discriminants (always byte-aligned)
+        # Add discriminants (word-aligned on Z80 like other fields)
         for disc in self.discriminants:
-            if total_bits % 8 != 0:
-                total_bits = ((total_bits + 7) // 8) * 8
+            if not self.is_packed:
+                if total_bits % 16 != 0:
+                    total_bits = ((total_bits + 15) // 16) * 16
+            else:
+                if total_bits % 8 != 0:
+                    total_bits = ((total_bits + 7) // 8) * 8
             disc.offset_bits = total_bits
-            total_bits += disc.component_type.size_bits
+            disc_size = disc.component_type.size_bits
+            if not self.is_packed and disc_size < 16:
+                disc_size = 16
+            total_bits += disc_size
 
         # Add common components
         for comp in self.components:

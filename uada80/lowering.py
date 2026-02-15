@@ -145,6 +145,7 @@ class LocalVariable:
     is_atomic: bool = False  # pragma Atomic - wrap accesses in DI/EI
     is_volatile: bool = False  # pragma Volatile - no caching
     dynamic_bounds: Optional[list] = None  # [(low_vreg, high_vreg), ...] for dynamically-bounded arrays
+    is_disc_constrained: bool = False  # True for constrained discriminated records (R : REC(5))
 
 
 @dataclass
@@ -953,6 +954,16 @@ class ASTLowering:
                     resolved_type = self._resolve_local_type(obj_decl.type_mark)
                     if resolved_type is None:
                         resolved_type = obj_decl.type_mark  # Fallback to raw AST
+                # Detect discriminant-constrained declarations: R : REC(5)
+                # These are parsed as SubtypeIndication(type_mark=IndexedComponent(...))
+                is_disc_constrained = False
+                if isinstance(resolved_type, RecordType) and resolved_type.discriminants:
+                    tm = obj_decl.type_mark
+                    if isinstance(tm, SubtypeIndication) and isinstance(tm.type_mark, IndexedComponent):
+                        is_disc_constrained = True
+                    # Also: types without default discriminants are always constrained
+                    if not all(d.default_value is not None for d in resolved_type.discriminants):
+                        is_disc_constrained = True
                 self.ctx.locals[full_name.lower()] = LocalVariable(
                     name=full_name,
                     vreg=vreg,
@@ -961,6 +972,7 @@ class ASTLowering:
                     ada_type=resolved_type,
                     is_atomic=is_atomic,
                     is_volatile=is_volatile,
+                    is_disc_constrained=is_disc_constrained,
                 )
                 stack_offset += size
             return stack_offset
@@ -5593,7 +5605,18 @@ class ASTLowering:
                         # Discriminant constraint check: if target has constrained discriminants,
                         # verify source's discriminant matches target's before copy.
                         # For constrained records (R : REC(5)), the discriminant can't change.
-                        if target_type.discriminants:
+                        # Skip check for unconstrained variables (type has defaults, no explicit constraint).
+                        local = self.ctx.locals.get(name)
+                        disc_constrained = True
+                        if local and target_type.discriminants:
+                            # If ALL discriminants have defaults and the local isn't explicitly constrained,
+                            # the variable might be unconstrained → skip check
+                            all_have_defaults = all(
+                                disc.default_value is not None for disc in target_type.discriminants
+                            )
+                            if all_have_defaults and not getattr(local, 'is_disc_constrained', False):
+                                disc_constrained = False
+                        if target_type.discriminants and disc_constrained:
                             for disc in target_type.discriminants:
                                 disc_offset = disc.offset_bits // 8 if disc.offset_bits else 0
                                 # Load discriminant from target (current/expected value)
@@ -5663,6 +5686,37 @@ class ASTLowering:
 
                     # For byref parameters (out/in out), store through the pointer
                     if name in self.ctx.byref_params:
+                        # For record types: memcpy + discriminant check
+                        if target_type and isinstance(target_type, RecordType):
+                            size = target_type.size_bytes()
+                            src_addr = self._get_record_base(stmt.value)
+                            if src_addr is None:
+                                src_addr = value
+                            # Discriminant constraint check for constrained actuals
+                            if target_type.discriminants:
+                                for disc in target_type.discriminants:
+                                    disc_offset = disc.offset_bits // 8 if disc.offset_bits else 0
+                                    tgt_disc = self.builder.new_vreg(IRType.WORD, f"_tgt_{disc.name}")
+                                    self.builder.load(tgt_disc,
+                                        MemoryLocation(base=param, offset=disc_offset, ir_type=IRType.WORD),
+                                        comment=f"load target discriminant {disc.name}")
+                                    src_disc = self.builder.new_vreg(IRType.WORD, f"_src_{disc.name}")
+                                    self.builder.load(src_disc,
+                                        MemoryLocation(base=src_addr, offset=disc_offset, ir_type=IRType.WORD),
+                                        comment=f"load source discriminant {disc.name}")
+                                    ne_check = self.builder.new_vreg(IRType.BOOL, "_disc_ne")
+                                    self.builder.cmp_ne(ne_check, src_disc, tgt_disc)
+                                    self.builder.jnz(ne_check, Label("_raise_constraint_error"))
+                            self._emit_memcpy(param, src_addr, size, f"copy record to byref {name}")
+                            return
+                        # For array types: memcpy
+                        if target_type and isinstance(target_type, ArrayType) and target_type.size_bytes() > 2:
+                            size = target_type.size_bytes()
+                            src_addr = self._get_array_base(stmt.value)
+                            if src_addr is None:
+                                src_addr = value
+                            self._emit_memcpy(param, src_addr, size, f"copy array to byref {name}")
+                            return
                         # For controlled types: Finalize old, store, Adjust new
                         if target_type and self._type_needs_adjustment(target_type):
                             # Load current value for Finalize
@@ -5770,6 +5824,21 @@ class ASTLowering:
                     src_addr = self._get_record_base(stmt.value)
                     if src_addr is None:
                         src_addr = value
+                    # Discriminant constraint check for heap-allocated records
+                    if target_type.discriminants:
+                        for disc in target_type.discriminants:
+                            disc_offset = disc.offset_bits // 8 if disc.offset_bits else 0
+                            tgt_disc = self.builder.new_vreg(IRType.WORD, f"_tgt_{disc.name}")
+                            self.builder.load(tgt_disc,
+                                MemoryLocation(base=ptr, offset=disc_offset, ir_type=IRType.WORD),
+                                comment=f"load target discriminant {disc.name}")
+                            src_disc = self.builder.new_vreg(IRType.WORD, f"_src_{disc.name}")
+                            self.builder.load(src_disc,
+                                MemoryLocation(base=src_addr, offset=disc_offset, ir_type=IRType.WORD),
+                                comment=f"load source discriminant {disc.name}")
+                            ne_check = self.builder.new_vreg(IRType.BOOL, "_disc_ne")
+                            self.builder.cmp_ne(ne_check, src_disc, tgt_disc)
+                            self.builder.jnz(ne_check, Label("_raise_constraint_error"))
                     self._emit_memcpy(ptr, src_addr, size, "store record through deref")
                 elif target_type and isinstance(target_type, ArrayType) and target_type.size_bytes() > 2:
                     size = target_type.size_bytes()
