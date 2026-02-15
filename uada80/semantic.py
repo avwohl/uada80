@@ -3151,20 +3151,19 @@ class SemanticAnalyzer:
         for idx, (lit_name, lit_value) in enumerate(decl.values):
             value = self._eval_static_int(lit_value)
 
-            # Update the position value for this literal
-            # EnumerationType.positions is a dict mapping literal name to value
-            if sym.ada_type.positions is not None:
-                if lit_name is not None:
-                    # Named form: match by literal name (case-insensitive)
-                    for lit in sym.ada_type.literals:
-                        if lit.lower() == lit_name.lower():
-                            sym.ada_type.positions[lit] = value
-                            break
-                else:
-                    # Positional form: use index to match against literals
-                    if idx < len(sym.ada_type.literals):
-                        lit = sym.ada_type.literals[idx]
-                        sym.ada_type.positions[lit] = value
+            # Store representation values in separate dict (not positions!)
+            # Positions always remain 0, 1, 2, ... for Pos/Val/Succ/Pred
+            if lit_name is not None:
+                # Named form: match by literal name (case-insensitive)
+                for lit in sym.ada_type.literals:
+                    if lit.lower() == lit_name.lower():
+                        sym.ada_type.representations[lit] = value
+                        break
+            else:
+                # Positional form: use index to match against literals
+                if idx < len(sym.ada_type.literals):
+                    lit = sym.ada_type.literals[idx]
+                    sym.ada_type.representations[lit] = value
 
     # =========================================================================
     # Task and Protected Types
@@ -7743,6 +7742,8 @@ class SemanticAnalyzer:
                 result = abs(left) % abs(right)
                 return result if left >= 0 else -result
             if expr.op == BinaryOp.EXP:
+                if isinstance(left, int) and isinstance(right, int) and right < 0:
+                    return None  # Integer ** (-N) → Constraint_Error at runtime
                 return left ** right
 
         if isinstance(expr, TypeConversion):

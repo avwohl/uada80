@@ -180,8 +180,11 @@ class EnumerationType(AdaType):
     """Enumeration type."""
 
     literals: list[str] = field(default_factory=list)
-    # Position values (usually 0, 1, 2, ... but can be customized via rep clause)
+    # Position values: always 0, 1, 2, ... (logical ordering for Pos/Val/Succ/Pred)
     positions: dict[str, int] = field(default_factory=dict)
+    # Representation values: set by FOR type USE (...) rep clause
+    # Only populated when enum has a representation clause
+    representations: dict[str, int] = field(default_factory=dict)
     base_type: Optional["EnumerationType"] = None  # For derived enumeration types
     is_derived: bool = False  # True for "type X is new Y", False for "subtype X is Y"
     # Explicit range bounds for constrained subtypes (e.g., subtype MIDWEEK is WEEKDAY range WED..WED)

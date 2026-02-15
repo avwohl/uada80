@@ -407,6 +407,12 @@ class ASTLowering:
                 if not spec.is_function:  # Only procedures, not functions
                     module.main_entry = spec.name
 
+        # Drain any remaining pending package-level variable initializations.
+        # This handles spec-only packages (no body) whose inits were never
+        # picked up by a _lower_package_init call.
+        if hasattr(self, '_pending_pkg_inits') and self._pending_pkg_inits:
+            self._flush_pending_pkg_inits()
+
         # Generate vtables for tagged types
         self._generate_vtables()
 
@@ -720,7 +726,31 @@ class ASTLowering:
             if qualified_name in self._subunit_generic_bodies:
                 # This is a generic body - skip it (will be lowered during instantiation)
                 return
-            self._lower_subprogram_body(body)
+            # Enter parent package scope so enum literals, types, etc. are visible
+            entered_parent = False
+            if parent_name:
+                parent_sym = self.symbols.lookup(parent_name)
+                if parent_sym and parent_sym.kind == SymbolKind.PACKAGE:
+                    self.symbols.enter_scope(parent_name)
+                    # Add parent package as use clause so its public symbols
+                    # (enum literals, types, etc.) are visible via lookup
+                    try:
+                        self.symbols.add_use_clause(parent_sym)
+                    except (ValueError, Exception):
+                        pass
+                    self._package_prefix_stack.append(parent_name)
+                    # Push parent spec declarations for enum/type lookup
+                    if parent_sym.definition and hasattr(parent_sym.definition, 'declarations'):
+                        self._body_declarations_stack.append(parent_sym.definition.declarations)
+                    entered_parent = True
+            try:
+                self._lower_subprogram_body(body)
+            finally:
+                if entered_parent:
+                    if self._body_declarations_stack:
+                        self._body_declarations_stack.pop()
+                    self._package_prefix_stack.pop()
+                    self.symbols.leave_scope()
         elif isinstance(body, PackageBody):
             # For subunit package bodies that complete nested packages inside a
             # procedure, the corresponding spec's variables may not yet be globals.
@@ -1317,7 +1347,7 @@ class ASTLowering:
     def _lower_package_decl(self, pkg: PackageDecl) -> None:
         """Lower a package declaration."""
         # Skip generic packages - they are templates, not concrete code
-        if pkg.generic_formals:
+        if pkg.generic_formals or getattr(pkg, 'is_generic', False):
             return
 
         pkg_prefix = pkg.name + "." if pkg.name else ""
@@ -1400,7 +1430,9 @@ class ASTLowering:
                     self._lower_task_body(decl)
 
             # Generate package initialization function if there are init statements
-            if body.statements:
+            # OR pending package-level variable initializers (from spec or body decls)
+            has_pending_inits = hasattr(self, '_pending_pkg_inits') and self._pending_pkg_inits
+            if body.statements or has_pending_inits:
                 self._lower_package_init(body)
         finally:
             self.symbols.leave_scope()
@@ -1424,6 +1456,22 @@ class ASTLowering:
             size = 2  # Default to word
             if decl.type_mark:
                 ada_type = self._resolve_type(decl.type_mark)
+                # Fallback: search package public_symbols for types in same package
+                if ada_type is None and prefix:
+                    pkg_name = prefix.rstrip(".").replace(".", "_").split("_")[0]
+                    # Try the full prefix (e.g., "C3900010" from "C3900010.")
+                    pkg_base = prefix.rstrip(".")
+                    pkg_sym = self.symbols.lookup(pkg_base)
+                    if pkg_sym and hasattr(pkg_sym, 'public_symbols') and pkg_sym.public_symbols:
+                        type_name = None
+                        if isinstance(decl.type_mark, Identifier):
+                            type_name = decl.type_mark.name.lower()
+                        elif isinstance(decl.type_mark, SelectedName):
+                            type_name = decl.type_mark.selector.lower()
+                        if type_name:
+                            type_sym = pkg_sym.public_symbols.get(type_name)
+                            if type_sym and type_sym.ada_type:
+                                ada_type = type_sym.ada_type
                 if ada_type:
                     size = max(2, (ada_type.size_bits + 7) // 8)
 
@@ -1435,7 +1483,11 @@ class ASTLowering:
             if decl.init_expr:
                 if not hasattr(self, '_pending_pkg_inits'):
                     self._pending_pkg_inits = []
-                self._pending_pkg_inits.append((global_name, decl.init_expr))
+                # Substitute generic formal parameters in the init expression
+                # so that deferred processing (in package init) doesn't depend
+                # on the generic type map being active.
+                init_expr = self._substitute_generic_formals_in_expr(decl.init_expr)
+                self._pending_pkg_inits.append((global_name, init_expr))
 
     def _lower_package_init(self, body: PackageBody) -> None:
         """Generate initialization function for a package body."""
@@ -1459,16 +1511,30 @@ class ASTLowering:
         # Process pending package-level variable initializations
         if hasattr(self, '_pending_pkg_inits') and self._pending_pkg_inits:
             for global_name, init_expr in self._pending_pkg_inits:
+                # Check size: composite types (>2 bytes) need memcpy
+                global_size = 2
+                if self.builder.module and global_name in self.builder.module.globals:
+                    _, global_size = self.builder.module.globals[global_name]
                 # Evaluate the initializer
                 value = self._lower_expr(init_expr)
-                # Store to global variable (with atomic/volatile flags)
-                global_mem = self._make_memory_location(
-                    global_name, is_global=True, ir_type=IRType.WORD
-                )
-                self.builder.emit(IRInstr(
-                    OpCode.STORE, global_mem, value,
-                    comment=f"init {global_name}"
-                ))
+                if global_size > 2:
+                    # Composite type: value is address of source data, use memcpy
+                    dst_addr = self.builder.new_vreg(IRType.PTR, f"_init_dst")
+                    self.builder.lea(
+                        dst_addr,
+                        MemoryLocation(is_global=True, symbol_name=global_name, ir_type=IRType.PTR),
+                        comment=f"addr of {global_name}"
+                    )
+                    self._emit_memcpy(dst_addr, value, global_size, f"init {global_name}")
+                else:
+                    # Scalar type: simple store
+                    global_mem = self._make_memory_location(
+                        global_name, is_global=True, ir_type=IRType.WORD
+                    )
+                    self.builder.emit(IRInstr(
+                        OpCode.STORE, global_mem, value,
+                        comment=f"init {global_name}"
+                    ))
             # Clear the list after processing
             self._pending_pkg_inits = []
 
@@ -1481,6 +1547,57 @@ class ASTLowering:
         self.ctx = None
 
         # Register this init function to be called at startup
+        if self.builder.module:
+            self.builder.module.init_functions.append(init_func_name)
+
+    def _flush_pending_pkg_inits(self) -> None:
+        """Generate an init function for any remaining pending package inits.
+
+        This handles spec-only packages (no body) whose variable initializers
+        were queued in _pending_pkg_inits but never emitted because no
+        _lower_package_init was called.
+        """
+        if not hasattr(self, '_pending_pkg_inits') or not self._pending_pkg_inits:
+            return
+
+        if not hasattr(self, '_init_counter'):
+            self._init_counter = 0
+        init_func_name = f"_ini{self._init_counter}"
+        self._init_counter += 1
+
+        # Create init function
+        func = self.builder.new_function(init_func_name, IRType.VOID)
+        entry = self.builder.new_block(f"{init_func_name}_entry")
+        self.builder.set_block(entry)
+
+        self.ctx = LoweringContext(function=func, subprogram_name=init_func_name)
+
+        for global_name, init_expr in self._pending_pkg_inits:
+            global_size = 2
+            if self.builder.module and global_name in self.builder.module.globals:
+                _, global_size = self.builder.module.globals[global_name]
+            value = self._lower_expr(init_expr)
+            if global_size > 2:
+                dst_addr = self.builder.new_vreg(IRType.PTR, f"_init_dst")
+                self.builder.lea(
+                    dst_addr,
+                    MemoryLocation(is_global=True, symbol_name=global_name, ir_type=IRType.PTR),
+                    comment=f"addr of {global_name}"
+                )
+                self._emit_memcpy(dst_addr, value, global_size, f"init {global_name}")
+            else:
+                global_mem = self._make_memory_location(
+                    global_name, is_global=True, ir_type=IRType.WORD
+                )
+                self.builder.emit(IRInstr(
+                    OpCode.STORE, global_mem, value,
+                    comment=f"init {global_name}"
+                ))
+        self._pending_pkg_inits = []
+
+        self.builder.ret()
+        self.ctx = None
+
         if self.builder.module:
             self.builder.module.init_functions.append(init_func_name)
 
@@ -1966,6 +2083,36 @@ class ASTLowering:
                     # Register type names from the generic package's spec
                     type_name = decl.name.lower() if isinstance(decl.name, str) else decl.name.name.lower()
                     self._generic_scope_type_names.add(type_name)
+                elif isinstance(decl, ObjectDecl):
+                    # Create global variables for generic instance variables
+                    inst_prefix = inst.name.replace(".", "_") + "."
+                    self._lower_package_object_decl(decl, prefix=inst_prefix)
+
+        # Flush pending init expressions immediately while generic type map
+        # is still active (so formal parameter references get substituted).
+        if hasattr(self, '_pending_pkg_inits') and self._pending_pkg_inits and self.ctx:
+            inst_pkg_name = inst.name.replace(".", "_")
+            self._package_prefix_stack.append(inst_pkg_name)
+            for global_name, init_expr in self._pending_pkg_inits:
+                value = self._lower_expr(init_expr)
+                global_size = 2
+                if self.builder.module and global_name in self.builder.module.globals:
+                    _, global_size = self.builder.module.globals[global_name]
+                if global_size > 2:
+                    dst_addr = self.builder.new_vreg(IRType.PTR, f"_init_dst")
+                    self.builder.lea(
+                        dst_addr,
+                        MemoryLocation(is_global=True, symbol_name=global_name, ir_type=IRType.PTR),
+                        comment=f"addr of {global_name}"
+                    )
+                    self._emit_memcpy(dst_addr, value, global_size, f"init {global_name}")
+                else:
+                    global_mem = self._make_memory_location(
+                        global_name, is_global=True, ir_type=IRType.WORD
+                    )
+                    self.builder.store(global_mem, value, comment=f"init {global_name}")
+            self._package_prefix_stack.pop()
+            self._pending_pkg_inits = []
 
                 # Lower subprograms from the generic package body (not the spec)
         # Generic packages have their subprogram implementations in the body
@@ -2009,8 +2156,12 @@ class ASTLowering:
             # (the BEGIN...END section). These run as part of the enclosing
             # procedure's flow, with formal subprogram substitution active.
             if generic_body.statements and self.ctx:
+                # Push package prefix so assignments can find globals
+                inst_pkg_name = inst.name.replace(".", "_")
+                self._package_prefix_stack.append(inst_pkg_name)
                 for stmt in generic_body.statements:
                     self._lower_statement(stmt)
+                self._package_prefix_stack.pop()
 
             # Pop the generic spec declarations
             if _generic_spec_decls:
@@ -2093,6 +2244,36 @@ class ASTLowering:
                 elif isinstance(decl, TypeDecl):
                     type_name = decl.name.lower() if isinstance(decl.name, str) else decl.name.name.lower()
                     self._generic_scope_type_names.add(type_name)
+                elif isinstance(decl, ObjectDecl):
+                    # Create global variables for generic instance variables
+                    inst_prefix = inst.name.replace(".", "_") + "."
+                    self._lower_package_object_decl(decl, prefix=inst_prefix)
+
+        # Flush pending init expressions immediately while generic type map
+        # is still active (so formal parameter references get substituted).
+        if hasattr(self, '_pending_pkg_inits') and self._pending_pkg_inits and self.ctx:
+            inst_pkg_name = inst.name.replace(".", "_")
+            self._package_prefix_stack.append(inst_pkg_name)
+            for global_name, init_expr in self._pending_pkg_inits:
+                value = self._lower_expr(init_expr)
+                global_size = 2
+                if self.builder.module and global_name in self.builder.module.globals:
+                    _, global_size = self.builder.module.globals[global_name]
+                if global_size > 2:
+                    dst_addr = self.builder.new_vreg(IRType.PTR, f"_init_dst")
+                    self.builder.lea(
+                        dst_addr,
+                        MemoryLocation(is_global=True, symbol_name=global_name, ir_type=IRType.PTR),
+                        comment=f"addr of {global_name}"
+                    )
+                    self._emit_memcpy(dst_addr, value, global_size, f"init {global_name}")
+                else:
+                    global_mem = self._make_memory_location(
+                        global_name, is_global=True, ir_type=IRType.WORD
+                    )
+                    self.builder.store(global_mem, value, comment=f"init {global_name}")
+            self._package_prefix_stack.pop()
+            self._pending_pkg_inits = []
 
                 # Lower subprograms from the generic package body
         if generic_body and isinstance(generic_body, PackageBody):
@@ -2127,8 +2308,12 @@ class ASTLowering:
             # (the BEGIN...END section). These run as part of the enclosing
             # procedure's flow, with formal subprogram substitution active.
             if generic_body.statements and self.ctx:
+                # Push package prefix so assignments can find globals
+                inst_pkg_name = inst.name.replace(".", "_")
+                self._package_prefix_stack.append(inst_pkg_name)
                 for stmt in generic_body.statements:
                     self._lower_statement(stmt)
+                self._package_prefix_stack.pop()
 
             # Pop the generic spec declarations
             if _generic_spec_decls:
@@ -2311,6 +2496,28 @@ class ASTLowering:
         self._generic_default_exprs = _saved_generic_default_exprs
         self._generic_actual_types = _saved_generic_actual_types
         self._generic_prefix = _saved_generic_prefix
+
+    def _substitute_generic_formals_in_expr(self, expr):
+        """Substitute generic formal object identifiers with their actual values.
+
+        When a generic package has 'C : INTEGER' as a formal and is instantiated
+        with C => 1, the init expression 'A : INTEGER := C' references the formal.
+        This replaces the Identifier('C') with IntegerLiteral(1) so the expression
+        can be lowered later when the generic type map is no longer active.
+        """
+        if not self._generic_type_map and not self._generic_default_exprs:
+            return expr
+        if isinstance(expr, Identifier):
+            name = expr.name.lower()
+            if name in self._generic_type_map and f"_subp_{name}" not in self._generic_type_map:
+                actual = self._generic_type_map[name]
+                if isinstance(actual, str):
+                    return Identifier(name=actual)
+                else:
+                    return actual  # Already an AST node (e.g., IntegerLiteral)
+            if self._generic_default_exprs and name in self._generic_default_exprs:
+                return self._generic_default_exprs[name]
+        return expr
 
     def _build_generic_type_map(self, formals: list, actuals: list) -> dict[str, Any]:
         """Build a mapping from formal generic parameters to actual parameters.
@@ -2781,10 +2988,9 @@ class ASTLowering:
                             src_addr = self._lower_expr(decl.init_expr)
                         self._emit_memcpy(local_addr, src_addr, local.size,
                                          f"init record {name} from expr")
-                    elif (ada_type and type(ada_type).__name__ == 'ArrayType' and local.size > 2
-                          and getattr(getattr(ada_type, 'component_type', None), 'name', '').lower() != 'character'):
-                        # Composite non-string array init from non-aggregate (e.g., A := A_CONST)
-                        # Need memcpy, not single word mov (strings use pointer semantics)
+                    elif (ada_type and type(ada_type).__name__ == 'ArrayType' and local.size > 2):
+                        # Composite array init from non-aggregate (e.g., A := A_CONST)
+                        # Need memcpy for inline storage (includes constrained strings)
                         frame_offset = -(local.stack_offset + local.size)
                         local_addr = self.builder.new_vreg(IRType.PTR, f"_{name}_addr")
                         self.builder.emit(IRInstr(
@@ -2938,6 +3144,34 @@ class ASTLowering:
                             ))
                             disc_offset += 2  # Each discriminant is 2 bytes
 
+                    # Initialize discriminants with default values when no explicit constraint
+                    # e.g., R : Rec1; where Rec1(Disc : Integer := 7)
+                    if not disc_values and isinstance(ada_type, RecordType) and ada_type.discriminants:
+                        defaults_to_init = [(d, d.default_value) for d in ada_type.discriminants
+                                            if d.default_value is not None]
+                        if defaults_to_init:
+                            frame_offset = -(local.stack_offset + local.size)
+                            local_addr = self.builder.new_vreg(IRType.PTR, f"_{name}_ddisc_addr")
+                            self.builder.emit(IRInstr(
+                                OpCode.LEA,
+                                dst=local_addr,
+                                src1=MemoryLocation(offset=frame_offset, ir_type=IRType.PTR, is_frame_offset=True),
+                            ))
+                            for disc, default_val in defaults_to_init:
+                                disc_offset_bytes = disc.offset_bits // 8 if disc.offset_bits else 0
+                                dval = self._lower_expr(default_val)
+                                disc_mem = MemoryLocation(
+                                    base=local_addr,
+                                    offset=disc_offset_bytes,
+                                    ir_type=IRType.WORD,
+                                )
+                                self.builder.emit(IRInstr(
+                                    OpCode.STORE,
+                                    dst=disc_mem,
+                                    src1=dval,
+                                    comment=f"init default discriminant {disc.name}",
+                                ))
+
                     # Initialize vtable pointer for tagged record types
                     if isinstance(ada_type, RecordType) and ada_type.is_tagged:
                         # Register tagged type for vtable generation
@@ -3089,6 +3323,8 @@ class ASTLowering:
             elif op == BinaryOp.MOD:
                 return left % right if right != 0 else 0
             elif op == BinaryOp.EXP:
+                if isinstance(left, int) and isinstance(right, int) and right < 0:
+                    return None  # Integer ** (-N) → Constraint_Error at runtime
                 return left ** right
             return 0
         elif isinstance(expr, UnaryExpr):
@@ -5939,7 +6175,41 @@ class ASTLowering:
 
             elif isinstance(stmt.target, SelectedName):
                 # Record field assignment
-                self._lower_selected_store(stmt.target, value)
+                # For composite field types (record, large array), need memcpy not word store
+                if target_type and isinstance(target_type, RecordType):
+                    size = target_type.size_bytes()
+                    # Compute target field address
+                    base_addr = self._get_record_base(stmt.target.prefix)
+                    if base_addr is not None:
+                        byte_offset, _, _, _ = self._get_field_bit_info(stmt.target)
+                        if byte_offset != 0:
+                            field_addr = self.builder.new_vreg(IRType.PTR, "_field_addr")
+                            self.builder.add(field_addr, base_addr, Immediate(byte_offset, IRType.WORD))
+                        else:
+                            field_addr = base_addr
+                        # Get source address (value is pointer to aggregate/record data)
+                        src_addr = self._get_record_base(stmt.value)
+                        if src_addr is None:
+                            src_addr = value
+                        self._emit_memcpy(field_addr, src_addr, size, "copy record to field")
+                    else:
+                        self._lower_selected_store(stmt.target, value)
+                elif target_type and isinstance(target_type, ArrayType) and target_type.size_bytes() > 2:
+                    size = target_type.size_bytes()
+                    # Compute target field address
+                    base_addr = self._get_record_base(stmt.target.prefix)
+                    if base_addr is not None:
+                        byte_offset, _, _, _ = self._get_field_bit_info(stmt.target)
+                        if byte_offset != 0:
+                            field_addr = self.builder.new_vreg(IRType.PTR, "_field_addr")
+                            self.builder.add(field_addr, base_addr, Immediate(byte_offset, IRType.WORD))
+                        else:
+                            field_addr = base_addr
+                        self._emit_memcpy(field_addr, value, size, "copy array to field")
+                    else:
+                        self._lower_selected_store(stmt.target, value)
+                else:
+                    self._lower_selected_store(stmt.target, value)
 
             elif isinstance(stmt.target, Dereference):
                 # Pointer dereference assignment: P.all := value
@@ -6044,9 +6314,20 @@ class ASTLowering:
                         prefix_type = self._resolve_local_type(local.ada_type)
                 if prefix_type is None and self.ctx and pname in self.ctx.params:
                     # Check params too (byref record params)
-                    sym = self.symbols.lookup(target.prefix.name)
-                    if sym and sym.ada_type:
-                        prefix_type = sym.ada_type
+                    # First check param_ada_types (has resolved AdaType)
+                    if pname in self.ctx.param_ada_types:
+                        prefix_type = self.ctx.param_ada_types[pname]
+                    else:
+                        # Try symbol table lookup on param type name
+                        param_type_name = self.ctx.param_types.get(pname)
+                        if param_type_name:
+                            sym = self.symbols.lookup(param_type_name)
+                            if sym and sym.ada_type:
+                                prefix_type = sym.ada_type
+                        if prefix_type is None:
+                            sym = self.symbols.lookup(target.prefix.name)
+                            if sym and sym.ada_type:
+                                prefix_type = sym.ada_type
                 if prefix_type is None:
                     sym = self.symbols.lookup(target.prefix.name)
                     if sym and sym.ada_type:
@@ -6724,6 +7005,13 @@ class ASTLowering:
         # Jump past handler code
         self.builder.jmp(Label(end_label))
 
+        # Pop from handler stack BEFORE generating handler code.
+        # At runtime, when a handler runs, _exc_do_raise has already
+        # restored the _exc_handler chain (popped this block's handlers).
+        # So return statements inside handler code must NOT try to pop
+        # this block's handlers again.
+        self.ctx.exception_handler_stack.pop()
+
         # Generate handler code
         for i, handler in enumerate(handlers):
             handler_block = self.builder.new_block(handler_labels[i])
@@ -6735,9 +7023,6 @@ class ASTLowering:
 
             # Jump to end (after handler executes)
             self.builder.jmp(Label(end_label))
-
-        # Pop from handler stack
-        self.ctx.exception_handler_stack.pop()
 
         # End block
         end_block = self.builder.new_block(end_label)
@@ -6781,18 +7066,32 @@ class ASTLowering:
         # Normal return: finalize all controlled objects before returning
         self._generate_finalizations()
 
-        # Pop any active exception handlers before returning.
-        # When a return exits from inside a begin..exception block, the
-        # _exc_handler chain must be restored so the caller's handlers
-        # are correctly linked. The stack deallocation from EXC_POP is
-        # harmless because ret will restore SP from the frame pointer.
-        if self.ctx and self.ctx.exception_handler_stack:
-            for handler_count, _end_label in self.ctx.exception_handler_stack:
-                for _ in range(handler_count):
-                    self.builder.emit(IRInstr(OpCode.EXC_POP))
-
+        # Compute return value FIRST (while exception handlers are still active,
+        # so exceptions during evaluation are properly caught).
+        value = None
         if stmt.value:
             value = self._lower_expr(stmt.value)
+
+        # Unwind any active exception handlers AFTER computing the return value
+        # but BEFORE the actual return instruction. This ensures:
+        # 1. Exceptions during return value computation are caught by the handler
+        # 2. The _exc_handler chain is restored so the caller's handlers work
+        # We use EXC_UNWIND (not EXC_POP) because:
+        # - EXC_POP modifies SP and clobbers HL/DE (return value may be in HL)
+        # - EXC_UNWIND only walks the handler chain, preserves HL and SP
+        # - The frame pointer restore (ld sp, ix) handles stack cleanup
+        if self.ctx and self.ctx.exception_handler_stack:
+            total_handlers = sum(
+                count for count, _label in self.ctx.exception_handler_stack
+            )
+            if total_handlers > 0:
+                self.builder.emit(IRInstr(
+                    OpCode.EXC_UNWIND,
+                    src1=Immediate(total_handlers, IRType.WORD),
+                    comment=f"unwind {total_handlers} handler(s) before return"
+                ))
+
+        if value is not None:
             self.builder.ret(value)
         else:
             self.builder.ret()
@@ -9029,6 +9328,20 @@ class ASTLowering:
                     ))
                     return addr
 
+            # Check parameters (array params passed by reference hold the array address)
+            if name in self.ctx.params:
+                param_vreg = self.ctx.params[name]
+                # For byref or record params, vreg IS the address
+                if name in self.ctx.byref_params or name in self.ctx.record_params:
+                    return param_vreg
+                # For array params, the vreg also holds the address (pushed by caller)
+                param_ada_type = self.ctx.param_ada_types.get(name)
+                if param_ada_type and hasattr(param_ada_type, 'kind') and param_ada_type.kind == TypeKind.ARRAY:
+                    return param_vreg
+                # Otherwise, the param is a scalar value; return its address
+                # (For IN mode scalars, the vreg holds the value directly)
+                return param_vreg
+
             # Check for outer-scope arrays (nested subprogram accessing outer array)
             outer_param_name = f"_outer_{name}"
             if outer_param_name in self.ctx.params:
@@ -9367,7 +9680,10 @@ class ASTLowering:
         self.builder.add(elem_addr_vreg, base_addr, total_offset)
 
         # Return as memory location using the computed address
-        return MemoryLocation(base=elem_addr_vreg, offset=0, ir_type=IRType.WORD)
+        # Use IRType.BYTE for 1-byte elements (e.g. Character) to avoid
+        # writing 2 bytes and corrupting adjacent array positions.
+        elem_ir_type = IRType.BYTE if element_size == 1 else IRType.WORD
+        return MemoryLocation(base=elem_addr_vreg, offset=0, ir_type=elem_ir_type)
 
     def _lower_selected_store(self, target: SelectedName, value) -> None:
         """Lower a selected component store (record field assignment or pointer dereference)."""
@@ -9410,6 +9726,29 @@ class ASTLowering:
             mem = MemoryLocation(base=field_addr, offset=0, ir_type=IRType.WORD)
             self.builder.store(mem, value)
             return
+
+        # Handle package-qualified global stores (e.g., Pkg.Var := value)
+        # This mirrors the logic in _lower_selected for reads.
+        # Global names use mixed case (from _lower_package_object_decl), so we
+        # need a case-insensitive lookup, same as the read path (lines 10398-10411).
+        full_dotted = self._get_selected_name_str(target).lower()
+        if self.builder.module:
+            search_name = full_dotted.replace(".", "_")
+            # Exact match first
+            if search_name in self.builder.module.globals:
+                global_mem = self._make_memory_location(
+                    search_name, is_global=True, ir_type=IRType.WORD
+                )
+                self.builder.store(global_mem, value, comment=f"store global {full_dotted}")
+                return
+            # Case-insensitive fallback (globals use mixed case from package prefix)
+            for global_name in self.builder.module.globals:
+                if global_name.lower() == search_name:
+                    global_mem = self._make_memory_location(
+                        global_name, is_global=True, ir_type=IRType.WORD
+                    )
+                    self.builder.store(global_mem, value, comment=f"store global {full_dotted}")
+                    return
 
         # Get record base address
         base_addr = self._get_record_base(target.prefix)
@@ -10743,20 +11082,10 @@ class ASTLowering:
                 comment="capture pool alloc result from HL"
             ))
 
-        # Initialize tag for tagged types (vtable pointer at offset 0)
+        # Register tagged type for vtable generation (vtable init done after zero-init)
         if is_tagged:
-            # Register tagged type for vtable generation
             if designated_type.name not in {t.name for t in self._tagged_types}:
                 self._tagged_types.append(designated_type)
-            vtable_name = f"_vtable_{designated_type.name}"
-            vtable_addr = MemoryLocation(
-                is_global=True, symbol_name=vtable_name, ir_type=IRType.PTR
-            )
-            tag_loc = MemoryLocation(base=result, offset=0, ir_type=IRType.PTR)
-            # Load vtable address and store as tag
-            vtable_val = self.builder.new_vreg(IRType.PTR, "_vtable_addr")
-            self.builder.lea(vtable_val, vtable_addr, comment=f"vtable addr for {designated_type.name}")
-            self.builder.store(tag_loc, vtable_val, comment="init tag (vtable ptr)")
 
         # If there's an initial value, store it
         if dynamic_init_addr is not None:
@@ -10792,6 +11121,16 @@ class ASTLowering:
                     self._emit_memcpy(dst, init_addr, size - data_offset, "copy record to heap alloc")
                 else:
                     self._emit_memcpy(result, init_addr, size, "copy record to heap alloc")
+                # Initialize vtable for tagged types after data copy
+                if is_tagged:
+                    vtable_name = f"_vtable_{designated_type.name}"
+                    vtable_addr = MemoryLocation(
+                        is_global=True, symbol_name=vtable_name, ir_type=IRType.PTR
+                    )
+                    tag_loc = MemoryLocation(base=result, offset=0, ir_type=IRType.PTR)
+                    vtable_val = self.builder.new_vreg(IRType.PTR, "_vtable_addr")
+                    self.builder.lea(vtable_val, vtable_addr, comment=f"vtable addr for {designated_type.name}")
+                    self.builder.store(tag_loc, vtable_val, comment="init tag (vtable ptr)")
             elif is_composite_array:
                 if data_offset != 0:
                     dst = self.builder.new_vreg(IRType.PTR, "_alloc_data")
@@ -10811,8 +11150,18 @@ class ASTLowering:
                     self._emit_range_check(init_val, expr._access_designated_type, "access subtype range check")
                 mem = MemoryLocation(base=result, offset=data_offset, ir_type=IRType.WORD)
                 self.builder.store(mem, init_val)
+                # Initialize vtable for tagged types with scalar init
+                if is_tagged:
+                    vtable_name = f"_vtable_{designated_type.name}"
+                    vtable_addr = MemoryLocation(
+                        is_global=True, symbol_name=vtable_name, ir_type=IRType.PTR
+                    )
+                    tag_loc = MemoryLocation(base=result, offset=0, ir_type=IRType.PTR)
+                    vtable_val = self.builder.new_vreg(IRType.PTR, "_vtable_addr")
+                    self.builder.lea(vtable_val, vtable_addr, comment=f"vtable addr for {designated_type.name}")
+                    self.builder.store(tag_loc, vtable_val, comment="init tag (vtable ptr)")
         elif designated_type and isinstance(designated_type, RecordType):
-            # Initialize record fields: zero-init, then discriminants, then defaults
+            # Initialize record fields: zero-init, then vtable, then discriminants, then defaults
             # Zero-initialize the allocated record
             if size > 2:
                 for zero_off in range(0, size, 2):
@@ -10821,6 +11170,17 @@ class ASTLowering:
                         Immediate(0, IRType.WORD),
                         comment="zero-init alloc" if zero_off == 0 else None,
                     )
+
+            # Initialize tag AFTER zero-init so it doesn't get clobbered
+            if is_tagged:
+                vtable_name = f"_vtable_{designated_type.name}"
+                vtable_addr = MemoryLocation(
+                    is_global=True, symbol_name=vtable_name, ir_type=IRType.PTR
+                )
+                tag_loc = MemoryLocation(base=result, offset=0, ir_type=IRType.PTR)
+                vtable_val = self.builder.new_vreg(IRType.PTR, "_vtable_addr")
+                self.builder.lea(vtable_val, vtable_addr, comment=f"vtable addr for {designated_type.name}")
+                self.builder.store(tag_loc, vtable_val, comment="init tag (vtable ptr)")
 
             # Initialize discriminants from subtype constraints or defaults
             disc_values = self._get_allocator_disc_values(expr.type_mark, designated_type)
@@ -11254,9 +11614,9 @@ class ASTLowering:
     def _emit_param_out_checks(self, sym, effective_args, param_modes, proc_name_lower):
         """Emit constraint checks for OUT/IN OUT parameters after a call returns.
 
-        After the call, the OUT/IN OUT parameters may have been modified by the callee.
-        We must check that the new value satisfies the actual parameter's subtype constraint.
-        This is the 'after call' check required by Ada RM 6.4.1.
+        For OUT and IN OUT parameters, after the call returns we must check that
+        the value written by the callee satisfies the actual parameter's subtype
+        constraint (Ada RM 6.4.1(13-16)).
         """
         if self.ctx is None:
             return
@@ -11266,17 +11626,15 @@ class ASTLowering:
             mode = param_modes[idx]
             if mode not in ("out", "in out"):
                 continue
-            # Get the actual variable's type (the constraint to check against)
             actual_type = self._get_actual_arg_type(arg)
             if actual_type is None or not self._type_needs_range_check(actual_type):
                 continue
-            # Load the current value of the actual parameter (after the call modified it)
             try:
                 value = self._lower_expr(arg)
                 self._emit_range_check(value, actual_type,
                                        f"out param {idx} after-call check")
             except Exception:
-                pass  # Skip check if we can't load the argument
+                pass
 
     def _get_actual_arg_type(self, arg):
         """Get the Ada type of an actual argument expression.
@@ -14557,6 +14915,20 @@ class ASTLowering:
                     comment=f"address of {name}"
                 ))
                 return local_addr
+            # For inline arrays (size > 2), return LEA to inline stack area
+            # This ensures reads and writes target the same memory location
+            if local.size > 2 and resolved_type and hasattr(resolved_type, 'kind'):
+                from uada80.type_system import TypeKind as _TK
+                if resolved_type.kind == _TK.ARRAY:
+                    frame_offset = -(local.stack_offset + local.size)
+                    local_addr = self.builder.new_vreg(IRType.PTR, f"_{name}_addr")
+                    self.builder.emit(IRInstr(
+                        OpCode.LEA,
+                        dst=local_addr,
+                        src1=MemoryLocation(offset=frame_offset, ir_type=IRType.PTR, is_frame_offset=True),
+                        comment=f"address of inline array {name}"
+                    ))
+                    return local_addr
             return local.vreg
 
         # Check params
@@ -14973,7 +15345,12 @@ class ASTLowering:
             if is_string:
                 left = self._lower_expr(expr.left)
                 right = self._lower_expr(expr.right)
-                return self._lower_string_comparison(op, left, right)
+                # Get string length for constrained comparison (avoids null-terminator issue)
+                str_len = None
+                str_type = left_type or right_type
+                if str_type and isinstance(str_type, ArrayType) and str_type.size_bits:
+                    str_len = str_type.size_bits // 8
+                return self._lower_string_comparison(op, left, right, str_len=str_len)
 
             # Check if this is a general array comparison (non-string arrays)
             array_type_for_cmp = None
@@ -15299,15 +15676,46 @@ class ASTLowering:
         self.builder.label(done)
         return result
 
-    def _lower_string_comparison(self, op: BinaryOp, left, right):
+    def _lower_string_comparison(self, op: BinaryOp, left, right, str_len=None):
         """Lower string comparison operations.
 
-        Calls runtime function to compare null-terminated strings.
+        For constrained strings with known length, uses _memcmp (length-based).
+        For unconstrained strings, uses _str_cmp (null-terminated).
         Returns comparison result as 0/1 for boolean False/True.
         """
         result = self.builder.new_vreg(IRType.WORD, "_str_cmp_result")
 
-        # Call _str_cmp which returns: negative if left < right, 0 if equal, positive if left > right
+        # Use _memcmp for EQ/NE when string length is known (avoids null-terminator
+        # dependency for inline constrained strings)
+        if str_len and op in (BinaryOp.EQ, BinaryOp.NE):
+            # _memcmp(ptr1, ptr2, size) -> 0 if equal, 1 if different
+            # Stack convention: ptr1 at IX+8, ptr2 at IX+6, size at IX+4
+            self.builder.push(left)   # ptr1 (pushed first = highest stack position)
+            self.builder.push(right)  # ptr2
+            self.builder.push(Immediate(str_len, IRType.WORD))  # size (pushed last = lowest)
+            self.builder.call(Label("_memcmp"), comment="string memcmp")
+
+            cmp_result = self.builder.new_vreg(IRType.WORD, "_cmp")
+            self.builder.emit(IRInstr(
+                OpCode.MOV, cmp_result,
+                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                comment="capture string comparison result"
+            ))
+
+            temp = self.builder.new_vreg(IRType.WORD, "_discard")
+            self.builder.pop(temp)
+            self.builder.pop(temp)
+            self.builder.pop(temp)
+
+            if op == BinaryOp.EQ:
+                self.builder.cmp_eq(result, cmp_result, Immediate(0, IRType.WORD))
+            else:  # NE
+                self.builder.cmp_ne(result, cmp_result, Immediate(0, IRType.WORD))
+
+            return result
+
+        # Fall back to _str_cmp for ordering or unknown-length strings
+        # _str_cmp: returns negative if left < right, 0 if equal, positive if left > right
         self.builder.push(right)  # second string
         self.builder.push(left)   # first string
         self.builder.call(Label("_str_cmp"), comment="string comparison")
@@ -17993,19 +18401,24 @@ class ASTLowering:
 
         if attr == "succ" and expr.args:
             # Type'Succ(X) - returns the successor of X
-            # Raises Constraint_Error if X is already at 'Last
+            # Raises Constraint_Error if X is already at base type's 'Last
             arg_value = self._lower_expr(expr.args[0])
 
             # Get type information for bounds check
+            # SUCC/PRED use the BASE type bounds, not subtype bounds
             if isinstance(expr.prefix, Identifier):
                 sym = self.symbols.lookup(expr.prefix.name)
                 if sym and sym.ada_type:
                     ada_type = sym.ada_type
-                    # Check that X < 'Last (can succeed)
-                    if hasattr(ada_type, "high"):
-                        self._emit_succ_check(arg_value, ada_type.high)
-                    elif isinstance(ada_type, EnumerationType) and ada_type.literals:
-                        self._emit_succ_check(arg_value, len(ada_type.literals) - 1)
+                    # Follow base_type chain to get root type bounds
+                    root_type = ada_type
+                    while hasattr(root_type, 'base_type') and root_type.base_type is not None:
+                        root_type = root_type.base_type
+                    # Check that X < root_type'Last (can succeed)
+                    if hasattr(root_type, "high"):
+                        self._emit_succ_check(arg_value, root_type.high)
+                    elif isinstance(root_type, EnumerationType) and root_type.literals:
+                        self._emit_succ_check(arg_value, len(root_type.literals) - 1)
 
             result = self.builder.new_vreg(IRType.WORD, "_succ")
             self.builder.add(result, arg_value, Immediate(1, IRType.WORD))
@@ -18013,18 +18426,23 @@ class ASTLowering:
 
         if attr == "pred" and expr.args:
             # Type'Pred(X) - returns the predecessor of X
-            # Raises Constraint_Error if X is already at 'First
+            # Raises Constraint_Error if X is already at base type's 'First
             arg_value = self._lower_expr(expr.args[0])
 
             # Get type information for bounds check
+            # SUCC/PRED use the BASE type bounds, not subtype bounds
             if isinstance(expr.prefix, Identifier):
                 sym = self.symbols.lookup(expr.prefix.name)
                 if sym and sym.ada_type:
                     ada_type = sym.ada_type
-                    # Check that X > 'First (can precede)
-                    if hasattr(ada_type, "low"):
-                        self._emit_pred_check(arg_value, ada_type.low)
-                    elif isinstance(ada_type, EnumerationType):
+                    # Follow base_type chain to get root type bounds
+                    root_type = ada_type
+                    while hasattr(root_type, 'base_type') and root_type.base_type is not None:
+                        root_type = root_type.base_type
+                    # Check that X > root_type'First (can precede)
+                    if hasattr(root_type, "low"):
+                        self._emit_pred_check(arg_value, root_type.low)
+                    elif isinstance(root_type, EnumerationType):
                         self._emit_pred_check(arg_value, 0)
 
             result = self.builder.new_vreg(IRType.WORD, "_pred")
