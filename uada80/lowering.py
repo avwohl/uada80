@@ -5534,6 +5534,9 @@ class ASTLowering:
                 from uada80.type_system import FixedType as _FxType
                 if isinstance(target_type, _FxType):
                     self._fixed_point_context_delta = getattr(target_type, 'delta', None) or getattr(target_type, 'small', None)
+                # Set resolved_type on aggregate RHS so _lower_aggregate knows the size/bounds
+                if isinstance(stmt.value, Aggregate) and target_type and not getattr(stmt.value, 'resolved_type', None):
+                    stmt.value.resolved_type = target_type
                 value = self._lower_expr(stmt.value)
                 self._fixed_point_context_delta = old_fx_delta
 
@@ -10184,11 +10187,27 @@ class ASTLowering:
 
                     for choice in variant.choices:
                         if isinstance(choice, int):
-                            # Simple value choice
+                            # Simple value choice (Python int)
                             is_match = self.builder.new_vreg(IRType.BOOL, "_choice_match")
                             self.builder.cmp_eq(is_match, disc_val, Immediate(choice, IRType.WORD))
-                            # match_found = match_found OR is_match
                             self.builder.or_(match_found, match_found, is_match)
+                        elif isinstance(choice, ExprChoice):
+                            # AST ExprChoice - evaluate the expression
+                            choice_val = self._lower_expr(choice.expr)
+                            is_match = self.builder.new_vreg(IRType.BOOL, "_choice_match")
+                            self.builder.cmp_eq(is_match, disc_val, choice_val)
+                            self.builder.or_(match_found, match_found, is_match)
+                        elif isinstance(choice, RangeChoice):
+                            # AST RangeChoice - check disc_val in range
+                            low_val = self._lower_expr(choice.range_expr.low)
+                            high_val = self._lower_expr(choice.range_expr.high)
+                            in_low = self.builder.new_vreg(IRType.BOOL, "_in_low")
+                            in_high = self.builder.new_vreg(IRType.BOOL, "_in_high")
+                            self.builder.cmp_ge(in_low, disc_val, low_val)
+                            self.builder.cmp_le(in_high, disc_val, high_val)
+                            in_range = self.builder.new_vreg(IRType.BOOL, "_in_range")
+                            self.builder.and_(in_range, in_low, in_high)
+                            self.builder.or_(match_found, match_found, in_range)
 
                     # If no match, raise Constraint_Error
                     self.builder.jz(match_found, Label("_raise_constraint_error"))
@@ -13551,20 +13570,27 @@ class ASTLowering:
                             # Index expression for array aggregate
                             value = self._lower_expr(comp.value)
                             idx = self._lower_expr(choice.expr)
-                            # Calculate offset: (index - lower_bound) * element_size
-                            # For simplicity, assume 0-based or 1-based indexing
+                            # Calculate offset: (index - agg_lower_bound) * element_size
+                            # Use type's lower bound as base; for sliding, both aggregate
+                            # and target have matching lengths so this is consistent
+                            elem_size = agg_type.element_size_bytes() if isinstance(agg_type, ArrayType) else 2
+                            lower_bound = agg_type.bounds[0][0] if isinstance(agg_type, ArrayType) and agg_type.bounds else 0
+                            adj_idx = self.builder.new_vreg(IRType.WORD, "_adj_idx")
+                            self.builder.sub(adj_idx, idx, Immediate(lower_bound, IRType.WORD))
                             offset_reg = self.builder.new_vreg(IRType.WORD, "_idx_off")
-                            self.builder.mul(offset_reg, idx, Immediate(2, IRType.WORD))
-                            # Create indexed memory location - compute address first
+                            self.builder.mul(offset_reg, adj_idx, Immediate(elem_size, IRType.WORD))
                             addr_reg = self.builder.new_vreg(IRType.PTR, "_elem_addr")
                             self.builder.add(addr_reg, agg_addr, offset_reg)
                             mem = MemoryLocation(base=addr_reg, offset=0, ir_type=IRType.WORD)
                             self.builder.store(mem, value)
                     elif isinstance(choice, RangeChoice):
-                        # Range association: (1 .. 5 => 0)
+                        # Range association: (6 .. 8 => 0)
+                        # Offset computed as (loop_var - range_low) * elem_size
+                        # This handles sliding: the aggregate fills positions 0, 1, 2, ...
                         value = self._lower_expr(comp.value)
                         low = self._lower_expr(choice.range_expr.low)
                         high = self._lower_expr(choice.range_expr.high)
+                        elem_size = agg_type.element_size_bytes() if isinstance(agg_type, ArrayType) else 2
                         # Generate loop to fill range
                         loop_var = self.builder.new_vreg(IRType.WORD, "_range_idx")
                         self.builder.mov(loop_var, low)
@@ -13573,9 +13599,11 @@ class ASTLowering:
                         self.builder.label(loop_start)
                         self.builder.cmp(loop_var, high)
                         self.builder.jg(loop_end)
-                        # Store value at index
+                        # Store value at offset: (loop_var - low) * elem_size
+                        adj_idx = self.builder.new_vreg(IRType.WORD, "_adj_idx")
+                        self.builder.sub(adj_idx, loop_var, low)
                         offset_reg = self.builder.new_vreg(IRType.WORD, "_range_off")
-                        self.builder.mul(offset_reg, loop_var, Immediate(2, IRType.WORD))
+                        self.builder.mul(offset_reg, adj_idx, Immediate(elem_size, IRType.WORD))
                         addr_reg = self.builder.new_vreg(IRType.PTR, "_elem_addr")
                         self.builder.add(addr_reg, agg_addr, offset_reg)
                         mem = MemoryLocation(base=addr_reg, offset=0, ir_type=IRType.WORD)
@@ -13770,22 +13798,39 @@ class ASTLowering:
                         if isinstance(choice, OthersChoice):
                             others_value = comp_assoc.value
                         elif isinstance(choice, RangeChoice):
-                            # Range association: (1 .. 5 => value)
+                            # Range association: (6 .. 8 => value)
+                            # Use (idx - range_low) for offset: handles sliding when
+                            # aggregate indices differ from target bounds
                             range_low = self._eval_static(choice.range_expr.low)
                             range_high = self._eval_static(choice.range_expr.high)
                             if range_low is not None and range_high is not None:
-                                value = self._lower_expr(comp_assoc.value)
-                                for idx in range(range_low, range_high + 1):
-                                    offset = (idx - lower_bound) * element_size
-                                    self._store_at_offset(target_addr, offset, value)
-                                    assigned_indices.add(idx)
+                                if is_multidim and row_type and isinstance(comp_assoc.value, Aggregate):
+                                    # Multi-dim: recursively init each row
+                                    for pos, idx in enumerate(range(range_low, range_high + 1)):
+                                        offset = pos * row_size
+                                        row_addr = self.builder.new_vreg(IRType.PTR, f"_row_{idx}_addr")
+                                        self.builder.add(row_addr, target_addr, Immediate(offset, IRType.WORD))
+                                        self._lower_aggregate_to_target(comp_assoc.value, row_addr, row_type)
+                                        assigned_indices.add(idx)
+                                else:
+                                    value = self._lower_expr(comp_assoc.value)
+                                    for pos, idx in enumerate(range(range_low, range_high + 1)):
+                                        offset = pos * element_size
+                                        self._store_at_offset(target_addr, offset, value)
+                                        assigned_indices.add(idx)
                         elif isinstance(choice, ExprChoice):
                             # Named index: (5 => value) or (Index_Name => value)
                             idx = self._eval_static(choice.expr)
                             if idx is not None:
-                                value = self._lower_expr(comp_assoc.value)
-                                offset = (idx - lower_bound) * element_size
-                                self._store_at_offset(target_addr, offset, value)
+                                if is_multidim and row_type and isinstance(comp_assoc.value, Aggregate):
+                                    offset = (idx - lower_bound) * row_size
+                                    row_addr = self.builder.new_vreg(IRType.PTR, f"_row_{idx}_addr")
+                                    self.builder.add(row_addr, target_addr, Immediate(offset, IRType.WORD))
+                                    self._lower_aggregate_to_target(comp_assoc.value, row_addr, row_type)
+                                else:
+                                    value = self._lower_expr(comp_assoc.value)
+                                    offset = (idx - lower_bound) * element_size
+                                    self._store_at_offset(target_addr, offset, value)
                                 assigned_indices.add(idx)
                 else:
                     # Positional association
@@ -14584,12 +14629,12 @@ class ASTLowering:
         # evaluating both sides with _lower_expr to avoid double-evaluation
         # of aggregates (which would allocate them on the stack twice).
         if op in (BinaryOp.EQ, BinaryOp.NE, BinaryOp.LT, BinaryOp.LE, BinaryOp.GT, BinaryOp.GE):
-            # For record equality/inequality with aggregates, propagate the record
+            # For record/array equality/inequality with aggregates, propagate the
             # type to the aggregate so it can be built with correct layout/size.
-            if isinstance(left_type, RecordType) and isinstance(expr.right, Aggregate):
+            if isinstance(left_type, (RecordType, ArrayType)) and isinstance(expr.right, Aggregate):
                 if not getattr(expr.right, 'resolved_type', None):
                     expr.right.resolved_type = left_type
-            elif isinstance(right_type, RecordType) and isinstance(expr.left, Aggregate):
+            elif isinstance(right_type, (RecordType, ArrayType)) and isinstance(expr.left, Aggregate):
                 if not getattr(expr.left, 'resolved_type', None):
                     expr.left.resolved_type = right_type
 
