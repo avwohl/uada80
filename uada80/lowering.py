@@ -10165,6 +10165,19 @@ class ASTLowering:
             array_type = self._get_prefix_type(expr.prefix)
             if array_type and isinstance(array_type, _ArrType):
                 return array_type.component_type
+        elif isinstance(expr, Dereference):
+            # Dereference (.all): get the designated type of the access type
+            from uada80.type_system import AccessType as _AccType
+            access_type = self._get_prefix_type(expr.prefix)
+            if access_type and isinstance(access_type, _AccType):
+                return access_type.designated_type
+        elif isinstance(expr, SelectedName):
+            # Record field: get the field's component type
+            prefix_type = self._get_prefix_type(expr.prefix)
+            if prefix_type and isinstance(prefix_type, RecordType):
+                comp = prefix_type.get_component(expr.selector.lower() if isinstance(expr.selector, str) else expr.selector.name.lower())
+                if comp:
+                    return comp.component_type
         return None
 
     def _get_field_offset_for_type(self, record_type, field_name: str) -> int:
@@ -10470,26 +10483,36 @@ class ASTLowering:
                 comp = init_expr.components[0]
                 if not comp.choices:  # Positional (no named association)
                     init_expr = comp.value
-            init_val = self._lower_expr(init_expr)
             # For tagged types, data starts at offset 2 (after the tag)
             data_offset = 2 if is_tagged else 0
-            # For composite types (records/arrays), init_val is an address
-            # pointing to the data on the stack — copy the data to heap
-            if designated_type and isinstance(designated_type, RecordType) and size > 2:
-                if data_offset != 0:
-                    dst = self.builder.new_vreg(IRType.PTR, "_alloc_data")
-                    self.builder.add(dst, result, Immediate(data_offset, IRType.WORD))
-                    self._emit_memcpy(dst, init_val, size - data_offset, "copy record to heap alloc")
-                else:
-                    self._emit_memcpy(result, init_val, size, "copy record to heap alloc")
-            elif designated_type and isinstance(designated_type, ArrayType) and size > 0:
-                if data_offset != 0:
-                    dst = self.builder.new_vreg(IRType.PTR, "_alloc_data")
-                    self.builder.add(dst, result, Immediate(data_offset, IRType.WORD))
-                    self._emit_memcpy(dst, init_val, size - data_offset, "copy array to heap alloc")
-                else:
-                    self._emit_memcpy(result, init_val, size, "copy array to heap alloc")
+            # For composite types (records/arrays), we need the ADDRESS of the init
+            # value (for memcpy), not the value itself
+            is_composite_record = designated_type and isinstance(designated_type, RecordType) and size > 2
+            is_composite_array = designated_type and isinstance(designated_type, ArrayType) and size > 0
+            if is_composite_record or is_composite_array:
+                # Try to get address of composite init value
+                init_addr = self._get_record_base(init_expr) if is_composite_record else self._get_expr_address(init_expr)
+                if init_addr is None:
+                    # Fallback: lower normally (for aggregates/function calls that produce addresses)
+                    init_addr = self._lower_expr(init_expr)
             else:
+                init_addr = None
+            if is_composite_record:
+                if data_offset != 0:
+                    dst = self.builder.new_vreg(IRType.PTR, "_alloc_data")
+                    self.builder.add(dst, result, Immediate(data_offset, IRType.WORD))
+                    self._emit_memcpy(dst, init_addr, size - data_offset, "copy record to heap alloc")
+                else:
+                    self._emit_memcpy(result, init_addr, size, "copy record to heap alloc")
+            elif is_composite_array:
+                if data_offset != 0:
+                    dst = self.builder.new_vreg(IRType.PTR, "_alloc_data")
+                    self.builder.add(dst, result, Immediate(data_offset, IRType.WORD))
+                    self._emit_memcpy(dst, init_addr, size - data_offset, "copy array to heap alloc")
+                else:
+                    self._emit_memcpy(result, init_addr, size, "copy array to heap alloc")
+            else:
+                init_val = self._lower_expr(init_expr)
                 mem = MemoryLocation(base=result, offset=data_offset, ir_type=IRType.WORD)
                 self.builder.store(mem, init_val)
         elif designated_type and isinstance(designated_type, RecordType):
@@ -14380,19 +14403,29 @@ class ASTLowering:
                 return self._lower_string_comparison(op, left, right)
 
             # Check if this is a general array comparison (non-string arrays)
+            array_type_for_cmp = None
             if left_type and isinstance(left_type, ArrayType) and not is_string:
+                array_type_for_cmp = left_type
+            elif right_type and isinstance(right_type, ArrayType) and not is_string:
+                array_type_for_cmp = right_type
+            if array_type_for_cmp is not None:
                 left_ptr = self._get_composite_ptr(expr.left)
                 right_ptr = self._get_composite_ptr(expr.right)
                 if op in (BinaryOp.EQ, BinaryOp.NE):
-                    return self._lower_array_comparison(op, left_ptr, right_ptr, left_type)
+                    return self._lower_array_comparison(op, left_ptr, right_ptr, array_type_for_cmp)
                 if op in (BinaryOp.LT, BinaryOp.LE, BinaryOp.GT, BinaryOp.GE):
-                    return self._lower_array_ordering(op, left_ptr, right_ptr, left_type, expr)
+                    return self._lower_array_ordering(op, left_ptr, right_ptr, array_type_for_cmp, expr)
 
-            # Check if this is a record comparison
+            # Check if this is a record comparison (check both sides — one may be an aggregate with no type)
+            record_type_for_cmp = None
             if left_type and isinstance(left_type, RecordType):
+                record_type_for_cmp = left_type
+            elif right_type and isinstance(right_type, RecordType):
+                record_type_for_cmp = right_type
+            if record_type_for_cmp is not None:
                 left_ptr = self._get_composite_ptr(expr.left)
                 right_ptr = self._get_composite_ptr(expr.right)
-                return self._lower_record_comparison(op, left_ptr, right_ptr, left_type)
+                return self._lower_record_comparison(op, left_ptr, right_ptr, record_type_for_cmp)
 
         # Set fixed-point context for RealLiteral operands in binary expressions
         old_fx_delta = getattr(self, '_fixed_point_context_delta', None)
