@@ -3873,6 +3873,23 @@ class SemanticAnalyzer:
         """Build an access (pointer) type."""
         designated = self._resolve_type(type_def.designated_type)
 
+        # If the access type has a range constraint (e.g., ACCESS INTEGER RANGE 2..6),
+        # create a constrained subtype for the designated type
+        if designated and type_def.constraint:
+            from uada80.type_system import IntegerType
+            from uada80.ast_nodes import RangeExpr
+            if isinstance(designated, IntegerType) and isinstance(type_def.constraint, RangeExpr):
+                try:
+                    low = int(self._eval_static_expr(type_def.constraint.low))
+                    high = int(self._eval_static_expr(type_def.constraint.high))
+                    designated = IntegerType(
+                        name=f"{name}_designated",
+                        size_bits=designated.size_bits,
+                        low=low, high=high
+                    )
+                except (TypeError, ValueError):
+                    pass  # Non-static bounds — skip constraint
+
         return AccessType(
             name=name,
             size_bits=16,  # Z80 address
@@ -5953,6 +5970,12 @@ class SemanticAnalyzer:
 
         # If context expects a named access type, use it (Ada context-determined resolution)
         if expected_type and isinstance(expected_type, AccessType):
+            # Store the access type's designated subtype on the allocator
+            # so lowering can emit constraint checks (e.g., new T1_7'(1)
+            # assigned to ACCESS INTEGER RANGE 2..6 should check against 2..6)
+            access_designated = expected_type.designated_type
+            if access_designated and access_designated is not designated_type:
+                expr._access_designated_type = access_designated
             return expected_type
 
         # Return an anonymous access type for the allocator

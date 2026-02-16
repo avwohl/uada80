@@ -554,6 +554,11 @@ class ASTLowering:
         # Get current nested package name for prefixed lookup
         current_pkg = getattr(self, '_current_nested_package', None)
 
+        # Get the enclosing subprogram name (for SelectedName like C64004G.O1)
+        enclosing_name = ""
+        if enclosing_ctx and enclosing_ctx.subprogram_name:
+            enclosing_name = enclosing_ctx.subprogram_name.lower()
+
         # Walk the AST to find identifier references
         def visit(node):
             if node is None:
@@ -569,6 +574,15 @@ class ASTLowering:
                         prefixed_name = f"{current_pkg}.{name}"
                         if prefixed_name in enclosing_locals:
                             outer_vars.add(prefixed_name)
+            elif isinstance(node, SelectedName):
+                # Handle SelectedName like C64004G.O1 where prefix is the enclosing
+                # procedure/package and selector is an outer variable
+                if isinstance(node.prefix, Identifier):
+                    prefix_name = node.prefix.name.lower()
+                    selector_name = node.selector.lower()
+                    if prefix_name == enclosing_name and selector_name not in local_names:
+                        if selector_name in enclosing_locals:
+                            outer_vars.add(selector_name)
             # Recursively visit child nodes
             for attr_name in dir(node):
                 if attr_name.startswith('_'):
@@ -7103,6 +7117,15 @@ class ASTLowering:
         value = None
         if stmt.value:
             value = self._lower_expr(stmt.value)
+            # Check return value against the function's return subtype constraint.
+            # This must happen BEFORE unwinding exception handlers so that
+            # Constraint_Error is caught by any enclosing handler in this function.
+            if self.ctx and self.ctx.subprogram_name:
+                ret_type = self._subprogram_return_types.get(
+                    self.ctx.subprogram_name)
+                if ret_type and self._type_needs_range_check(ret_type):
+                    self._emit_range_check(value, ret_type,
+                                           "return value range check")
 
         # Unwind any active exception handlers AFTER computing the return value
         # but BEFORE the actual return instruction. This ensures:
@@ -7552,6 +7575,12 @@ class ASTLowering:
                         self.builder.push(addr)
                         stack_slots += 1
                     else:
+                        # Set resolved_type on aggregate args for constrained params too
+                        # so _lower_aggregate knows the target type/size
+                        if isinstance(arg, Aggregate) and not getattr(arg, 'resolved_type', None):
+                            param_type = self._get_param_type(sym, forward_idx, proc_name_lower)
+                            if param_type:
+                                arg.resolved_type = param_type
                         # Pass value — emit constraint check against formal param type
                         val = self._lower_expr(arg)
                         formal_type = self._get_formal_param_type(sym, forward_idx, proc_name_lower)
@@ -7920,6 +7949,11 @@ class ASTLowering:
                     self.builder.push(addr)
                     stack_slots += 1
                 else:
+                    # Set resolved_type on aggregate args for constrained params too
+                    if isinstance(arg, Aggregate) and not getattr(arg, 'resolved_type', None):
+                        param_type = self._get_param_type(sym, forward_idx, proc_name_lower)
+                        if param_type:
+                            arg.resolved_type = param_type
                     # Pass value — emit constraint check against formal param type
                     value = self._lower_expr(arg)
                     formal_type = self._get_formal_param_type(sym, forward_idx, proc_name_lower)
@@ -9759,11 +9793,34 @@ class ASTLowering:
             self.builder.store(mem, value)
             return
 
+        # Handle SelectedName referencing outer scope local (e.g., C64004G.O1 inside
+        # nested function F). The selector is the variable name, and the outer var
+        # was passed as a hidden pointer parameter _outer_{selector}.
+        if isinstance(target.prefix, Identifier) and self.ctx:
+            selector = target.selector.lower()
+            outer_param_name = f"_outer_{selector}"
+            if outer_param_name in self.ctx.params:
+                ptr_vreg = self.ctx.params[outer_param_name]
+                self.builder.emit(IRInstr(
+                    OpCode.STORE,
+                    dst=MemoryLocation(offset=0, ir_type=IRType.WORD, base=ptr_vreg),
+                    src1=value,
+                    comment=f"store to outer {selector} via {target.prefix.name}.{target.selector}"
+                ))
+                return
+
+        # Also check if the full dotted name matches a local variable
+        # (handles nested package variables like C83F01D1.P.X1)
+        full_dotted = self._get_selected_name_str(target).lower()
+        if self.ctx and full_dotted in self.ctx.locals:
+            local = self.ctx.locals[full_dotted]
+            self.builder.mov(local.vreg, value, comment=f"{full_dotted} := ...")
+            return
+
         # Handle package-qualified global stores (e.g., Pkg.Var := value)
         # This mirrors the logic in _lower_selected for reads.
         # Global names use mixed case (from _lower_package_object_decl), so we
         # need a case-insensitive lookup, same as the read path (lines 10398-10411).
-        full_dotted = self._get_selected_name_str(target).lower()
         if self.builder.module:
             search_name = full_dotted.replace(".", "_")
             # Exact match first
@@ -10371,6 +10428,22 @@ class ASTLowering:
         if self.ctx and full_dotted in self.ctx.locals:
             local = self.ctx.locals[full_dotted]
             return local.vreg
+
+        # Check if SelectedName references an outer scope local variable
+        # (e.g., C64004G.O1 inside nested function F, where O1 is in enclosing scope).
+        # The outer var is passed as a hidden pointer parameter _outer_{selector}.
+        if isinstance(expr.prefix, Identifier) and self.ctx:
+            selector = expr.selector.lower()
+            outer_param_name = f"_outer_{selector}"
+            if outer_param_name in self.ctx.params:
+                ptr_vreg = self.ctx.params[outer_param_name]
+                result = self.builder.new_vreg(IRType.WORD, f"_load_outer_{selector}")
+                self.builder.load(
+                    result,
+                    MemoryLocation(base=ptr_vreg, offset=0, ir_type=IRType.WORD),
+                    comment=f"load outer {selector} via {expr.prefix.name}.{expr.selector}"
+                )
+                return result
 
         # Check if the full dotted name matches a global variable (handles nested
         # package variables whose body is a separate subunit, e.g. C83F01D1.P.X1
@@ -17788,6 +17861,11 @@ class ASTLowering:
                         self.builder.push(addr)
                         stack_slots += 1
                     else:
+                        # Set resolved_type on aggregate args for constrained params too
+                        if isinstance(arg_value, Aggregate) and not getattr(arg_value, 'resolved_type', None):
+                            param_type = self._get_param_type(sym, forward_idx, func_name_lower)
+                            if param_type:
+                                arg_value.resolved_type = param_type
                         # Regular argument - pass by value with constraint check
                         value = self._lower_expr(arg_value)
                         formal_type = self._get_formal_param_type(sym, forward_idx, func_name_lower)
@@ -18441,14 +18519,14 @@ class ASTLowering:
                         elif hasattr(ada_type, 'high') and ada_type.high is not None:
                             high_val = ada_type.high
                     if high_val is not None and self.ctx:
-                        # Check arg >= low
-                        if low_val != 0:
-                            ok_low = self._new_label("val_lo_ok")
-                            cond_lo = self.builder.new_vreg(IRType.BOOL, "_val_lo")
-                            self.builder.cmp_ge(cond_lo, arg_value, Immediate(low_val, IRType.WORD))
-                            self.builder.jz(cond_lo, Label("_raise_constraint_error"))
-                            lo_block = self.builder.new_block(ok_low)
-                            self.builder.set_block(lo_block)
+                        # Check arg >= low (always needed — even when low=0,
+                        # negative values like -1 pass the signed <= high check)
+                        ok_low = self._new_label("val_lo_ok")
+                        cond_lo = self.builder.new_vreg(IRType.BOOL, "_val_lo")
+                        self.builder.cmp_ge(cond_lo, arg_value, Immediate(low_val, IRType.WORD))
+                        self.builder.jz(cond_lo, Label("_raise_constraint_error"))
+                        lo_block = self.builder.new_block(ok_low)
+                        self.builder.set_block(lo_block)
                         # Check arg <= high
                         ok_hi = self._new_label("val_hi_ok")
                         cond_hi = self.builder.new_vreg(IRType.BOOL, "_val_hi")
@@ -23740,6 +23818,18 @@ class ASTLowering:
         if type_name and declarations:
             for d in declarations:
                 if isinstance(d, TypeDecl) and d.name.lower() == type_name:
+                    # Use ada_type from semantic analysis if available
+                    # This handles derived types, where the raw type_def (DerivedTypeDef)
+                    # doesn't have components/index_subtypes attributes, but ada_type
+                    # has the correct resolved type with proper size.
+                    if getattr(d, 'ada_type', None) is not None:
+                        d_ada = d.ada_type
+                        if hasattr(d_ada, 'size_bits') and d_ada.size_bits:
+                            return max(2, (d_ada.size_bits + 7) // 8)
+                        elif hasattr(d_ada, 'size_bytes') and callable(d_ada.size_bytes):
+                            sz = d_ada.size_bytes()
+                            if sz and sz > 0:
+                                return sz
                     # Found the local type declaration
                     type_def = d.type_def
                     if hasattr(type_def, 'components') or hasattr(type_def, 'fields'):
