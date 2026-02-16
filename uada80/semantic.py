@@ -3733,10 +3733,17 @@ class SemanticAnalyzer:
         self, name: str, type_def: EnumerationTypeDef
     ) -> EnumerationType:
         """Build an enumeration type."""
+        # Build set of character literal names from parser indices
+        char_lits = set()
+        if hasattr(type_def, 'char_literal_indices') and type_def.char_literal_indices:
+            for idx in type_def.char_literal_indices:
+                if idx < len(type_def.literals):
+                    char_lits.add(type_def.literals[idx])
         return EnumerationType(
             name=name,
             size_bits=0,
             literals=type_def.literals,
+            char_literals=char_lits,
         )
 
     def _build_array_type(
@@ -4005,6 +4012,7 @@ class SemanticAnalyzer:
                 is_derived=True,  # Mark as derived type - distinct from parent
                 first=first_pos if isinstance(first_pos, int) else None,
                 last=last_pos if isinstance(last_pos, int) else None,
+                char_literals=parent.char_literals.copy() if parent.char_literals else set(),
             )
 
         # Handle tagged type derivation with record extension and interfaces
@@ -4565,6 +4573,7 @@ class SemanticAnalyzer:
                             base_type=base_type,
                             first=enum_low,
                             last=enum_high,
+                            char_literals=base_type.char_literals.copy() if hasattr(base_type, 'char_literals') and base_type.char_literals else set(),
                         )
                 # Handle FixedType with float bounds from range constraint
                 if isinstance(base_type, FixedType):

@@ -10959,7 +10959,8 @@ class ASTLowering:
                             if isinstance(d.type_def, EnumerationTypeDef) and d.type_def.literals:
                                 for i, lit in enumerate(d.type_def.literals):
                                     # Compare with the char value (without quotes) - parser stores 'A' as 'A'
-                                    if lit == char_val or lit.lower() == char_val.lower():
+                                    # Use exact match for character literals (case-sensitive)
+                                    if lit == char_val:
                                         return Immediate(i, IRType.WORD)
 
             # Check symbol table for EnumerationType containing this literal
@@ -14276,6 +14277,19 @@ class ASTLowering:
             size = agg_type.size_bytes()
         elif isinstance(agg_type, ArrayType):
             size = agg_type.size_bytes()
+            if size == 0:
+                # Unconstrained array — compute from component count
+                num_components = len(expr.components)
+                elem_size = 2  # default
+                if hasattr(agg_type, 'component_type') and agg_type.component_type:
+                    ct = agg_type.component_type
+                    if hasattr(ct, 'size_bits') and ct.size_bits:
+                        elem_size = max(2, (ct.size_bits + 7) // 8)
+                    elif hasattr(ct, 'size_bytes') and callable(ct.size_bytes):
+                        sz = ct.size_bytes()
+                        if sz and sz > 0:
+                            elem_size = sz
+                size = num_components * elem_size
         else:
             # Fall back to component count
             num_components = len(expr.components)
@@ -16334,6 +16348,17 @@ class ASTLowering:
                 self.builder.not_(result, operand)
         elif op == UnaryOp.ABS:
             # ABS: if negative, negate; otherwise keep same
+            # Check for overflow: ABS(INTEGER'FIRST) must raise Constraint_Error
+            # because -(-32768) = 32768 which doesn't fit in 16-bit signed
+            operand_type = self._get_expr_type(expr.operand)
+            if operand_type and hasattr(operand_type, 'high') and hasattr(operand_type, 'low'):
+                # If -low > high, then ABS(low) overflows
+                if operand_type.low is not None and operand_type.high is not None:
+                    if -operand_type.low > operand_type.high:
+                        min_check = self.builder.new_vreg(IRType.BOOL, "_abs_min")
+                        self.builder.cmp_eq(min_check, operand, Immediate(operand_type.low, IRType.WORD))
+                        self.builder.jnz(min_check, Label("_raise_constraint_error"))
+
             cond = self.builder.new_vreg(IRType.BOOL, "_abs_cond")
             self.builder.cmp_lt(cond, operand, Immediate(0, IRType.WORD))
             # If positive (not negative), skip negation
@@ -18637,7 +18662,9 @@ class ASTLowering:
                 if actual and isinstance(actual, EnumerationType):
                     prefix_type = actual
             is_enum = ((prefix_type and isinstance(prefix_type, EnumerationType) and
-                       prefix_type.name not in ("Boolean", "Character", "Wide_Character", "Wide_Wide_Character"))
+                       not self._is_bool_derived(prefix_type) and
+                       not self._is_char_derived(prefix_type) and
+                       prefix_type.name not in ("Wide_Character", "Wide_Wide_Character"))
                       or enum_literals)
 
             if is_enum:
@@ -18646,11 +18673,19 @@ class ASTLowering:
                 table_label = self.builder.new_label("_enum_img")
 
                 # Create the table entries: [(name, value), ...]
+                # Character literals get wrapped in quotes for Image format
                 entries = []
+                char_lits = set()
                 if prefix_type and isinstance(prefix_type, EnumerationType):
+                    char_lits = getattr(prefix_type, 'char_literals', set()) or set()
                     for lit_name in prefix_type.literals:
                         value = prefix_type.positions.get(lit_name, 0)
-                        entries.append((lit_name, value))
+                        # Character literals need 'X' format in Image output
+                        if lit_name in char_lits:
+                            display = f"'{lit_name}'"
+                        else:
+                            display = lit_name
+                        entries.append((display, value))
                 elif enum_literals:
                     # Local enum declaration - literals are in order
                     for i, lit_name in enumerate(enum_literals):
@@ -18702,9 +18737,9 @@ class ASTLowering:
             self.builder.push(arg_value)
 
             # Choose the right runtime function based on type
-            if prefix_type and hasattr(prefix_type, 'name') and prefix_type.name == "Boolean":
+            if prefix_type and self._is_bool_derived(prefix_type):
                 self.builder.call(Label("_b_img"), comment="Boolean'Image")
-            elif prefix_type and hasattr(prefix_type, 'name') and prefix_type.name == "Character":
+            elif prefix_type and self._is_char_derived(prefix_type):
                 self.builder.call(Label("_c_img"), comment="Character'Image")
             elif prefix_type and hasattr(prefix_type, 'name') and prefix_type.name == "Wide_Character":
                 self.builder.call(Label("_wc_img"), comment="Wide_Character'Image")
@@ -18806,7 +18841,7 @@ class ASTLowering:
                 temp = self.builder.new_vreg(IRType.WORD, "_discard")
                 self.builder.pop(temp)
                 return result
-            elif prefix_type and hasattr(prefix_type, 'name') and prefix_type.name == "Boolean":
+            elif prefix_type and self._is_bool_derived(prefix_type):
                 # Boolean'Value - parse "TRUE" or "FALSE" string
                 arg_value = self._lower_expr(expr.args[0])
                 self.builder.push(arg_value)
@@ -18822,7 +18857,7 @@ class ASTLowering:
                 temp = self.builder.new_vreg(IRType.WORD, "_discard")
                 self.builder.pop(temp)
                 return result
-            elif prefix_type and hasattr(prefix_type, 'name') and prefix_type.name == "Character":
+            elif prefix_type and self._is_char_derived(prefix_type):
                 # Character'Value - parse "'X'" or "X" to character code
                 arg_value = self._lower_expr(expr.args[0])
                 self.builder.push(arg_value)
@@ -18904,11 +18939,18 @@ class ASTLowering:
                     table_label = self.builder.new_label("_enum_tbl")
 
                     # Create the table entries: [(name, value), ...]
+                    # Character literals get 'X' format for Value matching
                     entries = []
+                    char_lits = set()
                     if prefix_type and isinstance(prefix_type, EnumerationType):
+                        char_lits = getattr(prefix_type, 'char_literals', set()) or set()
                         for lit_name in prefix_type.literals:
                             value = prefix_type.positions.get(lit_name, 0)
-                            entries.append((lit_name, value))
+                            if lit_name in char_lits:
+                                display = f"'{lit_name}'"
+                            else:
+                                display = lit_name
+                            entries.append((display, value))
                     elif enum_literals:
                         # Local enum declaration - literals are in order
                         for i, lit_name in enumerate(enum_literals):
@@ -23553,6 +23595,28 @@ class ASTLowering:
             if expr.op != BinaryOp.CONCAT:
                 return True
 
+        return False
+
+    def _is_char_derived(self, ada_type) -> bool:
+        """Check if ada_type is Character or derived from Character."""
+        t = ada_type
+        seen = set()
+        while t is not None and id(t) not in seen:
+            seen.add(id(t))
+            if hasattr(t, 'name') and t.name in ("Character", "character"):
+                return True
+            t = getattr(t, 'base_type', None)
+        return False
+
+    def _is_bool_derived(self, ada_type) -> bool:
+        """Check if ada_type is Boolean or derived from Boolean."""
+        t = ada_type
+        seen = set()
+        while t is not None and id(t) not in seen:
+            seen.add(id(t))
+            if hasattr(t, 'name') and t.name in ("Boolean", "boolean"):
+                return True
+            t = getattr(t, 'base_type', None)
         return False
 
     def _is_character_type(self, expr) -> bool:

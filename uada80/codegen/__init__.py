@@ -166,12 +166,20 @@ class Z80CodeGen:
                 self._emit(f"{label}:")
                 self._emit(f"    DB {len(entries)}  ; count")
                 for name, value in entries:
-                    # Store uppercase name (null-terminated) followed by value byte
-                    if len(name) == 1 and (ord(name) < 32 or ord(name) > 126 or name == '"'):
-                        # Control chars and double-quote: emit as numeric byte
-                        self._emit(f'    DB {ord(name)}, 0, {value}')
+                    # Store name (null-terminated) followed by value byte
+                    # Character literals come in as 'X' format (3 chars with quotes)
+                    # Identifiers come in as NAME (uppercase applied here)
+                    is_char_lit = (len(name) == 3 and name[0] == "'" and name[2] == "'")
+                    if is_char_lit:
+                        ch = name[1]
+                        if ord(ch) < 32 or ord(ch) > 126 or ch == '"':
+                            # Non-printable or double-quote: emit as byte values
+                            self._emit(f"    DB 27H, {ord(ch)}, 27H, 0, {value}")
+                        else:
+                            # Printable char: emit with quotes preserved
+                            self._emit(f"    DB \"'{ch}'\", 0, {value}")
                     else:
-                        # MACRO-80 uses "" to represent a double quote inside a string
+                        # Identifier literal: uppercase per Ada Image rules
                         escaped = name.upper().replace('"', '""')
                         self._emit(f'    DB "{escaped}", 0, {value}')
             self._emit("")

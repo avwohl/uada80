@@ -190,6 +190,8 @@ class EnumerationType(AdaType):
     # Explicit range bounds for constrained subtypes (e.g., subtype MIDWEEK is WEEKDAY range WED..WED)
     first: Optional[int] = None
     last: Optional[int] = None
+    # Set of literal names that are character literals (for Image formatting)
+    char_literals: set = field(default_factory=set)
 
     def __post_init__(self) -> None:
         self.kind = TypeKind.ENUMERATION

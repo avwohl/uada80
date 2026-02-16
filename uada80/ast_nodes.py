@@ -554,6 +554,7 @@ class EnumerationTypeDef(TypeDef):
     """Enumeration type definition."""
 
     literals: list[str]  # Enumeration literals
+    char_literal_indices: set = field(default_factory=set)  # Indices of character literals
 
 
 @dataclass

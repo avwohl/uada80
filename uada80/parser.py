@@ -578,9 +578,17 @@ class Parser:
         """
         if self.check(TokenType.CHARACTER_LITERAL):
             token = self.advance()
-            return token.value  # Return the character literal including quotes
+            return token.value  # Return the character value
         else:
             return self.expect_identifier()
+
+    def _parse_enumeration_literal_ex(self) -> tuple:
+        """Parse an enum literal, returning (is_char_literal, name)."""
+        if self.check(TokenType.CHARACTER_LITERAL):
+            token = self.advance()
+            return (True, token.value)
+        else:
+            return (False, self.expect_identifier())
 
     def parse_actual_parameter_list(self) -> list[ActualParameter]:
         """Parse actual parameter list, handling both positional and named parameters.
@@ -2698,11 +2706,18 @@ class Parser:
         # Enumeration type
         if self.match(TokenType.LEFT_PAREN):
             literals = []
-            literals.append(self._parse_enumeration_literal())
+            char_lit_indices = set()
+            is_char, lit = self._parse_enumeration_literal_ex()
+            literals.append(lit)
+            if is_char:
+                char_lit_indices.add(0)
             while self.match(TokenType.COMMA):
-                literals.append(self._parse_enumeration_literal())
+                is_char, lit = self._parse_enumeration_literal_ex()
+                if is_char:
+                    char_lit_indices.add(len(literals))
+                literals.append(lit)
             self.expect(TokenType.RIGHT_PAREN)
-            return EnumerationTypeDef(literals=literals)
+            return EnumerationTypeDef(literals=literals, char_literal_indices=char_lit_indices)
 
         # Array type
         if self.match(TokenType.ARRAY):
