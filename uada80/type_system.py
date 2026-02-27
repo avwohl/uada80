@@ -110,6 +110,9 @@ class IntegerType(AdaType):
     high: int = 0
     base_type: Optional["IntegerType"] = None  # For subtypes/derived
     is_derived: bool = False  # True for "type X is new Y", False for "subtype X is Y"
+    # AST expressions for dynamic constraints (when static eval fails)
+    constraint_low_expr: object = None  # AST node for low bound
+    constraint_high_expr: object = None  # AST node for high bound
 
     def __post_init__(self) -> None:
         self.kind = TypeKind.INTEGER
@@ -192,6 +195,9 @@ class EnumerationType(AdaType):
     last: Optional[int] = None
     # Set of literal names that are character literals (for Image formatting)
     char_literals: set = field(default_factory=set)
+    # AST expressions for dynamic constraints (when static eval fails)
+    constraint_low_expr: object = None  # AST node for low bound
+    constraint_high_expr: object = None  # AST node for high bound
 
     def __post_init__(self) -> None:
         self.kind = TypeKind.ENUMERATION
@@ -287,6 +293,24 @@ class FixedType(AdaType):
             self.small = self.delta
         if self.size_bits == 0:
             self.size_bits = self._compute_size()
+
+    @property
+    def low(self) -> int:
+        """Return lower bound as scaled integer (for membership tests)."""
+        delta = self.small or self.delta
+        if delta == 0:
+            return -32768
+        import math
+        return math.ceil(self.range_first / delta)
+
+    @property
+    def high(self) -> int:
+        """Return upper bound as scaled integer (for membership tests)."""
+        delta = self.small or self.delta
+        if delta == 0:
+            return 32767
+        import math
+        return math.floor(self.range_last / delta)
 
     def _compute_size(self) -> int:
         """Compute size based on range and delta."""
@@ -904,6 +928,7 @@ def create_predefined_types() -> dict[str, AdaType]:
         size_bits=8,
         literals=char_literals,
         positions=char_positions,
+        char_literals=set(char_literals),
     )
 
     # Integer type (16-bit signed for Z80)

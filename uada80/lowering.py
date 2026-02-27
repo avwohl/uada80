@@ -1054,6 +1054,9 @@ class ASTLowering:
                 for inner in decl.declarations:
                     if isinstance(inner, ObjectDecl):
                         allocate_object_decl(inner, pkg_prefix)
+                    elif isinstance(inner, PackageDecl):
+                        # Allocate vars for nested package specs inside package bodies
+                        allocate_package_vars(inner, pkg_prefix)
 
         # Also allocate stack space for variables declared in subunit package
         # bodies (IS SEPARATE).  When a nested package body is a subunit, it
@@ -1414,6 +1417,26 @@ class ASTLowering:
         self.symbols.enter_scope(body.name)
 
         try:
+            # Make the package's own spec symbols visible in the body scope.
+            # Without this, types declared in the package spec (like T in
+            # "package P is type T is ...; end P;") would not be found when
+            # lowering T(expr) inside the package body, causing type
+            # conversions to silently return 0 instead of generating code.
+            if pkg_sym and hasattr(pkg_sym, 'public_symbols') and pkg_sym.public_symbols:
+                try:
+                    self.symbols.add_use_clause(pkg_sym)
+                except (ValueError, Exception):
+                    pass
+
+            # Also push the package spec declarations to _body_declarations_stack
+            # so that TypeDecl nodes from the spec are found by _lower_indexed
+            pkg_spec_decls = None
+            if pkg_sym and hasattr(pkg_sym, 'definition') and pkg_sym.definition:
+                spec_node = pkg_sym.definition
+                if hasattr(spec_node, 'declarations'):
+                    pkg_spec_decls = spec_node.declarations
+                    self._body_declarations_stack.append(pkg_spec_decls)
+
             # Process use clauses first so package symbols are visible
             for decl in body.declarations:
                 if isinstance(decl, UseClause):
@@ -1450,6 +1473,9 @@ class ASTLowering:
                 self._lower_package_init(body)
         finally:
             self.symbols.leave_scope()
+            # Pop the spec declarations (if pushed)
+            if pkg_spec_decls is not None and self._body_declarations_stack:
+                self._body_declarations_stack.pop()
             if self._body_declarations_stack:
                 self._body_declarations_stack.pop()
             # Pop package prefix
@@ -2975,8 +3001,35 @@ class ASTLowering:
                             dst=local_addr,
                             src1=MemoryLocation(offset=frame_offset, ir_type=IRType.PTR, is_frame_offset=True),
                         ))
+                        # For unconstrained arrays with constraints from the declaration,
+                        # extract the lower bound so aggregate initialization uses the
+                        # correct offset for element placement. We pass it as an override
+                        # rather than creating a fake constrained type, because the upper
+                        # bound may be dynamic (e.g., IDENT_INT(5)).
+                        agg_target_type = ada_type
+                        agg_lower_bound = None
+                        from uada80.type_system import ArrayType as _AggAT
+                        if (isinstance(ada_type, _AggAT) and not ada_type.is_constrained
+                                and decl.type_mark and isinstance(decl.type_mark, SubtypeIndication)):
+                            inner_tm = decl.type_mark.type_mark
+                            if isinstance(inner_tm, Slice) and inner_tm.range_expr:
+                                low_val = self._eval_static_expr(getattr(inner_tm.range_expr, 'low', None))
+                                high_val = self._eval_static_expr(getattr(inner_tm.range_expr, 'high', None))
+                                if low_val is not None and high_val is not None:
+                                    # Both bounds static - create a fully constrained type
+                                    agg_target_type = _AggAT(
+                                        name=ada_type.name,
+                                        component_type=ada_type.component_type,
+                                        bounds=[(low_val, high_val)],
+                                        is_constrained=True,
+                                        index_types=ada_type.index_types,
+                                    )
+                                elif low_val is not None:
+                                    # Only lower bound is static - pass as override
+                                    agg_lower_bound = low_val
                         # Write aggregate directly to the local
-                        self._lower_aggregate_to_target(decl.init_expr, local_addr, ada_type)
+                        self._lower_aggregate_to_target(decl.init_expr, local_addr, agg_target_type,
+                                                        lower_bound_override=agg_lower_bound)
                     elif self._is_float64_type(ada_type):
                         # Float64 initialization - copy 8 bytes to local
                         src_ptr = self._lower_float64_operand(decl.init_expr)
@@ -3359,6 +3412,44 @@ class ASTLowering:
                 return abs(operand)
             return operand
         return 0
+
+    def _is_static_expr(self, expr: Expr) -> bool:
+        """Check if an expression is a compile-time static expression.
+
+        Returns True if the expression consists only of literals, named numbers,
+        constants, and operators — no variables, function calls, or other
+        runtime-dependent constructs.
+        """
+        from uada80.ast_nodes import (IntegerLiteral, RealLiteral, Identifier,
+                                       BinaryExpr, UnaryExpr, Parenthesized,
+                                       QualifiedExpr, IndexedComponent)
+
+        if isinstance(expr, (IntegerLiteral, RealLiteral)):
+            return True
+        if isinstance(expr, Parenthesized):
+            return self._is_static_expr(expr.expr)
+        if isinstance(expr, QualifiedExpr):
+            return self._is_static_expr(expr.expr)
+        if isinstance(expr, IndexedComponent):
+            # Type conversion T(X) — check if inner expression is static
+            if expr.indices and len(expr.indices) == 1:
+                return self._is_static_expr(expr.indices[0])
+            return False
+        if isinstance(expr, Identifier):
+            name = expr.name.lower()
+            # Named numbers are static
+            if self.ctx and name in self.ctx.named_numbers:
+                return True
+            # Constants with known values are static
+            sym = self.symbols.lookup(expr.name)
+            if sym and sym.kind == SymbolKind.CONSTANT and sym.value is not None:
+                return True
+            return False
+        if isinstance(expr, BinaryExpr):
+            return self._is_static_expr(expr.left) and self._is_static_expr(expr.right)
+        if isinstance(expr, UnaryExpr):
+            return self._is_static_expr(expr.operand)
+        return False
 
     def _lower_exception_decl(self, decl: ExceptionDecl) -> None:
         """Lower an exception declaration.
@@ -4445,6 +4536,49 @@ class ASTLowering:
                         decl.init_expr.resolved_type = resolved
                 value = self._lower_expr(decl.init_expr)
                 self.builder.mov(local.vreg, value, comment=f"init {full_name}")
+            else:
+                # Default initialization for nested package objects without init_expr.
+                # Handle record component defaults (e.g., Y : QR where QR has C : QT := F).
+                from uada80.type_system import RecordType, AccessType
+                ada_type = self._resolve_local_type(local.ada_type) if local.ada_type else None
+                if isinstance(ada_type, RecordType):
+                    # Zero-initialize record to avoid garbage in uninitialized fields
+                    if local.size > 2:
+                        frame_offset = -(local.stack_offset + local.size)
+                        zero_addr = self.builder.new_vreg(IRType.PTR, f"_{name}_zero_addr")
+                        self.builder.emit(IRInstr(
+                            OpCode.LEA,
+                            dst=zero_addr,
+                            src1=MemoryLocation(offset=frame_offset, ir_type=IRType.PTR, is_frame_offset=True),
+                        ))
+                        for zero_off in range(0, local.size, 2):
+                            self.builder.store(
+                                MemoryLocation(base=zero_addr, offset=zero_off, ir_type=IRType.WORD),
+                                Immediate(0, IRType.WORD),
+                                comment=f"zero-init {full_name}" if zero_off == 0 else None,
+                            )
+                    # Initialize components with default values
+                    if ada_type.components:
+                        has_defaults = any(c.default_value is not None for c in ada_type.components)
+                        if has_defaults:
+                            frame_offset = -(local.stack_offset + local.size)
+                            local_addr = self.builder.new_vreg(IRType.PTR, f"_{name}_addr")
+                            self.builder.emit(IRInstr(
+                                OpCode.LEA,
+                                dst=local_addr,
+                                src1=MemoryLocation(offset=frame_offset, ir_type=IRType.PTR, is_frame_offset=True),
+                            ))
+                            for comp in ada_type.components:
+                                if comp.default_value is not None:
+                                    comp_offset_bytes = comp.offset_bits // 8
+                                    value = self._lower_expr(comp.default_value)
+                                    comp_mem = MemoryLocation(base=local_addr, offset=comp_offset_bytes, ir_type=IRType.WORD)
+                                    self.builder.emit(IRInstr(OpCode.STORE, dst=comp_mem, src1=value,
+                                                             comment=f"init {full_name}.{comp.name} default"))
+                elif isinstance(ada_type, AccessType):
+                    # Initialize access types to null (0)
+                    self.builder.mov(local.vreg, Immediate(0, IRType.WORD),
+                                    comment=f"init {full_name} to null")
 
     def _pre_register_package_body_labels(self, declarations) -> None:
         """Pre-register function labels from nested package bodies and sibling subprograms.
@@ -4574,6 +4708,32 @@ class ASTLowering:
         # Enter package scope for symbol visibility
         self.symbols.enter_scope(body.name)
 
+        # Make the package spec's type/function declarations visible in the
+        # body scope.  Without this, types declared in the spec (like type T)
+        # would not be found when lowering T(expr) in the body, causing type
+        # conversions to silently return 0.
+        # Find the matching PackageDecl in the enclosing declarations.
+        pkg_spec_decls = None
+        pkg_body_name = body.name.lower() if body.name else ""
+        # Search _current_body_declarations and _body_declarations_stack
+        for decl_list in ([self._current_body_declarations] if self._current_body_declarations else []) + list(self._body_declarations_stack):
+            if decl_list is None:
+                continue
+            for d in decl_list:
+                if isinstance(d, PackageDecl) and d.name and d.name.lower() == pkg_body_name:
+                    pkg_spec_decls = d.declarations
+                    break
+            if pkg_spec_decls is not None:
+                break
+        if pkg_spec_decls is not None:
+            self._body_declarations_stack.append(pkg_spec_decls)
+        # Also try add_use_clause if the package symbol is found
+        if pkg_sym and hasattr(pkg_sym, 'public_symbols') and pkg_sym.public_symbols:
+            try:
+                self.symbols.add_use_clause(pkg_sym)
+            except (ValueError, Exception):
+                pass
+
         for decl in body.declarations:
             if isinstance(decl, SubprogramBody):
                 # Skip bodies that complete generic subprogram specs - they are templates
@@ -4586,6 +4746,23 @@ class ASTLowering:
             elif isinstance(decl, ObjectDecl):
                 # Package body can have local variables too
                 self._lower_nested_package_object_init(decl, pkg_prefix)
+            elif isinstance(decl, PackageDecl):
+                # Nested package spec inside package body — lower its variable initializers
+                # (e.g., package R is Y : QR; Z : QS := F; end R; inside package body Q)
+                self._lower_nested_package_decl(decl, new_prefix)
+            elif isinstance(decl, UseClause):
+                # Process use clauses for symbol table visibility.
+                # Local variable access is handled by _find_local_with_package_prefix
+                # which searches for package-prefixed variants of the name.
+                for pkg_name_expr in decl.names:
+                    use_pkg_name = self._get_hierarchical_name(pkg_name_expr)
+                    if use_pkg_name:
+                        pkg_sym = self._resolve_package_name(use_pkg_name)
+                        if pkg_sym and pkg_sym.kind in (SymbolKind.PACKAGE, SymbolKind.GENERIC_PACKAGE):
+                            try:
+                                self.symbols.add_use_clause(pkg_sym)
+                            except (ValueError, Exception):
+                                pass
             elif isinstance(decl, PackageBody):
                 # Recursively lower nested package bodies (e.g., P contains Q)
                 self._lower_nested_package_body(decl)
@@ -4608,6 +4785,10 @@ class ASTLowering:
 
         # Leave package scope
         self.symbols.leave_scope()
+
+        # Pop the spec declarations (if pushed)
+        if pkg_spec_decls is not None and self._body_declarations_stack:
+            self._body_declarations_stack.pop()
 
         # Pop nested body prefix stack
         if hasattr(self, '_nested_body_prefix_stack') and self._nested_body_prefix_stack:
@@ -6863,6 +7044,19 @@ class ASTLowering:
         # This allows proper Ada block-scoped shadowing with case-insensitive names
         shadowed_locals: dict[str, LocalVariable] = {}
 
+        # Pre-register type declarations in the symbol table so that
+        # _resolve_local_type can find them during object allocation.
+        # Block-scoped types (declared in DECLARE ... BEGIN ... END) need
+        # to be visible when computing sizes and resolved types for variables
+        # in the same block.
+        block_name = getattr(stmt, 'label', None) or f"_block_{id(stmt)}"
+        self.symbols.enter_scope(block_name)
+        for decl in stmt.declarations:
+            if isinstance(decl, TypeDecl):
+                self._lower_type_decl(decl)
+            elif isinstance(decl, SubtypeDecl):
+                self._lower_subtype_decl(decl)
+
         # First, allocate stack space for any local variables in the block
         # This is needed because block declarations aren't part of the initial locals scan
         for decl in stmt.declarations:
@@ -6924,16 +7118,17 @@ class ASTLowering:
                                 ada_type=resolved_type,
                             )
                             self.ctx.locals_size += size
+                    elif isinstance(inner, PackageDecl) and not getattr(inner, 'is_generic', False):
+                        # Allocate vars for nested package specs inside package bodies
+                        # (e.g., package R inside package body Q in a DECLARE block)
+                        self._allocate_block_package_vars(inner, pkg_prefix, stmt.declarations, shadowed_locals)
 
         # Update the IR function's locals_size so codegen allocates enough stack space
         if self.builder.function:
             if self.ctx.locals_size > self.builder.function.locals_size:
                 self.builder.function.locals_size = self.ctx.locals_size
 
-        # Enter a new scope for the block to support use clauses and name resolution
-        block_name = getattr(stmt, 'label', None) or f"_block_{id(stmt)}"
-        self.symbols.enter_scope(block_name)
-
+        # Scope already entered above (before allocation) for type visibility.
         # Process use clauses first so they're visible during declaration lowering
         from uada80.ast_nodes import UseClause
         for decl in stmt.declarations:
@@ -9894,6 +10089,61 @@ class ASTLowering:
             )
             self.builder.store(mem, value)
 
+    def _find_local_with_package_prefix(self, name: str) -> Optional['LocalVariable']:
+        """Find a local variable that may be stored with a package prefix.
+
+        When a nested package P declares variable X, it gets allocated as "p.x"
+        in ctx.locals. If 'use P' makes X directly visible, we need to find
+        "p.x" when looking up just "x".
+
+        Search strategy:
+        1. Direct name lookup
+        2. Nested body prefix stack (innermost first): "q." + "r.name", etc.
+        3. Suffix-based search preferring the LONGEST prefix (deepest scope)
+           when inside a nested body, or the SHORTEST prefix otherwise.
+        """
+        if self.ctx is None:
+            return None
+        name_lower = name.lower()
+
+        # Direct lookup first
+        if name_lower in self.ctx.locals:
+            return self.ctx.locals[name_lower]
+
+        # Check with nested body prefix stack (exact prefix match)
+        current_prefix = ""
+        if hasattr(self, '_nested_body_prefix_stack') and self._nested_body_prefix_stack:
+            for prefix in reversed(self._nested_body_prefix_stack):
+                if prefix:
+                    prefixed = f"{prefix}{name_lower}"
+                    if prefixed in self.ctx.locals:
+                        return self.ctx.locals[prefixed]
+            current_prefix = self._nested_body_prefix_stack[-1] if self._nested_body_prefix_stack else ""
+
+        # Search for any local matching "*.name" pattern (package-prefixed).
+        # When inside a nested body (current_prefix is set), prefer matches
+        # that start with the current prefix (innermost scope first).
+        # Otherwise prefer the shortest prefix (most local scope).
+        suffix = f".{name_lower}"
+        scoped_match = None
+        fallback_match = None
+        fallback_prefix_len = float('inf')
+        for local_name, local_var in self.ctx.locals.items():
+            if local_name.endswith(suffix):
+                # Prefer matches within current nested body scope
+                if current_prefix and local_name.startswith(current_prefix.lower()):
+                    if scoped_match is None or len(local_name) < len(scoped_match[0]):
+                        scoped_match = (local_name, local_var)
+                else:
+                    prefix_len = len(local_name) - len(suffix)
+                    if prefix_len < fallback_prefix_len:
+                        fallback_prefix_len = prefix_len
+                        fallback_match = local_var
+
+        if scoped_match is not None:
+            return scoped_match[1]
+        return fallback_match
+
     def _get_record_base(self, prefix: Expr) -> Optional[VReg]:
         """Get the base address of a record."""
         if self.ctx is None:
@@ -9902,12 +10152,9 @@ class ASTLowering:
         if isinstance(prefix, Identifier):
             name = prefix.name.lower()
 
-            # Check locals
-            if name in self.ctx.locals:
-                local = self.ctx.locals[name]
-                # Calculate frame offset: records start at IX-(locals_size - stack_offset)
-                # E.g., for a 4-byte record at stack_offset=0 with locals_size=4:
-                #   frame_offset = -(4 - 0) = -4, so record is at IX-4 through IX-1
+            # Check locals (including package-prefixed variants via use clauses)
+            local = self._find_local_with_package_prefix(name)
+            if local is not None:
                 frame_offset = -(local.stack_offset + local.size)
                 addr = self.builder.new_vreg(IRType.PTR, f"_{name}_addr")
                 self.builder.emit(IRInstr(
@@ -11631,13 +11878,26 @@ class ASTLowering:
                     low_bound = round(rf / delta)
                     high_bound = round(rl / delta)
 
+        # For FloatType (non-Float64), convert float range bounds to integer bounds.
+        # Non-Float64 float types are stored as truncated integers on Z80
+        # (see _lower_fixed_point_literal fallback), so range bounds use int().
+        from uada80.type_system import FloatType as _FlType
+        if isinstance(target_type, _FlType) and low_bound is None:
+            rf = getattr(target_type, 'range_first', None)
+            rl = getattr(target_type, 'range_last', None)
+            if rf is not None and rl is not None:
+                low_bound = int(rf)
+                high_bound = int(rl)
+
         if low_bound is None or high_bound is None:
             return  # No bounds to check
 
         # Skip check if target can hold all possible values (full word range)
         if isinstance(low_bound, int) and isinstance(high_bound, int):
             if low_bound <= -32768 and high_bound >= 32767:
-                return  # Full 16-bit range, no check needed
+                return  # Full signed 16-bit range, no check needed
+            if low_bound == 0 and high_bound >= 0xFFFF:
+                return  # Full unsigned 16-bit range, no check needed
 
         # Emit the range check
         # Check value >= low_bound
@@ -11699,10 +11959,13 @@ class ASTLowering:
         """
         if ada_type is None:
             return False
-        from uada80.type_system import IntegerType, EnumerationType, ModularType
+        from uada80.type_system import IntegerType, EnumerationType, ModularType, FloatType
         if isinstance(ada_type, IntegerType):
             # Skip if full 16-bit range (no check needed)
             if ada_type.low <= -32768 and ada_type.high >= 32767:
+                return False
+            # Skip if full unsigned 16-bit range (e.g., Ada.Tags.Tag 0..65535)
+            if ada_type.low == 0 and ada_type.high >= 0xFFFF:
                 return False
             return True
         if isinstance(ada_type, EnumerationType):
@@ -11715,6 +11978,11 @@ class ASTLowering:
             if ada_type.modulus <= 1 or ada_type.modulus >= 65536:
                 return False
             return True
+        if isinstance(ada_type, FloatType):
+            # Check if the float subtype has constrained range bounds
+            if ada_type.range_first is not None and ada_type.range_last is not None:
+                return True
+            return False
         return False
 
     def _emit_param_in_check(self, value, formal_type, comment=""):
@@ -12024,8 +12292,32 @@ class ASTLowering:
             from uada80.type_system import FixedType as _FixedType
             delta = getattr(target_type, 'delta', None) or getattr(target_type, 'small', None)
             if delta:
-                # Convert float to integer first, then scale for fixed-point
+                # Compile-time: literals can be scaled directly
+                if isinstance(expr.operand, RealLiteral):
+                    scaled_val = round(expr.operand.value / delta)
+                    if scaled_val < -32768:
+                        scaled_val = -32768
+                    elif scaled_val > 32767:
+                        scaled_val = 32767
+                    return Immediate(scaled_val & 0xFFFF, IRType.WORD)
+                if isinstance(expr.operand, IntegerLiteral):
+                    scaled_val = round(expr.operand.value / delta)
+                    if scaled_val < -32768:
+                        scaled_val = -32768
+                    elif scaled_val > 32767:
+                        scaled_val = 32767
+                    return Immediate(scaled_val & 0xFFFF, IRType.WORD)
+                # Runtime: multiply by 1/delta in float space FIRST, then ftoi
+                # (ftoi truncates fractional part, so we must scale before converting)
                 float_ptr = self._lower_float64_operand(expr.operand)
+                used_temp = False
+                if delta != 1.0:
+                    scale_val = 1.0 / delta
+                    scale_ptr = self._lower_float64_literal(scale_val)
+                    scaled_ptr = self._alloc_float64_temp("_fx_scaled")
+                    self._f64_call_binary("_f64_mul", scaled_ptr, float_ptr, scale_ptr)
+                    float_ptr = scaled_ptr
+                    used_temp = True
                 result = self.builder.new_vreg(IRType.WORD, "_f64_to_fx")
                 self.builder.push(float_ptr)
                 self.builder.call(Label("_f64_ftoi"))
@@ -12034,19 +12326,14 @@ class ASTLowering:
                     MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
                     comment="result from _f64_ftoi for fixed"
                 ))
+                # Clean up: 2 bytes for ftoi arg + 8 bytes for float64 temp if used
+                cleanup = 10 if used_temp else 2
                 self.builder.emit(IRInstr(
                     OpCode.ADD,
                     MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
-                    Immediate(2, IRType.WORD),
-                    comment="clean up 1 argument"
+                    Immediate(cleanup, IRType.WORD),
+                    comment=f"clean up ftoi arg{' + float64 temp' if used_temp else ''}"
                 ))
-                # Scale: stored = round(value / delta)
-                if delta < 1.0:
-                    scale = round(1.0 / delta)
-                    if scale != 1:
-                        scaled = self.builder.new_vreg(IRType.WORD, "_fx_scale")
-                        self.builder.mul(scaled, result, Immediate(scale, IRType.WORD))
-                        return scaled
                 return result
 
         # Handle Fixed-point -> Float64 conversion
@@ -12105,10 +12392,26 @@ class ASTLowering:
                         scaled_val = 32767
                     return Immediate(scaled_val & 0xFFFF, IRType.WORD)
                 else:
+                    # Try static evaluation first — handles constant expressions
+                    # like FX_RNG1(RNG1 * LOW_COUNT) where all operands are named
+                    # numbers.  This avoids 16-bit overflow from runtime computation
+                    # of large intermediate values that will be scaled down by delta.
+                    # Use _eval_static_expr (returns None for non-static) to verify
+                    # the operand is truly static before using _evaluate_static_expr.
+                    # _is_static_expr can't distinguish F(7) (function call) from
+                    # T(7) (type conversion) when both are IndexedComponent.
+                    static_val = self._eval_static_expr(expr.operand)
+                    if static_val is not None:
+                        scaled_val = round(static_val / delta)
+                        if scaled_val < -32768:
+                            scaled_val = -32768
+                        elif scaled_val > 32767:
+                            scaled_val = 32767
+                        return Immediate(scaled_val & 0xFFFF, IRType.WORD)
                     # Runtime value to fixed-point
                     source_kind = getattr(source_type, 'kind', None) if source_type else None
-                    if source_kind == TypeKind.INTEGER:
-                        # Integer to fixed: stored = round(value / delta)
+                    if source_kind == TypeKind.INTEGER or source_kind is None:
+                        # Integer (or unknown type) to fixed: stored = round(value / delta)
                         operand_val = self._lower_expr(expr.operand)
                         if delta < 1.0:
                             # delta < 1: multiply by round(1/delta) to scale up
@@ -12241,8 +12544,25 @@ class ASTLowering:
         result = self.builder.new_vreg(IRType.WORD, "_member_result")
         self.builder.mov(result, Immediate(0, IRType.WORD))  # Default to False
 
+        # Set fixed-point context if the membership target is a fixed-point type.
+        # This ensures RealLiterals like 3.0 are scaled correctly by the type's delta.
+        old_fx_delta = getattr(self, '_fixed_point_context_delta', None)
+        for choice in expr.choices:
+            if isinstance(choice, ExprChoice) and isinstance(choice.expr, Identifier):
+                _tsym = self.symbols.lookup(choice.expr.name)
+                if _tsym and _tsym.kind in (SymbolKind.TYPE, SymbolKind.SUBTYPE):
+                    _tinfo = _tsym.ada_type
+                    if _tinfo is None:
+                        _tinfo = self._resolve_local_type(choice.expr)
+                    if _tinfo and hasattr(_tinfo, 'delta'):
+                        from uada80.type_system import FixedType as _FxT
+                        if isinstance(_tinfo, _FxT):
+                            self._fixed_point_context_delta = getattr(_tinfo, 'delta', None) or getattr(_tinfo, 'small', None)
+                break
+
         # Evaluate the expression being tested
         test_val = self._lower_expr(expr.expr)
+        self._fixed_point_context_delta = old_fx_delta
 
         # Create labels for control flow
         match_label = self.builder.new_label("member_match")
@@ -13543,6 +13863,23 @@ class ASTLowering:
             comment="pop _f64_copy args"
         ))
 
+    def _alloc_float64_temp(self, name: str = "_f64_tmp"):
+        """Allocate 8 bytes on stack for a Float64 temporary, return pointer vreg."""
+        result_ptr = self.builder.new_vreg(IRType.PTR, name)
+        self.builder.emit(IRInstr(
+            OpCode.SUB,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            Immediate(8, IRType.WORD),
+            comment=f"allocate 8 bytes for {name}"
+        ))
+        self.builder.emit(IRInstr(
+            OpCode.MOV, result_ptr,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.PTR),
+            comment=f"{name} = SP"
+        ))
+        return result_ptr
+
     def _f64_call_binary(self, func_name: str, result_ptr, left_ptr, right_ptr):
         """Call binary Float64 function: result = func(left, right)."""
         # Register runtime dependencies
@@ -14463,7 +14800,8 @@ class ASTLowering:
 
         return agg_addr
 
-    def _lower_aggregate_to_target(self, expr: Aggregate, target_addr, target_type):
+    def _lower_aggregate_to_target(self, expr: Aggregate, target_addr, target_type,
+                                    lower_bound_override=None):
         """Lower an aggregate directly to a target address.
 
         Used when the target type is known (e.g., record assignment).
@@ -14472,6 +14810,12 @@ class ASTLowering:
         - Named aggregates: (X => 1, Y => 2)
         - Range associations: (1 .. 5 => 0)
         - Others clause: (others => 0)
+
+        Args:
+            lower_bound_override: If provided, use this as the lower bound for
+                array offset calculations instead of deriving from the type.
+                Useful when the type is unconstrained but the declaration has
+                a known lower bound.
         """
         if self.ctx is None:
             return
@@ -14577,6 +14921,9 @@ class ASTLowering:
             if target_type.bounds:
                 lower_bound = target_type.bounds[0][0]
                 upper_bound = target_type.bounds[0][1]
+            # Apply lower_bound override (for unconstrained arrays with known lower bound)
+            if lower_bound_override is not None:
+                lower_bound = lower_bound_override
 
             # Handle multi-dimensional arrays
             # For a 2D array like Matrix(1..3, 1..3), each row aggregate fills a slice
@@ -14629,6 +14976,42 @@ class ASTLowering:
                                         offset = pos * element_size
                                         self._store_at_offset(target_addr, offset, value)
                                         assigned_indices.add(idx)
+                            else:
+                                # Dynamic range (e.g., 1 .. IDENT_INT(5) => 0)
+                                # Generate a runtime loop to fill the range
+                                dyn_low = self._lower_expr(choice.range_expr.low)
+                                dyn_high = self._lower_expr(choice.range_expr.high)
+                                value = self._lower_expr(comp_assoc.value)
+                                # Loop: for i := dyn_low to dyn_high: store value at offset (i - lower_bound) * elem_size
+                                loop_idx = self.builder.new_vreg(IRType.WORD, "_rng_i")
+                                self.builder.mov(loop_idx, dyn_low)
+                                loop_label = self.builder.new_label("agg_rng_lp")
+                                done_label = self.builder.new_label("agg_rng_dn")
+                                self.builder.label(loop_label)
+                                # Check if i > dyn_high
+                                loop_done = self.builder.new_vreg(IRType.WORD, "_rng_done")
+                                self.builder.cmp_gt(loop_done, loop_idx, dyn_high)
+                                self.builder.jnz(loop_done, done_label)
+                                # Compute offset = (i - lower_bound) * element_size
+                                dyn_offset = self.builder.new_vreg(IRType.WORD, "_rng_off")
+                                self.builder.sub(dyn_offset, loop_idx, Immediate(lower_bound, IRType.WORD))
+                                if element_size == 2:
+                                    self.builder.add(dyn_offset, dyn_offset, dyn_offset)  # * 2
+                                elif element_size != 1:
+                                    self.builder.mul(dyn_offset, dyn_offset, Immediate(element_size, IRType.WORD))
+                                # Store value at target_addr + offset
+                                dyn_addr = self.builder.new_vreg(IRType.PTR, "_rng_addr")
+                                self.builder.add(dyn_addr, target_addr, dyn_offset)
+                                self.builder.emit(IRInstr(
+                                    OpCode.STORE,
+                                    MemoryLocation(base=dyn_addr, offset=0, ir_type=IRType.WORD),
+                                    value,
+                                    comment="dynamic range aggregate store"
+                                ))
+                                # i += 1
+                                self.builder.add(loop_idx, loop_idx, Immediate(1, IRType.WORD))
+                                self.builder.jmp(loop_label)
+                                self.builder.label(done_label)
                         elif isinstance(choice, ExprChoice):
                             # Named index: (5 => value) or (Index_Name => value)
                             idx = self._eval_static(choice.expr)
@@ -14643,6 +15026,27 @@ class ASTLowering:
                                     offset = (idx - lower_bound) * element_size
                                     self._store_at_offset(target_addr, offset, value)
                                 assigned_indices.add(idx)
+                            else:
+                                # Dynamic index expression (e.g., Ident_Int(1) => 0)
+                                # Evaluate the index and value at runtime
+                                idx_vreg = self._lower_expr(choice.expr)
+                                value = self._lower_expr(comp_assoc.value)
+                                # Compute offset = (idx - lower_bound) * element_size
+                                dyn_offset = self.builder.new_vreg(IRType.WORD, "_dyn_idx_off")
+                                self.builder.sub(dyn_offset, idx_vreg, Immediate(lower_bound, IRType.WORD))
+                                if element_size == 2:
+                                    self.builder.add(dyn_offset, dyn_offset, dyn_offset)  # * 2
+                                elif element_size != 1:
+                                    self.builder.mul(dyn_offset, dyn_offset, Immediate(element_size, IRType.WORD))
+                                # Store value at target_addr + dyn_offset
+                                dyn_addr = self.builder.new_vreg(IRType.PTR, "_dyn_elem_addr")
+                                self.builder.add(dyn_addr, target_addr, dyn_offset)
+                                self.builder.emit(IRInstr(
+                                    OpCode.STORE,
+                                    MemoryLocation(base=dyn_addr, offset=0, ir_type=IRType.WORD),
+                                    value,
+                                    comment="dynamic index aggregate store"
+                                ))
                 else:
                     # Positional association
                     # For multi-dimensional arrays, use row_size for offset calculation
@@ -15122,6 +15526,35 @@ class ASTLowering:
         if name == "false":
             return Immediate(0, IRType.BOOL)
 
+        # Check for package-prefixed local variables (from 'use' clauses).
+        # When 'use R' makes R's variables visible, they are stored as "r.y"
+        # in ctx.locals but accessed as just "y". This search finds them.
+        pkg_local = self._find_local_with_package_prefix(name)
+        if pkg_local is not None and (name not in self.ctx.locals):
+            # Found via package prefix - return the vreg (same logic as direct local)
+            resolved_type = self._resolve_local_type(pkg_local.ada_type) if pkg_local.ada_type else None
+            if resolved_type and self._is_float64_type(resolved_type):
+                frame_offset = -(pkg_local.stack_offset + pkg_local.size)
+                local_addr = self.builder.new_vreg(IRType.PTR, f"_{name}_addr")
+                self.builder.emit(IRInstr(
+                    OpCode.LEA,
+                    dst=local_addr,
+                    src1=MemoryLocation(offset=frame_offset, ir_type=IRType.PTR, is_frame_offset=True),
+                ))
+                return local_addr
+            if pkg_local.size > 2 and resolved_type and hasattr(resolved_type, 'kind'):
+                from uada80.type_system import TypeKind as _TK2
+                if resolved_type.kind == _TK2.ARRAY:
+                    frame_offset = -(pkg_local.stack_offset + pkg_local.size)
+                    local_addr = self.builder.new_vreg(IRType.PTR, f"_{name}_addr")
+                    self.builder.emit(IRInstr(
+                        OpCode.LEA,
+                        dst=local_addr,
+                        src1=MemoryLocation(offset=frame_offset, ir_type=IRType.PTR, is_frame_offset=True),
+                    ))
+                    return local_addr
+            return pkg_local.vreg
+
         # Check if this identifier is a parameterless function call
         # In Ada, Get_Value without () is still a function call if it's a function with no required params
         sym = self.symbols.lookup(expr.name)
@@ -15506,6 +15939,15 @@ class ASTLowering:
                 left_ptr = self._get_composite_ptr(expr.left)
                 right_ptr = self._get_composite_ptr(expr.right)
                 return self._lower_record_comparison(op, left_ptr, right_ptr, record_type_for_cmp)
+
+        # Boolean array AND/OR/XOR: element-wise operations (Ada RM 4.5.6)
+        if op in (BinaryOp.AND, BinaryOp.OR, BinaryOp.XOR):
+            ba_type = left_type if isinstance(left_type, ArrayType) else (
+                right_type if isinstance(right_type, ArrayType) else None)
+            if ba_type and self._is_boolean_array_type(ba_type):
+                left_ptr = self._get_composite_ptr(expr.left)
+                right_ptr = self._get_composite_ptr(expr.right)
+                return self._lower_bool_array_binary(op, left_ptr, right_ptr, ba_type, expr)
 
         # Set fixed-point context for RealLiteral operands in binary expressions
         old_fx_delta = getattr(self, '_fixed_point_context_delta', None)
@@ -15910,7 +16352,20 @@ class ASTLowering:
                                 break
                 if local is None and name in self.ctx.locals:
                     local = self.ctx.locals[name]
-                if local and local.size > 2:
+                # Check if this is an array type - arrays always need LEA
+                # even for small arrays (size <= 2) since array comparison
+                # code expects pointers, not inline values.
+                is_array_type = False
+                if local and local.ada_type:
+                    from uada80.type_system import ArrayType as _ATComp
+                    if isinstance(local.ada_type, _ATComp):
+                        is_array_type = True
+                    elif isinstance(local.ada_type, SubtypeIndication):
+                        # Check if the SubtypeIndication wraps a Slice (constrained array)
+                        inner_tm = getattr(local.ada_type, 'type_mark', None)
+                        if isinstance(inner_tm, Slice):
+                            is_array_type = True
+                if local and (local.size > 2 or is_array_type):
                     # Composite type on stack — compute address via LEA
                     frame_offset = -(local.stack_offset + local.size)
                     addr = self.builder.new_vreg(IRType.PTR, f"_{name}_ptr")
@@ -16206,6 +16661,227 @@ class ASTLowering:
         self.builder.label(done_label)
         return result
 
+    def _is_boolean_array_type(self, arr_type) -> bool:
+        """Check if an array type has Boolean (or derived-from-Boolean) component."""
+        if not isinstance(arr_type, ArrayType) or not arr_type.component_type:
+            return False
+        comp = arr_type.component_type
+        # Direct Boolean check
+        if getattr(comp, 'name', '').lower() == 'boolean':
+            return True
+        # Walk base_type chain for derived-from-Boolean
+        current = comp
+        while hasattr(current, 'base_type') and current.base_type:
+            current = current.base_type
+            if getattr(current, 'name', '').lower() == 'boolean':
+                return True
+        return False
+
+    def _lower_bool_array_binary(self, op: BinaryOp, left_ptr, right_ptr,
+                                  arr_type: ArrayType, expr):
+        """Lower element-wise AND/OR/XOR on boolean arrays (Ada RM 4.5.6).
+
+        The result inherits the left operand's bounds.
+        Raises CONSTRAINT_ERROR if operand lengths differ.
+        """
+        # Get bounds info for both arrays
+        left_first, left_last, _ = self._get_array_dope_vector(expr.left)
+        right_first, right_last, _ = self._get_array_dope_vector(expr.right)
+
+        # Compute left length
+        left_len = self.builder.new_vreg(IRType.WORD, "_bll")
+        self.builder.sub(left_len, left_last, left_first)
+        self.builder.add(left_len, left_len, Immediate(1, IRType.WORD))
+
+        # Compute right length
+        right_len = self.builder.new_vreg(IRType.WORD, "_brl")
+        self.builder.sub(right_len, right_last, right_first)
+        self.builder.add(right_len, right_len, Immediate(1, IRType.WORD))
+
+        # Check lengths match (CONSTRAINT_ERROR if different)
+        len_ne = self.builder.new_vreg(IRType.WORD, "_bne")
+        self.builder.cmp_ne(len_ne, left_len, right_len)
+        self.builder.jnz(len_ne, Label("_raise_constraint_error"))
+
+        # Element size: 2 bytes for non-packed Boolean arrays
+        elem_size = arr_type.element_size_bytes() if hasattr(arr_type, 'element_size_bytes') else 2
+
+        # Allocate result array on stack: length * elem_size bytes
+        total_size = self.builder.new_vreg(IRType.WORD, "_bsz")
+        if elem_size == 2:
+            self.builder.add(total_size, left_len, left_len)  # length * 2
+        else:
+            self.builder.mul(total_size, left_len, Immediate(elem_size, IRType.WORD))
+
+        result_ptr = self.builder.new_vreg(IRType.PTR, "_bres")
+        self.builder.emit(IRInstr(
+            OpCode.SUB,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            total_size,
+            comment="allocate bool array result"
+        ))
+        self.builder.emit(IRInstr(
+            OpCode.MOV, result_ptr,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.PTR),
+            comment="bool array result = SP"
+        ))
+
+        # Loop counter
+        i_reg = self.builder.new_vreg(IRType.WORD, "_bi")
+        self.builder.mov(i_reg, Immediate(0, IRType.WORD))
+
+        loop_label = self.builder.new_label("ba_loop")
+        done_label = self.builder.new_label("ba_done")
+
+        self.builder.label(loop_label)
+
+        # if i >= length: goto done
+        done_cmp = self.builder.new_vreg(IRType.WORD, "_bdc")
+        self.builder.cmp_ge(done_cmp, i_reg, left_len)
+        self.builder.jnz(done_cmp, done_label)
+
+        # offset = i * elem_size
+        offset_reg = self.builder.new_vreg(IRType.WORD, "_boff")
+        if elem_size == 2:
+            self.builder.add(offset_reg, i_reg, i_reg)
+        else:
+            self.builder.mul(offset_reg, i_reg, Immediate(elem_size, IRType.WORD))
+
+        # Load left element
+        left_addr = self.builder.new_vreg(IRType.PTR, "_bla")
+        self.builder.add(left_addr, left_ptr, offset_reg)
+        left_elem = self.builder.new_vreg(IRType.WORD, "_ble")
+        self.builder.emit(IRInstr(
+            OpCode.LOAD, left_elem,
+            MemoryLocation(base=left_addr, offset=0, ir_type=IRType.WORD),
+            comment="load bool array left element"
+        ))
+
+        # Load right element
+        right_addr = self.builder.new_vreg(IRType.PTR, "_bra")
+        self.builder.add(right_addr, right_ptr, offset_reg)
+        right_elem = self.builder.new_vreg(IRType.WORD, "_bre")
+        self.builder.emit(IRInstr(
+            OpCode.LOAD, right_elem,
+            MemoryLocation(base=right_addr, offset=0, ir_type=IRType.WORD),
+            comment="load bool array right element"
+        ))
+
+        # Perform operation
+        res_elem = self.builder.new_vreg(IRType.WORD, "_bop")
+        if op == BinaryOp.AND:
+            self.builder.and_(res_elem, left_elem, right_elem)
+        elif op == BinaryOp.OR:
+            self.builder.or_(res_elem, left_elem, right_elem)
+        elif op == BinaryOp.XOR:
+            self.builder.xor(res_elem, left_elem, right_elem)
+
+        # Store result element
+        res_addr = self.builder.new_vreg(IRType.PTR, "_bra")
+        self.builder.add(res_addr, result_ptr, offset_reg)
+        self.builder.emit(IRInstr(
+            OpCode.STORE,
+            dst=MemoryLocation(base=res_addr, offset=0, ir_type=IRType.WORD),
+            src1=res_elem,
+            comment="store bool array result element"
+        ))
+
+        # i++
+        self.builder.add(i_reg, i_reg, Immediate(1, IRType.WORD))
+        self.builder.jmp(loop_label)
+
+        self.builder.label(done_label)
+
+        return result_ptr
+
+    def _lower_bool_array_not(self, operand_ptr, arr_type: ArrayType, expr):
+        """Lower element-wise NOT on a boolean array (Ada RM 4.5.6).
+
+        Result inherits the operand's bounds.
+        """
+        # Get bounds
+        first_val, last_val, _ = self._get_array_dope_vector(expr.operand)
+
+        # Compute length
+        arr_len = self.builder.new_vreg(IRType.WORD, "_bnl")
+        self.builder.sub(arr_len, last_val, first_val)
+        self.builder.add(arr_len, arr_len, Immediate(1, IRType.WORD))
+
+        # Element size
+        elem_size = arr_type.element_size_bytes() if hasattr(arr_type, 'element_size_bytes') else 2
+
+        # Allocate result on stack
+        total_size = self.builder.new_vreg(IRType.WORD, "_bnsz")
+        if elem_size == 2:
+            self.builder.add(total_size, arr_len, arr_len)
+        else:
+            self.builder.mul(total_size, arr_len, Immediate(elem_size, IRType.WORD))
+
+        result_ptr = self.builder.new_vreg(IRType.PTR, "_bnres")
+        self.builder.emit(IRInstr(
+            OpCode.SUB,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            total_size,
+            comment="allocate bool array NOT result"
+        ))
+        self.builder.emit(IRInstr(
+            OpCode.MOV, result_ptr,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.PTR),
+            comment="bool NOT result = SP"
+        ))
+
+        # Loop
+        i_reg = self.builder.new_vreg(IRType.WORD, "_bni")
+        self.builder.mov(i_reg, Immediate(0, IRType.WORD))
+
+        loop_label = self.builder.new_label("bn_loop")
+        done_label = self.builder.new_label("bn_done")
+
+        self.builder.label(loop_label)
+
+        done_cmp = self.builder.new_vreg(IRType.WORD, "_bndc")
+        self.builder.cmp_ge(done_cmp, i_reg, arr_len)
+        self.builder.jnz(done_cmp, done_label)
+
+        offset_reg = self.builder.new_vreg(IRType.WORD, "_bnoff")
+        if elem_size == 2:
+            self.builder.add(offset_reg, i_reg, i_reg)
+        else:
+            self.builder.mul(offset_reg, i_reg, Immediate(elem_size, IRType.WORD))
+
+        # Load element
+        src_addr = self.builder.new_vreg(IRType.PTR, "_bnsa")
+        self.builder.add(src_addr, operand_ptr, offset_reg)
+        src_elem = self.builder.new_vreg(IRType.WORD, "_bnse")
+        self.builder.emit(IRInstr(
+            OpCode.LOAD, src_elem,
+            MemoryLocation(base=src_addr, offset=0, ir_type=IRType.WORD),
+            comment="load bool array element for NOT"
+        ))
+
+        # NOT: XOR with 1 (logical negation: 0↔1)
+        res_elem = self.builder.new_vreg(IRType.WORD, "_bnop")
+        self.builder.xor(res_elem, src_elem, Immediate(1, IRType.WORD))
+
+        # Store result
+        dst_addr = self.builder.new_vreg(IRType.PTR, "_bnda")
+        self.builder.add(dst_addr, result_ptr, offset_reg)
+        self.builder.emit(IRInstr(
+            OpCode.STORE,
+            dst=MemoryLocation(base=dst_addr, offset=0, ir_type=IRType.WORD),
+            src1=res_elem,
+            comment="store bool array NOT result"
+        ))
+
+        self.builder.add(i_reg, i_reg, Immediate(1, IRType.WORD))
+        self.builder.jmp(loop_label)
+
+        self.builder.label(done_label)
+
+        return result_ptr
+
     def _unary_operator_to_name(self, op: UnaryOp) -> Optional[str]:
         """Convert a unary operator to its Ada operator function name."""
         op_names = {
@@ -16307,9 +16983,15 @@ class ASTLowering:
         if user_op is not None:
             return self._call_user_unary_operator(user_op, expr.operand)
 
+        # Boolean array NOT: element-wise negation (Ada RM 4.5.6)
+        operand_type = self._get_expr_type(expr.operand)
+        if op == UnaryOp.NOT and operand_type and isinstance(operand_type, ArrayType):
+            if self._is_boolean_array_type(operand_type):
+                operand_ptr = self._get_composite_ptr(expr.operand)
+                return self._lower_bool_array_not(operand_ptr, operand_type, expr)
+
         # Check if this is a Float64 operation.
         # Don't enter Float64 path for RealLiteral (universal_real — context-dependent).
-        operand_type = self._get_expr_type(expr.operand)
         if self._is_float64_type(operand_type) and not isinstance(expr.operand, RealLiteral):
             if op in (UnaryOp.MINUS, UnaryOp.ABS, UnaryOp.PLUS):
                 operand_ptr = self._lower_float64_operand(expr.operand)
@@ -18097,8 +18779,8 @@ class ASTLowering:
                 if attr == "size":
                     return Immediate(base_type.size_bits, IRType.WORD)
                 elif attr == "first":
-                    # Use orig_type to respect subtype ranges
-                    attr_type = orig_type if orig_type is not None else base_type
+                    # For 'BASE, always use the base type (not the subtype)
+                    attr_type = base_type
                     if isinstance(base_type, EnumerationType):
                         first_pos = getattr(attr_type, 'first', None)
                         return Immediate(first_pos if first_pos is not None else 0, IRType.WORD)
@@ -18107,8 +18789,8 @@ class ASTLowering:
                     elif hasattr(base_type, 'low') and base_type.low is not None:
                         return Immediate(base_type.low, IRType.WORD)
                 elif attr == "last":
-                    # Use orig_type to respect subtype ranges
-                    attr_type = orig_type if orig_type is not None else base_type
+                    # For 'BASE, always use the base type (not the subtype)
+                    attr_type = base_type
                     if isinstance(base_type, EnumerationType) and base_type.literals:
                         last_pos = getattr(attr_type, 'last', None)
                         return Immediate(last_pos if last_pos is not None else len(base_type.literals) - 1, IRType.WORD)
@@ -18535,14 +19217,18 @@ class ASTLowering:
                 sym = self.symbols.lookup(expr.prefix.name)
                 if sym and sym.ada_type:
                     ada_type = sym.ada_type
+                    # Val uses BASE type bounds, not subtype bounds
+                    root_type = ada_type
+                    while hasattr(root_type, 'base_type') and root_type.base_type is not None:
+                        root_type = root_type.base_type
                     low_val = 0
                     high_val = None
-                    if isinstance(ada_type, EnumerationType):
-                        low_val = ada_type.low if hasattr(ada_type, 'low') else 0
-                        if ada_type.literals:
-                            high_val = len(ada_type.literals) - 1
-                        elif hasattr(ada_type, 'high') and ada_type.high is not None:
-                            high_val = ada_type.high
+                    if isinstance(root_type, EnumerationType):
+                        low_val = 0  # Base type always starts at 0
+                        if root_type.literals:
+                            high_val = len(root_type.literals) - 1
+                        elif hasattr(root_type, 'high') and root_type.high is not None:
+                            high_val = root_type.high
                     if high_val is not None and self.ctx:
                         # Check arg >= low (always needed — even when low=0,
                         # negative values like -1 pass the signed <= high check)
@@ -18932,7 +19618,11 @@ class ASTLowering:
                     actual = self._generic_actual_types.get(prefix_type.name.lower())
                     if actual and isinstance(actual, EnumerationType):
                         prefix_type = actual
-                is_enum = (prefix_type and isinstance(prefix_type, EnumerationType)) or enum_literals
+                is_enum = ((prefix_type and isinstance(prefix_type, EnumerationType) and
+                           not self._is_bool_derived(prefix_type) and
+                           not self._is_char_derived(prefix_type) and
+                           prefix_type.name not in ("Wide_Character", "Wide_Wide_Character"))
+                          or enum_literals)
                 if is_enum:
                     # Enumeration'Value - lookup string in table
                     # Generate a unique label for this enum's lookup table
@@ -23787,6 +24477,63 @@ class ASTLowering:
             # Record field store
             self._lower_selected_store(target, value)
 
+    def _get_array_element_size(self, array_type_name: str, declarations: list = None) -> int:
+        """Get the element size in bytes for a named array type.
+
+        Looks up the array type in local declarations and symbol table to determine
+        the component type's size. Returns 2 (default word size) if unknown.
+        """
+        elem_size = 2  # Default element size for Z80 word
+
+        # Check local declarations first
+        if array_type_name and declarations:
+            for d in declarations:
+                if isinstance(d, TypeDecl) and d.name.lower() == array_type_name:
+                    # Check ada_type from semantic analysis
+                    d_ada = getattr(d, 'ada_type', None)
+                    if d_ada and hasattr(d_ada, 'component_type') and d_ada.component_type:
+                        ct = d_ada.component_type
+                        ct_name = getattr(ct, 'name', '').lower()
+                        if ct_name == 'character':
+                            return 1
+                        elif ct_name in ('float', 'long_float', 'long_long_float'):
+                            return 8
+                        elif hasattr(ct, 'size_bits') and ct.size_bits:
+                            return max(1, (ct.size_bits + 7) // 8)
+                        return 2
+                    # Check raw AST type_def
+                    type_def = d.type_def
+                    if hasattr(type_def, 'component_type') and type_def.component_type:
+                        comp = type_def.component_type
+                        comp_name = ''
+                        if isinstance(comp, Identifier):
+                            comp_name = comp.name.lower()
+                        elif hasattr(comp, 'name'):
+                            comp_name = comp.name.lower()
+                        if comp_name == 'character':
+                            return 1
+                        elif comp_name in ('float', 'long_float', 'long_long_float'):
+                            return 8
+                    break
+
+        # Check symbol table
+        if array_type_name and self.symbols:
+            type_sym = self.symbols.lookup(array_type_name)
+            if type_sym and type_sym.ada_type:
+                from uada80.type_system import ArrayType as _AT
+                ada_type = type_sym.ada_type
+                if isinstance(ada_type, _AT) and ada_type.component_type:
+                    ct = ada_type.component_type
+                    ct_name = getattr(ct, 'name', '').lower()
+                    if ct_name == 'character':
+                        return 1
+                    elif ct_name in ('float', 'long_float', 'long_long_float'):
+                        return 8
+                    elif hasattr(ct, 'size_bits') and ct.size_bits:
+                        return max(1, (ct.size_bits + 7) // 8)
+
+        return elem_size
+
     def _calc_type_size(self, decl: ObjectDecl, declarations: list = None) -> int:
         """Calculate the size in bytes for a local variable declaration.
 
@@ -23808,10 +24555,15 @@ class ASTLowering:
         if isinstance(type_mark, SubtypeIndication):
             inner = getattr(type_mark, 'type_mark', None)
 
-            # Handle Slice: String(1..80) is parsed as Slice(prefix=String, range_expr=RangeExpr)
+            # Handle Slice: String(1..80) or Arr(1..3) parsed as Slice(prefix=Name, range_expr=RangeExpr)
             if isinstance(inner, Slice):
                 prefix = getattr(inner, 'prefix', None)
-                if isinstance(prefix, Identifier) and prefix.name.lower() == 'string':
+                prefix_name = None
+                if isinstance(prefix, Identifier):
+                    prefix_name = prefix.name.lower()
+                elif isinstance(prefix, SelectedName):
+                    prefix_name = prefix.selector.lower()
+                if prefix_name == 'string':
                     range_expr = getattr(inner, 'range_expr', None)
                     if range_expr:
                         # RangeExpr has 'low' and 'high' attributes
@@ -23819,6 +24571,62 @@ class ASTLowering:
                         last = self._eval_static_expr(getattr(range_expr, 'high', None))
                         if first is not None and last is not None:
                             return last - first + 1
+                elif prefix_name:
+                    # Constrained unconstrained array: Arr(1..3) parsed as Slice
+                    # Try to get element count from the constraint range
+                    range_expr = getattr(inner, 'range_expr', None)
+                    elem_count = None
+                    if range_expr:
+                        first = self._eval_static_expr(getattr(range_expr, 'low', None))
+                        last = self._eval_static_expr(getattr(range_expr, 'high', None))
+                        if first is not None and last is not None:
+                            elem_count = max(0, last - first + 1)
+                        elif first is not None or last is not None:
+                            # Try heuristic evaluation for dynamic bounds
+                            # e.g., ARR(1 .. IDENT_INT(5)) - peek into function calls
+                            hint_first = first if first is not None else self._eval_static_expr_hint(getattr(range_expr, 'low', None))
+                            hint_last = last if last is not None else self._eval_static_expr_hint(getattr(range_expr, 'high', None))
+                            if hint_first is not None and hint_last is not None:
+                                elem_count = max(0, hint_last - hint_first + 1)
+                    # If bounds not statically known, try to get count from initializer
+                    if elem_count is None and hasattr(decl, 'init_expr') and decl.init_expr:
+                        init = decl.init_expr
+                        if isinstance(init, Aggregate) and init.components:
+                            # Check for range-based named associations (e.g., (1..5 => 0))
+                            for comp in init.components:
+                                if comp.choices:
+                                    for choice in comp.choices:
+                                        if isinstance(choice, RangeChoice):
+                                            rc = getattr(choice, 'range_expr', None)
+                                            if rc:
+                                                rf = self._eval_static_expr(getattr(rc, 'low', None))
+                                                rl = self._eval_static_expr(getattr(rc, 'high', None))
+                                                if rf is not None and rl is not None:
+                                                    elem_count = max(0, rl - rf + 1)
+                                                elif rf is not None or rl is not None:
+                                                    # Try heuristic for dynamic range in init
+                                                    hf = rf if rf is not None else self._eval_static_expr_hint(getattr(rc, 'low', None))
+                                                    hl = rl if rl is not None else self._eval_static_expr_hint(getattr(rc, 'high', None))
+                                                    if hf is not None and hl is not None:
+                                                        elem_count = max(0, hl - hf + 1)
+                                        elif isinstance(choice, ExprChoice):
+                                            # Named index: (IDENT_INT(1) => 0) - try heuristic
+                                            idx_hint = self._eval_static_expr_hint(choice.expr)
+                                            if idx_hint is not None:
+                                                # Track max index to compute count
+                                                if elem_count is None:
+                                                    elem_count = 1
+                                                # This is a lower bound on count
+                            if elem_count is None:
+                                elem_count = len(init.components)
+                        elif isinstance(init, StringLiteral):
+                            elem_count = len(init.value)
+                    if elem_count is not None and elem_count > 0:
+                        # Determine element size from the array type
+                        elem_size = self._get_array_element_size(prefix_name, declarations)
+                        return elem_count * elem_size
+                    # Fall through: set type_name so the rest of the function can try
+                    type_name = prefix_name
             elif isinstance(inner, Identifier):
                 type_name = inner.name.lower()
             elif isinstance(inner, SelectedName):
@@ -24281,6 +25089,38 @@ class ASTLowering:
                 if expr.op == BinaryOp.MOD:
                     return left % right if right != 0 else None
             return None
+        return None
+
+    def _eval_static_expr_hint(self, expr) -> int | None:
+        """Try to evaluate an expression statically, with heuristic fallbacks.
+
+        Like _eval_static_expr but also peeks into function calls with single
+        literal arguments (e.g., IDENT_INT(5) -> 5). This is used for size
+        estimation where an over-estimate is safe but an under-estimate causes
+        stack corruption. Should NOT be used for semantic correctness checks.
+        """
+        # First try exact static evaluation
+        result = self._eval_static_expr(expr)
+        if result is not None:
+            return result
+        # Try to peek into function calls with a single literal argument
+        # e.g., IDENT_INT(5) or IDENT_INT(0)
+        if isinstance(expr, FunctionCall):
+            args = getattr(expr, 'arguments', None) or getattr(expr, 'args', None)
+            if args and len(args) == 1:
+                arg = args[0]
+                # Handle named parameter association (value is the actual expr)
+                actual = getattr(arg, 'value', arg) if hasattr(arg, 'value') else arg
+                result = self._eval_static_expr(actual)
+                if result is not None:
+                    return result
+        # Try IndexedComponent (function call parsed as indexed)
+        if isinstance(expr, IndexedComponent):
+            indices = getattr(expr, 'indices', None)
+            if indices and len(indices) == 1:
+                result = self._eval_static_expr(indices[0])
+                if result is not None:
+                    return result
         return None
 
     def _get_string_max_length(self, expr) -> int:

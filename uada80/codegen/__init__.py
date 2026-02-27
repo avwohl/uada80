@@ -181,7 +181,12 @@ class Z80CodeGen:
                     else:
                         # Identifier literal: uppercase per Ada Image rules
                         escaped = name.upper().replace('"', '""')
-                        self._emit(f'    DB "{escaped}", 0, {value}')
+                        # Safety: emit non-printable chars as byte values
+                        if any(ord(c) < 32 or ord(c) > 126 for c in escaped):
+                            bytes_str = ", ".join(str(ord(c)) for c in name.upper())
+                            self._emit(f"    DB {bytes_str}, 0, {value}")
+                        else:
+                            self._emit(f'    DB "{escaped}", 0, {value}')
             self._emit("")
 
         # Generate code
@@ -7101,6 +7106,12 @@ class Z80CodeGen:
         """Generate MOV instruction."""
         if not isinstance(instr.dst, VReg) or instr.src1 is None:
             return
+        # Special case: MOV vreg, _SP (get current stack pointer)
+        if isinstance(instr.src1, MemoryLocation) and instr.src1.symbol_name == "_SP":
+            self._emit_instr("ld", "hl", "0")
+            self._emit_instr("add", "hl", "sp")  # HL = SP
+            self._store_from_hl(instr.dst)
+            return
         self._load_to_hl(instr.src1)
         self._store_from_hl(instr.dst)
 
@@ -7296,13 +7307,22 @@ class Z80CodeGen:
 
     def _gen_sub(self, instr: IRInstr) -> None:
         """Generate SUB instruction."""
-        # Special case: SUB _SP, _SP, immediate (stack allocation for aggregates)
+        # Special case: SUB _SP, _SP, value (stack allocation)
         if isinstance(instr.dst, MemoryLocation) and instr.dst.symbol_name == "_SP":
             if isinstance(instr.src2, Immediate):
                 size = instr.src2.value
                 # Allocate stack space: sp := sp - size
                 self._emit_instr("ld", "hl", f"-{size}")
                 self._emit_instr("add", "hl", "sp")
+                self._emit_instr("ld", "sp", "hl")
+                return
+            # Dynamic size in VReg: sp := sp - vreg
+            if isinstance(instr.src2, VReg):
+                self._load_to_de(instr.src2)
+                self._emit_instr("ld", "hl", "0")
+                self._emit_instr("add", "hl", "sp")
+                self._emit_instr("or", "a")
+                self._emit_instr("sbc", "hl", "de")
                 self._emit_instr("ld", "sp", "hl")
                 return
         if not isinstance(instr.dst, VReg):

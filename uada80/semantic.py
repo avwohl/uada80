@@ -3949,12 +3949,18 @@ class SemanticAnalyzer:
         # Handle derivation from integer type
         if isinstance(parent, IntegerType):
             low, high = parent.low, parent.high
+            constraint_low_expr = None
+            constraint_high_expr = None
             # Apply explicit RANGE constraint if present
             if type_def.constraint and isinstance(type_def.constraint, RangeExpr):
                 clow = self._try_eval_static(type_def.constraint.low)
                 chigh = self._try_eval_static(type_def.constraint.high)
                 if isinstance(clow, int) and isinstance(chigh, int):
                     low, high = clow, chigh
+                else:
+                    # Store AST for dynamic constraint evaluation during lowering
+                    constraint_low_expr = type_def.constraint.low
+                    constraint_high_expr = type_def.constraint.high
             return IntegerType(
                 name=name,
                 size_bits=parent.size_bits,
@@ -3962,6 +3968,8 @@ class SemanticAnalyzer:
                 high=high,
                 base_type=parent,
                 is_derived=True,
+                constraint_low_expr=constraint_low_expr,
+                constraint_high_expr=constraint_high_expr,
             )
 
         # Handle derivation from enumeration type (e.g., type MyBool is new Boolean)
@@ -3970,6 +3978,8 @@ class SemanticAnalyzer:
         if isinstance(parent, EnumerationType):
             first_pos = None
             last_pos = None
+            constraint_low_expr = None
+            constraint_high_expr = None
             # Apply explicit RANGE constraint if present
             # e.g., type T is new ENUM range E3..E4
             if type_def.constraint and isinstance(type_def.constraint, RangeExpr):
@@ -3992,6 +4002,10 @@ class SemanticAnalyzer:
                     v = self._try_eval_static(high_expr)
                     if isinstance(v, int):
                         last_pos = v
+                # If static eval failed, store AST for dynamic evaluation
+                if first_pos is None or last_pos is None:
+                    constraint_low_expr = low_expr
+                    constraint_high_expr = high_expr
             # If explicit constraint couldn't be evaluated, inherit parent's bounds
             if first_pos is None and parent.first is not None:
                 first_pos = parent.first
@@ -4013,6 +4027,8 @@ class SemanticAnalyzer:
                 first=first_pos if isinstance(first_pos, int) else None,
                 last=last_pos if isinstance(last_pos, int) else None,
                 char_literals=parent.char_literals.copy() if parent.char_literals else set(),
+                constraint_low_expr=constraint_low_expr,
+                constraint_high_expr=constraint_high_expr,
             )
 
         # Handle tagged type derivation with record extension and interfaces
@@ -4574,6 +4590,21 @@ class SemanticAnalyzer:
                             first=enum_low,
                             last=enum_high,
                             char_literals=base_type.char_literals.copy() if hasattr(base_type, 'char_literals') and base_type.char_literals else set(),
+                        )
+                # Handle FloatType with float bounds from range constraint
+                if isinstance(base_type, FloatType):
+                    low = self._try_eval_static(range_expr.low)
+                    high = self._try_eval_static(range_expr.high)
+                    if low is not None and high is not None:
+                        flow = float(low)
+                        fhigh = float(high)
+                        return FloatType(
+                            name=base_type.name,
+                            size_bits=base_type.size_bits,
+                            digits=base_type.digits,
+                            range_first=flow,
+                            range_last=fhigh,
+                            base_type=base_type,
                         )
                 # Handle FixedType with float bounds from range constraint
                 if isinstance(base_type, FixedType):
