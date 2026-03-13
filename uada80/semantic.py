@@ -3977,16 +3977,15 @@ class SemanticAnalyzer:
             from uada80.type_system import IntegerType
             from uada80.ast_nodes import RangeExpr
             if isinstance(designated, IntegerType) and isinstance(type_def.constraint, RangeExpr):
-                try:
-                    low = int(self._eval_static_expr(type_def.constraint.low))
-                    high = int(self._eval_static_expr(type_def.constraint.high))
+                # Use non-reporting eval — bounds may be non-static (evaluated at runtime)
+                low_val = self._eval_static_impl(type_def.constraint.low, report_errors=False)
+                high_val = self._eval_static_impl(type_def.constraint.high, report_errors=False)
+                if low_val is not None and high_val is not None:
                     designated = IntegerType(
                         name=f"{name}_designated",
                         size_bits=designated.size_bits,
-                        low=low, high=high
+                        low=int(low_val), high=int(high_val)
                     )
-                except (TypeError, ValueError):
-                    pass  # Non-static bounds — skip constraint
 
         return AccessType(
             name=name,

@@ -1525,21 +1525,37 @@ _s2i_check_plus:
 _s2i_start:
     ; DE = result (accumulator), start at 0
     LD DE, 0
+    XOR A
+    LD (_s2i_uscore), A     ; clear underscore flag
     PUSH BC                 ; Save sign flag
 
 _s2i_loop:
     LD A, (HL)
-    ; Skip underscores (Ada numeric separators)
+    ; Check for underscores (Ada numeric separators)
     CP '_'
     JR NZ, _s2i_chkd
+    ; Underscore: check for leading/consecutive
+    LD A, (_s2i_uscore)
+    BIT 0, A
+    JR NZ, _s2i_uerr        ; consecutive underscore (bit 0 already set)
+    BIT 1, A
+    JR Z, _s2i_uerr         ; leading underscore (no digits seen, bit 1 clear)
+    OR 1                    ; set bit 0 (underscore pending)
+    LD (_s2i_uscore), A
     INC HL
     JR _s2i_loop
 _s2i_chkd:
     ; Check if digit (0-9)
     CP '0'
-    JR C, _s2i_done         ; < '0', not a digit
+    JR C, _s2i_done_chk     ; < '0', not a digit
     CP '9'+1
-    JR NC, _s2i_done        ; > '9', not a digit
+    JR NC, _s2i_done_chk    ; > '9', not a digit
+
+    ; Digit seen: clear underscore flag (bit 0), set have-digits (bit 1)
+    PUSH AF
+    LD A, 2                 ; bit 1 = have digits, bit 0 = no pending underscore
+    LD (_s2i_uscore), A
+    POP AF
 
     ; A is a digit, convert to value
     SUB '0'
@@ -1565,8 +1581,207 @@ _s2i_chkd:
     INC HL                  ; Next character
     JR _s2i_loop
 
+_s2i_done_chk:
+    ; Check for trailing underscore (bit 0 of flag)
+    PUSH AF
+    LD A, (_s2i_uscore)
+    BIT 0, A
+    JR NZ, _s2i_uerr2       ; trailing underscore before non-digit
+    POP AF
 _s2i_done:
-    ; HL points to first non-digit; skip trailing whitespace
+    ; HL points to first non-digit/non-underscore
+    ; Set default base to 10 for exponent handling
+    LD A, 10
+    LD (_s2i_base), A
+    ; Check for '#' (based literal: digits parsed so far = base)
+    LD A, (HL)
+    CP '#'
+    JR Z, _s2i_based
+    ; Check for 'E' or 'e' (exponent)
+    CP 'E'
+    JR Z, _s2i_exp
+    CP 'e'
+    JR Z, _s2i_exp
+    ; Fall through to trailing whitespace check
+    JR _s2i_tws
+
+_s2i_based:
+    ; DE = base (2-16), HL points to '#'
+    ; Validate base range
+    LD A, D
+    OR A
+    JR NZ, _s2i_bad_base    ; base > 255
+    LD A, E
+    CP 2
+    JR C, _s2i_bad_base     ; base < 2
+    CP 17
+    JR NC, _s2i_bad_base    ; base > 16
+    ; Save base in C
+    LD C, E
+    INC HL                  ; skip '#'
+    LD DE, 0                ; reset accumulator for based digits
+    ; Reset underscore flag for based part (bit 1=0 no digits yet)
+    XOR A
+    LD (_s2i_uscore), A
+_s2i_bloop:
+    LD A, (HL)
+    CP '_'
+    JR NZ, _s2i_bchk
+    ; Underscore in based literal
+    LD A, (_s2i_uscore)
+    BIT 0, A
+    JR NZ, _s2i_uerr        ; consecutive underscore
+    BIT 1, A
+    JR Z, _s2i_uerr         ; leading underscore in based part
+    OR 1
+    LD (_s2i_uscore), A
+    INC HL
+    JR _s2i_bloop
+_s2i_bchk:
+    CP '#'
+    JR Z, _s2i_bchk2        ; closing '#' — check trailing underscore
+    JR _s2i_bchk3
+_s2i_bchk2:
+    ; Check trailing underscore before '#'
+    PUSH AF
+    LD A, (_s2i_uscore)
+    BIT 0, A
+    JR NZ, _s2i_uerr2       ; underscore before '#'
+    POP AF
+    JR _s2i_bend             ; closing '#'
+_s2i_bchk3:
+    ; Convert hex digit
+    CP '0'
+    JR C, _s2i_berr
+    CP '9'+1
+    JR C, _s2i_bdig         ; '0'-'9'
+    CP 'A'
+    JR C, _s2i_berr
+    CP 'F'+1
+    JR C, _s2i_bhex         ; 'A'-'F'
+    CP 'a'
+    JR C, _s2i_berr
+    CP 'f'+1
+    JR C, _s2i_bhxl         ; 'a'-'f'
+    JR _s2i_berr
+_s2i_bdig:
+    SUB '0'
+    JR _s2i_badd
+_s2i_bhex:
+    SUB 'A'-10
+    JR _s2i_badd
+_s2i_bhxl:
+    SUB 'a'-10
+_s2i_badd:
+    ; A = digit value, check < base (in C)
+    CP C
+    JR NC, _s2i_berr        ; digit >= base
+    ; Clear underscore flag, set have-digits
+    PUSH AF
+    LD A, 2                 ; bit 1=have digits, bit 0=no underscore
+    LD (_s2i_uscore), A
+    POP AF
+    ; DE = DE * base + A
+    PUSH HL
+    PUSH AF                 ; save digit
+    ; Multiply DE by C (base)
+    ; Use HL for multiply: HL = DE * C
+    LD H, D
+    LD L, E                 ; HL = current value
+    LD B, C
+    DEC B                   ; loop B-1 times
+    JR Z, _s2i_bmskip
+_s2i_bmlp:
+    ADD HL, DE
+    DJNZ _s2i_bmlp
+_s2i_bmskip:
+    ; HL = DE * base
+    POP AF                  ; restore digit
+    LD D, 0
+    LD E, A
+    ADD HL, DE              ; HL = value * base + digit
+    EX DE, HL               ; DE = new value
+    POP HL
+    INC HL
+    JR _s2i_bloop
+_s2i_bend:
+    INC HL                  ; skip closing '#'
+    ; Save base for exponent (base^exp, not 10^exp)
+    LD A, C
+    LD (_s2i_base), A
+    ; Check for exponent after based literal
+    LD A, (HL)
+    CP 'E'
+    JR Z, _s2i_exp
+    CP 'e'
+    JR Z, _s2i_exp
+    JR _s2i_tws
+_s2i_uerr2:
+    POP AF                  ; balance saved AF
+_s2i_uerr:
+_s2i_berr:
+_s2i_bad_base:
+    POP BC                  ; balance sign flag push
+    POP IX
+    JP _raise_constraint_error
+
+_s2i_exp:
+    ; DE = current value, HL points to 'E'/'e'
+    INC HL                  ; skip 'E'
+    ; Parse exponent (must be non-negative integer for Integer'Value)
+    LD A, (HL)
+    CP '+'
+    JR NZ, _s2i_edig
+    INC HL                  ; skip optional '+'
+_s2i_edig:
+    ; Parse exponent digits into B
+    LD B, 0
+_s2i_elp:
+    LD A, (HL)
+    CP '0'
+    JR C, _s2i_edone
+    CP '9'+1
+    JR NC, _s2i_edone
+    SUB '0'
+    ; B = B * 10 + A
+    PUSH DE
+    LD C, A                 ; save digit
+    LD A, B
+    ADD A, A                ; A*2
+    ADD A, A                ; A*4
+    ADD A, B                ; A*5
+    ADD A, A                ; A*10
+    ADD A, C                ; A*10 + digit
+    LD B, A
+    POP DE
+    INC HL
+    JR _s2i_elp
+_s2i_edone:
+    ; B = exponent, DE = value, multiply DE by base^B
+    LD A, B
+    OR A
+    JR Z, _s2i_tws          ; exponent 0, no multiply
+_s2i_emul:
+    ; Multiply DE by base (from _s2i_base)
+    PUSH HL
+    LD A, (_s2i_base)
+    LD C, A                 ; C = base
+    ; HL = DE * C using repeated addition
+    LD H, D
+    LD L, E                 ; HL = DE (value)
+    DEC C                   ; loop C-1 times
+    JR Z, _s2i_emsk
+_s2i_emlp:
+    ADD HL, DE
+    DEC C
+    JR NZ, _s2i_emlp
+_s2i_emsk:
+    EX DE, HL               ; DE = value * base
+    POP HL
+    DJNZ _s2i_emul
+    JR _s2i_tws
+
+    ; Skip trailing whitespace
 _s2i_tws:
     LD A, (HL)
     CP ' '
@@ -3476,6 +3691,12 @@ _exc_current:
     DW 0                    ; Current exception ID (1=Constraint_Error, etc)
 _exc_message:
     DW 0                    ; Pointer to exception message string
+
+; Integer'Value base storage for based/exponent parsing
+_s2i_base:
+    DB 10                   ; Default base 10
+_s2i_uscore:
+    DB 0                    ; Underscore flag for validation
 
 ; Integer to string conversion buffer
 _int_str_buf:

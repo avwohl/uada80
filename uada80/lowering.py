@@ -2160,7 +2160,15 @@ class ASTLowering:
         if hasattr(self, '_pending_pkg_inits') and self._pending_pkg_inits and self.ctx:
             inst_pkg_name = inst.name.replace(".", "_")
             self._package_prefix_stack.append(inst_pkg_name)
-            for global_name, init_expr in self._pending_pkg_inits:
+            for pending in self._pending_pkg_inits:
+                if len(pending) == 3:
+                    global_name, init_expr, init_ada_type = pending
+                else:
+                    global_name, init_expr = pending
+                    init_ada_type = None
+                if init_ada_type and isinstance(init_expr, Aggregate):
+                    if not getattr(init_expr, 'resolved_type', None):
+                        init_expr.resolved_type = init_ada_type
                 value = self._lower_expr(init_expr)
                 global_size = 2
                 if self.builder.module and global_name in self.builder.module.globals:
@@ -2321,7 +2329,15 @@ class ASTLowering:
         if hasattr(self, '_pending_pkg_inits') and self._pending_pkg_inits and self.ctx:
             inst_pkg_name = inst.name.replace(".", "_")
             self._package_prefix_stack.append(inst_pkg_name)
-            for global_name, init_expr in self._pending_pkg_inits:
+            for pending in self._pending_pkg_inits:
+                if len(pending) == 3:
+                    global_name, init_expr, init_ada_type = pending
+                else:
+                    global_name, init_expr = pending
+                    init_ada_type = None
+                if init_ada_type and isinstance(init_expr, Aggregate):
+                    if not getattr(init_expr, 'resolved_type', None):
+                        init_expr.resolved_type = init_ada_type
                 value = self._lower_expr(init_expr)
                 global_size = 2
                 if self.builder.module and global_name in self.builder.module.globals:
@@ -18108,6 +18124,25 @@ class ASTLowering:
             if self._is_float64_type(arg_type):
                 # Float64 sqrt - call _f64_sqrt
                 return self._lower_float64_sqrt(expr.args[0].value)
+            # If arg type unknown but function is from Elementary_Functions, assume Float64
+            if arg_type is None or (hasattr(arg_type, '__class__') and arg_type.__class__.__name__ == 'FloatType'):
+                # Check if called from Elementary_Functions package
+                is_elem_func = False
+                if isinstance(expr.name, SelectedName):
+                    # Package-qualified: Ada.Numerics.Elementary_Functions.Sqrt
+                    is_elem_func = True
+                elif sym and hasattr(sym, 'package_name') and sym.package_name and 'elementary' in sym.package_name.lower():
+                    is_elem_func = True
+                else:
+                    # Could be via use clause — check if there's a sqrt in scope from Elementary_Functions
+                    sqrt_sym = self.symbols.lookup("sqrt")
+                    if sqrt_sym and hasattr(sqrt_sym, 'package_name') and sqrt_sym.package_name and 'elementary' in sqrt_sym.package_name.lower():
+                        is_elem_func = True
+                    elif sqrt_sym is None:
+                        # No user-defined sqrt — assume it's Elementary_Functions
+                        is_elem_func = True
+                if is_elem_func:
+                    return self._lower_float64_sqrt(expr.args[0].value)
 
         # Check if this is a protected type function call (Counter.Value)
         if isinstance(expr.name, SelectedName):
