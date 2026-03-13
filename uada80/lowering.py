@@ -1452,6 +1452,8 @@ class ASTLowering:
                         pkg_name = self._get_hierarchical_name(pkg_name_expr)
                         if pkg_name:
                             use_pkg_sym = self._resolve_package_name(pkg_name)
+                            if not use_pkg_sym:
+                                use_pkg_sym = self._find_local_package_symbol(pkg_name)
                             if use_pkg_sym and use_pkg_sym.kind in (SymbolKind.PACKAGE, SymbolKind.GENERIC_PACKAGE):
                                 try:
                                     self.symbols.add_use_clause(use_pkg_sym)
@@ -2809,6 +2811,10 @@ class ASTLowering:
                 pkg_name = self._get_hierarchical_name(pkg_name_expr)
                 if pkg_name:
                     pkg_sym = self._resolve_package_name(pkg_name)
+                    if not pkg_sym:
+                        # Fall back to local package declarations (lowering
+                        # scopes are fresh and don't inherit semantic symbols)
+                        pkg_sym = self._find_local_package_symbol(pkg_name)
                     if pkg_sym and pkg_sym.kind in (SymbolKind.PACKAGE, SymbolKind.GENERIC_PACKAGE):
                         try:
                             self.symbols.add_use_clause(pkg_sym)
@@ -4861,6 +4867,8 @@ class ASTLowering:
                     use_pkg_name = self._get_hierarchical_name(pkg_name_expr)
                     if use_pkg_name:
                         pkg_sym = self._resolve_package_name(use_pkg_name)
+                        if not pkg_sym:
+                            pkg_sym = self._find_local_package_symbol(use_pkg_name)
                         if pkg_sym and pkg_sym.kind in (SymbolKind.PACKAGE, SymbolKind.GENERIC_PACKAGE):
                             try:
                                 self.symbols.add_use_clause(pkg_sym)
@@ -7247,10 +7255,17 @@ class ASTLowering:
                     pkg_name = self._get_hierarchical_name(pkg_name_expr)
                     if pkg_name:
                         pkg_sym = self.symbols.lookup(pkg_name)
+                        if not pkg_sym:
+                            pkg_sym = self._find_local_package_symbol(pkg_name)
                         if pkg_sym and hasattr(pkg_sym, 'public_symbols'):
                             for sym_name, sym_val in pkg_sym.public_symbols.items():
                                 try:
                                     self.symbols.define(sym_val)
+                                except Exception:
+                                    pass
+                            if pkg_sym.kind in (SymbolKind.PACKAGE, SymbolKind.GENERIC_PACKAGE):
+                                try:
+                                    self.symbols.add_use_clause(pkg_sym)
                                 except Exception:
                                     pass
 
@@ -9112,6 +9127,60 @@ class ASTLowering:
         if isinstance(current, Identifier):
             parts.insert(0, current.name)
         return ".".join(parts)
+
+    def _find_local_package_symbol(self, pkg_name: str) -> Optional[Symbol]:
+        """Search body declarations for a local PackageDecl and build a Symbol.
+
+        During lowering, enter_scope creates fresh empty scopes, so local
+        packages declared in the same subprogram body aren't in the symbol
+        table.  This method searches the declarations stack for a matching
+        PackageDecl and synthesises a PACKAGE Symbol with public_symbols
+        populated from its type/subprogram declarations.
+        """
+        pkg_name_lower = pkg_name.lower()
+        for decl_list in self._body_declarations_stack:
+            for d in decl_list:
+                if isinstance(d, PackageDecl) and d.name and d.name.lower() == pkg_name_lower:
+                    # Found the local package declaration - build a synthetic Symbol
+                    sym = Symbol(name=pkg_name, kind=SymbolKind.PACKAGE)
+                    # Collect public types, subtypes, functions, procedures
+                    for pd in d.declarations:
+                        dname = None
+                        if isinstance(pd, TypeDecl):
+                            dname = pd.name.lower() if isinstance(pd.name, str) else pd.name.name.lower()
+                            tsym = Symbol(name=dname, kind=SymbolKind.TYPE)
+                            # Resolve ada_type from the semantic symbol table if possible
+                            full_name = f"{pkg_name_lower}.{dname}"
+                            lookup_sym = self.symbols.lookup(full_name) or self.symbols.lookup(dname)
+                            if lookup_sym and lookup_sym.ada_type:
+                                tsym.ada_type = lookup_sym.ada_type
+                            sym.public_symbols[dname] = tsym
+                        elif isinstance(pd, SubtypeDecl):
+                            dname = pd.name.lower() if isinstance(pd.name, str) else str(pd.name).lower()
+                            ssym = Symbol(name=dname, kind=SymbolKind.SUBTYPE)
+                            lookup_sym = self.symbols.lookup(dname)
+                            if lookup_sym and lookup_sym.ada_type:
+                                ssym.ada_type = lookup_sym.ada_type
+                            sym.public_symbols[dname] = ssym
+                        elif isinstance(pd, SubprogramDecl):
+                            dname = pd.name.lower() if isinstance(pd.name, str) else str(pd.name).lower()
+                            skind = SymbolKind.FUNCTION if pd.is_function else SymbolKind.PROCEDURE
+                            fsym = Symbol(name=dname, kind=skind)
+                            sym.public_symbols[dname] = fsym
+                    # Also check private declarations (PARENT is declared
+                    # as private; for 'use' the *full* view is needed)
+                    for pd in getattr(d, 'private_declarations', []) or []:
+                        dname = None
+                        if isinstance(pd, TypeDecl):
+                            dname = pd.name.lower() if isinstance(pd.name, str) else pd.name.name.lower()
+                            if dname not in sym.public_symbols:
+                                tsym = Symbol(name=dname, kind=SymbolKind.TYPE)
+                                lookup_sym = self.symbols.lookup(dname)
+                                if lookup_sym and lookup_sym.ada_type:
+                                    tsym.ada_type = lookup_sym.ada_type
+                                sym.public_symbols[dname] = tsym
+                    return sym
+        return None
 
     def _resolve_package_name(self, pkg_name: str) -> Optional[Symbol]:
         """Resolve a package name, handling dotted hierarchical names.
@@ -19475,6 +19544,22 @@ class ASTLowering:
                         return Immediate(width, IRType.WORD)
                 # Fallback: return 0
                 return Immediate(0, IRType.WORD)
+
+        # Handle chained attributes like T'Image(X)'Length
+        # When prefix is an AttributeReference (not BASE, handled above), lower it
+        # and apply the outer attribute
+        if isinstance(expr.prefix, AttributeReference):
+            inner_attr = expr.prefix.attribute.lower()
+            if inner_attr != "base" and attr == "length":
+                # T'Image(X)'Length — lower the inner attribute to get a string,
+                # then get its length at runtime via _strlen
+                inner_val = self._lower_attribute(expr.prefix)
+                # inner_val should be a pointer to a string (from _c_img, _i2s, etc.)
+                result = self.builder.new_vreg(IRType.WORD, "_attr_length")
+                self.builder.push(inner_val)
+                self.builder.call(Label("_strlen"), comment="string length of attribute")
+                self.builder.pop(result)
+                return result
 
         if isinstance(expr.prefix, Identifier):
             # First check local variables (higher priority)
