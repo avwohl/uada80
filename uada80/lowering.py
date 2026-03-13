@@ -1235,6 +1235,14 @@ class ASTLowering:
 
         from uada80.type_system import RecordType as RecordTypeClass
         is_record = param_type and isinstance(param_type, RecordTypeClass)
+        # Constrained arrays > 2 bytes must also be passed by reference
+        # (they don't fit in a single WORD register)
+        is_large_array = (
+            param_type and
+            isinstance(param_type, ArrayType) and
+            param_type.is_constrained and
+            param_type.size_bytes() > 2
+        )
 
         for name in param.names:
             # Track parameter type for field offset lookup
@@ -1272,17 +1280,17 @@ class ASTLowering:
 
                 # Mark as unconstrained for call site lookup
                 self.ctx.unconstrained_params[name.lower()] = True
-            elif is_byref or is_record:
-                # Out/in out parameter or record type: pass by reference (pointer)
+            elif is_byref or is_record or is_large_array:
+                # Out/in out parameter, record type, or large array: pass by reference (pointer)
                 vreg = self.builder.new_vreg(IRType.PTR, f"{name}_ptr")
                 self.ctx.params[name.lower()] = vreg
                 # Only mark as byref (triggers dereference) for scalar out/in-out params.
-                # Record "in" params are passed as pointers but should NOT be dereferenced
-                # -- the pointer itself IS the value used for field access and comparison.
+                # Record "in" params and large array "in" params are passed as pointers
+                # but should NOT be dereferenced — the pointer is used for field/element access.
                 if is_byref:
                     self.ctx.byref_params[name.lower()] = True
-                # Track record-type params so call sites know to pass address
-                if is_record:
+                # Track record-type and large-array params so call sites know to pass address
+                if is_record or is_large_array:
                     self.ctx.record_params.add(name.lower())
                 self.ctx.function.params.append(vreg)
             else:
@@ -3171,6 +3179,18 @@ class ASTLowering:
                                 bounds=bounds,
                                 is_constrained=True,
                             )
+                        # If the index subtype has dynamic constraint expressions
+                        # (e.g., IDENT_INT(11)..13), and this is a positional aggregate,
+                        # compute the bounds at runtime and store as dynamic_bounds.
+                        # Per Ada RM 4.3.3(6): lower bound = index subtype 'FIRST.
+                        if (isinstance(decl.init_expr, Aggregate)
+                                and hasattr(ada_type, 'index_types') and ada_type.index_types):
+                            dyn_bounds = self._compute_dynamic_aggregate_bounds(
+                                decl.init_expr, ada_type)
+                            if dyn_bounds:
+                                local.dynamic_bounds = dyn_bounds
+                                # Also update ada_type to avoid stale static bounds
+                                # being used when dynamic_bounds exists
 
                     # For controlled types with initializer, call Adjust
                     # (Initialize is for default initialization only)
@@ -3656,6 +3676,21 @@ class ASTLowering:
         # Restore builder state
         self.builder.function = old_function
         self.builder.block = old_block
+
+        # Register the renaming stub in _nested_subprogram_labels so that
+        # subsequent calls to the renamed function within the same scope
+        # resolve to this stub (or its forwarding target).  Without this,
+        # calls after the renaming declaration still see the old label
+        # (e.g., the inherited primitive from before the renaming).
+        renamed_lower = self._mangle_operator_name(decl.name.lower())
+        if enum_literal_value is not None:
+            # For enum literal renamings, use the stub name directly
+            self._nested_subprogram_labels[renamed_lower] = stub_name
+        elif target_label:
+            # For forwarding stubs, point directly to the target
+            # (the stub just does JP target, so calling the target directly
+            # produces the same result)
+            self._nested_subprogram_labels[renamed_lower] = target_label
 
     def _find_enum_literal_in_decls(self, literal_name: str) -> Optional[int]:
         """Search current declarations for an enum literal with the given name.
@@ -7112,6 +7147,13 @@ class ASTLowering:
         # This allows proper Ada block-scoped shadowing with case-insensitive names
         shadowed_locals: dict[str, LocalVariable] = {}
 
+        # Snapshot _nested_subprogram_labels so that labels registered inside
+        # this block (e.g., package-local function bodies) don't leak into
+        # sibling DECLARE blocks.  Without this, an explicit function F in
+        # block 1 overwrites the inherited-F mapping and later blocks see
+        # the wrong label for their own inherited operations.
+        saved_nested_labels = dict(self._nested_subprogram_labels)
+
         # Pre-register type declarations in the symbol table so that
         # _resolve_local_type can find them during object allocation.
         # Block-scoped types (declared in DECLARE ... BEGIN ... END) need
@@ -7242,6 +7284,18 @@ class ASTLowering:
         # Restore shadowed locals after block exits
         for name_lower, saved_local in shadowed_locals.items():
             self.ctx.locals[name_lower] = saved_local
+
+        # Restore _nested_subprogram_labels: revert entries that were
+        # changed or added by this block, so sibling blocks start clean.
+        # Labels for subprograms defined *before* this block (e.g., P.F)
+        # keep their original mapping.
+        for key in list(self._nested_subprogram_labels):
+            if key not in saved_nested_labels:
+                # New key added by block — remove it
+                del self._nested_subprogram_labels[key]
+            elif self._nested_subprogram_labels[key] != saved_nested_labels[key]:
+                # Changed by block — restore original
+                self._nested_subprogram_labels[key] = saved_nested_labels[key]
 
     def _lower_block_with_handlers(
         self, statements: list[Stmt], handlers: list[ExceptionHandler]
@@ -8745,11 +8799,22 @@ class ASTLowering:
                 self.builder.sub(last_val, last_val, Immediate(1, IRType.WORD))
         elif isinstance(expr, Aggregate):
             # Array aggregate: get bounds from the resolved array type
+            # Per Ada RM 4.3.3(6): for positional aggregates, the lower bound
+            # is the index subtype's 'FIRST.
             agg_type = getattr(expr, 'resolved_type', None)
             num_elems = len(expr.components) if expr.components else 0
             if isinstance(agg_type, ArrayType) and agg_type.index_types:
                 idx = agg_type.index_types[0]
-                if hasattr(idx, 'low') and idx.low is not None and hasattr(idx, 'high') and idx.high is not None:
+                # Use _get_index_subtype_bounds for consistent handling of
+                # dynamic constraint expressions
+                isb = self._get_index_subtype_bounds(idx, expr, 0)
+                if isb is not None:
+                    first_val, last_val = isb
+                elif agg_type.is_constrained and agg_type.bounds:
+                    low, high = agg_type.bounds[0]
+                    first_val = Immediate(low, IRType.WORD)
+                    last_val = Immediate(high, IRType.WORD)
+                elif hasattr(idx, 'low') and idx.low is not None and hasattr(idx, 'high') and idx.high is not None:
                     # Sanity check: bounds should match element count for positional aggregates
                     span = idx.high - idx.low + 1
                     if num_elems > 0 and span == num_elems:
@@ -8762,15 +8827,9 @@ class ASTLowering:
                     else:
                         first_val = Immediate(idx.low, IRType.WORD)
                         last_val = Immediate(idx.high, IRType.WORD)
-                elif agg_type.is_constrained and agg_type.bounds:
-                    low, high = agg_type.bounds[0]
-                    first_val = Immediate(low, IRType.WORD)
-                    last_val = Immediate(high, IRType.WORD)
                 else:
                     # Unconstrained — use index subtype's first + element count
-                    idx_first = getattr(idx, 'low', 1) if idx else 1
-                    if idx_first is None:
-                        idx_first = 1
+                    idx_first = self._get_index_subtype_first(idx)
                     first_val = Immediate(idx_first, IRType.WORD)
                     last_val = Immediate(idx_first + num_elems - 1, IRType.WORD) if num_elems > 0 else Immediate(0, IRType.WORD)
             else:
@@ -8783,6 +8842,86 @@ class ASTLowering:
             last_val = Immediate(0, IRType.WORD)
 
         return (first_val, last_val, ptr_val)
+
+    def _get_index_subtype_first(self, idx_type) -> int:
+        """Get the 'FIRST value of an index subtype, handling dynamic constraints.
+
+        For subtypes with constraint_low_expr (dynamic bounds), try to extract
+        the static value from the AST. Falls back to the idx_type.low which may
+        be the base type range if the constraint was dynamic.
+        """
+        from uada80.ast_nodes import IntegerLiteral as _ILit
+        # Check for constraint expression first (handles dynamic subtypes)
+        cle = getattr(idx_type, 'constraint_low_expr', None)
+        if cle is not None:
+            if isinstance(cle, _ILit):
+                return cle.value
+            # For non-literal constraints, we can't statically determine the value
+            # Fall through to use low, which may be the base type's low
+        # Check if this is a proper subtype with its own range (not the base Integer range)
+        low = getattr(idx_type, 'low', None)
+        base = getattr(idx_type, 'base_type', None)
+        if low is not None:
+            # If low matches the base type's full range, it's likely not the subtype's actual bound
+            if base is not None and hasattr(base, 'low') and low == base.low:
+                # The subtype didn't get its low set (dynamic bound) — default to 1
+                return 1
+            return low
+        return 1
+
+    def _get_index_subtype_bounds(self, idx_type, agg_expr, dim: int):
+        """Get (first, last) bounds for an index subtype of a positional aggregate.
+
+        For positional aggregates, Ada RM 4.3.3(6) says the lower bound is the
+        index subtype's 'FIRST and the upper bound is first + count - 1.
+
+        Returns (Immediate, Immediate) tuple, or None if bounds must be computed dynamically.
+        """
+        from uada80.ast_nodes import IntegerLiteral as _ILit
+        # Count elements in this dimension
+        if dim == 0:
+            n = len(agg_expr.components) if agg_expr.components else 0
+        elif dim == 1 and agg_expr.components:
+            inner = agg_expr.components[0].value if agg_expr.components[0] else None
+            if isinstance(inner, Aggregate):
+                n = len(inner.components) if inner.components else 0
+            else:
+                n = 1
+        else:
+            n = 1
+
+        # Try to get the index subtype's 'FIRST
+        low = getattr(idx_type, 'low', None)
+        high = getattr(idx_type, 'high', None)
+        base = getattr(idx_type, 'base_type', None)
+        cle = getattr(idx_type, 'constraint_low_expr', None)
+        che = getattr(idx_type, 'constraint_high_expr', None)
+
+        # If constraint expressions exist, try to use them
+        if cle is not None:
+            if isinstance(cle, _ILit):
+                first = cle.value
+            else:
+                # Dynamic lower bound — need to evaluate at runtime
+                first_vreg = self._lower_expr(cle)
+                if n > 0:
+                    last_vreg = self.builder.new_vreg(IRType.WORD, f"_agg_last_d{dim}")
+                    self.builder.add(last_vreg, first_vreg, Immediate(n - 1, IRType.WORD))
+                    return (first_vreg, last_vreg)
+                return (first_vreg, first_vreg)
+        elif low is not None and base is not None and hasattr(base, 'low') and low != base.low:
+            # Subtype has its own range, not the base type range
+            first = low
+        elif low is not None and base is None:
+            # No base type — use low directly
+            first = low
+        else:
+            return None  # Can't determine
+
+        # Static bounds
+        if n > 0:
+            return (Immediate(first, IRType.WORD), Immediate(first + n - 1, IRType.WORD))
+        return (Immediate(first, IRType.WORD), Immediate(first, IRType.WORD))
 
     def _get_param_ndims(self, sym, forward_idx: int, func_name: str) -> int:
         """Get the number of dimensions for an unconstrained array parameter."""
@@ -8857,6 +8996,40 @@ class ASTLowering:
                             result.append((Immediate(low, IRType.WORD), Immediate(high, IRType.WORD)))
                         else:
                             result.append((Immediate(1, IRType.WORD), Immediate(0, IRType.WORD)))
+                    return result
+
+        # For Aggregate expressions with a resolved multi-dim array type,
+        # extract bounds from each dimension's index subtype.
+        if isinstance(expr, Aggregate):
+            agg_type = getattr(expr, 'resolved_type', None)
+            if isinstance(agg_type, ArrayType) and agg_type.index_types:
+                for dim in range(ndims):
+                    if dim < len(agg_type.index_types):
+                        idx = agg_type.index_types[dim]
+                        dim_bounds = self._get_index_subtype_bounds(idx, expr, dim)
+                        if dim_bounds is not None:
+                            result.append(dim_bounds)
+                        else:
+                            # Count elements in this dimension
+                            if dim == 0:
+                                n = len(expr.components)
+                            elif dim == 1 and expr.components:
+                                # For 2D, count inner aggregate elements
+                                inner = expr.components[0].value if expr.components[0] else None
+                                if isinstance(inner, Aggregate):
+                                    n = len(inner.components)
+                                else:
+                                    n = 1
+                            else:
+                                n = 1
+                            idx_first = self._get_index_subtype_first(idx)
+                            result.append((
+                                Immediate(idx_first, IRType.WORD),
+                                Immediate(idx_first + n - 1, IRType.WORD)
+                            ))
+                    else:
+                        result.append((Immediate(1, IRType.WORD), Immediate(0, IRType.WORD)))
+                if result:
                     return result
 
         # Fallback: use _get_array_dope_vector for dim 1, defaults for rest
@@ -13116,20 +13289,14 @@ class ASTLowering:
 
         On Z80, predefined float types (Float, Long_Float, Long_Long_Float) use
         the Float64 runtime. Derived types from these also use Float64.
-        Independent float type declarations (TYPE F IS DIGITS 3) use fixed-point.
+        Independent float type declarations (TYPE F IS DIGITS 3) also use Float64
+        since there is no FP hardware on Z80.
         """
         if ada_type is None:
             return False
         from uada80.type_system import FloatType
         if isinstance(ada_type, FloatType):
-            # Predefined float types use Float64 runtime
-            if ada_type.name in ('Float', 'Long_Float', 'Long_Long_Float'):
-                return True
-            # Follow base_type chain for derived float types
-            if hasattr(ada_type, 'base_type') and ada_type.base_type is not None:
-                return self._is_float64_type(ada_type.base_type)
-            # Independent float type (DIGITS N) without base_type → not Float64
-            return False
+            return True
         return False
 
     def _lower_float64_operand(self, expr):
@@ -14738,9 +14905,10 @@ class ASTLowering:
                 }
 
         # Determine size of aggregate
-        if isinstance(agg_type, RecordType):
-            size = agg_type.size_bytes()
-        elif isinstance(agg_type, ArrayType):
+        # For multi-dimensional arrays, detect if components are inner aggregates
+        # and compute flat total size (rows * cols * ... * elem_size).
+        is_multidim_array = False
+        if isinstance(agg_type, ArrayType):
             size = agg_type.size_bytes()
             if size == 0:
                 # Unconstrained array — compute from component count
@@ -14754,7 +14922,24 @@ class ASTLowering:
                         sz = ct.size_bytes()
                         if sz and sz > 0:
                             elem_size = sz
-                size = num_components * elem_size
+                # Check if this is a multi-dimensional array aggregate
+                # (components are inner Aggregates representing rows/slices)
+                if (num_components > 0 and expr.components
+                        and not expr.components[0].choices
+                        and isinstance(expr.components[0].value, Aggregate)):
+                    is_multidim_array = True
+                    # Count total scalar elements across all inner aggregates
+                    total_scalars = 0
+                    for comp in expr.components:
+                        if isinstance(comp.value, Aggregate):
+                            total_scalars += len(comp.value.components)
+                        else:
+                            total_scalars += 1
+                    size = total_scalars * elem_size
+                else:
+                    size = num_components * elem_size
+        elif isinstance(agg_type, RecordType):
+            size = agg_type.size_bytes()
         else:
             # Fall back to component count
             num_components = len(expr.components)
@@ -14890,10 +15075,26 @@ class ASTLowering:
                         self.builder.label(loop_end)
             else:
                 # Positional aggregate: (1, 2, 3)
-                value = self._lower_expr(comp.value)
-                mem = MemoryLocation(base=agg_addr, offset=positional_offset, ir_type=IRType.WORD)
-                self.builder.store(mem, value)
-                positional_offset += 2
+                if is_multidim_array and isinstance(comp.value, Aggregate):
+                    # Multi-dimensional array: flatten inner aggregate into outer
+                    inner_agg = comp.value
+                    for inner_comp in inner_agg.components:
+                        if inner_comp.choices:
+                            # Named inner component — just lower it normally
+                            inner_val = self._lower_expr(inner_comp.value)
+                            mem = MemoryLocation(base=agg_addr, offset=positional_offset, ir_type=IRType.WORD)
+                            self.builder.store(mem, inner_val)
+                            positional_offset += 2
+                        else:
+                            inner_val = self._lower_expr(inner_comp.value)
+                            mem = MemoryLocation(base=agg_addr, offset=positional_offset, ir_type=IRType.WORD)
+                            self.builder.store(mem, inner_val)
+                            positional_offset += 2
+                else:
+                    value = self._lower_expr(comp.value)
+                    mem = MemoryLocation(base=agg_addr, offset=positional_offset, ir_type=IRType.WORD)
+                    self.builder.store(mem, value)
+                    positional_offset += 2
 
         # Handle others clause - fill remaining fields/elements
         if others_value is not None:
@@ -15246,12 +15447,30 @@ class ASTLowering:
                     comment=f"address of local {name}"
                 ))
                 return result
+            # Check params (byref params like records/large arrays already hold an address)
+            if self.ctx and name in self.ctx.params:
+                param_vreg = self.ctx.params[name]
+                if name in self.ctx.record_params or name in self.ctx.byref_params:
+                    # Param is already a pointer — return it directly
+                    return param_vreg
+                # For value params, we can't easily get the stack address at IR level,
+                # so return None and let the caller handle it
+                return None
             # Check globals using _find_global_name (handles package prefix)
             if self.builder.module:
                 global_name = self._find_global_name(name)
-                if global_name:
-                    # Mangle: global_name is like "C3900010_Default_Time",
-                    # assembly label is "_c3900010_default_time"
+                if global_name and global_name.lower() != name.lower():
+                    # Only use if we actually found a prefixed global (not just the name echoed back)
+                    asm_label = f"_{global_name.lower()}" if not global_name.startswith("_") else global_name.lower()
+                    result = self.builder.new_vreg(IRType.PTR, f"_addr_{name}")
+                    self.builder.emit(IRInstr(
+                        OpCode.LEA, result,
+                        Label(asm_label),
+                        comment=f"address of {name}"
+                    ))
+                    return result
+                # Check if name is actually in globals (exact match)
+                if global_name and any(gn.lower() == global_name.lower() for gn in self.builder.module.globals):
                     asm_label = f"_{global_name.lower()}" if not global_name.startswith("_") else global_name.lower()
                     result = self.builder.new_vreg(IRType.PTR, f"_addr_{name}")
                     self.builder.emit(IRInstr(
@@ -16054,7 +16273,7 @@ class ASTLowering:
                 left_ptr = self._get_composite_ptr(expr.left)
                 right_ptr = self._get_composite_ptr(expr.right)
                 if op in (BinaryOp.EQ, BinaryOp.NE):
-                    return self._lower_array_comparison(op, left_ptr, right_ptr, array_type_for_cmp)
+                    return self._lower_array_comparison(op, left_ptr, right_ptr, array_type_for_cmp, expr=expr)
                 if op in (BinaryOp.LT, BinaryOp.LE, BinaryOp.GT, BinaryOp.GE):
                     return self._lower_array_ordering(op, left_ptr, right_ptr, array_type_for_cmp, expr)
 
@@ -16569,12 +16788,26 @@ class ASTLowering:
 
         return result
 
-    def _lower_array_comparison(self, op: BinaryOp, left, right, arr_type: ArrayType):
+    def _lower_array_comparison(self, op: BinaryOp, left, right, arr_type: ArrayType,
+                                expr=None):
         """Lower array equality/inequality comparison using memcmp.
 
         For constrained arrays, compares the full array data byte-by-byte.
+        For unconstrained arrays (e.g. parameters), computes size at runtime
+        from the dope vector bounds.
         """
         result = self.builder.new_vreg(IRType.WORD, "_arr_cmp_result")
+
+        # Get element size for the array's component type
+        elem_size = 2  # default for Z80 16-bit words
+        if arr_type.component_type:
+            if hasattr(arr_type.component_type, 'size_bytes'):
+                es = arr_type.component_type.size_bytes()
+                if es and es > 0:
+                    elem_size = es
+            # For nested arrays (multi-dim stored as array-of-arrays), use element_size_bytes
+            if isinstance(arr_type.component_type, ArrayType):
+                elem_size = arr_type.element_size_bytes()
 
         # Get the total size of the array in bytes
         cmp_size = arr_type.size_bytes() if hasattr(arr_type, 'size_bytes') else 0
@@ -16587,15 +16820,66 @@ class ASTLowering:
                     if hasattr(rc, 'first') and hasattr(rc, 'last'):
                         try:
                             n = int(rc.last) - int(rc.first) + 1
-                            comp_size = 2  # default
-                            if hasattr(arr_type.component_type, 'size_bytes'):
-                                comp_size = arr_type.component_type.size_bytes()
-                            elif hasattr(arr_type.component_type, 'name'):
-                                if arr_type.component_type.name in ('Float', 'Long_Float'):
-                                    comp_size = 4
-                            cmp_size = max(0, n * comp_size)
+                            cmp_size = max(0, n * elem_size)
                         except (ValueError, TypeError):
                             pass
+
+        if cmp_size <= 0 and expr is not None:
+            # Unconstrained array — compute size at runtime from dope vector bounds.
+            # Get bounds for the left operand (the array variable, not the aggregate).
+            # For multi-dimensional arrays, total elements = product of all dimension lengths.
+            ndims = len(arr_type.index_types) if arr_type.index_types else 1
+            all_bounds = self._get_array_dope_vector_multidim(expr.left, ndims)
+
+            # Compute total element count: product of (last - first + 1) for each dimension
+            total_elems = None
+            for dim_first, dim_last in all_bounds:
+                dim_len = self.builder.new_vreg(IRType.WORD, "_dim_len")
+                self.builder.sub(dim_len, dim_last, dim_first)
+                self.builder.add(dim_len, dim_len, Immediate(1, IRType.WORD))
+                if total_elems is None:
+                    total_elems = dim_len
+                else:
+                    new_total = self.builder.new_vreg(IRType.WORD, "_total_elems")
+                    self.builder.mul(new_total, total_elems, dim_len)
+                    total_elems = new_total
+
+            # Multiply by element size to get byte count
+            if total_elems is not None:
+                if elem_size != 1:
+                    cmp_size_reg = self.builder.new_vreg(IRType.WORD, "_cmp_size")
+                    self.builder.mul(cmp_size_reg, total_elems, Immediate(elem_size, IRType.WORD))
+                else:
+                    cmp_size_reg = total_elems
+
+                # Call _memcmp with runtime-computed size
+                self.builder.push(left)
+                self.builder.push(right)
+                self.builder.push(cmp_size_reg)
+                self.builder.call(Label("_memcmp"), comment="array comparison (unconstrained)")
+
+                cmp_result = self.builder.new_vreg(IRType.WORD, "_mcmp")
+                self.builder.emit(IRInstr(
+                    OpCode.MOV, cmp_result,
+                    MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    comment="capture memcmp result"
+                ))
+
+                # Clean up stack (3 arguments)
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+                self.builder.pop(temp)
+                self.builder.pop(temp)
+
+                # Convert to boolean: memcmp returns 0 if equal
+                if op == BinaryOp.EQ:
+                    self.builder.cmp_eq(result, cmp_result, Immediate(0, IRType.WORD))
+                elif op == BinaryOp.NE:
+                    self.builder.cmp_ne(result, cmp_result, Immediate(0, IRType.WORD))
+                else:
+                    self.builder.cmp_eq(result, cmp_result, Immediate(0, IRType.WORD))
+
+                return result
 
         if cmp_size <= 0:
             # Can't determine size - fall back to scalar comparison
@@ -18034,13 +18318,22 @@ class ASTLowering:
                     args=expr.args
                 )
             elif func_name in self._generic_type_map:
-                # This is a generic formal object used as a value (not a subprogram)
-                # Lower it as an expression instead of a function call
+                # Generic formal type/object used in an expression.
+                # If the "call" has arguments (e.g., T(IDENT_INT(2))), this
+                # is a type conversion to the formal type — lower the
+                # argument and apply the conversion.  If no arguments, it's
+                # a reference to a generic formal object — just return its
+                # value.
                 actual = self._generic_type_map[func_name]
-                if isinstance(actual, str):
-                    return self._lower_identifier(Identifier(name=actual))
+                if expr.args:
+                    # Type conversion: T(expr) -> QT(expr) — lower the argument
+                    arg_expr = expr.args[0].value if hasattr(expr.args[0], 'value') else expr.args[0]
+                    return self._lower_expr(arg_expr)
                 else:
-                    return self._lower_expr(actual)
+                    if isinstance(actual, str):
+                        return self._lower_identifier(Identifier(name=actual))
+                    else:
+                        return self._lower_expr(actual)
 
         # Check for Unchecked_Conversion instantiation call
         sym = self.symbols.lookup(func_name)
@@ -18579,125 +18872,165 @@ class ASTLowering:
                 else:
                     call_target = self._mangle_operator_name(sym.name.lower()).replace('.', '_')
 
-            # Check for overloaded function - use unique label if available
-            # Use type signature from resolved symbol to match definition
-            type_sig = self._get_param_type_sig_from_symbol(sym)
-            # If sym is None but we can determine argument types, build a type sig
-            # from the actual argument types. This handles the case where symbol lookup
-            # fails during lowering (e.g., use-visible overloaded functions from nested
-            # packages) but we can still determine which overload to call.
-            if not type_sig and expr.args:
-                arg_type_names = []
-                for arg in expr.args:
-                    arg_expr = arg.value if hasattr(arg, 'value') else arg
-                    arg_type = self._get_expr_type(arg_expr)
-                    if arg_type:
-                        arg_type_names.append(arg_type.name.lower())
-                if arg_type_names:
-                    arg_sig = ",".join(arg_type_names)
-                    # Search the function label map for entries matching this function
-                    # name and argument signature. We don't know the return type, so
-                    # look for any entry where the function name and param part match.
-                    for key in self._function_label_map:
-                        key_name = key[1]  # function name
-                        key_sig = key[2]   # type signature string
-                        if key_name == call_target and (key_sig.startswith(arg_sig + "->") or key_sig == arg_sig):
-                            type_sig = key_sig
+            # For inherited primitives (derived type operations), resolve
+            # the call to the *original* parent function's label.  The
+            # name-based lookup in _nested_subprogram_labels can return
+            # the wrong label when a homographic explicit declaration in a
+            # sibling scope overwrote the mapping.  Using the original
+            # symbol's type signature in _function_label_map gives us the
+            # correct label regardless of what was registered later.
+            _inherited_resolved = False
+            if sym and getattr(sym, 'inherited_from', None):
+                orig_sym = sym.inherited_from
+                orig_target = self._mangle_operator_name(orig_sym.name.lower()).replace('.', '_')
+                orig_type_sig = self._get_param_type_sig_from_symbol(orig_sym)
+                if orig_type_sig:
+                    # Search _function_label_map for the original function
+                    scope_prefix = ""
+                    if self.ctx and self.ctx.subprogram_name:
+                        scope_prefix = self.ctx.subprogram_name + "_"
+                    for _prefix in [scope_prefix, ""]:
+                        label_key = (_prefix, orig_target, orig_type_sig)
+                        resolved_label = self._function_label_map.get(label_key)
+                        if resolved_label:
+                            call_target = resolved_label
+                            _inherited_resolved = True
                             break
-            generic_orig = getattr(self, '_generic_original_name', None)
-            current_func_label = None
-            if self.ctx and self.ctx.subprogram_name and self.builder.function:
-                current_func_label = self.builder.function.name
-            # When we have a type signature, try the function label map first
-            # (it handles overloaded functions correctly, unlike _nested_subprogram_labels
-            # which only stores the last registered overload for each name).
-            _resolved_via_label_map = False
-            if type_sig and call_target in self._nested_subprogram_labels:
-                scope_prefix = ""
-                if self.ctx and self.ctx.subprogram_name:
-                    scope_prefix = self.ctx.subprogram_name + "_"
-                # Try label map with scope prefix first
-                for _prefix in [scope_prefix, ""]:
-                    label_key = (_prefix, call_target, type_sig)
-                    resolved_label = self._function_label_map.get(label_key)
-                    if resolved_label and not (generic_orig and current_func_label and resolved_label == current_func_label):
-                        call_target = resolved_label
-                        _resolved_via_label_map = True
-                        break
-                # Also try with enclosing context scope prefixes
-                if not _resolved_via_label_map and self.ctx:
-                    enc = getattr(self.ctx, 'enclosing_ctx', None)
-                    while enc and not _resolved_via_label_map:
-                        enc_prefix = (enc.subprogram_name + "_") if enc.subprogram_name else ""
-                        if enc_prefix:
-                            label_key = (enc_prefix, call_target, type_sig)
-                            resolved_label = self._function_label_map.get(label_key)
-                            if resolved_label and not (generic_orig and current_func_label and resolved_label == current_func_label):
-                                call_target = resolved_label
-                                _resolved_via_label_map = True
-                        enc = getattr(enc, 'enclosing_ctx', None)
-                if not _resolved_via_label_map:
-                    # Type sig didn't match any label map entry — fall back to nested labels
+                    # Also try enclosing scope prefixes
+                    if not _inherited_resolved and self.ctx:
+                        enc = getattr(self.ctx, 'enclosing_ctx', None)
+                        while enc and not _inherited_resolved:
+                            enc_prefix = (enc.subprogram_name + "_") if enc.subprogram_name else ""
+                            if enc_prefix:
+                                label_key = (enc_prefix, orig_target, orig_type_sig)
+                                resolved_label = self._function_label_map.get(label_key)
+                                if resolved_label:
+                                    call_target = resolved_label
+                                    _inherited_resolved = True
+                            enc = getattr(enc, 'enclosing_ctx', None)
+
+            # Normal overload/label resolution — skip if already resolved
+            # via inherited_from above.
+            if not _inherited_resolved:
+                # Check for overloaded function - use unique label if available
+                # Use type signature from resolved symbol to match definition
+                type_sig = self._get_param_type_sig_from_symbol(sym)
+                # If sym is None but we can determine argument types, build a type sig
+                # from the actual argument types. This handles the case where symbol lookup
+                # fails during lowering (e.g., use-visible overloaded functions from nested
+                # packages) but we can still determine which overload to call.
+                if not type_sig and expr.args:
+                    arg_type_names = []
+                    for arg in expr.args:
+                        arg_expr = arg.value if hasattr(arg, 'value') else arg
+                        arg_type = self._get_expr_type(arg_expr)
+                        if arg_type:
+                            arg_type_names.append(arg_type.name.lower())
+                    if arg_type_names:
+                        arg_sig = ",".join(arg_type_names)
+                        # Search the function label map for entries matching this function
+                        # name and argument signature. We don't know the return type, so
+                        # look for any entry where the function name and param part match.
+                        for key in self._function_label_map:
+                            key_name = key[1]  # function name
+                            key_sig = key[2]   # type signature string
+                            if key_name == call_target and (key_sig.startswith(arg_sig + "->") or key_sig == arg_sig):
+                                type_sig = key_sig
+                                break
+                generic_orig = getattr(self, '_generic_original_name', None)
+                current_func_label = None
+                if self.ctx and self.ctx.subprogram_name and self.builder.function:
+                    current_func_label = self.builder.function.name
+                # When we have a type signature, try the function label map first
+                # (it handles overloaded functions correctly, unlike _nested_subprogram_labels
+                # which only stores the last registered overload for each name).
+                _resolved_via_label_map = False
+                if type_sig and call_target in self._nested_subprogram_labels:
+                    scope_prefix = ""
+                    if self.ctx and self.ctx.subprogram_name:
+                        scope_prefix = self.ctx.subprogram_name + "_"
+                    # Try label map with scope prefix first
+                    for _prefix in [scope_prefix, ""]:
+                        label_key = (_prefix, call_target, type_sig)
+                        resolved_label = self._function_label_map.get(label_key)
+                        if resolved_label and not (generic_orig and current_func_label and resolved_label == current_func_label):
+                            call_target = resolved_label
+                            _resolved_via_label_map = True
+                            break
+                    # Also try with enclosing context scope prefixes
+                    if not _resolved_via_label_map and self.ctx:
+                        enc = getattr(self.ctx, 'enclosing_ctx', None)
+                        while enc and not _resolved_via_label_map:
+                            enc_prefix = (enc.subprogram_name + "_") if enc.subprogram_name else ""
+                            if enc_prefix:
+                                label_key = (enc_prefix, call_target, type_sig)
+                                resolved_label = self._function_label_map.get(label_key)
+                                if resolved_label and not (generic_orig and current_func_label and resolved_label == current_func_label):
+                                    call_target = resolved_label
+                                    _resolved_via_label_map = True
+                            enc = getattr(enc, 'enclosing_ctx', None)
+                    if not _resolved_via_label_map:
+                        # Type sig didn't match any label map entry — fall back to nested labels
+                        resolved = self._nested_subprogram_labels[call_target]
+                        if not (generic_orig and current_func_label and resolved == current_func_label):
+                            call_target = resolved
+                elif call_target in self._nested_subprogram_labels:
                     resolved = self._nested_subprogram_labels[call_target]
-                    if not (generic_orig and current_func_label and resolved == current_func_label):
+                    if generic_orig and current_func_label and resolved == current_func_label:
+                        pass  # Skip: would create self-recursion in generic body
+                    else:
                         call_target = resolved
-            elif call_target in self._nested_subprogram_labels:
-                resolved = self._nested_subprogram_labels[call_target]
-                if generic_orig and current_func_label and resolved == current_func_label:
-                    pass  # Skip: would create self-recursion in generic body
                 else:
-                    call_target = resolved
-            else:
-                # For overloaded functions, use the full label map with type signature
-                # Try with scope prefix first (for nested calls), then without (for top-level)
-                scope_prefix = ""
-                if self.ctx and self.ctx.subprogram_name:
-                    scope_prefix = self.ctx.subprogram_name + "_"
-                label_key = (scope_prefix, call_target, type_sig)
-                resolved_label = self._function_label_map.get(label_key)
-                if resolved_label and not (generic_orig and current_func_label and resolved_label == current_func_label):
-                    call_target = resolved_label
-                else:
-                    # Try without scope prefix (top-level or different scope)
-                    label_key = ("", call_target, type_sig)
+                    # For overloaded functions, use the full label map with type signature
+                    # Try with scope prefix first (for nested calls), then without (for top-level)
+                    scope_prefix = ""
+                    if self.ctx and self.ctx.subprogram_name:
+                        scope_prefix = self.ctx.subprogram_name + "_"
+                    label_key = (scope_prefix, call_target, type_sig)
                     resolved_label = self._function_label_map.get(label_key)
                     if resolved_label and not (generic_orig and current_func_label and resolved_label == current_func_label):
                         call_target = resolved_label
-                    elif self.ctx and getattr(self.ctx, 'enclosing_ctx', None):
-                        # Forward reference in nested function
-                        found = False
-                        ctx = self.ctx
-                        while ctx:
-                            prefix = (ctx.subprogram_name + "_") if ctx.subprogram_name else ""
-                            if prefix:
-                                candidate = f"{prefix}{call_target}"
-                                if generic_orig and current_func_label and candidate == current_func_label:
-                                    ctx = getattr(ctx, 'enclosing_ctx', None)
-                                    continue
-                                if any(v == candidate for v in self._nested_subprogram_labels.values()):
-                                    call_target = candidate
-                                    found = True
-                                    break
-                                if any(v == candidate for v in self._function_label_map.values()):
-                                    call_target = candidate
-                                    found = True
-                                    break
-                            ctx = getattr(ctx, 'enclosing_ctx', None)
-                        if not found:
-                            enc = getattr(self.ctx, 'enclosing_ctx', None)
-                            if enc and enc.subprogram_name:
-                                is_known_external = False
-                                # External package functions have no definition AST node
-                                if sym and sym.definition is None and sym.kind in (
-                                    SymbolKind.FUNCTION, SymbolKind.PROCEDURE):
-                                    is_known_external = True
-                                if not is_known_external and self.builder.module:
-                                    for func in self.builder.module.functions:
-                                        if func.name.lower() == call_target.lower():
-                                            is_known_external = True
-                                            break
-                                if not is_known_external:
-                                    call_target = f"{enc.subprogram_name}_{call_target}"
+                    else:
+                        # Try without scope prefix (top-level or different scope)
+                        label_key = ("", call_target, type_sig)
+                        resolved_label = self._function_label_map.get(label_key)
+                        if resolved_label and not (generic_orig and current_func_label and resolved_label == current_func_label):
+                            call_target = resolved_label
+                        elif self.ctx and getattr(self.ctx, 'enclosing_ctx', None):
+                            # Forward reference in nested function
+                            found = False
+                            ctx = self.ctx
+                            while ctx:
+                                prefix = (ctx.subprogram_name + "_") if ctx.subprogram_name else ""
+                                if prefix:
+                                    candidate = f"{prefix}{call_target}"
+                                    if generic_orig and current_func_label and candidate == current_func_label:
+                                        ctx = getattr(ctx, 'enclosing_ctx', None)
+                                        continue
+                                    if any(v == candidate for v in self._nested_subprogram_labels.values()):
+                                        call_target = candidate
+                                        found = True
+                                        break
+                                    if any(v == candidate for v in self._function_label_map.values()):
+                                        call_target = candidate
+                                        found = True
+                                        break
+                                ctx = getattr(ctx, 'enclosing_ctx', None)
+                            if not found:
+                                enc = getattr(self.ctx, 'enclosing_ctx', None)
+                                if enc and enc.subprogram_name:
+                                    is_known_external = False
+                                    # External package functions have no definition AST node
+                                    if sym and sym.definition is None and sym.kind in (
+                                        SymbolKind.FUNCTION, SymbolKind.PROCEDURE):
+                                        is_known_external = True
+                                    if not is_known_external and self.builder.module:
+                                        for func in self.builder.module.functions:
+                                            if func.name.lower() == call_target.lower():
+                                                is_known_external = True
+                                                break
+                                    if not is_known_external:
+                                        call_target = f"{enc.subprogram_name}_{call_target}"
 
             # Check if this is a dispatching call
             is_dispatching = self._is_dispatching_call(sym, expr.args)
@@ -18969,6 +19302,80 @@ class ASTLowering:
         for _ in range(stack_slots):
             temp = self.builder.new_vreg(IRType.WORD, "_discard")
             self.builder.pop(temp)
+
+    def _lower_enum_width_dynamic(self, prefix_type):
+        """Generate runtime Width computation for an enum type with dynamic range bounds.
+
+        For each literal position i in 0..N-1, we know the Image length at compile time.
+        At runtime we evaluate the dynamic first/last bounds and compute:
+          if first > last then 0  (empty range)
+          else max of Image_Length(i) for all i in first..last
+        This is generated as inline comparisons without loops.
+        """
+        from uada80.ir import Immediate, IRType, Label
+
+        cle = getattr(prefix_type, 'constraint_low_expr', None)
+        che = getattr(prefix_type, 'constraint_high_expr', None)
+
+        # Evaluate dynamic bounds (these are Pos values: 0-based enum positions)
+        # The constraint expressions return Boolean values for Boolean subtypes,
+        # which the IR represents as 0/1 integers (same as Pos values).
+        dyn_first = self._lower_expr(cle) if cle else Immediate(0, IRType.WORD)
+        dyn_last = self._lower_expr(che) if che else Immediate(len(prefix_type.literals) - 1, IRType.WORD)
+
+        # Precompute Image lengths for each literal position
+        char_lits = getattr(prefix_type, 'char_literals', set()) or set()
+        image_lengths = []
+        for lit in prefix_type.literals:
+            if lit in char_lits:
+                image_lengths.append(len(lit) + 2)  # "'X'" = 3 chars
+            else:
+                image_lengths.append(len(lit))
+
+        # Result vreg
+        result = self.builder.new_vreg(IRType.WORD, "_ewidth")
+        self.builder.mov(result, Immediate(0, IRType.WORD))
+
+        done_label = self._new_label("ewdn")
+
+        # Check for empty range: if first > last, result stays 0
+        empty_check = self.builder.new_vreg(IRType.BOOL, "_echk")
+        self.builder.cmp_gt(empty_check, dyn_first, dyn_last)
+        self.builder.jnz(empty_check, Label(done_label))
+
+        # For each literal position, check if it's in range and update max
+        # Generate: if pos >= first AND pos <= last then result = max(result, width)
+        for i, img_len in enumerate(image_lengths):
+            pos_imm = Immediate(i, IRType.WORD)
+
+            # Check pos >= first
+            in_lo = self.builder.new_vreg(IRType.BOOL, "_elo")
+            self.builder.cmp_ge(in_lo, pos_imm, dyn_first)
+            skip_label = self._new_label("ewsk")
+            self.builder.jz(in_lo, Label(skip_label))
+
+            # Check pos <= last
+            in_hi = self.builder.new_vreg(IRType.BOOL, "_ehi")
+            self.builder.cmp_le(in_hi, pos_imm, dyn_last)
+            self.builder.jz(in_hi, Label(skip_label))
+
+            # pos is in range: update result = max(result, img_len)
+            wider = self.builder.new_vreg(IRType.BOOL, "_ewid")
+            self.builder.cmp_gt(wider, Immediate(img_len, IRType.WORD), result)
+            no_update_label = self._new_label("ewnu")
+            self.builder.jz(wider, Label(no_update_label))
+            self.builder.mov(result, Immediate(img_len, IRType.WORD))
+
+            no_update_block = self.builder.new_block(no_update_label)
+            self.builder.set_block(no_update_block)
+
+            skip_block = self.builder.new_block(skip_label)
+            self.builder.set_block(skip_block)
+
+        done_block = self.builder.new_block(done_label)
+        self.builder.set_block(done_block)
+
+        return result
 
     def _lower_attribute(self, expr: AttributeReference):
         """Lower an attribute reference."""
@@ -19268,6 +19675,29 @@ class ASTLowering:
                     return Immediate(ada_type.high, IRType.WORD)
                 if attr == "size":
                     return Immediate(ada_type.size_bits, IRType.WORD)
+
+                # Handle fixed-point 'Fore and 'Aft attributes
+                if attr == "fore":
+                    import math
+                    # Use range_first/range_last (real values), not low/high (scaled ints)
+                    lo = getattr(ada_type, 'range_first', None)
+                    hi = getattr(ada_type, 'range_last', None)
+                    if lo is None:
+                        lo = -1.0
+                    if hi is None:
+                        hi = 1.0
+                    max_abs = max(abs(lo), abs(hi))
+                    int_part = int(max_abs)
+                    digits_before = 1 if int_part == 0 else int(math.log10(int_part)) + 1
+                    return Immediate(1 + digits_before, IRType.WORD)
+                if attr == "aft":
+                    import math
+                    delta = getattr(ada_type, 'delta', None) or getattr(ada_type, 'delta_value', None)
+                    if delta is not None and delta > 0:
+                        aft_val = max(int(math.ceil(-math.log10(delta))), 1)
+                    else:
+                        aft_val = 1
+                    return Immediate(aft_val, IRType.WORD)
 
                 # Handle 'Modulus attribute for modular types
                 if attr == "modulus":
@@ -23891,9 +24321,19 @@ class ASTLowering:
                         if first_pos is not None and last_pos is not None:
                             if first_pos > last_pos:
                                 return Immediate(0, IRType.WORD)  # Empty range
+                        # Check for dynamic constraints on character types
+                        cle = getattr(prefix_type, 'constraint_low_expr', None)
+                        che = getattr(prefix_type, 'constraint_high_expr', None)
+                        if cle is not None or che is not None:
+                            return self._lower_enum_width_dynamic(prefix_type)
                         return Immediate(3, IRType.WORD)  # "'X'" = 3 chars
 
                     if prefix_type.literals:
+                        # Check for dynamic constraints (non-static range bounds)
+                        cle = getattr(prefix_type, 'constraint_low_expr', None)
+                        che = getattr(prefix_type, 'constraint_high_expr', None)
+                        if cle is not None or che is not None:
+                            return self._lower_enum_width_dynamic(prefix_type)
                         # Determine range of literals in this (sub)type
                         first_pos = prefix_type.first if prefix_type.first is not None else 0
                         last_pos = prefix_type.last if prefix_type.last is not None else len(prefix_type.literals) - 1
@@ -24044,6 +24484,13 @@ class ASTLowering:
             # Check if this is a nested subprogram (tracked in _nested_subprogram_labels)
             if not is_function and func_name in self._nested_subprogram_labels:
                 is_function = True
+
+            # Check if prefix is a generic formal type (mapped via
+            # _generic_type_map).  T(IDENT_INT(2)) inside a generic body
+            # should be treated as a type conversion, not a function call.
+            if not is_function and not is_type and self._generic_type_map:
+                if func_name in self._generic_type_map and not func_name.startswith('_subp_'):
+                    is_type = True
 
             # Check for common type names (Integer, Character, etc.)
             # These are built-in types that may not have explicit symbols
@@ -25220,7 +25667,12 @@ class ASTLowering:
                                 last = hi if last is None else max(last, hi)
                     has_named = True
             if has_positional and not has_named:
-                return [(1, positional_count)]
+                # Per Ada RM 4.3.3(6): the lower bound of each dimension
+                # is the index subtype's 'FIRST.
+                idx_first = 1  # default
+                if array_type and hasattr(array_type, 'index_types') and array_type.index_types:
+                    idx_first = self._get_index_subtype_first(array_type.index_types[0])
+                return [(idx_first, idx_first + positional_count - 1)]
             if has_named and first is not None and last is not None:
                 return [(first, last)]
         elif isinstance(init_expr, StringLiteral):
@@ -25250,6 +25702,77 @@ class ASTLowering:
                 if local and isinstance(local.ada_type, ArrayType):
                     if local.ada_type.is_constrained and local.ada_type.bounds:
                         return list(local.ada_type.bounds)
+        return None
+
+    def _compute_dynamic_aggregate_bounds(self, init_expr, array_type) -> list | None:
+        """Compute dynamic bounds for a positional aggregate initializing an unconstrained array.
+
+        Per Ada RM 4.3.3(6): for positional aggregates, the lower bound of each
+        dimension is the index subtype's 'FIRST. If the index subtype has dynamic
+        constraint expressions, we lower those expressions to get runtime vreg values.
+
+        Returns list of (low_vreg, high_vreg) tuples, or None if bounds are all static.
+        """
+        if not isinstance(init_expr, Aggregate) or not init_expr.components:
+            return None
+        if not hasattr(array_type, 'index_types') or not array_type.index_types:
+            return None
+
+        # Only handle purely positional aggregates
+        for comp in init_expr.components:
+            if comp.choices:
+                return None  # Named/mixed — skip
+
+        num_elems = len(init_expr.components)
+        has_dynamic = False
+        dyn_bounds = []
+
+        for dim, idx_type in enumerate(array_type.index_types):
+            cle = getattr(idx_type, 'constraint_low_expr', None)
+            che = getattr(idx_type, 'constraint_high_expr', None)
+
+            # Determine element count for this dimension
+            if dim == 0:
+                n = num_elems
+            elif dim == 1 and init_expr.components:
+                inner = init_expr.components[0].value
+                if isinstance(inner, Aggregate):
+                    n = len(inner.components)
+                else:
+                    n = 1
+            else:
+                n = 1
+
+            # Check if this dimension has dynamic constraint expressions
+            if cle is not None or che is not None:
+                # At least one bound is dynamic — need runtime computation
+                if cle is not None:
+                    low_vreg = self._lower_expr(cle)
+                else:
+                    low_val = getattr(idx_type, 'low', 1)
+                    low_vreg = Immediate(low_val if low_val is not None else 1, IRType.WORD)
+
+                # last = first + n - 1
+                high_vreg = self.builder.new_vreg(IRType.WORD, f"_agg_last_d{dim}")
+                self.builder.add(high_vreg, low_vreg, Immediate(n - 1, IRType.WORD))
+                dyn_bounds.append((low_vreg, high_vreg))
+                has_dynamic = True
+            else:
+                # Check if the subtype's low/high are its own (not inherited from base)
+                low = getattr(idx_type, 'low', None)
+                high = getattr(idx_type, 'high', None)
+                base = getattr(idx_type, 'base_type', None)
+                if low is not None and base is not None and hasattr(base, 'low') and low == base.low:
+                    # This is the base type range — subtype didn't get its own range
+                    # Default to 1-based (this shouldn't normally happen for well-formed subtypes)
+                    dyn_bounds.append((Immediate(1, IRType.WORD), Immediate(n, IRType.WORD)))
+                else:
+                    # Static bounds from the subtype
+                    first = low if low is not None else 1
+                    dyn_bounds.append((Immediate(first, IRType.WORD), Immediate(first + n - 1, IRType.WORD)))
+
+        if has_dynamic:
+            return dyn_bounds
         return None
 
     def _extract_index_bounds(self, idx_range) -> tuple[int | None, int | None]:

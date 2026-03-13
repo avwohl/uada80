@@ -4498,6 +4498,12 @@ class SemanticAnalyzer:
             # Preserve intrinsic flag so inherited operators use inline code
             if getattr(sym, 'is_intrinsic', False):
                 inherited_sym.is_intrinsic = True
+            # Track original parent symbol so lowering can resolve to the
+            # correct function label (rather than relying on name-based lookup
+            # in _nested_subprogram_labels which may have been overwritten by
+            # a homographic declaration in a sibling scope).
+            # Follow the chain if sym is itself inherited.
+            inherited_sym.inherited_from = getattr(sym, 'inherited_from', None) or sym
 
             # Copy parameters, substituting types as needed
             for param in sym.parameters:
@@ -4696,6 +4702,32 @@ class SemanticAnalyzer:
                             last=enum_high,
                             char_literals=base_type.char_literals.copy() if hasattr(base_type, 'char_literals') and base_type.char_literals else set(),
                         )
+                else:
+                    # Non-static bounds: store constraint expressions for
+                    # runtime evaluation during lowering
+                    if isinstance(base_type, EnumerationType):
+                        return EnumerationType(
+                            name=base_type.name,
+                            size_bits=base_type.size_bits,
+                            literals=base_type.literals.copy(),
+                            positions=base_type.positions.copy(),
+                            base_type=base_type,
+                            first=None,
+                            last=None,
+                            char_literals=base_type.char_literals.copy() if hasattr(base_type, 'char_literals') and base_type.char_literals else set(),
+                            constraint_low_expr=range_expr.low,
+                            constraint_high_expr=range_expr.high,
+                        )
+                    elif isinstance(base_type, IntegerType):
+                        return IntegerType(
+                            name=base_type.name,
+                            size_bits=base_type.size_bits,
+                            low=base_type.low,
+                            high=base_type.high,
+                            base_type=base_type,
+                            constraint_low_expr=range_expr.low,
+                            constraint_high_expr=range_expr.high,
+                        )
                 # Handle FloatType with float bounds from range constraint
                 if isinstance(base_type, FloatType):
                     low = self._try_eval_static(range_expr.low)
@@ -4727,6 +4759,31 @@ class SemanticAnalyzer:
                             small=base_type.small,
                             base_type=base_type,
                         )
+
+        # Handle DeltaConstraint for fixed-point subtypes (DELTA D RANGE L..H)
+        from uada80.ast_nodes import DeltaConstraint
+        if subtype_ind.constraint and isinstance(subtype_ind.constraint, DeltaConstraint):
+            if isinstance(base_type, FixedType):
+                delta_val = self._try_eval_static(subtype_ind.constraint.delta)
+                new_delta = float(delta_val) if delta_val is not None else base_type.delta
+                range_first = base_type.range_first
+                range_last = base_type.range_last
+                if subtype_ind.constraint.range_constraint:
+                    rc = subtype_ind.constraint.range_constraint
+                    low = self._try_eval_static(rc.low)
+                    high = self._try_eval_static(rc.high)
+                    if low is not None and high is not None:
+                        range_first = float(low)
+                        range_last = float(high)
+                return FixedType(
+                    name=base_type.name,
+                    size_bits=base_type.size_bits,
+                    delta=new_delta,
+                    range_first=range_first,
+                    range_last=range_last,
+                    small=base_type.small,
+                    base_type=base_type,
+                )
 
         return base_type
 
@@ -7957,6 +8014,12 @@ class SemanticAnalyzer:
                 # Handle P."+"(a, b)
                 func_name = expr.func.selector
 
+            # ACATS identity functions return their argument unchanged
+            if func_name and func_name.upper() in ('IDENT_INT', 'IDENT_BOOL', 'IDENT_CHAR'):
+                if expr.args and len(expr.args) == 1:
+                    arg = expr.args[0].value if hasattr(expr.args[0], 'value') else expr.args[0]
+                    return self._eval_static_impl(arg, report_errors)
+
             if func_name and func_name.startswith('"') and func_name.endswith('"'):
                 op = func_name[1:-1].upper()
                 args = [a.value if hasattr(a, 'value') else a for a in (expr.args or [])]
@@ -7997,6 +8060,17 @@ class SemanticAnalyzer:
             return None
 
         if isinstance(expr, IndexedComponent):
+            # Handle ACATS identity functions parsed as IndexedComponent
+            if isinstance(expr.prefix, Identifier):
+                ident_name = expr.prefix.name.upper()
+                if ident_name in ('IDENT_INT', 'IDENT_BOOL', 'IDENT_CHAR'):
+                    args = expr.actual_params or []
+                    if not args and expr.indices:
+                        args = expr.indices
+                    if len(args) == 1:
+                        arg = getattr(args[0], 'value', args[0])
+                        return self._eval_static_impl(arg, report_errors)
+
             # Handle prefix operator notation like P."+"(a, b) parsed as IndexedComponent
             op = None
             if isinstance(expr.prefix, SelectedName):
@@ -8149,9 +8223,35 @@ class SemanticAnalyzer:
                 if attr == "delta" and hasattr(type_obj, "delta_value"):
                     return type_obj.delta_value
                 if attr == "fore" and hasattr(type_obj, "kind"):
-                    return 2  # Typical default fore value
+                    # FORE = 1 + max digits before decimal point for any value
+                    # Per Ada RM 3.5.10(5): includes space or minus sign
+                    import math
+                    t = type_obj
+                    # Use range_first/range_last (real values) for fixed-point
+                    lo = getattr(t, 'range_first', None)
+                    hi = getattr(t, 'range_last', None)
+                    if lo is None:
+                        lo = getattr(t, 'low', -1)
+                    if hi is None:
+                        hi = getattr(t, 'high', 1)
+                    max_abs = max(abs(lo) if lo is not None else 1,
+                                 abs(hi) if hi is not None else 1)
+                    int_part = int(max_abs)
+                    if int_part == 0:
+                        digits_before = 1
+                    else:
+                        digits_before = int(math.log10(int_part)) + 1
+                    return 1 + digits_before  # 1 for sign/space
                 if attr == "aft" and hasattr(type_obj, "kind"):
-                    return 3  # Typical default aft value
+                    # AFT = number of decimal digits after point
+                    # Per Ada RM 3.5.10(6): ceil(-log10(delta))
+                    import math
+                    t = type_obj
+                    delta = getattr(t, 'delta', None) or getattr(t, 'delta_value', None)
+                    if delta is not None and delta > 0:
+                        aft = int(math.ceil(-math.log10(delta)))
+                        return max(aft, 1)
+                    return 1
                 if attr == "small" and hasattr(type_obj, "kind"):
                     return 1  # Placeholder
 

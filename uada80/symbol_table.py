@@ -79,6 +79,7 @@ class Symbol:
     is_atomic: bool = False  # pragma Atomic (use DI/EI on Z80)
     is_no_return: bool = False  # pragma No_Return
     is_generic_formal: bool = False  # Generic formal parameter
+    inherited_from: Optional["Symbol"] = None  # For inherited primitives: original parent symbol
     is_abstract: bool = False  # Abstract subprogram (is abstract)
     is_pure: bool = False  # pragma Pure (for packages)
     is_preelaborate: bool = False  # pragma Preelaborate (for packages)
