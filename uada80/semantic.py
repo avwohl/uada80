@@ -1086,6 +1086,12 @@ class SemanticAnalyzer:
             if pkg_name.upper() in ("SYSTEM", "ADA", "INTERFACES"):
                 self._merge_standard_values(pkg_symbol, pkg_name.upper())
 
+            # Try to process the corresponding body file for pragma Import
+            # directives. This allows adalib functions that are implemented
+            # via pragma Import (like Ada.Exceptions) to use the correct
+            # external names at link time.
+            self._extract_body_pragma_imports(pkg_symbol, file_path)
+
             self.symbols.leave_scope()
 
             # Restore state
@@ -1242,6 +1248,91 @@ class SemanticAnalyzer:
                 else:
                     type_sym.ada_type = AdaType(kind=TypeKind.INTEGER, name=c_type)
                 pkg_symbol.public_symbols[c_type.lower()] = type_sym
+
+    # Runtime name mappings for standard library functions whose bodies
+    # can't be compiled on Z80. Maps package_name -> {func_name -> runtime_label}.
+    # All labels must be unique within 8 chars (um80 truncation).
+    _ADALIB_RUNTIME_NAMES = {
+        'ada.exceptions': {
+            'exception_name': '_exc_nam',
+            'exception_information': '_exc_inf',
+            'exception_message': '_exc_gm',
+            'raise_exception': '_exc_rais',
+            'reraise_occurrence': '_exc_rer',
+        },
+    }
+
+    def _extract_body_pragma_imports(self, pkg_symbol: Symbol, spec_path: str) -> None:
+        """Extract pragma Import directives from the package body file.
+
+        When an adalib package body uses pragma Import on local helper functions
+        and then implements public functions by calling those helpers, we can't
+        easily inline that. Instead, we apply known runtime name mappings for
+        standard library packages and scan body files for direct pragma Import
+        on public symbols.
+        """
+        # Apply hardcoded runtime name mappings for standard packages
+        pkg_name = pkg_symbol.name.lower() if pkg_symbol.name else ""
+        if pkg_name in self._ADALIB_RUNTIME_NAMES:
+            mappings = self._ADALIB_RUNTIME_NAMES[pkg_name]
+            for func_name, runtime_label in mappings.items():
+                sym = pkg_symbol.public_symbols.get(func_name)
+                if sym and sym.kind in (SymbolKind.FUNCTION, SymbolKind.PROCEDURE):
+                    sym.is_imported = True
+                    sym.external_name = runtime_label
+                    # Also override runtime_name since it takes precedence
+                    # (may have been set by built-in symbol merge)
+                    sym.runtime_name = runtime_label
+
+        if not spec_path:
+            return
+
+        # Try to find the body file (.adb) and scan for direct pragma Import
+        body_path = None
+        if spec_path.endswith('.ads'):
+            candidate = spec_path[:-4] + '.adb'
+            if os.path.exists(candidate):
+                body_path = candidate
+        if not body_path:
+            return
+
+        try:
+            with open(body_path, 'r') as f:
+                source = f.read()
+            from uada80.parser import parse
+            program = parse(source, body_path)
+        except Exception:
+            return
+
+        # Scan for pragma Import directives in the body
+        for unit in program.units:
+            body = unit.unit if isinstance(unit, CompilationUnit) else unit
+            decls = []
+            if isinstance(body, PackageBody):
+                decls = list(body.declarations or [])
+                decls.extend(body.statements or [])
+            elif isinstance(body, SubprogramBody):
+                decls = list(body.declarations or [])
+                decls.extend(body.statements or [])
+
+            for decl in decls:
+                if isinstance(decl, PragmaStmt) and decl.name.lower() == 'import':
+                    if len(decl.args) >= 3:
+                        entity = decl.args[1]
+                        if isinstance(entity, ActualParameter):
+                            entity = entity.value
+                        ext_name_node = decl.args[2]
+                        if isinstance(ext_name_node, ActualParameter):
+                            ext_name_node = ext_name_node.value
+
+                        if isinstance(entity, Identifier) and isinstance(ext_name_node, StringLiteral):
+                            entity_name = entity.name.lower()
+                            ext_name = ext_name_node.value
+                            # Check if this entity is a public symbol
+                            sym = pkg_symbol.public_symbols.get(entity_name)
+                            if sym and sym.kind in (SymbolKind.FUNCTION, SymbolKind.PROCEDURE):
+                                sym.is_imported = True
+                                sym.external_name = ext_name
 
     def _merge_standard_values(self, pkg_symbol: Symbol, name: str) -> None:
         """Merge fallback values for standard package constants that weren't evaluated.
@@ -3980,14 +4071,22 @@ class SemanticAnalyzer:
             last_pos = None
             constraint_low_expr = None
             constraint_high_expr = None
+            pass  # Debug removed
             # Apply explicit RANGE constraint if present
             # e.g., type T is new ENUM range E3..E4
             if type_def.constraint and isinstance(type_def.constraint, RangeExpr):
                 low_expr = type_def.constraint.low
                 high_expr = type_def.constraint.high
-                # Resolve enum literal positions
+                # Resolve enum literal positions (case-insensitive lookup)
                 if isinstance(low_expr, Identifier):
                     pos = parent.positions.get(low_expr.name)
+                    if pos is None:
+                        # Case-insensitive fallback
+                        low_lower = low_expr.name.lower()
+                        for lit_name, lit_pos in parent.positions.items():
+                            if lit_name.lower() == low_lower:
+                                pos = lit_pos
+                                break
                     if pos is not None:
                         first_pos = pos
                 if first_pos is None:
@@ -3996,6 +4095,13 @@ class SemanticAnalyzer:
                         first_pos = v
                 if isinstance(high_expr, Identifier):
                     pos = parent.positions.get(high_expr.name)
+                    if pos is None:
+                        # Case-insensitive fallback
+                        high_lower = high_expr.name.lower()
+                        for lit_name, lit_pos in parent.positions.items():
+                            if lit_name.lower() == high_lower:
+                                pos = lit_pos
+                                break
                     if pos is not None:
                         last_pos = pos
                 if last_pos is None:

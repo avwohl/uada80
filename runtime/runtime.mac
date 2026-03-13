@@ -1529,6 +1529,12 @@ _s2i_start:
 
 _s2i_loop:
     LD A, (HL)
+    ; Skip underscores (Ada numeric separators)
+    CP '_'
+    JR NZ, _s2i_chkd
+    INC HL
+    JR _s2i_loop
+_s2i_chkd:
     ; Check if digit (0-9)
     CP '0'
     JR C, _s2i_done         ; < '0', not a digit
@@ -1560,6 +1566,28 @@ _s2i_loop:
     JR _s2i_loop
 
 _s2i_done:
+    ; HL points to first non-digit; skip trailing whitespace
+_s2i_tws:
+    LD A, (HL)
+    CP ' '
+    JR Z, _s2i_twn
+    CP 9                    ; tab
+    JR Z, _s2i_twn
+    JR _s2i_twk
+_s2i_twn:
+    INC HL
+    JR _s2i_tws
+_s2i_twk:
+    ; Must be NUL (end of string) or raise Constraint_Error
+    LD A, (HL)
+    OR A
+    JR Z, _s2i_ok
+    ; Invalid trailing character - raise Constraint_Error
+    POP BC                  ; balance sign flag push
+    POP IX
+    JP _raise_constraint_error
+
+_s2i_ok:
     ; DE = result value
     POP BC                  ; Restore sign flag (B)
 
@@ -2576,6 +2604,137 @@ _exc_get_name:
 
 _exc_generic:
     DB 'Exception', 0
+
+; ============================================================
+; _exc_nam - Ada.Exceptions.Exception_Name wrapper
+; Input: stack param = Exception_Occurrence (just the ID on Z80)
+; Output: HL = pointer to null-terminated name string
+; ============================================================
+    PUBLIC _exc_nam
+_exc_nam:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+    LD L, (IX+4)
+    LD H, (IX+5)       ; HL = exception ID from param
+    CALL _exc_get_name  ; HL = name string pointer
+    POP IX
+    RET
+
+; ============================================================
+; _exc_inf - Ada.Exceptions.Exception_Information wrapper
+; Input: stack param = Exception_Occurrence
+; Output: HL = pointer to null-terminated info string
+; Same as Exception_Name for now (simplified implementation)
+; ============================================================
+    PUBLIC _exc_inf
+_exc_inf:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+    LD L, (IX+4)
+    LD H, (IX+5)       ; HL = exception ID from param
+    CALL _exc_get_name  ; Use name as info (simplified)
+    POP IX
+    RET
+
+; ============================================================
+; _exc_gm - Ada.Exceptions.Exception_Message wrapper
+; Input: stack param = Exception_Occurrence
+; Output: HL = pointer to empty string (messages not implemented)
+; ============================================================
+    PUBLIC _exc_gm
+_exc_gm:
+    LD HL, _exc_empty
+    RET
+
+_exc_empty:
+    DB 0
+
+; ============================================================
+; _exc_rais - Ada.Exceptions.Raise_Exception wrapper
+; Input: stack params = Exception_Id, Message string addr
+; ============================================================
+    PUBLIC _exc_rais
+_exc_rais:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+    LD L, (IX+4)
+    LD H, (IX+5)       ; HL = exception ID
+    JP _exc_do_raise    ; Raise the exception (does not return)
+
+; ============================================================
+; _exc_rer - Ada.Exceptions.Reraise_Occurrence wrapper
+; Input: stack param = Exception_Occurrence
+; ============================================================
+    PUBLIC _exc_rer
+_exc_rer:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+    LD L, (IX+4)
+    LD H, (IX+5)       ; HL = exception ID
+    JP _exc_do_raise    ; Reraise (does not return)
+
+; ============================================================
+; ============================================================
+; Ada.Calendar stubs
+; ============================================================
+
+; _time_of - Ada.Calendar.Time_Of stub
+; Input: stack params = Year, Month, Day, [Seconds]
+; Output: HL = pointer to 4-byte Time record {Ticks, Days}
+; Z80 systems don't have real-time clocks
+; ============================================================
+    PUBLIC _time_of
+_time_of:
+    ; Allocate 4-byte Time record on heap
+    LD HL, 4
+    CALL _heap_alloc
+    ; HL = pointer to record, zero-init all 4 bytes
+    PUSH HL                  ; save base pointer
+    LD (HL), 0               ; Ticks low
+    INC HL
+    LD (HL), 0               ; Ticks high
+    INC HL
+    LD (HL), 0               ; Days low
+    INC HL
+    LD (HL), 0               ; Days high
+    POP HL                   ; restore base pointer
+    RET
+
+; _clock - Ada.Calendar.Clock stub
+; Output: HL = pointer to 4-byte Time record
+; ============================================================
+    PUBLIC _clock
+_clock:
+    LD HL, 4
+    CALL _heap_alloc
+    PUSH HL
+    LD (HL), 0
+    INC HL
+    LD (HL), 0
+    INC HL
+    LD (HL), 0
+    INC HL
+    LD (HL), 0
+    POP HL
+    RET
+
+; _year - Ada.Calendar.Year stub
+; Input: stack param = pointer to Time record
+; Output: HL = 1901 (default year)
+; ============================================================
+    PUBLIC _year
+_year:
+    LD HL, 1901
+    RET
+
+; _split - Ada.Calendar.Split stub
+; No-op implementation
+; ============================================================
+; _split already defined elsewhere for string splitting
 
 ; ============================================================
 ; Tagged Type Dispatch

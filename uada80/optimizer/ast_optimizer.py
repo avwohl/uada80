@@ -854,15 +854,17 @@ class ASTOptimizer:
                     self.stats.attribute_evaluations += 1
                     return CharacterLiteral(value=char)
 
-        # 'Image for integer literals
+        # 'Image for integer literals (Ada RM 3.5(35): leading space for non-negative)
         if attr_upper == "IMAGE" and isinstance(prefix, IntegerLiteral):
-            text = str(prefix.value)
+            val = prefix.value
+            text = (" " + str(val)) if val >= 0 else str(val)
             self.stats.attribute_evaluations += 1
             return StringLiteral(value=text)
 
-        # 'Image with argument for integer type
+        # 'Image with argument for integer type (Ada RM 3.5(35): leading space for non-negative)
         if attr_upper == "IMAGE" and args and isinstance(args[0], IntegerLiteral):
-            text = str(args[0].value)
+            val = args[0].value
+            text = (" " + str(val)) if val >= 0 else str(val)
             self.stats.attribute_evaluations += 1
             return StringLiteral(value=text)
 
