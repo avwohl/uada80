@@ -4274,12 +4274,17 @@ class SemanticAnalyzer:
 
         # Handle derivation from non-tagged record type
         if isinstance(parent, RecordType) and not parent.is_tagged:
-            return RecordType(
+            # Don't set parent_type since components are already copied —
+            # _compute_size would double-count (parent size + component sizes)
+            derived = RecordType(
                 name=name,
                 components=list(parent.components),
                 discriminants=list(parent.discriminants) if parent.discriminants else [],
-                parent_type=parent,
+                parent_type=None,
             )
+            # Store the parent type reference for type conversion purposes
+            derived.base_type = parent
+            return derived
 
         # Handle derivation from array type
         if isinstance(parent, ArrayType):
