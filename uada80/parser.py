@@ -3065,8 +3065,12 @@ class Parser:
                 if is_function:
                     self.expect(TokenType.RETURN)
                     return_type = self._parse_return_type()
-                # Use the return type or a dummy as the type_mark
-                type_mark = return_type if return_type else Identifier(name="__access_subprogram__", span=None)
+                type_mark = AccessSubprogramTypeIndication(
+                    is_function=is_function,
+                    parameters=params,
+                    return_type=return_type,
+                    span=None,
+                )
             else:
                 type_mark = self.parse_name()
 
@@ -3114,9 +3118,11 @@ class Parser:
         """
         start = self.current
         # Handle null exclusion: "not null T" where T is a named access type
+        is_not_null = False
         if self.check(TokenType.NOT) and self.peek(1).type == TokenType.NULL:
             self.advance()  # consume NOT
             self.advance()  # consume NULL
+            is_not_null = True
         type_mark = self.parse_name()
         constraint = None
 
@@ -3134,7 +3140,7 @@ class Parser:
                     # Range attribute (e.g., A'Range)
                     range_constraint = low
             constraint = DigitsConstraint(digits=digits_expr, range_constraint=range_constraint)
-            return SubtypeIndication(type_mark=type_mark, constraint=constraint, span=self.make_span(start))
+            return SubtypeIndication(type_mark=type_mark, constraint=constraint, not_null=is_not_null, span=self.make_span(start))
 
         # Parse delta constraint (fixed-point subtype)
         if self.match(TokenType.DELTA):
@@ -3150,7 +3156,7 @@ class Parser:
                     # Range attribute (e.g., A'Range)
                     range_constraint = low
             constraint = DeltaConstraint(delta=delta_expr, range_constraint=range_constraint)
-            return SubtypeIndication(type_mark=type_mark, constraint=constraint, span=self.make_span(start))
+            return SubtypeIndication(type_mark=type_mark, constraint=constraint, not_null=is_not_null, span=self.make_span(start))
 
         # Parse range constraint
         if self.match(TokenType.RANGE):
@@ -3164,7 +3170,7 @@ class Parser:
                 constraint = RangeConstraint(range_expr=low)
 
         # Always return SubtypeIndication for consistent interface
-        return SubtypeIndication(type_mark=type_mark, constraint=constraint, span=self.make_span(start))
+        return SubtypeIndication(type_mark=type_mark, constraint=constraint, not_null=is_not_null, span=self.make_span(start))
 
     def parse_object_declaration(self) -> ObjectDecl | NumberDecl | ExceptionDecl:
         """Parse object (variable/constant) declaration, number declaration, or exception declaration.

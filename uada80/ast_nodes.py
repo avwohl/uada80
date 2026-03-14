@@ -673,6 +673,7 @@ class SubtypeIndication(Expr):
 
     type_mark: Expr
     constraint: Optional["Constraint"] = None
+    not_null: bool = False  # 'not null' null-exclusion qualifier
 
 
 # ============================================================================

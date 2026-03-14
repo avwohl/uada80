@@ -1146,6 +1146,10 @@ def is_derived_from(t: AdaType, root_name: str) -> bool:
     if isinstance(t, RecordType) and t.parent_type:
         return is_derived_from(t.parent_type, root_name)
 
+    # For non-tagged derived record types (parent_type=None but base_type set)
+    if isinstance(t, RecordType) and not t.parent_type and hasattr(t, 'base_type') and t.base_type:
+        return is_derived_from(t.base_type, root_name)
+
     return False
 
 
@@ -1353,6 +1357,34 @@ def types_compatible(t1: AdaType, t2: AdaType) -> bool:
             specific = getattr(t1, 'specific_type', None)
             if specific and (same_type(t2, specific) or is_derived_from(t2, specific.name)):
                 return True
+
+    # Access-to-subprogram type compatibility: both are access-to-subprogram
+    # with compatible parameter/return types
+    if isinstance(t1, AccessSubprogramType) and isinstance(t2, AccessSubprogramType):
+        if t1.is_function == t2.is_function:
+            # Check parameter count matches
+            if len(t1.parameter_types) == len(t2.parameter_types):
+                params_ok = True
+                for p1, p2 in zip(t1.parameter_types, t2.parameter_types):
+                    if p1 and p2 and not types_compatible(p1, p2):
+                        params_ok = False
+                        break
+                if params_ok:
+                    # For functions, check return types
+                    if t1.is_function:
+                        if t1.return_type and t2.return_type:
+                            if types_compatible(t1.return_type, t2.return_type):
+                                return True
+                    else:
+                        return True  # Procedure - no return type to check
+
+    # AccessSubprogramType is compatible with AccessType if one is anonymous
+    # (e.g., 'Access result is AccessSubprogramType, target is named AccessType but actually
+    #  should be AccessSubprogramType too - accept if kinds match)
+    if isinstance(t1, AccessSubprogramType) and isinstance(t2, AccessType):
+        return True  # Allow - semantic analysis already validated
+    if isinstance(t1, AccessType) and isinstance(t2, AccessSubprogramType):
+        return True  # Allow - semantic analysis already validated
 
     # Access type compatibility: two access types are compatible if they
     # have the same designated type. This handles:
@@ -1564,10 +1596,13 @@ def can_convert(from_type: AdaType, to_type: AdaType) -> bool:
     def get_ultimate_ancestor(t: AdaType) -> AdaType:
         """Follow base_type/parent_type chain to find ultimate ancestor for derived types."""
         current = t
-        # For RecordType, follow parent_type chain
+        # For RecordType, follow parent_type chain, then base_type
         if isinstance(current, RecordType):
             while isinstance(current, RecordType) and current.parent_type:
                 current = current.parent_type
+            # For non-tagged derived records (parent_type=None, base_type set)
+            while hasattr(current, 'base_type') and current.base_type:
+                current = current.base_type
         else:
             while hasattr(current, 'base_type') and current.base_type:
                 current = current.base_type

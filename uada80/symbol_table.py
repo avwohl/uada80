@@ -6537,6 +6537,18 @@ class SymbolTable:
                 return prefix_symbol.public_symbols[selector_lower]
             return None
 
+        # Protected type/object prefix - look up operations in public_symbols
+        if prefix_symbol.kind in (SymbolKind.PROTECTED_TYPE, SymbolKind.PROTECTED):
+            if prefix_symbol.public_symbols and selector_lower in prefix_symbol.public_symbols:
+                return prefix_symbol.public_symbols[selector_lower]
+            return None
+
+        # Task type/object prefix - look up entries in public_symbols
+        if prefix_symbol.kind in (SymbolKind.TASK_TYPE, SymbolKind.TASK):
+            if prefix_symbol.public_symbols and selector_lower in prefix_symbol.public_symbols:
+                return prefix_symbol.public_symbols[selector_lower]
+            return None
+
         # Could also be record component access, but that's handled
         # by type checking, not symbol lookup
 

@@ -697,6 +697,10 @@ class SemanticAnalyzer:
             # Works for both packages and block labels (both have public_symbols)
             if prefix_sym.public_symbols and selector in prefix_sym.public_symbols:
                 return prefix_sym.public_symbols[selector]
+            # Ada RM 10.1.1: Child packages also see parent's private part
+            if hasattr(prefix_sym, 'private_symbols') and prefix_sym.private_symbols:
+                if selector in prefix_sym.private_symbols:
+                    return prefix_sym.private_symbols[selector]
         return None
 
     def _find_package_in_ast(self, pkg_name: str) -> Optional[Symbol]:
@@ -1745,6 +1749,14 @@ class SemanticAnalyzer:
         # This uses the existing use clause mechanism for symbol lookup
         self.symbols.add_use_clause(parent_sym)
 
+        # Ada RM 10.1.1: Child package bodies have visibility to parent's private part
+        if hasattr(parent_sym, 'private_symbols') and parent_sym.private_symbols:
+            for sym_name, sym_val in parent_sym.private_symbols.items():
+                try:
+                    self.symbols.define(sym_val)
+                except Exception:
+                    pass
+
         # Recursively import grandparent symbols if parent is also a child
         if "." in parent_name:
             self._import_parent_package_symbols(parent_name)
@@ -1821,6 +1833,26 @@ class SemanticAnalyzer:
                             parent_type=parent,
                             is_tagged=parent.is_tagged,
                         )
+                    elif parent and isinstance(parent, AccessType):
+                        # Derived access type - preserve AccessType with designated type
+                        type_sym.ada_type = AccessType(
+                            name=formal.name,
+                            designated_type=parent.designated_type,
+                            is_access_constant=parent.is_access_constant,
+                            is_not_null=parent.is_not_null,
+                            is_access_all=parent.is_access_all,
+                        )
+                        type_sym.ada_type.base_type = parent
+                    elif parent and isinstance(parent, AccessSubprogramType):
+                        type_sym.ada_type = AccessSubprogramType(
+                            name=formal.name,
+                            is_function=parent.is_function,
+                            parameter_types=list(parent.parameter_types),
+                            return_type=parent.return_type,
+                            is_not_null=parent.is_not_null,
+                            is_access_protected=parent.is_access_protected,
+                        )
+                        type_sym.ada_type.base_type = parent
                     elif parent:
                         type_sym.ada_type = AdaType(kind=parent.kind, name=formal.name)
                         type_sym.ada_type.base_type = parent
@@ -2571,6 +2603,25 @@ class SemanticAnalyzer:
                 )
             elif isinstance(decl.type_mark, SubtypeIndication):
                 obj_type = self._resolve_subtype_indication(decl.type_mark)
+                # Apply 'not null' qualifier from subtype indication
+                if getattr(decl.type_mark, 'not_null', False) and obj_type:
+                    if isinstance(obj_type, AccessType) and not obj_type.is_not_null:
+                        obj_type = AccessType(
+                            name=obj_type.name,
+                            designated_type=obj_type.designated_type,
+                            is_access_constant=obj_type.is_access_constant,
+                            is_not_null=True,
+                            is_access_all=obj_type.is_access_all,
+                        )
+                    elif isinstance(obj_type, AccessSubprogramType) and not obj_type.is_not_null:
+                        obj_type = AccessSubprogramType(
+                            name=obj_type.name,
+                            is_function=obj_type.is_function,
+                            parameter_types=list(obj_type.parameter_types),
+                            return_type=obj_type.return_type,
+                            is_not_null=True,
+                            is_access_protected=obj_type.is_access_protected,
+                        )
             else:
                 # Assume it's a type name (Identifier or SelectedName)
                 obj_type = self._resolve_type(decl.type_mark)
@@ -2826,6 +2877,12 @@ class SemanticAnalyzer:
                     disc_type = self._resolve_type(disc_spec.type_mark)
                     if disc_type is None:
                         disc_type = IntegerType(name="_unknown", size_bits=16, low=0, high=0)
+                    # Wrap in AccessType if discriminant is an access discriminant
+                    if getattr(disc_spec, 'is_access', False) and not isinstance(disc_type, (AccessType, AccessSubprogramType)):
+                        disc_type = AccessType(
+                            name=f"_anonymous_access",
+                            designated_type=disc_type,
+                        )
                     for disc_name in disc_spec.names:
                         ada_type.discriminants.append(
                             RecordComponent(
@@ -3303,11 +3360,29 @@ class SemanticAnalyzer:
                 family_index_type=family_type,
             ))
 
+        # Build discriminant list
+        disc_list = []
+        if decl.discriminants:
+            for disc_spec in decl.discriminants:
+                disc_type = self._resolve_type(disc_spec.type_mark)
+                if disc_type is None:
+                    disc_type = IntegerType(name="_unknown", size_bits=16, low=0, high=0)
+                for disc_name in disc_spec.names:
+                    disc_list.append(
+                        RecordComponent(
+                            name=disc_name,
+                            component_type=disc_type,
+                            is_discriminant=True,
+                            default_value=disc_spec.default_value,
+                        )
+                    )
+
         # Create the task type
         is_single = getattr(decl, 'is_single', False)
         task_type = TaskType(
             name=decl.name,
             entries=entries,
+            discriminants=disc_list,
             is_single_task=is_single,
         )
 
@@ -3331,6 +3406,16 @@ class SemanticAnalyzer:
 
         # Enter task scope to analyze entries and declarations
         self.symbols.enter_scope(decl.name)
+
+        # Add discriminants to task scope so they're visible inside the task body
+        for disc in disc_list:
+            disc_sym = Symbol(
+                name=disc.name,
+                kind=SymbolKind.VARIABLE,
+                ada_type=disc.component_type,
+            )
+            disc_sym.is_discriminant = True
+            self.symbols.define(disc_sym)
 
         # Add entries to scope
         for entry_decl in decl.entries:
@@ -3364,6 +3449,20 @@ class SemanticAnalyzer:
 
         # Enter task body scope
         self.symbols.enter_scope(body.name)
+
+        # Re-register discriminants from task type so they're visible in the body
+        if task_sym.ada_type and isinstance(task_sym.ada_type, TaskType):
+            for disc in task_sym.ada_type.discriminants:
+                disc_sym = Symbol(
+                    name=disc.name,
+                    kind=SymbolKind.VARIABLE,
+                    ada_type=disc.component_type,
+                )
+                disc_sym.is_discriminant = True
+                try:
+                    self.symbols.define(disc_sym)
+                except Exception:
+                    pass
 
         # Re-register entries from task spec so they're visible in the body.
         # Use the original entry declarations from the task type definition
@@ -3984,7 +4083,8 @@ class SemanticAnalyzer:
                     designated = IntegerType(
                         name=f"{name}_designated",
                         size_bits=designated.size_bits,
-                        low=int(low_val), high=int(high_val)
+                        low=int(low_val), high=int(high_val),
+                        base_type=designated,
                     )
 
         return AccessType(
@@ -4281,6 +4381,7 @@ class SemanticAnalyzer:
                 components=list(parent.components),
                 discriminants=list(parent.discriminants) if parent.discriminants else [],
                 parent_type=None,
+                variant_part=parent.variant_part,
             )
             # Store the parent type reference for type conversion purposes
             derived.base_type = parent
@@ -4324,6 +4425,31 @@ class SemanticAnalyzer:
                 bounds=parent.bounds,
                 base_type=parent,
             )
+
+        # Handle derivation from access type
+        if isinstance(parent, AccessType):
+            derived = AccessType(
+                name=name,
+                size_bits=parent.size_bits,
+                designated_type=parent.designated_type,
+                is_access_all=parent.is_access_all,
+                is_access_constant=parent.is_access_constant,
+                is_not_null=parent.is_not_null,
+            )
+            derived.base_type = parent
+            return derived
+
+        if isinstance(parent, AccessSubprogramType):
+            derived = AccessSubprogramType(
+                name=name,
+                is_function=parent.is_function,
+                parameter_types=list(parent.parameter_types),
+                return_type=parent.return_type,
+                is_not_null=parent.is_not_null,
+                is_access_protected=parent.is_access_protected,
+            )
+            derived.base_type = parent
+            return derived
 
         return parent
 
@@ -4588,6 +4714,33 @@ class SemanticAnalyzer:
             # Constrained array type: ARR(1..10) parses as Slice
             # Extract the base type from the prefix
             return self._resolve_type(type_expr.prefix)
+        elif isinstance(type_expr, AccessTypeIndication):
+            # Anonymous access type (e.g., access Integer, access Vehicle'Class)
+            designated_type = self._resolve_type(type_expr.subtype)
+            return AccessType(
+                name="_anonymous_access",
+                designated_type=designated_type,
+                is_access_constant=type_expr.is_constant,
+                is_not_null=type_expr.not_null,
+                is_access_all=type_expr.is_all,
+            )
+        elif isinstance(type_expr, AccessSubprogramTypeIndication):
+            # Anonymous access-to-subprogram type
+            param_types = []
+            for param in type_expr.parameters:
+                pt = self._resolve_type(param.type_mark) if param.type_mark else None
+                if pt:
+                    for _ in param.names:
+                        param_types.append(pt)
+            ret_type = self._resolve_type(type_expr.return_type) if type_expr.return_type else None
+            return AccessSubprogramType(
+                name="_anonymous_access_subprogram",
+                is_function=type_expr.is_function,
+                parameter_types=param_types,
+                return_type=ret_type,
+                is_not_null=type_expr.not_null,
+                is_access_protected=type_expr.is_protected,
+            )
         return None
 
     def _resolve_subtype_indication(
@@ -7643,20 +7796,38 @@ class SemanticAnalyzer:
             return AdaType(name="Address", kind=TypeKind.ACCESS)
 
         # Access returns an access type to the prefix
-        if attr_lower == "access":
+        if attr_lower in ("access", "unchecked_access"):
             if prefix_type is None:
                 return None
-            return AccessType(
-                name=f"access_{prefix_type.name}",
-                kind=TypeKind.ACCESS,
-                size_bits=16,  # Z80 has 16-bit pointers
-                designated_type=prefix_type,
-            )
-
-        # Unchecked_Access is like Access but without accessibility checks
-        if attr_lower == "unchecked_access":
-            if prefix_type is None:
-                return None
+            # Check if the prefix is a subprogram name (for access-to-subprogram)
+            prefix_sym = None
+            if isinstance(expr.prefix, Identifier):
+                prefix_sym = self.symbols.lookup(expr.prefix.name)
+            elif isinstance(expr.prefix, SelectedName):
+                # Package.Subprogram'Access
+                if isinstance(expr.prefix.prefix, Identifier):
+                    prefix_sym = self.symbols.lookup_selected(
+                        expr.prefix.prefix.name, expr.prefix.selector)
+                else:
+                    # Navigate package hierarchy
+                    pkg_sym = self._resolve_hierarchical_package(expr.prefix.prefix)
+                    if pkg_sym and pkg_sym.public_symbols:
+                        prefix_sym = pkg_sym.public_symbols.get(expr.prefix.selector.lower())
+            if prefix_sym and prefix_sym.kind in (SymbolKind.FUNCTION, SymbolKind.PROCEDURE):
+                # Build AccessSubprogramType from the subprogram signature
+                param_types = []
+                for param in prefix_sym.parameters:
+                    if param.ada_type:
+                        param_types.append(param.ada_type)
+                ret_type = prefix_sym.ada_type if prefix_sym.kind == SymbolKind.FUNCTION else None
+                return AccessSubprogramType(
+                    name=f"access_{prefix_sym.name}",
+                    is_function=(prefix_sym.kind == SymbolKind.FUNCTION),
+                    parameter_types=param_types,
+                    return_type=ret_type,
+                    is_access_protected=prefix_sym.kind in (SymbolKind.FUNCTION, SymbolKind.PROCEDURE) and
+                        getattr(prefix_sym, 'is_protected_operation', False),
+                )
             return AccessType(
                 name=f"access_{prefix_type.name}",
                 kind=TypeKind.ACCESS,

@@ -100,6 +100,7 @@ from uada80.ast_nodes import (
     UseClause,
     BodyStub,
     DiscriminantConstraint,
+    AccessTypeIndication,
 )
 from uada80.ir import (
     IRType,
@@ -121,6 +122,7 @@ from uada80.type_system import (
     TypeKind,
     PREDEFINED_TYPES,
     AccessType,
+    AccessSubprogramType,
     RecordType,
     RecordComponent,
     ArrayType,
@@ -1185,18 +1187,77 @@ class ASTLowering:
                 type_name_str = type_name.name
             elif isinstance(type_name, SelectedName):
                 type_name_str = type_name.selector  # Use just the type name part
+            elif isinstance(type_name, AccessTypeIndication):
+                # Anonymous access type parameter (e.g., "access Button")
+                # Resolve the designated type and create an AccessType
+                from uada80.type_system import AccessType as _AT_param
+                designated_subtype = type_name.subtype
+                desig_name = None
+                if isinstance(designated_subtype, Identifier):
+                    desig_name = designated_subtype.name
+                elif isinstance(designated_subtype, SelectedName):
+                    desig_name = designated_subtype.selector
+                if desig_name:
+                    type_name_str = desig_name
+                    desig_sym = self.symbols.lookup(desig_name)
+                    if desig_sym and desig_sym.ada_type:
+                        param_type = _AT_param(
+                            name="_anonymous_access",
+                            designated_type=desig_sym.ada_type,
+                        )
+                if type_name_str is None:
+                    type_name_str = str(type_name)
             else:
                 type_name_str = str(type_name)
 
-            # Try global symbol table first
-            type_sym = self.symbols.lookup(type_name_str)
-            if type_sym and type_sym.ada_type:
-                param_type = type_sym.ada_type
+            # Try global symbol table first (skip if param_type already resolved above)
+            if param_type is None:
+                type_sym = self.symbols.lookup(type_name_str)
+                if type_sym and type_sym.ada_type:
+                    param_type = type_sym.ada_type
 
             # If bare name lookup failed, try resolving via the full type_mark
             # (handles SelectedName like C3900010.Alert_Type by searching package symbols)
             if param_type is None:
                 param_type = self._resolve_local_type(type_name)
+
+            # For SelectedName type marks from generic instances (e.g., Math_Pk.Math_Procedure_Ptr),
+            # resolve by finding the GenericInstantiation in body declarations and looking up
+            # the type from the generic spec's public_symbols.
+            if param_type is None and isinstance(type_name, SelectedName) and isinstance(type_name.prefix, Identifier):
+                _inst_prefix = type_name.prefix.name.lower()
+                _inst_selector = type_name.selector.lower()
+                for d in (self._current_body_declarations or []):
+                    if isinstance(d, GenericInstantiation) and d.name.lower() == _inst_prefix:
+                        _gen_name = None
+                        if isinstance(d.generic_name, Identifier):
+                            _gen_name = d.generic_name.name.lower()
+                        elif isinstance(d.generic_name, SelectedName):
+                            _gen_name = d.generic_name.selector.lower()
+                        if _gen_name:
+                            _gen_sym = self.symbols.lookup(_gen_name)
+                            if _gen_sym and hasattr(_gen_sym, 'public_symbols') and _gen_sym.public_symbols:
+                                _type_sym = _gen_sym.public_symbols.get(_inst_selector)
+                                if _type_sym and _type_sym.ada_type:
+                                    param_type = _type_sym.ada_type
+                        break
+                # Also search _body_declarations_stack if not found
+                if param_type is None and hasattr(self, '_body_declarations_stack'):
+                    for stack_decls in self._body_declarations_stack:
+                        for d in (stack_decls or []):
+                            if isinstance(d, GenericInstantiation) and d.name.lower() == _inst_prefix:
+                                _gen_name = None
+                                if isinstance(d.generic_name, Identifier):
+                                    _gen_name = d.generic_name.name.lower()
+                                elif isinstance(d.generic_name, SelectedName):
+                                    _gen_name = d.generic_name.selector.lower()
+                                if _gen_name:
+                                    _gen_sym = self.symbols.lookup(_gen_name)
+                                    if _gen_sym and hasattr(_gen_sym, 'public_symbols') and _gen_sym.public_symbols:
+                                        _type_sym = _gen_sym.public_symbols.get(_inst_selector)
+                                        if _type_sym and _type_sym.ada_type:
+                                            param_type = _type_sym.ada_type
+                                break
 
             # Also check local type declarations
             if param_type is None and hasattr(self, '_current_body_declarations') and self._current_body_declarations:
@@ -3164,6 +3225,10 @@ class ASTLowering:
                             if check_type:
                                 self._emit_range_check(init_value, check_type,
                                                        comment=f"init range check for {name}")
+                        # Null-exclusion check for 'not null' access types
+                        if ada_type and self._is_not_null_access(ada_type, decl):
+                            self._emit_null_exclusion_check(
+                                init_value, f"null-exclusion check for init of {name}")
                         self.builder.mov(local.vreg, init_value,
                                         comment=f"init {name}")
                         # Track typed constant values for qualified name resolution
@@ -3373,9 +3438,13 @@ class ASTLowering:
                                         comp_mem = MemoryLocation(base=local_addr, offset=comp_offset_bytes, ir_type=IRType.WORD)
                                         self.builder.emit(IRInstr(OpCode.STORE, dst=comp_mem, src1=value, comment=f"init {name}.{comp.name}"))
                     # Initialize access types to null (0)
-                    if isinstance(ada_type, AccessType):
+                    if isinstance(ada_type, (AccessType, AccessSubprogramType)):
                         self.builder.mov(local.vreg, Immediate(0, IRType.WORD),
                                         comment=f"init {name} to null")
+                        # Null-exclusion check: 'not null' access default init raises Constraint_Error
+                        if self._is_not_null_access(ada_type, decl):
+                            self._emit_null_exclusion_check(
+                                local.vreg, f"null-exclusion on default init of {name}")
 
                     # Call Initialize for controlled types
                     if ada_type and self._type_needs_finalization(ada_type):
@@ -6193,6 +6262,10 @@ class ASTLowering:
             if target_type:
                 self._emit_range_check(value, target_type, "assignment range check")
 
+            # Emit null-exclusion check for 'not null' access types
+            if target_type and self._is_not_null_access(target_type):
+                self._emit_null_exclusion_check(value, "null-exclusion check on assignment")
+
             # Get target
             if isinstance(stmt.target, Identifier):
                 name = stmt.target.name.lower()
@@ -7791,6 +7864,71 @@ class ASTLowering:
                     self.builder.pop(temp)
                 return
 
+        # Check if this is a call through an access-to-subprogram record field
+        # e.g., B.Response(B) where Response is a record component of access-to-procedure type
+        if isinstance(stmt.name, SelectedName):
+            _as_prefix = stmt.name.prefix
+            _as_selector = stmt.name.selector.lower()
+            _as_rec_type = None
+            if isinstance(_as_prefix, Identifier):
+                _as_prefix_name = _as_prefix.name.lower()
+                if self.ctx and _as_prefix_name in self.ctx.locals:
+                    _as_local = self.ctx.locals[_as_prefix_name]
+                    if _as_local.ada_type:
+                        _as_rec_type = self._resolve_local_type(_as_local.ada_type)
+                if _as_rec_type is None and self.ctx and _as_prefix_name in self.ctx.params:
+                    if _as_prefix_name in self.ctx.param_ada_types:
+                        _as_rec_type = self.ctx.param_ada_types[_as_prefix_name]
+                if _as_rec_type is None:
+                    _as_sym = self.symbols.lookup(_as_prefix_name) if self.symbols else None
+                    if _as_sym and _as_sym.ada_type:
+                        _as_rec_type = _as_sym.ada_type
+                # Follow implicit dereference for access types
+                from uada80.type_system import AccessSubprogramType as _AST_proc
+                if isinstance(_as_rec_type, AccessType) and _as_rec_type.designated_type:
+                    _as_rec_type = _as_rec_type.designated_type
+                if isinstance(_as_rec_type, RecordType):
+                    _as_comp = _as_rec_type.get_component(_as_selector)
+                    if _as_comp:
+                        _as_comp_type = _as_comp.component_type
+                        if isinstance(_as_comp_type, _AST_proc):
+                            # Load the access-to-subprogram value from the record field
+                            func_ptr = self._lower_expr(stmt.name)
+                            # Use _lower_indirect_proc_call_from_type with the loaded pointer
+                            # Push arguments with proper mode handling
+                            type_sym = self._lookup_type_symbol(_as_comp_type.name) if _as_comp_type.name else None
+                            param_modes = []
+                            if type_sym and type_sym.definition:
+                                from uada80.ast_nodes import TypeDecl as _TD, AccessSubprogramTypeDef as _ASTD
+                                typedef = type_sym.definition
+                                if isinstance(typedef, _TD) and isinstance(typedef.type_def, _ASTD):
+                                    for p in typedef.type_def.parameters:
+                                        mode = p.mode if p.mode else 'in'
+                                        for _ in p.names:
+                                            param_modes.append(mode)
+                            stack_slots = 0
+                            args = stmt.args if stmt.args else []
+                            for i, arg in enumerate(reversed(args)):
+                                forward_idx = len(args) - 1 - i
+                                mode = param_modes[forward_idx] if forward_idx < len(param_modes) else 'in'
+                                arg_expr = arg.value if hasattr(arg, 'value') and arg.value else arg
+                                if mode in ('out', 'in out'):
+                                    addr = self._get_lvalue_address(arg_expr)
+                                    self.builder.push(addr)
+                                else:
+                                    value = self._lower_expr(arg_expr)
+                                    self.builder.push(value)
+                                stack_slots += 1
+                            self.builder.emit(IRInstr(
+                                OpCode.CALL_INDIRECT,
+                                src1=func_ptr,
+                                comment=f"indirect proc call via {_as_prefix_name}.{_as_selector}"
+                            ))
+                            for _ in range(stack_slots):
+                                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                                self.builder.pop(temp)
+                            return
+
         # Handle SelectedName procedure calls (Ada.Text_IO.Put_Line, etc.)
         if isinstance(stmt.name, SelectedName):
             # Not a protected operation - check for Text_IO / Integer_Text_IO
@@ -8002,6 +8140,13 @@ class ASTLowering:
                     if isinstance(type_sym.ada_type, AccessSubprogramType):
                         is_access_subprog_call = True
                         access_subprog_type = type_sym.ada_type
+                # Fallback: check param_ada_types directly (handles generic instantiation types)
+                if not is_access_subprog_call and self.ctx and call_name_lower in self.ctx.param_ada_types:
+                    from uada80.type_system import AccessSubprogramType
+                    param_ada_type = self.ctx.param_ada_types[call_name_lower]
+                    if isinstance(param_ada_type, AccessSubprogramType):
+                        is_access_subprog_call = True
+                        access_subprog_type = param_ada_type
             # Also check locals (for local variables with access-to-subprogram type)
             if not is_access_subprog_call and self.ctx and call_name_lower in self.ctx.locals:
                 local_info = self.ctx.locals[call_name_lower]
@@ -9704,6 +9849,14 @@ class ASTLowering:
                     src1=MemoryLocation(offset=neg_offset, ir_type=IRType.PTR, is_frame_offset=True),
                 ))
                 return addr_reg
+            elif self.ctx and name in self.ctx.params:
+                # For byref params (out/in out), the param vreg already holds the address
+                if name in self.ctx.byref_params:
+                    return self.ctx.params[name]
+                # For in params, compute address from frame
+                # The param is on the stack - return its vreg (it's a value, not address)
+                # Caller may need the address of the param slot itself
+                return self.ctx.params[name]
             else:
                 # Global variable
                 return Label(f"_{name}")
@@ -10700,14 +10853,14 @@ class ASTLowering:
                     # If semantic analysis stored ada_type with proper offsets, use it
                     if hasattr(decl, 'ada_type') and decl.ada_type and isinstance(decl.ada_type, RecordType):
                         record_type = decl.ada_type
-                        for comp in record_type.components:
-                            if comp.name.lower() == field_name:
-                                comp_offset_bits = comp.offset_bits + (offset * 8)
-                                size_bits = comp.size_bits if comp.size_bits else comp.component_type.size_bits
-                                byte_offset = comp_offset_bits // 8
-                                bit_offset = comp_offset_bits % 8
-                                is_packed = record_type.is_packed and (bit_offset != 0 or size_bits < 8)
-                                return (byte_offset, bit_offset, size_bits, is_packed)
+                        comp = record_type.get_component(field_name)
+                        if comp is not None:
+                            comp_offset_bits = comp.offset_bits + (offset * 8)
+                            size_bits = comp.size_bits if comp.size_bits else comp.component_type.size_bits
+                            byte_offset = comp_offset_bits // 8
+                            bit_offset = comp_offset_bits % 8
+                            is_packed = record_type.is_packed and (bit_offset != 0 or size_bits < 8)
+                            return (byte_offset, bit_offset, size_bits, is_packed)
 
                     # Fallback: calculate from AST components
                     if hasattr(type_def, 'components'):
@@ -10762,9 +10915,9 @@ class ASTLowering:
         if isinstance(selected.prefix, Identifier):
             sym = self.symbols.lookup(selected.prefix.name)
             if sym and sym.ada_type and isinstance(sym.ada_type, RecordType):
-                for comp in sym.ada_type.components:
-                    if comp.name.lower() == selected.selector.lower():
-                        return (comp.component_type.size_bits + 7) // 8
+                comp = sym.ada_type.get_component(selected.selector)
+                if comp is not None:
+                    return (comp.component_type.size_bits + 7) // 8
         return 2  # Default to word size
 
     def _get_field_bit_info(self, selected: SelectedName) -> tuple[int, int, int, bool]:
@@ -10785,16 +10938,16 @@ class ASTLowering:
             sym = self.symbols.lookup(selected.prefix.name)
             if sym and sym.ada_type and isinstance(sym.ada_type, RecordType):
                 record_type = sym.ada_type
-                for comp in record_type.components:
-                    if comp.name.lower() == selected.selector.lower():
-                        offset_bits = comp.offset_bits
-                        # Use packed size if set, otherwise component type size
-                        size_bits = comp.size_bits if comp.size_bits else comp.component_type.size_bits
-                        byte_offset = offset_bits // 8
-                        bit_offset = offset_bits % 8
-                        # It's a packed sub-byte field if bit_offset != 0 or size < 8
-                        is_packed = record_type.is_packed and (bit_offset != 0 or size_bits < 8)
-                        return (byte_offset, bit_offset, size_bits, is_packed)
+                comp = record_type.get_component(selected.selector)
+                if comp is not None:
+                    offset_bits = comp.offset_bits
+                    # Use packed size if set, otherwise component type size
+                    size_bits = comp.size_bits if comp.size_bits else comp.component_type.size_bits
+                    byte_offset = offset_bits // 8
+                    bit_offset = offset_bits % 8
+                    # It's a packed sub-byte field if bit_offset != 0 or size < 8
+                    is_packed = record_type.is_packed and (bit_offset != 0 or size_bits < 8)
+                    return (byte_offset, bit_offset, size_bits, is_packed)
 
             # If symbol table lookup failed, try to find type from local declarations
             if self.ctx and var_name in self.ctx.locals:
@@ -12273,6 +12426,37 @@ class ASTLowering:
         too_high = self.builder.new_vreg(IRType.BOOL, "_too_high")
         self.builder.cmp_gt(too_high, value, high_vreg)
         self.builder.jnz(too_high, Label("_raise_constraint_error"))
+
+    def _is_not_null_access(self, ada_type, decl=None) -> bool:
+        """Check if a type is a 'not null' access type.
+
+        Args:
+            ada_type: The Ada type to check
+            decl: Optional declaration node to check for not_null on subtype indication
+        """
+        if ada_type is None:
+            return False
+        if isinstance(ada_type, AccessType) and ada_type.is_not_null:
+            return True
+        if isinstance(ada_type, AccessSubprogramType) and ada_type.is_not_null:
+            return True
+        # Check if the declaration's subtype indication has 'not null'
+        if decl is not None:
+            type_mark = getattr(decl, 'type_mark', None)
+            if type_mark is not None and getattr(type_mark, 'not_null', False):
+                return True
+            # Also check AccessTypeIndication's not_null
+            if type_mark is not None and getattr(type_mark, 'not_null', False):
+                return True
+        return False
+
+    def _emit_null_exclusion_check(self, value, comment: str = "") -> None:
+        """Emit null-exclusion check (raise Constraint_Error if value is null/0)."""
+        if self.ctx is None:
+            return
+        is_null = self.builder.new_vreg(IRType.BOOL, "_is_null")
+        self.builder.cmp_eq(is_null, value, Immediate(0, IRType.WORD))
+        self.builder.jnz(is_null, Label("_raise_constraint_error"))
 
     def _get_formal_param_type(self, sym, forward_idx, proc_name_lower):
         """Get the Ada type of a formal parameter for constraint checking.
@@ -18580,6 +18764,8 @@ class ASTLowering:
                         _local = self.ctx.locals[prefix_name]
                         if _local.ada_type:
                             _rec_type = self._resolve_local_type(_local.ada_type)
+                    if _rec_type is None and self.ctx and prefix_name in self.ctx.param_ada_types:
+                        _rec_type = self.ctx.param_ada_types[prefix_name]
                     if _rec_type is None:
                         _sym = self.symbols.lookup(prefix_name) if self.symbols else None
                         if _sym and _sym.ada_type:
@@ -18600,6 +18786,38 @@ class ASTLowering:
                                     a.value if hasattr(a, 'value') else a for a in expr.args
                                 ))
                                 return self._lower_indexed(indexed_expr)
+
+                    # Check if this is a call through an access-to-subprogram record field
+                    # e.g., RO_4.C(4.5) where C is a record component of access-to-function type
+                    if isinstance(_rec_type, _RecordType):
+                        from uada80.type_system import AccessSubprogramType as _AST_func
+                        _as_comp = _rec_type.get_component(selector)
+                        if _as_comp and isinstance(_as_comp.component_type, _AST_func):
+                            # Load the access-to-subprogram value from the record field
+                            func_ptr = self._lower_expr(expr.name)
+                            # Indirect call through the function pointer
+                            # Push arguments (right to left)
+                            stack_slots = 0
+                            if expr.args:
+                                for arg in reversed(expr.args):
+                                    val = self._lower_expr(arg.value if hasattr(arg, 'value') else arg)
+                                    self.builder.push(val)
+                                    stack_slots += 1
+                            self.builder.emit(IRInstr(
+                                OpCode.CALL_INDIRECT,
+                                src1=func_ptr,
+                                comment=f"indirect func call via {prefix_name}.{selector}"
+                            ))
+                            for _ in range(stack_slots):
+                                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                                self.builder.pop(temp)
+                            # Capture result from HL
+                            self.builder.emit(IRInstr(
+                                OpCode.MOV, result,
+                                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                                comment=f"capture indirect call return from {prefix_name}.{selector}"
+                            ))
+                            return result
 
                     # Not a protected type - this is a package-qualified function call
                     # Check if this is a predefined operator that should use inline code
@@ -18815,6 +19033,12 @@ class ASTLowering:
                 if type_sym and type_sym.ada_type:
                     from uada80.type_system import AccessSubprogramType
                     if isinstance(type_sym.ada_type, AccessSubprogramType):
+                        is_access_func = True
+                # Fallback: check param_ada_types directly (handles generic instantiation types)
+                if not is_access_func and self.ctx and func_name_lower in self.ctx.param_ada_types:
+                    from uada80.type_system import AccessSubprogramType
+                    param_ada_type = self.ctx.param_ada_types[func_name_lower]
+                    if isinstance(param_ada_type, AccessSubprogramType):
                         is_access_func = True
             # Check locals
             if not is_access_func and self.ctx and func_name_lower in self.ctx.locals:
@@ -19557,7 +19781,7 @@ class ASTLowering:
                 # inner_val should be a pointer to a string (from _c_img, _i2s, etc.)
                 result = self.builder.new_vreg(IRType.WORD, "_attr_length")
                 self.builder.push(inner_val)
-                self.builder.call(Label("_strlen"), comment="string length of attribute")
+                self.builder.call(Label("_str_len"), comment="string length of attribute")
                 self.builder.pop(result)
                 return result
 
