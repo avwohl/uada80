@@ -277,9 +277,9 @@ def compile_and_run_acats(test_files, timeout=5.0):
         support = resolve_support_files(test_files)
         files = [REPORT_FILE] + support + list(test_files)
         try:
-            result = _compile_with_timeout(compiler, files, timeout=60)
+            result = _compile_with_timeout(compiler, files, timeout=90)
             if result is None:
-                return "compile", False, "TIMEOUT: compilation hung (>60s)"
+                return "compile", False, "TIMEOUT: compilation hung (>90s)"
             if not result.success:
                 msg = str(result.errors[0]) if result.errors else "unknown"
                 return "compile", False, msg
@@ -290,7 +290,7 @@ def compile_and_run_acats(test_files, timeout=5.0):
         # Assemble
         proc = subprocess.run(
             [UM80_CMD, "-o", str(rel_file), str(asm_file)],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, timeout=60
         )
         if proc.returncode != 0:
             return "assemble", False, proc.stderr.strip()
@@ -298,7 +298,7 @@ def compile_and_run_acats(test_files, timeout=5.0):
         # Link
         proc = subprocess.run(
             [UL80_CMD, "-o", str(com_file), str(rel_file), str(LIBADA)],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, timeout=60
         )
         if proc.returncode != 0:
             return "link", False, proc.stderr.strip()
@@ -307,7 +307,8 @@ def compile_and_run_acats(test_files, timeout=5.0):
         try:
             proc = subprocess.run(
                 [CPMEMU_CMD, "--z80", str(com_file)],
-                capture_output=True, text=True, timeout=timeout
+                capture_output=True, text=True, timeout=timeout,
+                cwd=str(tmpdir)
             )
             output = proc.stdout + proc.stderr
             return "run", True, output

@@ -70,4 +70,7 @@ temp/
 # Ad-hoc diagnostic scripts and test results
 real_failures*.txt
 scan_*.py
+run_c*.py
+run_cat*.py
+feature*.md
 WIP.txt
