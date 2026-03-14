@@ -7003,11 +7003,25 @@ class SemanticAnalyzer:
                 # No user-defined operator - use common_type
                 result = common_type(left_type, right_type)
                 if result is None:
-                    self.error(
-                        f"incompatible types for arithmetic: "
-                        f"'{left_type.name}' and '{right_type.name}'",
-                        expr,
-                    )
+                    # Try re-analyzing operands with context from the other side
+                    # (overload resolution may have picked the wrong candidate)
+                    retry_right = self._analyze_expr(expr.right, expected_type=left_type)
+                    if retry_right and retry_right is not right_type:
+                        result = common_type(left_type, retry_right)
+                        if result is not None:
+                            right_type = retry_right
+                    if result is None:
+                        retry_left = self._analyze_expr(expr.left, expected_type=right_type)
+                        if retry_left and retry_left is not left_type:
+                            result = common_type(retry_left, right_type)
+                            if result is not None:
+                                left_type = retry_left
+                    if result is None:
+                        self.error(
+                            f"incompatible types for arithmetic: "
+                            f"'{left_type.name}' and '{right_type.name}'",
+                            expr,
+                        )
                 return result
 
         # Concatenation
