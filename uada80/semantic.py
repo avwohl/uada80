@@ -2410,6 +2410,9 @@ class SemanticAnalyzer:
         if ret_type and hasattr(ret_type, 'name') and ret_type.name.lower() in type_map:
             ret_type = type_map[ret_type.name.lower()]
         inst_symbol.return_type = ret_type
+        # Set ada_type to the return type (used for overload resolution by return type)
+        if is_function and ret_type:
+            inst_symbol.ada_type = ret_type
 
         # Copy parameters with type substitution
         inst_symbol.parameters = []
@@ -6788,15 +6791,49 @@ class SemanticAnalyzer:
                     sym.ada_type is not None and
                     sym.ada_type.kind == TypeKind.ENUMERATION)
 
-        # If there's an expected type and the symbol is an enum literal,
-        # try to find a matching overload
-        if expected_type is not None and is_enum_literal(symbol):
-            # Get all overloads for this name
+        # If there's an expected type, try to find a matching overload
+        if expected_type is not None:
             overloads = self.symbols.all_overloads(expr.name)
-            for candidate in overloads:
-                if is_enum_literal(candidate):
-                    if candidate.ada_type and types_compatible(expected_type, candidate.ada_type):
-                        return candidate.ada_type
+            if len(overloads) > 1:
+                def _type_name_match(t1, t2):
+                    """Check if two types match by name (exact or base type)."""
+                    if t1 is None or t2 is None:
+                        return False
+                    n1 = getattr(t1, 'name', '').lower()
+                    n2 = getattr(t2, 'name', '').lower()
+                    if n1 == n2:
+                        return True
+                    # Check base type (BOOL is subtype of BOOLEAN)
+                    base1 = getattr(t1, 'base_type', None)
+                    if base1 and getattr(base1, 'name', '').lower() == n2:
+                        return True
+                    return False
+
+                # Pass 1: exact name match (preferred for overload resolution)
+                for candidate in overloads:
+                    if is_enum_literal(candidate):
+                        if candidate.ada_type and _type_name_match(expected_type, candidate.ada_type):
+                            return candidate.ada_type
+                for candidate in overloads:
+                    if candidate.kind == SymbolKind.FUNCTION and not candidate.parameters:
+                        if candidate.ada_type and _type_name_match(expected_type, candidate.ada_type):
+                            expr.resolved_symbol = candidate
+                            return candidate.ada_type
+
+                # Pass 2: compatible match (derived types, etc.)
+                for candidate in overloads:
+                    if is_enum_literal(candidate):
+                        if candidate.ada_type and types_compatible(expected_type, candidate.ada_type):
+                            return candidate.ada_type
+                for candidate in overloads:
+                    if candidate.kind == SymbolKind.FUNCTION and not candidate.parameters:
+                        if candidate.ada_type and types_compatible(expected_type, candidate.ada_type):
+                            expr.resolved_symbol = candidate
+                            return candidate.ada_type
+            elif is_enum_literal(symbol):
+                # Single overload but check enum compatibility
+                if symbol.ada_type and types_compatible(expected_type, symbol.ada_type):
+                    return symbol.ada_type
             # No match found - fall through to return default
 
         return symbol.ada_type
@@ -7776,6 +7813,33 @@ class SemanticAnalyzer:
                 return prefix_type
             return None
 
+        # Analyze attribute arguments with correct expected_type for overload resolution
+        if expr.args:
+            if attr_lower in ("pos", "succ", "pred", "image"):
+                # Argument must be of the prefix type
+                for arg in expr.args:
+                    self._analyze_expr(arg, expected_type=prefix_type)
+            elif attr_lower == "val":
+                # Argument must be universal_integer
+                for arg in expr.args:
+                    self._analyze_expr(arg, expected_type=PREDEFINED_TYPES.get("Universal_Integer"))
+            elif attr_lower == "value":
+                # Argument must be String
+                for arg in expr.args:
+                    self._analyze_expr(arg, expected_type=PREDEFINED_TYPES.get("String"))
+            elif attr_lower in ("min", "max") and prefix_type and prefix_type.kind in (
+                TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.ENUMERATION,
+                TypeKind.FLOAT, TypeKind.FIXED, TypeKind.UNIVERSAL_INTEGER,
+                TypeKind.UNIVERSAL_REAL
+            ):
+                # T'Min(X,Y), T'Max(X,Y) - args must be of the prefix type
+                for arg in expr.args:
+                    self._analyze_expr(arg, expected_type=prefix_type)
+            else:
+                # Generic analysis for other attribute args
+                for arg in expr.args:
+                    self._analyze_expr(arg)
+
         # Integer-valued attributes that return Universal_Integer
         # (implicitly convertible to any integer type per Ada RM)
         if attr_lower in ("length", "size", "pos", "storage_size",
@@ -8037,7 +8101,7 @@ class SemanticAnalyzer:
     def _analyze_qualified_expr(self, expr: QualifiedExpr) -> Optional[AdaType]:
         """Analyze a qualified expression."""
         target_type = self._resolve_type(expr.type_mark)
-        self._analyze_expr(expr.expr)
+        self._analyze_expr(expr.expr, expected_type=target_type)
         return target_type
 
     # =========================================================================

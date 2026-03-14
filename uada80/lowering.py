@@ -7407,11 +7407,13 @@ class ASTLowering:
         ]
 
         # Push exception handlers (in reverse order so first handler is checked first)
-        # Count total pushes for proper cleanup
+        # Track per-handler push counts for proper cleanup at handler entry
         total_pushes = 0
+        per_handler_pushes = []  # push count for each handler
 
         for i, handler in reversed(list(enumerate(handlers))):
             handler_label = handler_labels[i]
+            handler_push_count = 0
 
             # Determine exception ID(s) for this handler
             if not handler.exception_names:
@@ -7421,7 +7423,7 @@ class ASTLowering:
                     dst=Label(handler_label),
                     src1=Immediate(0, IRType.WORD),  # 0 = catch all
                 ))
-                total_pushes += 1
+                handler_push_count = 1
             else:
                 # Support multiple exception names: when E1 | E2 | E3 =>
                 # Push a handler for each exception name (they all jump to same handler)
@@ -7443,7 +7445,13 @@ class ASTLowering:
                         dst=Label(handler_label),
                         src1=Immediate(exc_id, IRType.WORD),
                     ))
-                    total_pushes += 1
+                    handler_push_count += 1
+
+            total_pushes += handler_push_count
+            per_handler_pushes.append((i, handler_push_count))
+
+        # per_handler_pushes is in reverse order (last handler first), reverse it
+        per_handler_pushes.sort(key=lambda x: x[0])
 
         # Track handler count for this block (total pushes for proper cleanup)
         handler_count = total_pushes
@@ -7462,15 +7470,34 @@ class ASTLowering:
 
         # Pop from handler stack BEFORE generating handler code.
         # At runtime, when a handler runs, _exc_do_raise has already
-        # restored the _exc_handler chain (popped this block's handlers).
-        # So return statements inside handler code must NOT try to pop
-        # this block's handlers again.
+        # popped the matched handler from the chain. But sibling handlers
+        # (those pushed earlier, deeper in the chain) are still there.
+        # We must pop them at handler entry to prevent stale handlers
+        # from catching exceptions raised inside handler code.
         self.ctx.exception_handler_stack.pop()
+
+        # Compute remaining sibling pops for each handler.
+        # Push order: H(N-1) first, H(0) last.
+        # Chain: H(0) -> H(1) -> ... -> H(N-1) -> previous
+        # When H(i) fires: _exc_do_raise pops H(i), remaining = sum of pushes for H(i+1)..H(N-1)
+        remaining_pops = []
+        suffix_sum = 0
+        for i in range(len(handlers) - 1, -1, -1):
+            remaining_pops.append(suffix_sum)
+            suffix_sum += per_handler_pushes[i][1]
+        remaining_pops.reverse()
 
         # Generate handler code
         for i, handler in enumerate(handlers):
             handler_block = self.builder.new_block(handler_labels[i])
             self.builder.set_block(handler_block)
+
+            # Pop remaining sibling handlers from the chain.
+            # _exc_do_raise already popped the matched handler and restored SP.
+            # Sibling frames are still on the stack above SP; EXC_POP both
+            # removes them from the chain and frees their stack space.
+            for _ in range(remaining_pops[i]):
+                self.builder.emit(IRInstr(OpCode.EXC_POP))
 
             # Execute handler statements
             for s in handler.statements:
@@ -12465,16 +12492,13 @@ class ASTLowering:
                     low_bound = round(rf / delta)
                     high_bound = round(rl / delta)
 
-        # For FloatType (non-Float64), convert float range bounds to integer bounds.
-        # Non-Float64 float types are stored as truncated integers on Z80
-        # (see _lower_fixed_point_literal fallback), so range bounds use int().
+        # For FloatType, skip range checks entirely.
+        # Float64 values are stored as 6-byte memory structures (pointers),
+        # so integer comparison against bounds is meaningless. Proper float
+        # range checking would require float64 comparison routines.
         from uada80.type_system import FloatType as _FlType
-        if isinstance(target_type, _FlType) and low_bound is None:
-            rf = getattr(target_type, 'range_first', None)
-            rl = getattr(target_type, 'range_last', None)
-            if rf is not None and rl is not None:
-                low_bound = int(rf)
-                high_bound = int(rl)
+        if isinstance(target_type, _FlType):
+            return
 
         if low_bound is None or high_bound is None:
             return  # No bounds to check
@@ -15438,7 +15462,11 @@ class ASTLowering:
 
         # Handle others clause - fill remaining fields/elements
         if others_value is not None:
-            others_val = self._lower_expr(others_value)
+            # Check if the expression has side effects (allocator, function call)
+            # If so, re-evaluate per element; otherwise evaluate once
+            has_side_effects = isinstance(others_value, (FunctionCall, Allocator))
+            if not has_side_effects:
+                others_val = self._lower_expr(others_value)
             if isinstance(agg_type, ArrayType):
                 # For arrays: fill all elements from positional_offset to end
                 element_size = 2  # default
@@ -15459,6 +15487,9 @@ class ASTLowering:
                     self.builder.label(loop_start)
                     self.builder.cmp(loop_idx, Immediate(loop_end_off, IRType.WORD))
                     self.builder.jge(loop_end)
+                    # Re-evaluate per element for side-effect expressions
+                    if has_side_effects:
+                        others_val = self._lower_expr(others_value)
                     addr_reg = self.builder.new_vreg(IRType.PTR, "_oth_addr")
                     self.builder.add(addr_reg, agg_addr, loop_idx)
                     mem = MemoryLocation(base=addr_reg, offset=0, ir_type=IRType.WORD)
@@ -15751,9 +15782,14 @@ class ASTLowering:
 
             # Apply 'others' to unassigned indices
             if others_value is not None:
-                value = self._lower_expr(others_value)
+                # Re-evaluate per element for side-effect expressions (allocator, function call)
+                has_side_effects = isinstance(others_value, (FunctionCall, Allocator))
+                if not has_side_effects:
+                    value = self._lower_expr(others_value)
                 for idx in range(lower_bound, upper_bound + 1):
                     if idx not in assigned_indices:
+                        if has_side_effects:
+                            value = self._lower_expr(others_value)
                         offset = (idx - lower_bound) * element_size
                         self._store_at_offset(target_addr, offset, value)
 
@@ -16245,7 +16281,8 @@ class ASTLowering:
 
         # Check if this identifier is a parameterless function call
         # In Ada, Get_Value without () is still a function call if it's a function with no required params
-        sym = self.symbols.lookup(expr.name)
+        # Use resolved_symbol from semantic analysis if available (for overload resolution)
+        sym = getattr(expr, 'resolved_symbol', None) or self.symbols.lookup(expr.name)
         if sym and sym.kind == SymbolKind.FUNCTION:
             # Check if function has no required parameters
             has_required_params = False
@@ -18006,7 +18043,7 @@ class ASTLowering:
                 if hasattr(self, '_generic_type_map') and self._generic_type_map:
                     mapped = self._generic_type_map.get(type_name, type_name)
                     if isinstance(mapped, str):
-                        type_name = mapped
+                        type_name = mapped.lower()
             else:
                 type_name = "_unknown"
             # Each param_spec can have multiple names (e.g., X, Y: Integer)
@@ -18022,7 +18059,7 @@ class ASTLowering:
                 if hasattr(self, '_generic_type_map') and self._generic_type_map:
                     mapped = self._generic_type_map.get(ret_type_lower, ret_type_lower)
                     if isinstance(mapped, str):
-                        ret_type_lower = mapped
+                        ret_type_lower = mapped.lower()
                 sig = f"{sig}->{ret_type_lower}"
         return sig
 
@@ -19246,7 +19283,10 @@ class ASTLowering:
                     return self._lower_unary(synth_expr)
 
             # Resolve overloaded function
-            sym = self._resolve_overload(expr.name.name, expr.args)
+            # Use resolved_symbol from semantic analysis if available (overload resolution)
+            sym = getattr(expr.name, 'resolved_symbol', None)
+            if sym is None:
+                sym = self._resolve_overload(expr.name.name, expr.args)
             # Fallback: search package public_symbols for child subprograms
             # Only match symbols that are child subprogram units (name contains '.')
             if sym is None:
