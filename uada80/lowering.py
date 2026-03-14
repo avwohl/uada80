@@ -8383,6 +8383,18 @@ class ASTLowering:
             if proc_name_lower in self._subprogram_byref_params:
                 byref_params = self._subprogram_byref_params[proc_name_lower]
 
+            # Pre-lower aggregate arguments that allocate stack space
+            # before the push sequence begins. This prevents stack corruption
+            # when aggregate allocation (sub SP) inserts bytes between pushes.
+            proc_pre_lowered = {}
+            for fwd_idx, arg in enumerate(effective_args):
+                if arg and isinstance(arg, Aggregate):
+                    if not getattr(arg, 'resolved_type', None):
+                        param_type = self._get_param_type(sym, fwd_idx, proc_name_lower)
+                        if param_type:
+                            arg.resolved_type = param_type
+                    proc_pre_lowered[fwd_idx] = self._lower_expr(arg)
+
             # Push arguments in reverse order
             # Track stack slots for proper cleanup (unconstrained arrays use 3 slots)
             stack_slots = 0
@@ -8405,10 +8417,10 @@ class ASTLowering:
                         param_type = self._get_param_type(sym, forward_idx, proc_name_lower)
                         if param_type:
                             arg.resolved_type = param_type
-                    # Lower expression FIRST (may call functions/modify stack)
-                    ptr_val = self._lower_expr(arg)
-                    # THEN get bounds and push them
-                    all_bounds = self._get_array_dope_vector_multidim(arg, ndims)
+                    # Use pre-lowered value for aggregates, else lower now
+                    ptr_val = proc_pre_lowered.get(forward_idx) or self._lower_expr(arg)
+                    # Get bounds — pass pre_lowered_ptr to avoid double-lower
+                    all_bounds = self._get_array_dope_vector_multidim(arg, ndims, pre_lowered_ptr=ptr_val)
                     for dim_first, dim_last in reversed(all_bounds):
                         self.builder.push(dim_last)
                         self.builder.push(dim_first)
@@ -8436,7 +8448,8 @@ class ASTLowering:
                         if param_type:
                             arg.resolved_type = param_type
                     # Pass value — emit constraint check against formal param type
-                    value = self._lower_expr(arg)
+                    # Use pre-lowered value for aggregates
+                    value = proc_pre_lowered.get(forward_idx) or self._lower_expr(arg)
                     formal_type = self._get_formal_param_type(sym, forward_idx, proc_name_lower)
                     self._emit_param_in_check(value, formal_type,
                                               f"in param {forward_idx} constraint check")
@@ -8589,8 +8602,30 @@ class ASTLowering:
                 ))
                 return addr
 
-        # Handle IndexedComponent: N1(3) passed as in out → address of element
+        # Handle QualifiedExpr: T'(X) passed as byref → unwrap to get address of X
+        if isinstance(arg, QualifiedExpr):
+            return self._get_arg_address(arg.expr)
+
+        # Handle TypeConversion: unwrap to get address of inner expression
+        if isinstance(arg, TypeConversion):
+            return self._get_arg_address(arg.expr)
+
+        # Handle IndexedComponent: either Type(X) conversion or N1(3) array element
         if isinstance(arg, IndexedComponent):
+            # Check if this is a type conversion (prefix is a type name)
+            if isinstance(arg.prefix, Identifier):
+                sym = self.symbols.lookup(arg.prefix.name)
+                if sym and sym.kind in (SymbolKind.TYPE, SymbolKind.SUBTYPE):
+                    # Type conversion — unwrap to inner expression
+                    if arg.indices:
+                        return self._get_arg_address(arg.indices[0])
+            elif isinstance(arg.prefix, SelectedName):
+                target_type = self._resolve_local_type(arg.prefix)
+                if target_type:
+                    # Package.Type(X) conversion — unwrap
+                    if arg.indices:
+                        return self._get_arg_address(arg.indices[0])
+
             base_addr = self._get_array_base(arg.prefix)
             if base_addr is not None:
                 elem_loc = self._calc_element_addr(arg, base_addr)
@@ -8864,17 +8899,21 @@ class ASTLowering:
                 return getattr(sub_sym.parameters[arg_idx], 'ada_type', None)
         return None
 
-    def _get_array_dope_vector(self, expr) -> tuple:
+    def _get_array_dope_vector(self, expr, pre_lowered_ptr=None) -> tuple:
         """Get the dope vector (first, last, ptr) for an array expression.
 
         For constrained arrays, bounds come from the type.
         For unconstrained arrays (parameters), bounds come from the dope vector.
         For string literals, bounds are derived from the literal.
 
+        Args:
+            pre_lowered_ptr: If provided, use this as the ptr instead of lowering expr again.
+                           Prevents double-lowering of aggregates that allocate stack space.
+
         Returns: (first_val, last_val, ptr_val) - IRValues for the dope vector
         """
         # Get the pointer to the array data
-        ptr_val = self._lower_expr(expr)
+        ptr_val = pre_lowered_ptr if pre_lowered_ptr is not None else self._lower_expr(expr)
 
         # Determine bounds based on expression type
         if isinstance(expr, StringLiteral):
@@ -8963,7 +9002,55 @@ class ASTLowering:
             # is the index subtype's 'FIRST.
             agg_type = getattr(expr, 'resolved_type', None)
             num_elems = len(expr.components) if expr.components else 0
-            if isinstance(agg_type, ArrayType) and agg_type.index_types:
+
+            # For named aggregates with range choices like (3..5 => 2),
+            # extract bounds from the choice ranges directly
+            agg_bounds_from_choices = None
+            if expr.components and len(expr.components) >= 1:
+                first_comp = expr.components[0]
+                if hasattr(first_comp, 'choices') and first_comp.choices:
+                    from uada80.ast_nodes import RangeChoice as _RangeChoice
+                    choice = first_comp.choices[0]
+                    if isinstance(choice, _RangeChoice) and choice.range_expr:
+                        low_expr = getattr(choice.range_expr, 'low', None)
+                        high_expr = getattr(choice.range_expr, 'high', None)
+                        if low_expr is not None and high_expr is not None:
+                            # Try static evaluation
+                            try:
+                                low_v = self._eval_static_expr(low_expr)
+                                high_v = self._eval_static_expr(high_expr)
+                                if low_v is not None and high_v is not None:
+                                    # For multiple named associations, find overall min/max
+                                    overall_low = low_v
+                                    overall_high = high_v
+                                    for comp in expr.components[1:]:
+                                        if hasattr(comp, 'choices') and comp.choices:
+                                            c = comp.choices[0]
+                                            if isinstance(c, _RangeChoice) and c.range_expr:
+                                                cl = self._eval_static_expr(getattr(c.range_expr, 'low', None))
+                                                ch = self._eval_static_expr(getattr(c.range_expr, 'high', None))
+                                                if cl is not None:
+                                                    overall_low = min(overall_low, cl)
+                                                if ch is not None:
+                                                    overall_high = max(overall_high, ch)
+                                    agg_bounds_from_choices = (overall_low, overall_high)
+                            except Exception:
+                                pass
+                        if agg_bounds_from_choices is None:
+                            # Try dynamic evaluation
+                            try:
+                                first_val = self._lower_expr(low_expr)
+                                last_val = self._lower_expr(high_expr)
+                                agg_bounds_from_choices = "dynamic"
+                            except Exception:
+                                pass
+
+            if agg_bounds_from_choices is not None and agg_bounds_from_choices != "dynamic":
+                first_val = Immediate(agg_bounds_from_choices[0], IRType.WORD)
+                last_val = Immediate(agg_bounds_from_choices[1], IRType.WORD)
+            elif agg_bounds_from_choices == "dynamic":
+                pass  # first_val and last_val already set above
+            elif isinstance(agg_type, ArrayType) and agg_type.index_types:
                 idx = agg_type.index_types[0]
                 # Use _get_index_subtype_bounds for consistent handling of
                 # dynamic constraint expressions
@@ -9098,14 +9185,14 @@ class ASTLowering:
                 return ndims_list[forward_idx]
         return 1
 
-    def _get_array_dope_vector_multidim(self, expr, ndims: int) -> list:
+    def _get_array_dope_vector_multidim(self, expr, ndims: int, pre_lowered_ptr=None) -> list:
         """Get bounds for all dimensions of an array argument.
 
         Returns list of (first_val, last_val) tuples, one per dimension.
         Falls back to _get_array_dope_vector for dimension 1 if no multi-dim info.
         """
         if ndims <= 1:
-            first_val, last_val, _ = self._get_array_dope_vector(expr)
+            first_val, last_val, _ = self._get_array_dope_vector(expr, pre_lowered_ptr=pre_lowered_ptr)
             return [(first_val, last_val)]
 
         result = []
@@ -16979,6 +17066,42 @@ class ASTLowering:
                 # For params (unconstrained arrays), the param vreg IS a pointer
                 if name in self.ctx.params:
                     return self.ctx.params[name]
+
+        # For QualifiedExpr T'(X) or TypeConversion/IndexedComponent T(X),
+        # unwrap to get the composite pointer of the inner expression.
+        if isinstance(expr, QualifiedExpr):
+            return self._get_composite_ptr(expr.expr)
+        if isinstance(expr, TypeConversion):
+            return self._get_composite_ptr(expr.expr)
+        if isinstance(expr, IndexedComponent) and isinstance(expr.prefix, (Identifier, SelectedName)):
+            # Check if this is a type conversion (prefix is a type name)
+            sym = None
+            if isinstance(expr.prefix, Identifier):
+                sym = self.symbols.lookup(expr.prefix.name)
+            elif isinstance(expr.prefix, SelectedName):
+                resolved = self._resolve_local_type(expr.prefix)
+                if resolved:
+                    # It's a type conversion - get pointer to the inner expression
+                    if expr.indices:
+                        return self._get_composite_ptr(expr.indices[0])
+            if sym and sym.kind in (SymbolKind.TYPE, SymbolKind.SUBTYPE):
+                # Type conversion — unwrap to inner expression
+                if expr.indices:
+                    return self._get_composite_ptr(expr.indices[0])
+
+        # For function calls or other expressions that produce composite results,
+        # lower the expression, store in a temp, and return the temp address.
+        expr_type = self._get_expr_type(expr)
+        if expr_type and isinstance(expr_type, (RecordType, ArrayType)):
+            # The lowered result is a value (first word), but we need a pointer.
+            # Store the full composite in a frame temp and return its address.
+            result = self._lower_expr(expr)
+            size = (expr_type.size_bits + 7) // 8 if expr_type.size_bits else 2
+            if size > 2:
+                # For composite results from function calls, the result vreg
+                # holds the address of the return value buffer — use it directly
+                return result
+
         # Default: use the normal lowered expression (works for globals, pointers, etc.)
         return self._lower_expr(expr)
 
@@ -18049,6 +18172,11 @@ class ASTLowering:
                 if sym and sym.kind in (SymbolKind.TYPE, SymbolKind.SUBTYPE):
                     if sym.ada_type:
                         return sym.ada_type
+            # Check if prefix is a function — return its return type
+            if isinstance(expr.prefix, Identifier):
+                func_sym = self.symbols.lookup(expr.prefix.name)
+                if func_sym and func_sym.kind == SymbolKind.FUNCTION and func_sym.return_type:
+                    return func_sym.return_type
             # If prefix is an array variable, return the component (element) type.
             # This handles e.g. AT(1) where AT is ARRAY OF T => returns T.
             prefix_type = self._get_expr_type(expr.prefix)
@@ -19381,6 +19509,20 @@ class ASTLowering:
             if func_name_lower in self._subprogram_byref_params:
                 byref_params = self._subprogram_byref_params[func_name_lower]
 
+            # Pre-lower aggregate arguments that allocate stack space
+            # before the push sequence begins. This prevents stack corruption
+            # when aggregate allocation (sub SP) inserts bytes between pushes.
+            pre_lowered = {}
+            for fwd_idx, arg_value in enumerate(effective_exprs):
+                if arg_value and isinstance(arg_value, Aggregate):
+                    # Lower now to allocate stack space before push sequence
+                    # Set resolved_type first if needed
+                    if not getattr(arg_value, 'resolved_type', None):
+                        param_type = self._get_param_type(sym, fwd_idx, func_name_lower)
+                        if param_type:
+                            arg_value.resolved_type = param_type
+                    pre_lowered[fwd_idx] = self._lower_expr(arg_value)
+
             # Push arguments (right to left for cdecl-style calling convention)
             # Track number of stack slots used (for cleanup)
             stack_slots = 0
@@ -19398,11 +19540,13 @@ class ASTLowering:
 
                     if arg_is_unconstrained:
                         ndims = self._get_param_ndims(sym, forward_idx, func_name_lower)
-                        all_bounds = self._get_array_dope_vector_multidim(arg_value, ndims)
+                        # Use pre-lowered ptr to avoid double-lowering aggregates
+                        pre_ptr = pre_lowered.get(forward_idx)
+                        all_bounds = self._get_array_dope_vector_multidim(arg_value, ndims, pre_lowered_ptr=pre_ptr)
                         for dim_first, dim_last in reversed(all_bounds):
                             self.builder.push(dim_last)
                             self.builder.push(dim_first)
-                        ptr_val = self._lower_expr(arg_value)
+                        ptr_val = pre_ptr or self._lower_expr(arg_value)
                         self.builder.push(ptr_val)
                         stack_slots += 1 + 2 * len(all_bounds)
                     elif param_mode in ("out", "in out") or is_byref:
@@ -19427,7 +19571,8 @@ class ASTLowering:
                             if param_type:
                                 arg_value.resolved_type = param_type
                         # Regular argument - pass by value with constraint check
-                        value = self._lower_expr(arg_value)
+                        # Use pre-lowered value for aggregates to avoid stack corruption
+                        value = pre_lowered.get(forward_idx) or self._lower_expr(arg_value)
                         formal_type = self._get_formal_param_type(sym, forward_idx, func_name_lower)
                         self._emit_param_in_check(value, formal_type,
                                                   f"in param {forward_idx} constraint check")
