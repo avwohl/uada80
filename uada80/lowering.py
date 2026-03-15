@@ -15587,7 +15587,7 @@ class ASTLowering:
                             # Use type's lower bound as base; for sliding, both aggregate
                             # and target have matching lengths so this is consistent
                             elem_size = agg_type.element_size_bytes() if isinstance(agg_type, ArrayType) else 2
-                            lower_bound = agg_type.bounds[0][0] if isinstance(agg_type, ArrayType) and agg_type.bounds else 0
+                            lower_bound = agg_type.bounds[0][0] if isinstance(agg_type, ArrayType) and agg_type.bounds else 1
                             adj_idx = self.builder.new_vreg(IRType.WORD, "_adj_idx")
                             self.builder.sub(adj_idx, idx, Immediate(lower_bound, IRType.WORD))
                             offset_reg = self.builder.new_vreg(IRType.WORD, "_idx_off")
@@ -15683,7 +15683,16 @@ class ASTLowering:
                         mem = MemoryLocation(base=agg_addr, offset=positional_offset,
                                              ir_type=IRType.WORD)
                     self.builder.store(mem, value)
-                    positional_offset += 2
+                    # Advance by actual field size when record field_info is available
+                    if isinstance(agg_type, RecordType) and field_info:
+                        ordered = list(field_info.keys())
+                        if positional_field_index - 1 < len(ordered):
+                            fsize = field_info[ordered[positional_field_index - 1]]['size']
+                            positional_offset += max(fsize, 2) if fsize != 1 else 1
+                        else:
+                            positional_offset += 2
+                    else:
+                        positional_offset += 2
 
         # Handle others clause - fill remaining fields/elements
         if others_value is not None:
@@ -15721,18 +15730,25 @@ class ASTLowering:
                                             # Named disc assignment
                                             if isinstance(comp.value, Identifier):
                                                 disc_value = comp.value.name.upper()
+                                            elif isinstance(comp.value, IntegerLiteral):
+                                                disc_value = str(comp.value.value)
                             else:
                                 # First positional = discriminant
                                 if isinstance(comp.value, Identifier):
                                     disc_value = comp.value.name.upper()
+                                elif isinstance(comp.value, IntegerLiteral):
+                                    disc_value = str(comp.value.value)
                                 break  # Only first positional is discriminant
                         if disc_value:
                             # Match disc_value against variant choices
                             for variant in vp.variants:
                                 for ch in variant.choices:
                                     choice_name = None
-                                    if hasattr(ch, 'expr') and hasattr(ch.expr, 'name'):
-                                        choice_name = ch.expr.name.upper()
+                                    if hasattr(ch, 'expr'):
+                                        if hasattr(ch.expr, 'name'):
+                                            choice_name = ch.expr.name.upper()
+                                        elif hasattr(ch.expr, 'value'):
+                                            choice_name = str(ch.expr.value)
                                     if choice_name == disc_value:
                                         active_variant_fields = {
                                             c.name.lower() for c in variant.components}
@@ -17195,45 +17211,20 @@ class ASTLowering:
                 comment="concat result address"
             ))
 
-        # Copy elements from left array
-        if left_len > 0:
-            for i in range(left_len):
-                offset = i * elem_size
-                # Load element from source
-                src_elem = self.builder.new_vreg(IRType.WORD, f"_concat_src{i}")
-                self.builder.emit(IRInstr(
-                    OpCode.LOAD, src_elem,
-                    MemoryLocation(base=left_addr, offset=offset, ir_type=IRType.WORD),
-                    comment=f"load left[{i}]"
-                ))
-                # Store to destination
-                dest_offset = i * elem_size
-                self.builder.emit(IRInstr(
-                    OpCode.STORE,
-                    dst=MemoryLocation(base=result_addr, offset=dest_offset, ir_type=IRType.WORD),
-                    src1=src_elem,
-                    comment=f"store result[{i}]"
-                ))
+        # Determine IR type for element access — use BYTE for 1-byte elements (Character)
+        elem_ir_type = IRType.BYTE if elem_size == 1 else IRType.WORD
+
+        # Use memcpy for efficiency when arrays are large enough
+        if left_len > 0 and total_size > 0:
+            left_size = left_len * elem_size
+            self._emit_memcpy(result_addr, left_addr, left_size, "concat left")
 
         # Copy elements from right array
-        if right_len > 0:
-            for i in range(right_len):
-                offset = i * elem_size
-                # Load element from source
-                src_elem = self.builder.new_vreg(IRType.WORD, f"_concat_src{left_len + i}")
-                self.builder.emit(IRInstr(
-                    OpCode.LOAD, src_elem,
-                    MemoryLocation(base=right_addr, offset=offset, ir_type=IRType.WORD),
-                    comment=f"load right[{i}]"
-                ))
-                # Store to destination
-                dest_offset = (left_len + i) * elem_size
-                self.builder.emit(IRInstr(
-                    OpCode.STORE,
-                    dst=MemoryLocation(base=result_addr, offset=dest_offset, ir_type=IRType.WORD),
-                    src1=src_elem,
-                    comment=f"store result[{left_len + i}]"
-                ))
+        if right_len > 0 and total_size > 0:
+            right_size = right_len * elem_size
+            right_dest = self.builder.new_vreg(IRType.PTR, "_concat_right_dst")
+            self.builder.add(right_dest, result_addr, Immediate(left_len * elem_size, IRType.WORD))
+            self._emit_memcpy(right_dest, right_addr, right_size, "concat right")
 
         return result_addr
 

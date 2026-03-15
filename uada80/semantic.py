@@ -7557,16 +7557,49 @@ class SemanticAnalyzer:
                                             is_derived_from(param.ada_type, arg_types[i].name)):
                                         all_derived = False
                     if all_match:
-                        if expected_type and candidate.return_type and types_compatible(candidate.return_type, expected_type):
-                            # Exact return type match - use immediately
-                            return candidate.return_type
                         if best_match is None:
                             best_match = candidate
                     elif all_derived and derived_match is None:
                         derived_match = candidate
+                # When expected_type is available, prefer exact return type name match
+                # over compatible (derived) match to avoid selecting a derived overload
+                # when the base type overload exists.
+                if expected_type:
+                    exact_return = None
+                    compat_return = None
+                    for candidate in overloads:
+                        if candidate.kind != SymbolKind.FUNCTION:
+                            continue
+                        cand_params = candidate.parameters if candidate.parameters else []
+                        if len(cand_params) != len(args):
+                            continue
+                        # Quick param check
+                        ok = True
+                        for i, param in enumerate(cand_params):
+                            if i < len(arg_types) and arg_types[i] and param.ada_type:
+                                if not types_compatible(param.ada_type, arg_types[i]):
+                                    ok = False
+                                    break
+                        if not ok:
+                            continue
+                        if candidate.return_type:
+                            ret_name = getattr(candidate.return_type, 'name', '').lower()
+                            exp_name = getattr(expected_type, 'name', '').lower()
+                            if ret_name == exp_name:
+                                if exact_return is None:
+                                    exact_return = candidate
+                            elif types_compatible(candidate.return_type, expected_type):
+                                if compat_return is None:
+                                    compat_return = candidate
+                    chosen = exact_return or compat_return
+                    if chosen:
+                        expr.prefix.resolved_symbol = chosen
+                        return chosen.return_type
                 if best_match:
+                    expr.prefix.resolved_symbol = best_match
                     return best_match.return_type
                 if derived_match:
+                    expr.prefix.resolved_symbol = derived_match
                     return derived_match.return_type
                 # No matching overload found - try with first overload anyway
                 # (could be an array result being indexed)
@@ -8293,6 +8326,8 @@ class SemanticAnalyzer:
             best = self._resolve_overload(symbol, expr.args, expr, expected_type=expected_type)
             if best is not None:
                 symbol = best
+                # Annotate the call expression so lowering can pick the correct label
+                expr.name.resolved_symbol = symbol
 
             self._check_call_arguments(symbol, expr.args, expr)
             return symbol.return_type
