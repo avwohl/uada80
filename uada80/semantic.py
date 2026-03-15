@@ -6836,7 +6836,13 @@ class SemanticAnalyzer:
                     return symbol.ada_type
             # No match found - fall through to return default
 
-        return symbol.ada_type
+        # Resolve private/incomplete types to their full definitions
+        result_type = symbol.ada_type
+        if result_type and result_type.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE):
+            completed = self.symbols.lookup_type(result_type.name)
+            if completed:
+                result_type = completed
+        return result_type
 
     def _analyze_binary_expr(self, expr: BinaryExpr, expected_type: Optional[AdaType] = None) -> Optional[AdaType]:
         """Analyze a binary expression."""
@@ -8004,6 +8010,66 @@ class SemanticAnalyzer:
             return PREDEFINED_TYPES.get("Universal_Real", PREDEFINED_TYPES["Float"])
 
         # (fore, aft already handled above as Universal_Integer)
+
+        # Tag attribute returns Ada.Tags.Tag (treat as opaque type)
+        if attr_lower == "tag":
+            tag_type = self.symbols.lookup_type("Tag")
+            if tag_type:
+                return tag_type
+            # Fallback: create an opaque Tag type
+            return AdaType(name="Tag", kind=TypeKind.PRIVATE)
+
+        # External_Tag returns String (Ada RM 3.9.2)
+        if attr_lower == "external_tag":
+            return PREDEFINED_TYPES["String"]
+
+        # Internal_Tag returns Ada.Tags.Tag
+        if attr_lower == "internal_tag":
+            tag_type = self.symbols.lookup_type("Tag")
+            if tag_type:
+                return tag_type
+            return AdaType(name="Tag", kind=TypeKind.PRIVATE)
+
+        # Identity attribute returns Exception_Id or Task_Id (Ada RM 11.4.1)
+        if attr_lower == "identity":
+            # For exceptions, returns Exception_Id
+            eid_type = self.symbols.lookup_type("Exception_Id")
+            if eid_type:
+                return eid_type
+            return PREDEFINED_TYPES.get("Integer")
+
+        # Wide_Image, Wide_Wide_Image return Wide_String/Wide_Wide_String
+        if attr_lower == "wide_image":
+            return PREDEFINED_TYPES.get("Wide_String", PREDEFINED_TYPES["String"])
+
+        if attr_lower == "wide_wide_image":
+            return PREDEFINED_TYPES.get("Wide_Wide_String", PREDEFINED_TYPES["String"])
+
+        # Wide_Value, Wide_Wide_Value return the type (like Value)
+        if attr_lower in ("wide_value", "wide_wide_value"):
+            return prefix_type
+
+        # Class attribute returns class-wide type
+        if attr_lower == "class":
+            if prefix_type and isinstance(prefix_type, RecordType) and prefix_type.is_tagged:
+                # Create class-wide type
+                cw = RecordType(
+                    name=f"{prefix_type.name}'Class",
+                    is_tagged=True,
+                    is_class_wide=True,
+                    specific_type=prefix_type,
+                    components=prefix_type.components,
+                    discriminants=prefix_type.discriminants,
+                    parent_type=prefix_type.parent_type,
+                )
+                return cw
+            return prefix_type
+
+        # Input/Output stream attributes (Ada RM 13.13.2)
+        if attr_lower in ("read", "write", "input", "output"):
+            if attr_lower == "input":
+                return prefix_type  # Input returns the type
+            return None  # Read/Write/Output are procedures
 
         # Default: return Integer for unknown attributes
         return PREDEFINED_TYPES["Integer"]

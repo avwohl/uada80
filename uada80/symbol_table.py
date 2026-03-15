@@ -6470,7 +6470,8 @@ class SymbolTable:
     def lookup_type(self, name: str) -> Optional[AdaType]:
         """Look up a type by name."""
         symbol = self.lookup(name)
-        if symbol is not None and symbol.kind in (SymbolKind.TYPE, SymbolKind.SUBTYPE):
+        if symbol is not None and symbol.kind in (SymbolKind.TYPE, SymbolKind.SUBTYPE,
+                                                    SymbolKind.TASK_TYPE, SymbolKind.TASK):
             return symbol.ada_type
         return None
 

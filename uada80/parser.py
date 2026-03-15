@@ -3875,6 +3875,25 @@ class Parser:
                 name=names[0], names=names, mode=mode, type_ref=type_ref, default_value=default_value
             )
 
+        # Use clause inside generic formal part (Ada RM 12.7)
+        # e.g., use Complex_Types;
+        if self.match(TokenType.USE):
+            if self.match(TokenType.TYPE):
+                # use type clause: use type Package.Type;
+                type_name = self.parse_name()
+                self.expect(TokenType.SEMICOLON)
+                # Return as a generic use-type formal (semantic analyzer will handle)
+                return GenericObjectDecl(
+                    name="_use_type", mode="use_type", type_ref=type_name
+                )
+            else:
+                # use clause: use Package;
+                pkg_name = self.parse_name()
+                self.expect(TokenType.SEMICOLON)
+                return GenericObjectDecl(
+                    name="_use", mode="use", type_ref=pkg_name
+                )
+
         # Generic subprogram formal: with procedure/function ...
         if self.match(TokenType.WITH):
             if self.match(TokenType.PROCEDURE):
@@ -3884,12 +3903,16 @@ class Parser:
                     params = self.parse_parameter_specifications()
                     self.expect(TokenType.RIGHT_PAREN)
 
-                # Check for "is <>" or "is Name"
+                # Check for "is <>" or "is abstract" or "is Name"
                 is_box = False
                 default_subprogram = None
                 if self.match(TokenType.IS):
                     if self.match(TokenType.BOX):
                         is_box = True
+                    elif self.match(TokenType.ABSTRACT):
+                        pass  # Abstract formal - accepted but ignored
+                    elif self.match(TokenType.NULL):
+                        pass  # Null default - accepted but ignored
                     else:
                         # Specific default subprogram name
                         default_subprogram = self.parse_name()
@@ -3914,12 +3937,15 @@ class Parser:
                 self.expect(TokenType.RETURN)
                 return_type = self._parse_return_type()
 
-                # Check for "is <>" or "is Name"
+                # Check for "is <>" or "is abstract" or "is Name"
                 is_box = False
                 default_subprogram = None
+                is_abstract = False
                 if self.match(TokenType.IS):
                     if self.match(TokenType.BOX):
                         is_box = True
+                    elif self.match(TokenType.ABSTRACT):
+                        is_abstract = True
                     else:
                         # Specific default subprogram name
                         default_subprogram = self.parse_name()
