@@ -95,6 +95,7 @@ from uada80.ast_nodes import (
     MembershipTest,
     ExprChoice,
     RangeChoice,
+    OthersChoice,
     Slice,
     Dereference,
     TargetName,
@@ -6250,11 +6251,13 @@ class SemanticAnalyzer:
             if expected_type and hasattr(expected_type, 'literals'):
                 char_val = expr.value
                 if char_val in expected_type.literals:
+                    expr.resolved_type = expected_type
                     return expected_type
             # Also check for derived character types
             if expected_type and hasattr(expected_type, 'base_type'):
                 base = expected_type.base_type
                 if hasattr(base, 'literals') and expr.value in base.literals:
+                    expr.resolved_type = expected_type
                     return expected_type
             return PREDEFINED_TYPES["Character"]
         elif isinstance(expr, NullLiteral):
@@ -6493,22 +6496,137 @@ class SemanticAnalyzer:
             expr: The aggregate expression to analyze
             expected_type: Optional expected type from context (e.g., array type for array aggregate)
         """
-        # Analyze all components, including iterated ones
-        element_type = None
-        for component in expr.components:
-            if isinstance(component, IteratedComponentAssociation):
-                element_type = self._analyze_iterated_component(component)
-            elif isinstance(component, ComponentAssociation):
-                # Analyze the value expression
-                if component.value:
-                    comp_type = self._analyze_expr(component.value)
-                    if element_type is None:
-                        element_type = comp_type
+        from uada80.type_system import RecordType as _RecType
+
+        # For record aggregates with a known expected type, resolve component
+        # values against the specific field types (important for overload
+        # resolution when OTHERS is used with variant records).
+        if expected_type and isinstance(expected_type, _RecType):
+            self._analyze_record_aggregate(expr, expected_type)
+        else:
+            # Analyze all components, including iterated ones
+            element_type = None
+            for component in expr.components:
+                if isinstance(component, IteratedComponentAssociation):
+                    element_type = self._analyze_iterated_component(component)
+                elif isinstance(component, ComponentAssociation):
+                    # Analyze the value expression
+                    if component.value:
+                        comp_type = self._analyze_expr(component.value)
+                        if element_type is None:
+                            element_type = comp_type
         # If we have an expected type, return it (aggregate takes type from context)
         if expected_type:
             return expected_type
         # Type is determined by context, but we analyze components
         return None
+
+    def _analyze_record_aggregate(self, expr: Aggregate, record_type) -> None:
+        """Analyze a record aggregate against a known record type.
+
+        Resolves component values (including OTHERS) against the specific
+        field types, which is important for overload resolution in variant
+        records (e.g., discriminant determines which overloaded function
+        to call for OTHERS).
+        """
+        from uada80.type_system import RecordType as _RecType
+
+        # Determine which fields are explicitly assigned and find the
+        # discriminant value to identify the active variant.
+        assigned_fields = set()
+        disc_value_name = None
+        positional_index = 0
+        others_comp = None
+
+        # Build ordered field list: discriminants first, then components
+        ordered_fields = []
+        for disc in record_type.discriminants:
+            ordered_fields.append(disc)
+        for comp in record_type.components:
+            ordered_fields.append(comp)
+
+        for component in expr.components:
+            if not isinstance(component, ComponentAssociation):
+                continue
+            if component.choices:
+                for ch in component.choices:
+                    if isinstance(ch, OthersChoice):
+                        others_comp = component
+                    elif isinstance(ch, ExprChoice) and isinstance(ch.expr, Identifier):
+                        field_name = ch.expr.name.lower()
+                        assigned_fields.add(field_name)
+                        # Look up field type for the named component
+                        field_comp = record_type.get_component(ch.expr.name)
+                        if field_comp and field_comp.component_type and component.value:
+                            self._analyze_expr(component.value, field_comp.component_type)
+                        elif component.value:
+                            self._analyze_expr(component.value)
+                    elif component.value:
+                        self._analyze_expr(component.value)
+            else:
+                # Positional component
+                if positional_index < len(ordered_fields):
+                    field = ordered_fields[positional_index]
+                    assigned_fields.add(field.name.lower())
+                    # Check if this is the discriminant
+                    if field.name.lower() in {d.name.lower() for d in record_type.discriminants}:
+                        if isinstance(component.value, Identifier):
+                            disc_value_name = component.value.name.upper()
+                    if field.component_type and component.value:
+                        self._analyze_expr(component.value, field.component_type)
+                    elif component.value:
+                        self._analyze_expr(component.value)
+                elif component.value:
+                    self._analyze_expr(component.value)
+                positional_index += 1
+
+        # Handle OTHERS: determine the active variant fields and resolve
+        # the OTHERS expression against the appropriate field type.
+        if others_comp and others_comp.value and record_type.variant_part:
+            vp = record_type.variant_part
+            active_variant = None
+
+            # Determine active variant from explicitly assigned fields
+            for variant in vp.variants:
+                variant_names = {c.name.lower() for c in variant.components}
+                if variant_names & assigned_fields:
+                    active_variant = variant
+                    break
+
+            # If no variant field assigned, try discriminant value
+            if active_variant is None and disc_value_name:
+                for variant in vp.variants:
+                    for ch in variant.choices:
+                        if hasattr(ch, 'expr') and hasattr(ch.expr, 'name'):
+                            if ch.expr.name.upper() == disc_value_name:
+                                active_variant = variant
+                                break
+                    if active_variant:
+                        break
+
+            if active_variant:
+                # Find unassigned fields in the active variant
+                for comp in active_variant.components:
+                    if comp.name.lower() not in assigned_fields:
+                        # Analyze OTHERS value with this field's type
+                        if comp.component_type:
+                            self._analyze_expr(others_comp.value, comp.component_type)
+                        else:
+                            self._analyze_expr(others_comp.value)
+                        break  # Only need to resolve once for overloads
+            else:
+                # Couldn't determine variant — analyze without context
+                self._analyze_expr(others_comp.value)
+
+            # Also analyze OTHERS for non-variant unassigned fields
+            for disc in record_type.discriminants:
+                if disc.name.lower() not in assigned_fields:
+                    if disc.component_type:
+                        self._analyze_expr(others_comp.value, disc.component_type)
+                    break
+        elif others_comp and others_comp.value:
+            # No variant part — just analyze OTHERS normally
+            self._analyze_expr(others_comp.value)
 
     def _analyze_container_aggregate(self, expr: ContainerAggregate) -> Optional[AdaType]:
         """Analyze a container aggregate [...]."""
@@ -6795,15 +6913,22 @@ class SemanticAnalyzer:
         if expected_type is not None:
             overloads = self.symbols.all_overloads(expr.name)
             if len(overloads) > 1:
-                def _type_name_match(t1, t2):
-                    """Check if two types match by name (exact or base type)."""
+                def _exact_name_match(t1, t2):
+                    """Check if two types match by exact name only."""
                     if t1 is None or t2 is None:
                         return False
                     n1 = getattr(t1, 'name', '').lower()
                     n2 = getattr(t2, 'name', '').lower()
-                    if n1 == n2:
+                    return n1 == n2
+
+                def _type_name_match(t1, t2):
+                    """Check if two types match by name (exact or base type)."""
+                    if _exact_name_match(t1, t2):
                         return True
+                    if t1 is None or t2 is None:
+                        return False
                     # Check base type (BOOL is subtype of BOOLEAN)
+                    n2 = getattr(t2, 'name', '').lower()
                     base1 = getattr(t1, 'base_type', None)
                     if base1 and getattr(base1, 'name', '').lower() == n2:
                         return True
@@ -6812,24 +6937,41 @@ class SemanticAnalyzer:
                 # Pass 1: exact name match (preferred for overload resolution)
                 for candidate in overloads:
                     if is_enum_literal(candidate):
-                        if candidate.ada_type and _type_name_match(expected_type, candidate.ada_type):
+                        if candidate.ada_type and _exact_name_match(expected_type, candidate.ada_type):
+                            expr.resolved_type = candidate.ada_type
                             return candidate.ada_type
                 for candidate in overloads:
                     if candidate.kind == SymbolKind.FUNCTION and not candidate.parameters:
-                        if candidate.ada_type and _type_name_match(expected_type, candidate.ada_type):
+                        ret = candidate.return_type or candidate.ada_type
+                        if ret and _exact_name_match(expected_type, ret):
                             expr.resolved_symbol = candidate
+                            return ret
+
+                # Pass 1b: base type name match
+                for candidate in overloads:
+                    if is_enum_literal(candidate):
+                        if candidate.ada_type and _type_name_match(expected_type, candidate.ada_type):
+                            expr.resolved_type = candidate.ada_type
                             return candidate.ada_type
+                for candidate in overloads:
+                    if candidate.kind == SymbolKind.FUNCTION and not candidate.parameters:
+                        ret = candidate.return_type or candidate.ada_type
+                        if ret and _type_name_match(expected_type, ret):
+                            expr.resolved_symbol = candidate
+                            return ret
 
                 # Pass 2: compatible match (derived types, etc.)
                 for candidate in overloads:
                     if is_enum_literal(candidate):
                         if candidate.ada_type and types_compatible(expected_type, candidate.ada_type):
+                            expr.resolved_type = candidate.ada_type
                             return candidate.ada_type
                 for candidate in overloads:
                     if candidate.kind == SymbolKind.FUNCTION and not candidate.parameters:
-                        if candidate.ada_type and types_compatible(expected_type, candidate.ada_type):
+                        ret = candidate.return_type or candidate.ada_type
+                        if ret and types_compatible(expected_type, ret):
                             expr.resolved_symbol = candidate
-                            return candidate.ada_type
+                            return ret
             elif is_enum_literal(symbol):
                 # Single overload but check enum compatibility
                 if symbol.ada_type and types_compatible(expected_type, symbol.ada_type):
@@ -6838,6 +6980,9 @@ class SemanticAnalyzer:
 
         # Resolve private/incomplete types to their full definitions
         result_type = symbol.ada_type
+        # For functions, use return_type if ada_type is not set
+        if result_type is None and symbol.kind == SymbolKind.FUNCTION:
+            result_type = symbol.return_type
         if result_type and result_type.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE):
             completed = self.symbols.lookup_type(result_type.name)
             if completed:
@@ -6847,14 +6992,18 @@ class SemanticAnalyzer:
     def _analyze_binary_expr(self, expr: BinaryExpr, expected_type: Optional[AdaType] = None) -> Optional[AdaType]:
         """Analyze a binary expression."""
         # For relational operators, don't propagate expected_type (e.g. Boolean)
-        # to operands - operand types are independent of the result type
+        # to operands - operand types are independent of the result type.
+        # However, use LHS type as context for RHS to resolve overloaded literals.
         is_relational = expr.op in (
             BinaryOp.EQ, BinaryOp.NE, BinaryOp.LT,
             BinaryOp.LE, BinaryOp.GT, BinaryOp.GE,
         )
         operand_expected = None if is_relational else expected_type
         left_type = self._analyze_expr(expr.left, expected_type=operand_expected)
-        right_type = self._analyze_expr(expr.right, expected_type=operand_expected)
+        # For relational ops, use LHS type as context for RHS (helps resolve
+        # overloaded enum/character literals like 'C' in ENUM2'SUCC('A') /= 'C')
+        rhs_expected = left_type if is_relational else operand_expected
+        right_type = self._analyze_expr(expr.right, expected_type=rhs_expected)
 
         # Relational operators return Boolean (unless user-defined to return something else)
         if expr.op in (

@@ -810,6 +810,8 @@ class SubtypeDecl(Decl):
     name: str
     subtype_indication: SubtypeIndication
     aspects: list["AspectSpecification"] = field(default_factory=list)
+    # Analyzed type from semantic analysis
+    ada_type: Optional[any] = None  # AdaType (avoid circular import)
 
 
 @dataclass

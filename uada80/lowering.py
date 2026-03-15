@@ -3108,7 +3108,11 @@ class ASTLowering:
                         self._fixed_point_context_delta = _old_fx_delta_constraint
 
                     # For record/array aggregates, write directly to the local variable
-                    if isinstance(decl.init_expr, Aggregate) and ada_type:
+                    # Also handle QualifiedExpr wrapping an Aggregate (e.g., AAI'(others => ...))
+                    init_agg = decl.init_expr
+                    if isinstance(init_agg, QualifiedExpr) and isinstance(init_agg.expr, Aggregate):
+                        init_agg = init_agg.expr
+                    if isinstance(init_agg, Aggregate) and ada_type:
                         # Get address of local variable
                         # Calculate frame offset: -(locals_size - stack_offset)
                         # This matches how field access computes record addresses
@@ -3146,7 +3150,7 @@ class ASTLowering:
                                     # Only lower bound is static - pass as override
                                     agg_lower_bound = low_val
                         # Write aggregate directly to the local
-                        self._lower_aggregate_to_target(decl.init_expr, local_addr, agg_target_type,
+                        self._lower_aggregate_to_target(init_agg, local_addr, agg_target_type,
                                                         lower_bound_override=agg_lower_bound)
                     elif self._is_float64_type(ada_type):
                         # Float64 initialization - copy 8 bytes to local
@@ -4074,6 +4078,96 @@ class ASTLowering:
         # Re-register the type in the current scope so it's visible during lowering.
         # The semantic analyzer defined it in a scope that has since been exited.
         ada_type = getattr(decl, 'ada_type', None)
+
+        # When inside a generic instantiation, derived types declared as
+        # "TYPE X IS NEW G" (where G is a generic formal type parameter)
+        # have a placeholder ada_type from the generic template.  We need
+        # to rebuild the derived type using the actual type that was passed
+        # to the generic instantiation so that attributes like 'First,
+        # 'Last, 'Size etc. reflect the real type.
+        if (ada_type is not None
+                and self._generic_type_map
+                and hasattr(decl, 'type_def')):
+            from uada80.ast_nodes import DerivedTypeDef as _DerivedTD
+            type_def = decl.type_def
+            if isinstance(type_def, _DerivedTD):
+                parent_name = None
+                if isinstance(type_def.parent_type, Identifier):
+                    parent_name = type_def.parent_type.name
+                elif isinstance(type_def.parent_type, SelectedName):
+                    parent_name = self._get_hierarchical_name(type_def.parent_type)
+                if parent_name and parent_name.lower() in self._generic_type_map:
+                    # The parent is a generic formal -- resolve the actual type
+                    actual_type = self._generic_actual_types.get(parent_name.lower())
+                    if actual_type is None:
+                        actual_name = self._generic_type_map[parent_name.lower()]
+                        actual_sym = self.symbols.lookup(actual_name)
+                        if actual_sym and actual_sym.ada_type:
+                            actual_type = actual_sym.ada_type
+                    if actual_type is not None:
+                        from uada80.type_system import (
+                            IntegerType as _IntT, FloatType as _FloatT,
+                            FixedType as _FixedT,
+                        )
+                        if isinstance(actual_type, EnumerationType):
+                            ada_type = EnumerationType(
+                                name=decl.name,
+                                size_bits=actual_type.size_bits,
+                                literals=actual_type.literals.copy(),
+                                positions=(actual_type.positions.copy()
+                                           if actual_type.positions else {}),
+                                base_type=actual_type,
+                                is_derived=True,
+                                first=getattr(actual_type, 'first', None),
+                                last=getattr(actual_type, 'last', None),
+                                char_literals=(actual_type.char_literals.copy()
+                                               if actual_type.char_literals
+                                               else set()),
+                            )
+                        elif isinstance(actual_type, _IntT):
+                            ada_type = _IntT(
+                                name=decl.name,
+                                size_bits=actual_type.size_bits,
+                                low=actual_type.low,
+                                high=actual_type.high,
+                                base_type=actual_type,
+                                is_derived=True,
+                            )
+                        elif isinstance(actual_type, _FloatT):
+                            ada_type = _FloatT(
+                                name=decl.name,
+                                size_bits=actual_type.size_bits,
+                                digits=actual_type.digits,
+                                range_first=actual_type.range_first,
+                                range_last=actual_type.range_last,
+                                base_type=actual_type,
+                            )
+                        elif isinstance(actual_type, _FixedT):
+                            ada_type = _FixedT(
+                                name=decl.name,
+                                size_bits=actual_type.size_bits,
+                                delta=actual_type.delta,
+                                range_first=actual_type.range_first,
+                                range_last=actual_type.range_last,
+                                small=getattr(actual_type, 'small',
+                                              actual_type.delta),
+                                base_type=actual_type,
+                            )
+                        elif isinstance(actual_type, ArrayType):
+                            ada_type = ArrayType(
+                                name=decl.name,
+                                component_type=actual_type.component_type,
+                                bounds=(actual_type.bounds.copy()
+                                        if actual_type.bounds else []),
+                                is_constrained=actual_type.is_constrained,
+                                index_types=actual_type.index_types,
+                                base_type=actual_type,
+                            )
+                        else:
+                            # Other type kinds: use actual directly
+                            ada_type = actual_type
+                        decl.ada_type = ada_type
+
         if ada_type and not self.symbols.is_defined_locally(decl.name):
             sym = Symbol(
                 name=decl.name,
@@ -10489,10 +10583,29 @@ class ASTLowering:
                             elif hasattr(it, 'first') and hasattr(it, 'last') and it.first is not None and it.last is not None:
                                 bounds_list.append((it.first, it.last))
 
-        # Default bounds if not found — use (0, 0) as safe fallback
-        # (1, 10) was causing memory corruption for unresolved array types)
+        # Check outer variable (nested function accessing enclosing scope's array)
+        if not bounds_list and isinstance(indexed.prefix, Identifier) and self.ctx:
+            outer_name = f"_outer_{indexed.prefix.name.lower()}"
+            outer_type = self.ctx.param_ada_types.get(outer_name)
+            if outer_type and hasattr(outer_type, 'bounds') and outer_type.bounds:
+                bounds_list = list(outer_type.bounds)
+                if hasattr(outer_type, 'component_type') and outer_type.component_type:
+                    element_size = (outer_type.component_type.size_bits + 7) // 8
+                    if (element_size < 2 and not getattr(outer_type, 'is_packed', False) and
+                            getattr(outer_type.component_type, 'name', '').lower() != 'character'):
+                        element_size = 2
+            elif outer_type and hasattr(outer_type, 'index_types') and outer_type.index_types:
+                for it in outer_type.index_types:
+                    if hasattr(it, 'low') and hasattr(it, 'high') and it.low is not None and it.high is not None:
+                        bounds_list.append((it.low, it.high))
+                    elif hasattr(it, 'first') and hasattr(it, 'last') and it.first is not None and it.last is not None:
+                        bounds_list.append((it.first, it.last))
+
+        # Default bounds if not found — skip bounds check entirely
+        # (using (0, 0) causes spurious Constraint_Error and wrong offsets)
         if not bounds_list:
             bounds_list = [(0, 0)] * len(indexed.indices)
+            check_bounds = False  # Don't emit wrong bounds check
 
         # Calculate sizes for each dimension (for row-major order)
         # dim_sizes[i] = product of all subsequent dimension sizes
@@ -10866,9 +10979,9 @@ class ASTLowering:
             # First try symbol table lookup
             sym = self.symbols.lookup(selected.prefix.name)
             if sym and sym.ada_type and isinstance(sym.ada_type, RecordType):
-                for comp in sym.ada_type.components:
-                    if comp.name.lower() == selected.selector.lower():
-                        return comp.offset_bits // 8
+                comp = sym.ada_type.get_component(selected.selector)
+                if comp is not None:
+                    return comp.offset_bits // 8
 
             # If symbol table lookup failed, try to find type from local declarations
             # This handles locally-declared record types
@@ -11150,14 +11263,15 @@ class ASTLowering:
                 # First try resolved AdaType from param_ada_types
                 param_ada_type = self.ctx.param_ada_types.get(var_name)
                 if param_ada_type and isinstance(param_ada_type, RecordType):
-                    for comp in param_ada_type.components:
-                        if comp.name.lower() == selected.selector.lower():
-                            offset_bits = comp.offset_bits
-                            size_bits = comp.size_bits if comp.size_bits else comp.component_type.size_bits
-                            byte_offset = offset_bits // 8
-                            bit_offset = offset_bits % 8
-                            is_packed = param_ada_type.is_packed and (bit_offset != 0 or size_bits < 8)
-                            return (byte_offset, bit_offset, size_bits, is_packed)
+                    comp = param_ada_type.get_component(selected.selector)
+                    if comp is not None:
+                        offset_bits = comp.offset_bits
+                        size_bits = comp.size_bits if comp.size_bits else (
+                            comp.component_type.size_bits if comp.component_type else 16)
+                        byte_offset = offset_bits // 8
+                        bit_offset = offset_bits % 8
+                        is_packed = param_ada_type.is_packed and (bit_offset != 0 or size_bits < 8)
+                        return (byte_offset, bit_offset, size_bits, is_packed)
 
                 # Fallback: look up the type from body declarations stack
                 type_name = self.ctx.param_types.get(var_name)
@@ -11168,14 +11282,15 @@ class ASTLowering:
                                 # Use the ada_type stored on the AST node during semantic analysis
                                 if hasattr(decl, 'ada_type') and decl.ada_type and isinstance(decl.ada_type, RecordType):
                                     record_type = decl.ada_type
-                                    for comp in record_type.components:
-                                        if comp.name.lower() == selected.selector.lower():
-                                            offset_bits = comp.offset_bits
-                                            size_bits = comp.size_bits if comp.size_bits else comp.component_type.size_bits
-                                            byte_offset = offset_bits // 8
-                                            bit_offset = offset_bits % 8
-                                            is_packed = record_type.is_packed and (bit_offset != 0 or size_bits < 8)
-                                            return (byte_offset, bit_offset, size_bits, is_packed)
+                                    comp = record_type.get_component(selected.selector)
+                                    if comp is not None:
+                                        offset_bits = comp.offset_bits
+                                        size_bits = comp.size_bits if comp.size_bits else (
+                                            comp.component_type.size_bits if comp.component_type else 16)
+                                        byte_offset = offset_bits // 8
+                                        bit_offset = offset_bits % 8
+                                        is_packed = record_type.is_packed and (bit_offset != 0 or size_bits < 8)
+                                        return (byte_offset, bit_offset, size_bits, is_packed)
                                 break
 
         # Handle array element record field (e.g., P(2).X where P is array of records)
@@ -13199,6 +13314,13 @@ class ASTLowering:
         """
         if self.ctx is None:
             return Immediate(0, IRType.WORD)
+
+        # Propagate qualifying type to inner aggregate so _lower_aggregate
+        # knows the target type (needed for correct others/field layout)
+        if isinstance(expr.expr, Aggregate) and not getattr(expr.expr, 'resolved_type', None):
+            target_type = self._resolve_type(expr.type_mark)
+            if target_type:
+                expr.expr.resolved_type = target_type
 
         # Evaluate the inner expression
         result = self._lower_expr(expr.expr)
@@ -15288,11 +15410,16 @@ class ASTLowering:
         if isinstance(agg_type, RecordType):
             # Collect all components including inherited ones
             # Include discriminants first (they precede components in layout)
+            # Also include variant part components (fields inside CASE variants)
             all_comps = []
             rt = agg_type
             while rt is not None:
                 all_comps.extend(rt.discriminants)
                 all_comps.extend(rt.components)
+                vp = getattr(rt, 'variant_part', None)
+                if vp is not None:
+                    for variant in vp.variants:
+                        all_comps.extend(variant.components)
                 rt = rt.parent_type
             for comp in all_comps:
                 # Use component_type.size_bits for actual field size (comp.size_bits
@@ -15375,7 +15502,9 @@ class ASTLowering:
 
         # Track current positional offset for positional aggregates
         positional_offset = 0
+        positional_field_index = 0  # Index into field_info for positional record fields
         others_value = None
+        assigned_fields = set()  # Track which record fields have been explicitly assigned
 
         # First pass: find others clause if present
         for comp in expr.components:
@@ -15413,6 +15542,10 @@ class ASTLowering:
                                 offset = positional_offset
                                 field_size = 2
                                 positional_offset += 2
+                            assigned_fields.add(field_name)
+                            # Use correct IRType based on field size to avoid
+                            # overwriting adjacent fields (e.g., 1-byte Boolean)
+                            field_ir_type = IRType.BYTE if field_size == 1 else IRType.WORD
                             # Check if field is a multi-byte record type
                             if field_size > 2 and self._is_record_typed_field(field_name, agg_type):
                                 src_addr = self._get_expr_address(comp.value)
@@ -15422,11 +15555,11 @@ class ASTLowering:
                                     self._emit_memcpy(dst_addr, src_addr, field_size, f"field {field_name}")
                                 else:
                                     value = self._lower_expr(comp.value)
-                                    mem = MemoryLocation(base=agg_addr, offset=offset, ir_type=IRType.WORD)
+                                    mem = MemoryLocation(base=agg_addr, offset=offset, ir_type=field_ir_type)
                                     self.builder.store(mem, value, comment=f"field {field_name}")
                             else:
                                 value = self._lower_expr(comp.value)
-                                mem = MemoryLocation(base=agg_addr, offset=offset, ir_type=IRType.WORD)
+                                mem = MemoryLocation(base=agg_addr, offset=offset, ir_type=field_ir_type)
                                 self.builder.store(mem, value, comment=f"field {field_name}")
                         else:
                             # Index expression for array aggregate
@@ -15493,7 +15626,25 @@ class ASTLowering:
                             positional_offset += 2
                 else:
                     value = self._lower_expr(comp.value)
-                    mem = MemoryLocation(base=agg_addr, offset=positional_offset, ir_type=IRType.WORD)
+                    # For record aggregates, use field_info to map positional
+                    # index to the correct field offset and size
+                    if isinstance(agg_type, RecordType) and field_info:
+                        ordered = list(field_info.keys())
+                        if positional_field_index < len(ordered):
+                            pos_field = ordered[positional_field_index]
+                            offset = field_info[pos_field]['offset']
+                            fsize = field_info[pos_field]['size']
+                            assigned_fields.add(pos_field)
+                            field_ir_type = IRType.BYTE if fsize == 1 else IRType.WORD
+                            mem = MemoryLocation(base=agg_addr, offset=offset,
+                                                 ir_type=field_ir_type)
+                        else:
+                            mem = MemoryLocation(base=agg_addr, offset=positional_offset,
+                                                 ir_type=IRType.WORD)
+                        positional_field_index += 1
+                    else:
+                        mem = MemoryLocation(base=agg_addr, offset=positional_offset,
+                                             ir_type=IRType.WORD)
                     self.builder.store(mem, value)
                     positional_offset += 2
 
@@ -15504,7 +15655,82 @@ class ASTLowering:
             has_side_effects = isinstance(others_value, (FunctionCall, Allocator))
             if not has_side_effects:
                 others_val = self._lower_expr(others_value)
-            if isinstance(agg_type, ArrayType):
+            if isinstance(agg_type, RecordType):
+                # For records: fill unassigned fields with OTHERS value.
+                # Only fill fields from the active variant (determined by
+                # which variant contains explicitly assigned fields).
+                # Discriminants and common fields are always filled.
+                active_variant_fields = set()
+                vp = getattr(agg_type, 'variant_part', None)
+                if vp is not None:
+                    # Find which variant is active based on assigned fields
+                    for variant in vp.variants:
+                        variant_names = {c.name.lower() for c in variant.components}
+                        if variant_names & assigned_fields:
+                            # This variant has explicitly assigned fields
+                            active_variant_fields = variant_names
+                            break
+                    if not active_variant_fields:
+                        # No explicit variant field assigned; try to determine
+                        # from discriminant value (e.g., positional TRUE/FALSE)
+                        disc_name = vp.discriminant_name.lower()
+                        disc_value = None
+                        # Check if discriminant was set positionally or by name
+                        for comp in expr.components:
+                            if comp.choices:
+                                for ch in comp.choices:
+                                    if isinstance(ch, ExprChoice) and isinstance(ch.expr, Identifier):
+                                        if ch.expr.name.lower() == disc_name:
+                                            # Named disc assignment
+                                            if isinstance(comp.value, Identifier):
+                                                disc_value = comp.value.name.upper()
+                            else:
+                                # First positional = discriminant
+                                if isinstance(comp.value, Identifier):
+                                    disc_value = comp.value.name.upper()
+                                break  # Only first positional is discriminant
+                        if disc_value:
+                            # Match disc_value against variant choices
+                            for variant in vp.variants:
+                                for ch in variant.choices:
+                                    choice_name = None
+                                    if hasattr(ch, 'expr') and hasattr(ch.expr, 'name'):
+                                        choice_name = ch.expr.name.upper()
+                                    if choice_name == disc_value:
+                                        active_variant_fields = {
+                                            c.name.lower() for c in variant.components}
+                                        break
+                                if active_variant_fields:
+                                    break
+                        if not active_variant_fields:
+                            # Still couldn't determine; default to all variants
+                            for variant in vp.variants:
+                                active_variant_fields.update(
+                                    c.name.lower() for c in variant.components)
+
+                # Collect fields eligible for OTHERS
+                # Include: discriminants, common fields, active variant fields
+                all_variant_fields = set()
+                if vp is not None:
+                    for variant in vp.variants:
+                        all_variant_fields.update(
+                            c.name.lower() for c in variant.components)
+
+                for fname, finfo in field_info.items():
+                    if fname in assigned_fields:
+                        continue
+                    # Skip fields from inactive variants
+                    if fname in all_variant_fields and fname not in active_variant_fields:
+                        continue
+                    if has_side_effects:
+                        others_val = self._lower_expr(others_value)
+                    # Use correct IRType based on field size
+                    field_ir_type = IRType.BYTE if finfo['size'] == 1 else IRType.WORD
+                    mem = MemoryLocation(base=agg_addr, offset=finfo['offset'],
+                                         ir_type=field_ir_type)
+                    self.builder.store(mem, others_val,
+                                       comment=f"others field {fname}")
+            elif isinstance(agg_type, ArrayType):
                 # For arrays: fill all elements from positional_offset to end
                 element_size = 2  # default
                 if agg_type.component_type:
@@ -16684,8 +16910,8 @@ class ASTLowering:
             elif right_type and isinstance(right_type, ArrayType) and not is_string:
                 array_type_for_cmp = right_type
             if array_type_for_cmp is not None:
-                left_ptr = self._get_composite_ptr(expr.left)
-                right_ptr = self._get_composite_ptr(expr.right)
+                left_ptr = self._get_composite_ptr(expr.left, expected_type=array_type_for_cmp)
+                right_ptr = self._get_composite_ptr(expr.right, expected_type=array_type_for_cmp)
                 if op in (BinaryOp.EQ, BinaryOp.NE):
                     return self._lower_array_comparison(op, left_ptr, right_ptr, array_type_for_cmp, expr=expr)
                 if op in (BinaryOp.LT, BinaryOp.LE, BinaryOp.GT, BinaryOp.GE):
@@ -16698,8 +16924,8 @@ class ASTLowering:
             elif right_type and isinstance(right_type, RecordType):
                 record_type_for_cmp = right_type
             if record_type_for_cmp is not None:
-                left_ptr = self._get_composite_ptr(expr.left)
-                right_ptr = self._get_composite_ptr(expr.right)
+                left_ptr = self._get_composite_ptr(expr.left, expected_type=record_type_for_cmp)
+                right_ptr = self._get_composite_ptr(expr.right, expected_type=record_type_for_cmp)
                 return self._lower_record_comparison(op, left_ptr, right_ptr, record_type_for_cmp)
 
         # Boolean array AND/OR/XOR: element-wise operations (Ada RM 4.5.6)
@@ -16707,8 +16933,8 @@ class ASTLowering:
             ba_type = left_type if isinstance(left_type, ArrayType) else (
                 right_type if isinstance(right_type, ArrayType) else None)
             if ba_type and self._is_boolean_array_type(ba_type):
-                left_ptr = self._get_composite_ptr(expr.left)
-                right_ptr = self._get_composite_ptr(expr.right)
+                left_ptr = self._get_composite_ptr(expr.left, expected_type=ba_type)
+                right_ptr = self._get_composite_ptr(expr.right, expected_type=ba_type)
                 return self._lower_bool_array_binary(op, left_ptr, right_ptr, ba_type, expr)
 
         # Set fixed-point context for RealLiteral operands in binary expressions
@@ -17092,7 +17318,7 @@ class ASTLowering:
 
         return result
 
-    def _get_composite_ptr(self, expr) -> 'VReg':
+    def _get_composite_ptr(self, expr, expected_type=None) -> 'VReg':
         """Get a pointer to the data of a composite (array/record) expression.
 
         For local variables with size > 2, the vreg holds the value (first word)
@@ -17162,6 +17388,39 @@ class ASTLowering:
                 # Type conversion — unwrap to inner expression
                 if expr.indices:
                     return self._get_composite_ptr(expr.indices[0])
+
+        # For aggregate expressions with a known array type, allocate a flat
+        # contiguous buffer and fill it using _lower_aggregate_to_target.
+        # This ensures multi-dimensional aggregates are laid out flat (matching
+        # how array variables are stored) so memcmp comparison works correctly.
+        if isinstance(expr, Aggregate):
+            expr_type = self._get_expr_type(expr)
+            if not expr_type and expected_type and isinstance(expected_type, (ArrayType, RecordType)):
+                expr_type = expected_type
+            if expr_type and isinstance(expr_type, (ArrayType, RecordType)):
+                size = expr_type.size_bytes() if hasattr(expr_type, 'size_bytes') else 0
+                if size > 0:
+                    # Allocate stack space for the flat aggregate
+                    sp_adj = self.builder.new_vreg(IRType.WORD, "_agg_sp")
+                    self.builder.emit(IRInstr(
+                        OpCode.SUB, sp_adj,
+                        MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+                        Immediate(size, IRType.WORD),
+                        comment=f"allocate flat aggregate ({size} bytes)"
+                    ))
+                    self.builder.emit(IRInstr(
+                        OpCode.MOV,
+                        MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+                        sp_adj,
+                    ))
+                    agg_addr = self.builder.new_vreg(IRType.PTR, "_flat_agg")
+                    self.builder.mov(agg_addr, sp_adj, comment="flat aggregate base address")
+                    # Zero-init
+                    for i in range(0, size, 2):
+                        self._store_at_offset(agg_addr, i, Immediate(0, IRType.WORD))
+                    # Fill using aggregate-to-target (handles multi-dim correctly)
+                    self._lower_aggregate_to_target(expr, agg_addr, expr_type)
+                    return agg_addr
 
         # For function calls or other expressions that produce composite results,
         # lower the expression, store in a temp, and return the temp address.
