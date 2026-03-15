@@ -51,7 +51,7 @@ package Interfaces.C is
    -- Memory allocation (would need heap support)
    function New_Char_Array (Chars : char_array) return chars_ptr;
    function New_String (Str : String) return chars_ptr;
-   procedure Free (Item : in Out chars_ptr);
+   procedure Free (Item : in out chars_ptr);
 
    -- C wide character types (limited support on Z80)
    type wchar_t is new Interfaces.Unsigned_16;

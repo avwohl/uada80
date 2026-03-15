@@ -56,7 +56,7 @@ package body Interfaces.C is
    -- To_C --
    ----------
 
-   function To_C
+   procedure To_C
      (Item       : String;
       Target     : out char_array;
       Count      : out size_t;
@@ -174,7 +174,7 @@ package body Interfaces.C is
    -- Free --
    ----------
 
-   procedure Free (Item : in Out chars_ptr) is
+   procedure Free (Item : in out chars_ptr) is
    begin
       Item := Null_Ptr;  -- Not implemented without heap
    end Free;

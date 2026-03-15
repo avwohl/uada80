@@ -77,20 +77,56 @@ def resolve_support_files(test_files):
             return base
         return None
 
-    # Scan all test files for with clauses
+    def _find_dotted_support(dotted_name):
+        """Find support files for a dotted unit name like ImpDef.Annex_D.
+
+        Returns list of index keys to include (parent + child).
+        ACATS convention: ImpDef.Annex_D -> impdefd.a (parent stem + first
+        letter of last component).
+        """
+        results = []
+        parts = dotted_name.split('.')
+        # Always include the parent
+        parent = _find_support(parts[0])
+        if parent:
+            results.append(parent)
+        # Try ACATS child package convention: parent_stem + last_char
+        # e.g., ImpDef.Annex_D -> impdef + d = impdefd
+        if len(parts) >= 2:
+            child_key = parts[0] + parts[-1][-1]  # e.g., impdef + d
+            found = _find_support(child_key)
+            if found:
+                results.append(found)
+            # Also try Ada child file convention: parent-child
+            hyphen_key = '-'.join(parts)  # e.g., impdef-annex_d
+            found = _find_support(hyphen_key)
+            if found:
+                results.append(found)
+            # Try underscore join: impdef_annex_d
+            under_key = '_'.join(parts)
+            found = _find_support(under_key)
+            if found:
+                results.append(found)
+        return results
+
+    # Scan all test files for with clauses (capture dotted names)
     needed = set()
     for f in test_files:
         try:
             text = f.read_text(errors='replace')
         except OSError:
             continue
-        for m in re.finditer(r'(?i)\bwith\s+([A-Za-z][A-Za-z0-9_]*)', text):
-            unit = m.group(1).lower()
+        for m in re.finditer(r'(?i)\bwith\s+([A-Za-z][A-Za-z0-9_.]*)', text):
+            unit = m.group(1).lower().rstrip('.')
             if unit == 'report':
                 continue
-            found = _find_support(unit)
-            if found:
-                needed.add(found)
+            if '.' in unit:
+                for key in _find_dotted_support(unit):
+                    needed.add(key)
+            else:
+                found = _find_support(unit)
+                if found:
+                    needed.add(found)
 
     if not needed:
         return []
@@ -111,13 +147,17 @@ def resolve_support_files(test_files):
             text = path.read_text(errors='replace')
         except OSError:
             return
-        for m in re.finditer(r'(?i)\bwith\s+([A-Za-z][A-Za-z0-9_]*)', text):
-            dep = m.group(1).lower()
+        for m in re.finditer(r'(?i)\bwith\s+([A-Za-z][A-Za-z0-9_.]*)', text):
+            dep = m.group(1).lower().rstrip('.')
             if dep == 'report' or dep == unit:
                 continue
-            found_dep = _find_support(dep)
-            if found_dep:
-                _resolve(found_dep)
+            if '.' in dep:
+                for dep_key in _find_dotted_support(dep):
+                    _resolve(dep_key)
+            else:
+                found_dep = _find_support(dep)
+                if found_dep:
+                    _resolve(found_dep)
         resolved.append(path)
 
     for unit in sorted(needed):

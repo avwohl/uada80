@@ -10453,9 +10453,46 @@ class ASTLowering:
                                 element_size = (ada_type.component_type.size_bits + 7) // 8
                             break
 
-        # Default bounds if not found
+        # Last resort: resolve the array type by following the type name through
+        # symbol table.  This covers parameters whose ada_type is set but whose
+        # bounds/index_types haven't been resolved yet.
         if not bounds_list:
-            bounds_list = [(1, 10)] * len(indexed.indices)  # Default 1..10 for each dim
+            arr_type = None
+            if isinstance(indexed.prefix, Identifier):
+                sym = self.symbols.lookup(indexed.prefix.name)
+                if sym and sym.ada_type:
+                    arr_type = sym.ada_type
+                    # Follow base_type chain to find bounds
+                    while arr_type and not getattr(arr_type, 'bounds', None):
+                        if hasattr(arr_type, 'base_type') and arr_type.base_type:
+                            arr_type = arr_type.base_type
+                        elif hasattr(arr_type, 'name') and arr_type.name:
+                            # Try symbol table lookup by type name
+                            type_sym = self.symbols.lookup(arr_type.name)
+                            if type_sym and type_sym.ada_type and type_sym.ada_type is not arr_type:
+                                arr_type = type_sym.ada_type
+                            else:
+                                break
+                        else:
+                            break
+                    if arr_type and hasattr(arr_type, 'bounds') and arr_type.bounds:
+                        bounds_list = list(arr_type.bounds)
+                        if hasattr(arr_type, 'component_type') and arr_type.component_type:
+                            element_size = (arr_type.component_type.size_bits + 7) // 8
+                            if (element_size < 2 and not getattr(arr_type, 'is_packed', False) and
+                                    getattr(arr_type.component_type, 'name', '').lower() != 'character'):
+                                element_size = 2
+                    elif arr_type and hasattr(arr_type, 'index_types') and arr_type.index_types:
+                        for it in arr_type.index_types:
+                            if hasattr(it, 'low') and hasattr(it, 'high') and it.low is not None and it.high is not None:
+                                bounds_list.append((it.low, it.high))
+                            elif hasattr(it, 'first') and hasattr(it, 'last') and it.first is not None and it.last is not None:
+                                bounds_list.append((it.first, it.last))
+
+        # Default bounds if not found — use (0, 0) as safe fallback
+        # (1, 10) was causing memory corruption for unresolved array types)
+        if not bounds_list:
+            bounds_list = [(0, 0)] * len(indexed.indices)
 
         # Calculate sizes for each dimension (for row-major order)
         # dim_sizes[i] = product of all subsequent dimension sizes
