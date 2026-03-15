@@ -1400,6 +1400,94 @@ _memcmp_dn:
     RET
 
 ; ============================================================
+; _str_ncmp - Ordered compare of two memory blocks (length-bounded)
+; Like _str_cmp but with explicit length instead of null termination.
+; Compares byte-by-byte up to min(len1, len2), then by length.
+; Input: Stack: ptr1 (IX+10), len1 (IX+8), ptr2 (IX+6), len2 (IX+4)
+; Output: HL = negative if s1<s2, 0 if equal, positive if s1>s2
+; Destroys: A, BC, DE, HL
+; ============================================================
+    PUBLIC _str_ncmp
+_str_ncmp:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+    PUSH BC
+    ; Get lengths
+    LD C, (IX+8)
+    LD B, (IX+9)        ; BC = len1
+    LD L, (IX+4)
+    LD H, (IX+5)        ; HL = len2
+    ; Compute min(len1, len2) into BC, keep both lengths on stack
+    PUSH BC              ; save len1
+    PUSH HL              ; save len2
+    ; if len2 < len1, use len2
+    OR A                 ; clear carry
+    SBC HL, BC           ; HL = len2 - len1
+    JR NC, _sncmp_l1     ; len2 >= len1, BC already = min = len1
+    ; len2 < len1
+    LD C, (IX+4)
+    LD B, (IX+5)         ; BC = len2 = min
+_sncmp_l1:
+    ; BC = min(len1, len2)
+    ; Get pointers
+    LD L, (IX+10)
+    LD H, (IX+11)        ; HL = ptr1
+    LD E, (IX+6)
+    LD D, (IX+7)         ; DE = ptr2
+    ; Check for zero min length
+    LD A, B
+    OR C
+    JR Z, _sncmp_cl      ; all compared bytes equal, compare lengths
+_sncmp_lp:
+    LD A, (HL)
+    PUSH HL
+    EX DE, HL
+    CP (HL)              ; A(*ptr1) - *ptr2
+    EX DE, HL
+    POP HL
+    JR NZ, _sncmp_df
+    INC HL
+    INC DE
+    DEC BC
+    LD A, B
+    OR C
+    JR NZ, _sncmp_lp
+_sncmp_cl:
+    ; All compared bytes equal - compare lengths
+    POP HL               ; len2
+    POP BC               ; len1
+    ; Return len1 - len2 (sign-extended to 16-bit)
+    OR A
+    SBC HL, BC           ; HL = len2 - len1
+    ; Negate: we want len1 - len2
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL               ; HL = len1 - len2
+    POP BC
+    POP IX
+    RET
+_sncmp_df:
+    ; Bytes differ: A = *ptr1, (DE) still at ptr2
+    ; Compute *ptr1 - *ptr2
+    EX DE, HL            ; HL = ptr2
+    SUB (HL)             ; A = *ptr1 - *ptr2
+    ; Sign-extend A to HL
+    LD L, A
+    RLCA
+    SBC A, A
+    LD H, A
+    POP DE               ; discard saved len2
+    POP DE               ; discard saved len1
+    POP BC
+    POP IX
+    RET
+
+; ============================================================
 ; _int_to_str - Convert integer to string
 ; Input: Stack: value (16-bit signed at IX+4)
 ; Output: HL = pointer to null-terminated string in static buffer

@@ -538,6 +538,34 @@ class RecordType(AdaType):
             # Larger enums stay at their natural size
         return comp_type.size_bits
 
+    def _estimate_disc_dep_size(self, comp_type: "ArrayType") -> int:
+        """Estimate max size in bits for a discriminant-dependent array component.
+
+        When a record component's array bounds depend on a discriminant
+        (e.g., STRING(3..DISC)), the type's size_bits is 0. We estimate
+        the max size using the discriminant's subtype range.
+        """
+        # Get element size in bits (e.g., 8 for Character)
+        elem_bits = 8  # default for Character
+        if comp_type.component_type and comp_type.component_type.size_bits:
+            elem_bits = comp_type.component_type.size_bits
+
+        # Find the largest discriminant max value to estimate array length
+        max_disc = 0
+        for disc in self.discriminants:
+            dt = disc.component_type
+            if dt:
+                if hasattr(dt, 'high') and dt.high is not None:
+                    max_disc = max(max_disc, abs(dt.high))
+                elif hasattr(dt, 'last') and dt.last is not None:
+                    max_disc = max(max_disc, abs(dt.last))
+
+        if max_disc > 0:
+            # Conservative estimate: discriminant value * element size
+            return max_disc * elem_bits
+
+        return 0  # Can't estimate, fall through to minimum
+
     def _compute_size(self) -> int:
         """Compute record size based on components.
 
@@ -598,6 +626,13 @@ class RecordType(AdaType):
                     total_bits = ((total_bits + 15) // 16) * 16
                 comp.offset_bits = total_bits
                 comp_size = comp.component_type.size_bits
+                # For discriminant-dependent array components (size_bits=0),
+                # estimate max size from discriminant ranges
+                if comp_size == 0 and isinstance(comp.component_type, ArrayType) and self.discriminants:
+                    comp_size = self._estimate_disc_dep_size(comp.component_type)
+                    # Store estimated size on the component for lowering
+                    if comp_size > 0:
+                        comp.size_bits = comp_size
                 # Ensure minimum 16-bit slot for non-packed fields
                 # (Z80 uses ld hl,(addr) which reads 2 bytes)
                 if comp_size < 16:

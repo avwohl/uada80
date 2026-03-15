@@ -3184,7 +3184,7 @@ class ASTLowering:
                             src_addr = self._lower_expr(decl.init_expr)
                         self._emit_memcpy(local_addr, src_addr, local.size,
                                          f"init record {name} from expr")
-                    elif (ada_type and type(ada_type).__name__ == 'ArrayType' and local.size > 2):
+                    elif (ada_type and type(ada_type).__name__ == 'ArrayType' and local.size >= 1):
                         # Composite array init from non-aggregate (e.g., A := A_CONST)
                         # Need memcpy for inline storage (includes constrained strings)
                         frame_offset = -(local.stack_offset + local.size)
@@ -10219,7 +10219,25 @@ class ASTLowering:
         # Calculate element address
         elem_addr = self._calc_element_addr(target, base_addr)
 
-        # Store value to element address
+        # Check if the element type is composite (record or large array)
+        # and needs memcpy instead of a simple 2-byte store
+        arr_type = self._get_expr_type(target.prefix)
+        if arr_type and isinstance(arr_type, ArrayType) and arr_type.component_type:
+            comp_type = arr_type.component_type
+            comp_size = comp_type.size_bytes() if hasattr(comp_type, 'size_bytes') else None
+            if comp_size and comp_size > 2 and isinstance(comp_type, (RecordType, ArrayType)):
+                # Composite element — memcpy from source to element address
+                dst_addr = self.builder.new_vreg(IRType.PTR, "_elem_dst")
+                self.builder.emit(IRInstr(
+                    OpCode.LEA, dst_addr, elem_addr,
+                    comment="element address for composite store"
+                ))
+                src_addr = value  # value is a pointer to the aggregate/record data
+                self._emit_memcpy(dst_addr, src_addr, comp_size,
+                                  "copy composite to array element")
+                return
+
+        # Store value to element address (scalar or small types)
         self.builder.store(elem_addr, value)
 
     def _get_array_base(self, prefix: Expr) -> Optional[VReg]:
@@ -15635,6 +15653,25 @@ class ASTLowering:
                             offset = field_info[pos_field]['offset']
                             fsize = field_info[pos_field]['size']
                             assigned_fields.add(pos_field)
+                            # For composite fields (string/array > 2 bytes), copy data
+                            # instead of storing the pointer
+                            if fsize > 2 and isinstance(comp.value, (StringLiteral, Aggregate)):
+                                dst_addr = self.builder.new_vreg(IRType.PTR, f"_{pos_field}_dst")
+                                if offset != 0:
+                                    self.builder.add(dst_addr, agg_addr, Immediate(offset, IRType.WORD))
+                                else:
+                                    self.builder.mov(dst_addr, agg_addr)
+                                # For string literals, value is a pointer to string data
+                                # For aggregates, value is a pointer to aggregate data
+                                # Determine actual copy size from the expression
+                                copy_size = fsize
+                                if isinstance(comp.value, StringLiteral):
+                                    copy_size = min(fsize, len(comp.value.value))
+                                self._emit_memcpy(dst_addr, value, copy_size,
+                                                  f"copy composite to field {pos_field}")
+                                positional_field_index += 1
+                                positional_offset += fsize
+                                continue
                             field_ir_type = IRType.BYTE if fsize == 1 else IRType.WORD
                             mem = MemoryLocation(base=agg_addr, offset=offset,
                                                  ir_type=field_ir_type)
@@ -15830,12 +15867,21 @@ class ASTLowering:
                                 if field_name in field_info:
                                     offset = field_info[field_name]['offset']
                                     field_type = field_info[field_name]['type']
+                                    field_size = field_info[field_name]['size']
                                     # Handle nested aggregates for record/array fields
                                     if isinstance(comp_assoc.value, Aggregate) and isinstance(field_type, (RecordType, ArrayType)):
                                         # Compute field address and recursively init
                                         field_addr = self.builder.new_vreg(IRType.PTR, f"_{field_name}_addr")
                                         self.builder.add(field_addr, target_addr, Immediate(offset, IRType.WORD))
                                         self._lower_aggregate_to_target(comp_assoc.value, field_addr, field_type)
+                                    elif isinstance(comp_assoc.value, StringLiteral) and isinstance(field_type, ArrayType) and field_size > 2:
+                                        # String literal into array/string field — copy data not pointer
+                                        value = self._lower_expr(comp_assoc.value)
+                                        field_addr = self.builder.new_vreg(IRType.PTR, f"_{field_name}_addr")
+                                        self.builder.add(field_addr, target_addr, Immediate(offset, IRType.WORD))
+                                        copy_size = min(field_size, len(comp_assoc.value.value))
+                                        self._emit_memcpy(field_addr, value, copy_size,
+                                                          f"copy string to named field {field_name}")
                                     else:
                                         value = self._lower_expr(comp_assoc.value)
                                         self._store_at_offset(target_addr, offset, value)
@@ -15847,12 +15893,21 @@ class ASTLowering:
                         if field_name in field_info:
                             offset = field_info[field_name]['offset']
                             field_type = field_info[field_name]['type']
+                            field_size = field_info[field_name]['size']
                             # Handle nested aggregates for record/array fields
                             if isinstance(comp_assoc.value, Aggregate) and isinstance(field_type, (RecordType, ArrayType)):
                                 # Compute field address and recursively init
                                 field_addr = self.builder.new_vreg(IRType.PTR, f"_{field_name}_addr")
                                 self.builder.add(field_addr, target_addr, Immediate(offset, IRType.WORD))
                                 self._lower_aggregate_to_target(comp_assoc.value, field_addr, field_type)
+                            elif isinstance(comp_assoc.value, StringLiteral) and isinstance(field_type, ArrayType) and field_size > 2:
+                                # String literal into array/string field — copy data not pointer
+                                value = self._lower_expr(comp_assoc.value)
+                                field_addr = self.builder.new_vreg(IRType.PTR, f"_{field_name}_addr")
+                                self.builder.add(field_addr, target_addr, Immediate(offset, IRType.WORD))
+                                copy_size = min(field_size, len(comp_assoc.value.value))
+                                self._emit_memcpy(field_addr, value, copy_size,
+                                                  f"copy string to field {field_name}")
                             else:
                                 value = self._lower_expr(comp_assoc.value)
                                 self._store_at_offset(target_addr, offset, value)
@@ -15935,9 +15990,10 @@ class ASTLowering:
                                         assigned_indices.add(idx)
                                 else:
                                     value = self._lower_expr(comp_assoc.value)
+                                    elem_ir_type = IRType.BYTE if element_size == 1 else IRType.WORD
                                     for pos, idx in enumerate(range(range_low, range_high + 1)):
                                         offset = pos * element_size
-                                        self._store_at_offset(target_addr, offset, value)
+                                        self._store_at_offset(target_addr, offset, value, ir_type=elem_ir_type)
                                         assigned_indices.add(idx)
                             else:
                                 # Dynamic range (e.g., 1 .. IDENT_INT(5) => 0)
@@ -15965,9 +16021,10 @@ class ASTLowering:
                                 # Store value at target_addr + offset
                                 dyn_addr = self.builder.new_vreg(IRType.PTR, "_rng_addr")
                                 self.builder.add(dyn_addr, target_addr, dyn_offset)
+                                store_type = IRType.BYTE if element_size == 1 else IRType.WORD
                                 self.builder.emit(IRInstr(
                                     OpCode.STORE,
-                                    MemoryLocation(base=dyn_addr, offset=0, ir_type=IRType.WORD),
+                                    MemoryLocation(base=dyn_addr, offset=0, ir_type=store_type),
                                     value,
                                     comment="dynamic range aggregate store"
                                 ))
@@ -15987,7 +16044,8 @@ class ASTLowering:
                                 else:
                                     value = self._lower_expr(comp_assoc.value)
                                     offset = (idx - lower_bound) * element_size
-                                    self._store_at_offset(target_addr, offset, value)
+                                    elem_ir_type = IRType.BYTE if element_size == 1 else IRType.WORD
+                                    self._store_at_offset(target_addr, offset, value, ir_type=elem_ir_type)
                                 assigned_indices.add(idx)
                             else:
                                 # Dynamic index expression (e.g., Ident_Int(1) => 0)
@@ -16004,9 +16062,10 @@ class ASTLowering:
                                 # Store value at target_addr + dyn_offset
                                 dyn_addr = self.builder.new_vreg(IRType.PTR, "_dyn_elem_addr")
                                 self.builder.add(dyn_addr, target_addr, dyn_offset)
+                                store_type = IRType.BYTE if element_size == 1 else IRType.WORD
                                 self.builder.emit(IRInstr(
                                     OpCode.STORE,
-                                    MemoryLocation(base=dyn_addr, offset=0, ir_type=IRType.WORD),
+                                    MemoryLocation(base=dyn_addr, offset=0, ir_type=store_type),
                                     value,
                                     comment="dynamic index aggregate store"
                                 ))
@@ -16026,6 +16085,7 @@ class ASTLowering:
                             self._store_at_offset(target_addr, offset, value)
                     else:
                         offset = (positional_index - lower_bound) * element_size
+                        elem_ir_type = IRType.BYTE if element_size == 1 else IRType.WORD
                         # Handle nested aggregates for arrays of records/arrays
                         if isinstance(comp_assoc.value, Aggregate) and target_type.component_type:
                             comp_type = target_type.component_type
@@ -16036,10 +16096,10 @@ class ASTLowering:
                                 self._lower_aggregate_to_target(comp_assoc.value, elem_addr, comp_type)
                             else:
                                 value = self._lower_expr(comp_assoc.value)
-                                self._store_at_offset(target_addr, offset, value)
+                                self._store_at_offset(target_addr, offset, value, ir_type=elem_ir_type)
                         else:
                             value = self._lower_expr(comp_assoc.value)
-                            self._store_at_offset(target_addr, offset, value)
+                            self._store_at_offset(target_addr, offset, value, ir_type=elem_ir_type)
                     assigned_indices.add(positional_index)
                     positional_index += 1
 
@@ -16049,21 +16109,23 @@ class ASTLowering:
                 has_side_effects = isinstance(others_value, (FunctionCall, Allocator))
                 if not has_side_effects:
                     value = self._lower_expr(others_value)
+                elem_ir_type = IRType.BYTE if element_size == 1 else IRType.WORD
                 for idx in range(lower_bound, upper_bound + 1):
                     if idx not in assigned_indices:
                         if has_side_effects:
                             value = self._lower_expr(others_value)
                         offset = (idx - lower_bound) * element_size
-                        self._store_at_offset(target_addr, offset, value)
+                        self._store_at_offset(target_addr, offset, value, ir_type=elem_ir_type)
 
-    def _store_at_offset(self, base_addr, offset: int, value) -> None:
+    def _store_at_offset(self, base_addr, offset: int, value, ir_type=None) -> None:
         """Store a value at a given offset from a base address."""
+        store_ir_type = ir_type or IRType.WORD
         if offset != 0:
             addr = self.builder.new_vreg(IRType.PTR, "_addr")
             self.builder.add(addr, base_addr, Immediate(offset, IRType.WORD))
-            mem = MemoryLocation(base=addr, offset=0, ir_type=IRType.WORD)
+            mem = MemoryLocation(base=addr, offset=0, ir_type=store_ir_type)
         else:
-            mem = MemoryLocation(base=base_addr, offset=0, ir_type=IRType.WORD)
+            mem = MemoryLocation(base=base_addr, offset=0, ir_type=store_ir_type)
         self.builder.store(mem, value)
 
     def _get_expr_address(self, expr) -> Optional[VReg]:
@@ -16894,13 +16956,20 @@ class ASTLowering:
             if not is_string and self._is_string_type(expr.left):
                 is_string = True
             if is_string:
+                str_arr_type = left_type if isinstance(left_type, ArrayType) else (
+                    right_type if isinstance(right_type, ArrayType) else None)
+                if op in (BinaryOp.LT, BinaryOp.LE, BinaryOp.GT, BinaryOp.GE):
+                    # Use length-aware ordering (handles different-length strings)
+                    left_ptr = self._get_composite_ptr(expr.left, expected_type=str_arr_type)
+                    right_ptr = self._get_composite_ptr(expr.right, expected_type=str_arr_type)
+                    return self._lower_string_ordering(op, left_ptr, right_ptr,
+                                                       str_arr_type, expr)
                 left = self._lower_expr(expr.left)
                 right = self._lower_expr(expr.right)
                 # Get string length for constrained comparison (avoids null-terminator issue)
                 str_len = None
-                str_type = left_type or right_type
-                if str_type and isinstance(str_type, ArrayType) and str_type.size_bits:
-                    str_len = str_type.size_bits // 8
+                if str_arr_type and str_arr_type.size_bits:
+                    str_len = str_arr_type.size_bits // 8
                 return self._lower_string_comparison(op, left, right, str_len=str_len)
 
             # Check if this is a general array comparison (non-string arrays)
@@ -17318,6 +17387,92 @@ class ASTLowering:
 
         return result
 
+    def _lower_string_ordering(self, op: BinaryOp, left_ptr, right_ptr,
+                                arr_type, expr):
+        """Lower lexicographic ordering for string/character arrays.
+
+        Uses _str_ncmp(ptr1, len1, ptr2, len2) which handles different lengths
+        and does not rely on null termination.
+        """
+        result = self.builder.new_vreg(IRType.WORD, "_sord")
+
+        # Get lengths for each side individually (they may differ)
+        left_type = self._get_expr_type(expr.left) if expr else None
+        right_type = self._get_expr_type(expr.right) if expr else None
+        left_len = self._get_string_length(expr.left,
+            left_type if isinstance(left_type, ArrayType) else arr_type)
+        right_len = self._get_string_length(expr.right,
+            right_type if isinstance(right_type, ArrayType) else arr_type)
+
+        # Call _str_ncmp: stack is ptr1(IX+10), len1(IX+8), ptr2(IX+6), len2(IX+4)
+        # Push in reverse order: ptr1 first (highest), then len1, ptr2, len2 last
+        self.builder.push(left_ptr)
+        self.builder.push(left_len)
+        self.builder.push(right_ptr)
+        self.builder.push(right_len)
+        self.builder.call(Label("_str_ncmp"), comment="string ordering")
+
+        cmp_result = self.builder.new_vreg(IRType.WORD, "_scmp")
+        self.builder.emit(IRInstr(
+            OpCode.MOV, cmp_result,
+            MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+            comment="capture string ordering result"
+        ))
+
+        # Clean up stack (4 arguments)
+        temp = self.builder.new_vreg(IRType.WORD, "_discard")
+        self.builder.pop(temp)
+        self.builder.pop(temp)
+        self.builder.pop(temp)
+        self.builder.pop(temp)
+
+        # Convert strcmp-style result to boolean
+        if op == BinaryOp.LT:
+            self.builder.cmp_lt(result, cmp_result, Immediate(0, IRType.WORD))
+        elif op == BinaryOp.LE:
+            self.builder.cmp_le(result, cmp_result, Immediate(0, IRType.WORD))
+        elif op == BinaryOp.GT:
+            self.builder.cmp_gt(result, cmp_result, Immediate(0, IRType.WORD))
+        elif op == BinaryOp.GE:
+            self.builder.cmp_ge(result, cmp_result, Immediate(0, IRType.WORD))
+
+        return result
+
+    def _get_string_length(self, expr, arr_type):
+        """Get the length of a string expression as a VReg.
+
+        For constrained arrays with known size, returns a constant.
+        For unconstrained arrays (parameters), computes from dope vector.
+        """
+        # Try constrained type size first
+        if arr_type and isinstance(arr_type, ArrayType) and arr_type.size_bits:
+            length = arr_type.size_bits // 8
+            len_reg = self.builder.new_vreg(IRType.WORD, "_slen")
+            self.builder.mov(len_reg, Immediate(length, IRType.WORD))
+            return len_reg
+
+        # Try dope vector (unconstrained array parameter)
+        try:
+            first, last, _ = self._get_array_dope_vector(expr)
+            len_reg = self.builder.new_vreg(IRType.WORD, "_slen")
+            self.builder.sub(len_reg, last, first)
+            self.builder.add(len_reg, len_reg, Immediate(1, IRType.WORD))
+            # Clamp negative to 0 (null array)
+            null_check = self.builder.new_vreg(IRType.WORD, "_snc")
+            self.builder.cmp_lt(null_check, last, first)
+            ok_label = self.builder.new_label("slen_ok")
+            self.builder.jz(null_check, ok_label)
+            self.builder.mov(len_reg, Immediate(0, IRType.WORD))
+            self.builder.label(ok_label)
+            return len_reg
+        except Exception:
+            pass
+
+        # Fallback: assume reasonable default (shouldn't happen)
+        len_reg = self.builder.new_vreg(IRType.WORD, "_slen")
+        self.builder.mov(len_reg, Immediate(0, IRType.WORD))
+        return len_reg
+
     def _get_composite_ptr(self, expr, expected_type=None) -> 'VReg':
         """Get a pointer to the data of a composite (array/record) expression.
 
@@ -17731,6 +17886,11 @@ class ASTLowering:
             MemoryLocation(base=right_addr, offset=0, ir_type=IRType.WORD),
             comment="load right array element"
         ))
+
+        # For byte-sized elements, mask off the high byte (LOAD always reads 2 bytes)
+        if comp_size == 1:
+            self.builder.and_(left_elem, left_elem, Immediate(0xFF, IRType.WORD))
+            self.builder.and_(right_elem, right_elem, Immediate(0xFF, IRType.WORD))
 
         # if left_elem < right_elem: goto lt
         lt_cmp = self.builder.new_vreg(IRType.WORD, "_ltc")
@@ -26058,6 +26218,11 @@ class ASTLowering:
                         last = self._eval_static_expr(getattr(range_expr, 'high', None))
                         if first is not None and last is not None:
                             return last - first + 1
+                        # Try heuristic for dynamic bounds (e.g., STRING(2..IDENT_INT(6)))
+                        hint_first = first if first is not None else self._eval_static_expr_hint(getattr(range_expr, 'low', None))
+                        hint_last = last if last is not None else self._eval_static_expr_hint(getattr(range_expr, 'high', None))
+                        if hint_first is not None and hint_last is not None:
+                            return max(0, hint_last - hint_first + 1)
                 elif prefix_name:
                     # Constrained unconstrained array: Arr(1..3) parsed as Slice
                     # Try to get element count from the constraint range
