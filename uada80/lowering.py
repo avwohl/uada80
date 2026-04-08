@@ -265,6 +265,9 @@ class ASTLowering:
         self._subprogram_param_ada_types: dict[str, list] = {}
         # Track return types for functions (needed for attributes like F'First)
         self._subprogram_return_types: dict[str, Any] = {}
+        # All protected types seen during lowering (persists across contexts)
+        # Maps object name (lowercase) -> ProtectedType
+        self._all_protected_types: dict[str, ProtectedType] = {}
         # Track which subprograms are nested (need static link at call sites)
         self._nested_subprograms: set[str] = set()
         # Stack of body declarations for nested scope lookup
@@ -3883,6 +3886,25 @@ class ASTLowering:
             parts.append(current.name)
         return ".".join(reversed(parts))
 
+    def _find_local(self, name: str):
+        """Find a local variable by name, with package-prefix fallback.
+
+        When a variable is stored as 'pkg.var' but referenced as just 'var'
+        (e.g. inside a package body), this searches for any local whose key
+        ends with '.{name}'.
+        """
+        if not self.ctx:
+            return None
+        name_lower = name.lower()
+        local = self.ctx.locals.get(name_lower)
+        if local is not None:
+            return local
+        suffix = "." + name_lower
+        for k, v in self.ctx.locals.items():
+            if k.endswith(suffix):
+                return v
+        return None
+
     def _type_needs_finalization(self, ada_type) -> bool:
         """Check if a type needs finalization."""
         from uada80.type_system import RecordType
@@ -4318,6 +4340,7 @@ class ASTLowering:
 
         # Register in context for later lookup
         self.ctx.protected_types[decl.name.lower()] = prot_type
+        self._all_protected_types[decl.name.lower()] = prot_type
 
         # Allocate stack space for the protected object instance
         # Layout: 1-byte lock + components
@@ -5521,7 +5544,8 @@ class ASTLowering:
                     saved_locals[pname_lower] = self.ctx.locals[pname_lower]
                 from types import SimpleNamespace
                 self.ctx.locals[pname_lower] = SimpleNamespace(
-                    vreg=local_vreg, size=2, stack_offset=0, ada_type=pspec.type_mark
+                    vreg=local_vreg, size=2, stack_offset=0, ada_type=pspec.type_mark,
+                    dynamic_bounds=None
                 )
                 param_info.append((pname_lower, mode, param_offset))
                 param_offset += 2
@@ -7810,6 +7834,28 @@ class ASTLowering:
                     prot_sym = self.symbols.lookup(prefix_name) if self.symbols else None
                     if prot_sym and hasattr(prot_sym, 'ada_type') and isinstance(prot_sym.ada_type, ProtectedType):
                         prot_type = prot_sym.ada_type
+                # Fallback: check _get_prefix_type and _find_local for protected type
+                if prot_type is None:
+                    pt = self._get_prefix_type(prefix)
+                    if isinstance(pt, ProtectedType):
+                        prot_type = pt
+                # Fallback: check _all_protected_types by looking up object's type name
+                if prot_type is None and hasattr(self, '_all_protected_types'):
+                    # Try symbol table for type name
+                    _obj_sym = self.symbols.lookup(prefix_name) if self.symbols else None
+                    if _obj_sym and _obj_sym.ada_type and hasattr(_obj_sym.ada_type, 'name'):
+                        _tname = _obj_sym.ada_type.name.lower() if _obj_sym.ada_type.name else None
+                        if _tname and _tname in self._all_protected_types:
+                            prot_type = self._all_protected_types[_tname]
+                    # Also check if the selector matches any protected operation
+                    if prot_type is None:
+                        for _pt_name, _pt in self._all_protected_types.items():
+                            for _op in _pt.operations:
+                                if _op.name.lower() == selector.lower():
+                                    prot_type = _pt
+                                    break
+                            if prot_type:
+                                break
 
                 if prot_type:
                     # This is a call to a protected operation
@@ -11595,6 +11641,20 @@ class ASTLowering:
                 prot_sym = self.symbols.lookup(prefix_name) if self.symbols else None
                 if prot_sym and hasattr(prot_sym, 'ada_type') and isinstance(prot_sym.ada_type, ProtectedType):
                     prot_type = prot_sym.ada_type
+            # Fallback: check _get_prefix_type for protected type
+            if prot_type is None:
+                pt = self._get_prefix_type(expr.prefix)
+                if isinstance(pt, ProtectedType):
+                    prot_type = pt
+            # Fallback: search all known protected types for matching operation
+            if prot_type is None and hasattr(self, '_all_protected_types'):
+                for _pt_name, _pt in self._all_protected_types.items():
+                    for _op in _pt.operations:
+                        if _op.name.lower() == selector.lower():
+                            prot_type = _pt
+                            break
+                    if prot_type:
+                        break
 
             if prot_type:
                 # Check if the selector is a function in this protected type
@@ -11986,17 +12046,35 @@ class ASTLowering:
         if isinstance(expr, Identifier):
             name = expr.name.lower()
             # Check locals first (may have resolved ada_type)
-            if self.ctx and name in self.ctx.locals:
-                local = self.ctx.locals[name]
-                if local.ada_type:
-                    from uada80.type_system import AdaType as _AdaType
-                    if isinstance(local.ada_type, _AdaType):
-                        return local.ada_type
-                    # ada_type is an unresolved AST expression - try to resolve now
-                    resolved = self._resolve_local_type(local.ada_type)
-                    if resolved:
-                        local.ada_type = resolved
-                        return resolved
+            local = self._find_local(name)
+            if local and local.ada_type:
+                from uada80.type_system import AdaType as _AdaType
+                if isinstance(local.ada_type, _AdaType):
+                    return local.ada_type
+                # ada_type is an unresolved AST expression - try to resolve now
+                resolved = self._resolve_local_type(local.ada_type)
+                if resolved:
+                    local.ada_type = resolved
+                    return resolved
+                # Fallback: search AST declarations for the type name
+                # (handles types in nested package bodies not in symbol table)
+                if isinstance(local.ada_type, SubtypeIndication) and local.ada_type.type_mark:
+                    _tm = local.ada_type.type_mark
+                    _tname = _tm.name.lower() if isinstance(_tm, Identifier) else None
+                    if _tname:
+                        from uada80.ast_nodes import TypeDecl as _TD2, PackageDecl as _PD2, PackageBody as _PB2
+                        _all = list(getattr(self, '_current_body_declarations', None) or [])
+                        for _dl in getattr(self, '_body_declarations_stack', []):
+                            _all.extend(_dl)
+                        for _d in _all:
+                            if isinstance(_d, _TD2) and _d.name.lower() == _tname and _d.ada_type:
+                                local.ada_type = _d.ada_type
+                                return _d.ada_type
+                            if isinstance(_d, (_PD2, _PB2)):
+                                for _sd in list(getattr(_d, 'declarations', [])) + list(getattr(_d, 'private_declarations', None) or []):
+                                    if isinstance(_sd, _TD2) and _sd.name.lower() == _tname and _sd.ada_type:
+                                        local.ada_type = _sd.ada_type
+                                        return _sd.ada_type
             # Check function parameters (they have Ada types in ctx.param_ada_types)
             if self.ctx and name in self.ctx.params and name in self.ctx.param_ada_types:
                 param_type = self.ctx.param_ada_types[name]
@@ -12025,12 +12103,44 @@ class ASTLowering:
             if access_type and isinstance(access_type, _AccType):
                 return access_type.designated_type
         elif isinstance(expr, SelectedName):
-            # Record field: get the field's component type
+            selector_str = expr.selector.lower() if isinstance(expr.selector, str) else expr.selector.name.lower()
+            # First check if the full dotted name is a local variable (e.g., "p.r1")
+            full_name = self._get_selected_name_str(expr)
+            if self.ctx and full_name.lower() in self.ctx.locals:
+                local = self.ctx.locals[full_name.lower()]
+                if local.ada_type:
+                    from uada80.type_system import AdaType as _AdaType
+                    if isinstance(local.ada_type, _AdaType):
+                        return local.ada_type
+                    resolved = self._resolve_local_type(local.ada_type)
+                    if resolved:
+                        local.ada_type = resolved
+                        return resolved
             prefix_type = self._get_prefix_type(expr.prefix)
             if prefix_type and isinstance(prefix_type, RecordType):
-                comp = prefix_type.get_component(expr.selector.lower() if isinstance(expr.selector, str) else expr.selector.name.lower())
+                comp = prefix_type.get_component(selector_str)
                 if comp:
                     return comp.component_type
+            elif prefix_type and isinstance(prefix_type, AccessType):
+                # Implicit dereference of access-to-record
+                desig = prefix_type.designated_type
+                if isinstance(desig, RecordType):
+                    comp = desig.get_component(selector_str)
+                    if comp:
+                        return comp.component_type
+            elif prefix_type is None:
+                # Prefix may be a package — try resolving the full selected name
+                sym = self.symbols.lookup(full_name)
+                if sym and sym.ada_type:
+                    return sym.ada_type
+                # Also try just the selector within the package scope
+                if isinstance(expr.prefix, Identifier):
+                    pkg_name = expr.prefix.name.lower()
+                    pkg_sym = self.symbols.lookup(pkg_name)
+                    if pkg_sym and hasattr(pkg_sym, 'public_symbols'):
+                        var_sym = pkg_sym.public_symbols.get(selector_str)
+                        if var_sym and hasattr(var_sym, 'ada_type'):
+                            return var_sym.ada_type
         return None
 
     def _get_all_record_components(self, record_type: RecordType) -> list:
@@ -19442,6 +19552,20 @@ class ASTLowering:
                     prot_sym = self.symbols.lookup(prefix_name) if self.symbols else None
                     if prot_sym and hasattr(prot_sym, 'ada_type') and isinstance(prot_sym.ada_type, ProtectedType):
                         prot_type = prot_sym.ada_type
+                # Fallback: check _get_prefix_type for protected type
+                if prot_type is None:
+                    pt = self._get_prefix_type(prefix)
+                    if isinstance(pt, ProtectedType):
+                        prot_type = pt
+                # Fallback: search all known protected types for matching operation
+                if prot_type is None and hasattr(self, '_all_protected_types'):
+                    for _pt_name, _pt in self._all_protected_types.items():
+                        for _op in _pt.operations:
+                            if _op.name.lower() == selector.lower():
+                                prot_type = _pt
+                                break
+                        if prot_type:
+                            break
 
                 if prot_type:
                     # This is a call to a protected function
@@ -19494,16 +19618,42 @@ class ASTLowering:
                     # e.g., Old.List(I) where Old is access-to-record and List is an array field
                     from uada80.type_system import RecordType as _RecordType, ArrayType as _ArrayType, AccessType as _AccessType
                     _rec_type = None
-                    if self.ctx and prefix_name in self.ctx.locals:
-                        _local = self.ctx.locals[prefix_name]
-                        if _local.ada_type:
-                            _rec_type = self._resolve_local_type(_local.ada_type)
+                    _local = self._find_local(prefix_name)
+                    if _local and _local.ada_type:
+                        _rec_type = self._resolve_local_type(_local.ada_type)
                     if _rec_type is None and self.ctx and prefix_name in self.ctx.param_ada_types:
                         _rec_type = self.ctx.param_ada_types[prefix_name]
                     if _rec_type is None:
                         _sym = self.symbols.lookup(prefix_name) if self.symbols else None
                         if _sym and _sym.ada_type:
                             _rec_type = _sym.ada_type
+                    # Fallback: use _get_prefix_type which handles package-prefixed locals
+                    if _rec_type is None:
+                        _rec_type = self._get_prefix_type(prefix)
+                    # Fallback: if local found but type unresolved, search AST declarations
+                    # for the type name (handles nested package body types)
+                    if _rec_type is None and _local and _local.ada_type:
+                        _sti = _local.ada_type
+                        if isinstance(_sti, SubtypeIndication) and _sti.type_mark:
+                            _type_name = None
+                            if isinstance(_sti.type_mark, Identifier):
+                                _type_name = _sti.type_mark.name.lower()
+                            if _type_name:
+                                from uada80.ast_nodes import TypeDecl as _TD, PackageDecl as _PD, PackageBody as _PB
+                                _all_decls = list(getattr(self, '_current_body_declarations', None) or [])
+                                for _dl in getattr(self, '_body_declarations_stack', []):
+                                    _all_decls.extend(_dl)
+                                for _d in _all_decls:
+                                    if isinstance(_d, _TD) and _d.name.lower() == _type_name and _d.ada_type:
+                                        _rec_type = _d.ada_type
+                                        break
+                                    if isinstance(_d, (_PD, _PB)):
+                                        for _sd in list(getattr(_d, 'declarations', [])) + list(getattr(_d, 'private_declarations', None) or []):
+                                            if isinstance(_sd, _TD) and _sd.name.lower() == _type_name and _sd.ada_type:
+                                                _rec_type = _sd.ada_type
+                                                break
+                                        if _rec_type is not None:
+                                            break
                     # Follow implicit dereference for access types
                     if isinstance(_rec_type, _AccessType) and _rec_type.designated_type:
                         _rec_type = _rec_type.designated_type
@@ -25841,13 +25991,12 @@ class ASTLowering:
 
             if isinstance(rec_prefix, Identifier):
                 var_name = rec_prefix.name.lower()
-                # Check locals
-                if self.ctx and var_name in self.ctx.locals:
-                    local = self.ctx.locals[var_name]
-                    if local.ada_type:
-                        rec_type = _deref_access_type(self._resolve_local_type(local.ada_type))
-                        if _check_record_array_field(rec_type, selector):
-                            is_array_field = True
+                # Check locals (with package-prefix fallback)
+                _local_match = self._find_local(var_name)
+                if _local_match and _local_match.ada_type:
+                    rec_type = _deref_access_type(self._resolve_local_type(_local_match.ada_type))
+                    if _check_record_array_field(rec_type, selector):
+                        is_array_field = True
                 # Check parameters (may be byref) - use param_types to find Ada type
                 if not is_array_field and self.ctx and var_name in self.ctx.params:
                     type_name_str = self.ctx.param_types.get(var_name)
