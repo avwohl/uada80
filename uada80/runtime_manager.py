@@ -5,6 +5,7 @@ Tracks which runtime routines are needed during compilation and generates
 the appropriate EXTRN declarations. This replaces inline code emission
 with linking against libada.lib.
 """
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, auto

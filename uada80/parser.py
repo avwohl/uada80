@@ -4,6 +4,8 @@ Recursive descent parser for Ada.
 Implements a complete parser for Ada 2012 based on the Ada Reference Manual grammar.
 """
 
+from __future__ import annotations
+
 from typing import Optional
 from .lexer import Token, TokenType
 from .ast_nodes import *

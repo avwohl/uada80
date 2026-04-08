@@ -5,6 +5,8 @@ Coordinates all compilation phases: parsing, semantic analysis,
 lowering, and code generation.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path

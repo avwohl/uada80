@@ -11,6 +11,8 @@ Optimization Levels:
 - Level 3: + CSE, copy propagation, loop optimizations
 """
 
+from __future__ import annotations
+
 from dataclasses import replace
 from typing import Any, Optional
 

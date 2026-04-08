@@ -4,6 +4,7 @@ Abstract Syntax Tree node definitions for Ada.
 Defines all AST node types for the full Ada 2012 language.
 Based on Ada Reference Manual structure.
 """
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -31,11 +32,10 @@ class SourceSpan:
 # ============================================================================
 
 
-@dataclass
 class ASTNode:
     """Base class for all AST nodes."""
 
-    span: Optional[SourceSpan] = field(default=None, kw_only=True)
+    span: Optional[SourceSpan] = None
 
 
 @dataclass

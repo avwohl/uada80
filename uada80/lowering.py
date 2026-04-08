@@ -3,6 +3,7 @@ AST to IR Lowering.
 
 Translates type-checked AST to IR for code generation.
 """
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Optional

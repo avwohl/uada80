@@ -3,10 +3,11 @@ Lexer for Ada language.
 
 Tokenizes Ada source code according to Ada 2012 RM Chapter 2 (Lexical Elements).
 """
+from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Iterator
+from typing import Iterator, Optional
 
 
 class TokenType(Enum):

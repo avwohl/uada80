@@ -8,6 +8,8 @@ A low-level IR designed for the Z80 architecture:
 - Basic blocks for control flow
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
