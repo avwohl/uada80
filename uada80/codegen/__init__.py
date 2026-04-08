@@ -215,6 +215,10 @@ class Z80CodeGen:
             self._generate_float64_externals()
             self._generate_libada_externals()
         else:
+            # Pre-register DSEG labels so they aren't emitted as EXTRNs
+            if saved_globals:
+                for name in saved_globals:
+                    self.defined_labels.add(self._mangle_symbol(name))
             # Library mode: emit EXTRN declarations for needed routines
             self._generate_runtime_externs()
 
@@ -4095,6 +4099,15 @@ class Z80CodeGen:
             label_name = stripped_raw.split(':')[0].strip()
             if label_name:
                 self.defined_labels.add(label_name)
+        # Track global memory references: ld (_symbol), hl  or  ld hl, (_symbol)
+        # Only for runtime symbols (starting with _) that aren't locally defined
+        if '(_' in stripped_raw and 'ix' not in stripped_raw.lower():
+            import re
+            global_ref = re.search(r'\((_[a-z][a-z0-9_]*)\)', stripped_raw)
+            if global_ref:
+                sym = global_ref.group(1)
+                if not sym.startswith("__"):
+                    self.runtime_deps.add(sym)
         # Track runtime calls in emitted lines (but not calls to local functions)
         stripped = line.strip().lower()
         if stripped.startswith("call _") and not stripped.startswith("call __"):

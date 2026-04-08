@@ -318,6 +318,13 @@ class ASTLowering:
         self._primitive_op_labels: dict[tuple[str, str], str] = {}
         # Counter for delta aggregate temp variables
         self._delta_tmp_count: int = 0
+        # Map task type name (lowercase) -> expected body function label
+        self._task_type_body_labels: dict[str, str] = {}
+        # Variables promoted to DSEG for task body access (shared between scopes)
+        # Maps global_label -> True (just tracking existence)
+        self._task_promoted_globals: dict[str, str] = {}
+        # In-scope promoted vars: maps var_name -> dseg_label
+        self._task_promoted_vars: dict[str, str] = {}
 
     def _find_global_name(self, name: str) -> str:
         """Find the actual global name for a variable (may have package prefix)."""
@@ -609,6 +616,109 @@ class ASTLowering:
         # Visit all statements
         for stmt in body.statements:
             visit(stmt)
+
+        return outer_vars
+
+    def _find_task_outer_var_refs(
+        self, decl: TaskBody, enclosing_ctx: LoweringContext
+    ) -> set[str]:
+        """Find references to enclosing scope variables in a task body.
+
+        Similar to _find_outer_var_refs but adapted for task bodies which
+        don't have parameter specs.
+        """
+        outer_vars = set()
+
+        # Get names defined locally in this task body
+        local_names = set()
+        for d in decl.declarations:
+            if isinstance(d, ObjectDecl):
+                for name in d.names:
+                    local_names.add(name.lower())
+
+        # Get names from enclosing scope
+        enclosing_locals = set(enclosing_ctx.locals.keys()) if enclosing_ctx else set()
+
+        enclosing_name = ""
+        if enclosing_ctx and enclosing_ctx.subprogram_name:
+            enclosing_name = enclosing_ctx.subprogram_name.lower()
+
+        def visit(node):
+            if node is None:
+                return
+            if isinstance(node, Identifier):
+                name = node.name.lower()
+                if name not in local_names and name in enclosing_locals:
+                    outer_vars.add(name)
+            elif isinstance(node, SelectedName):
+                if isinstance(node.prefix, Identifier):
+                    prefix_name = node.prefix.name.lower()
+                    selector_name = node.selector.lower()
+                    if prefix_name == enclosing_name and selector_name not in local_names:
+                        if selector_name in enclosing_locals:
+                            outer_vars.add(selector_name)
+            for attr_name in dir(node):
+                if attr_name.startswith('_'):
+                    continue
+                attr = getattr(node, attr_name, None)
+                if attr is None:
+                    continue
+                if isinstance(attr, list):
+                    for item in attr:
+                        if hasattr(item, '__dict__'):
+                            visit(item)
+                elif hasattr(attr, '__dict__') and not callable(attr):
+                    visit(attr)
+
+        for stmt in decl.statements:
+            visit(stmt)
+        # Also check declarations (e.g., initializers referencing outer vars)
+        for d in decl.declarations:
+            if isinstance(d, ObjectDecl) and d.init_expr:
+                visit(d.init_expr)
+
+        # Transitively include outer vars needed by nested subprograms called
+        # from this task body. If the task calls a nested function that needs
+        # _outer_global, the task body also needs _outer_global so it can
+        # forward it at the call site.
+        # Collect function names called from this task body
+        called_funcs = set()
+        def find_calls(node):
+            if node is None:
+                return
+            if isinstance(node, ProcedureCallStmt):
+                if isinstance(node.name, Identifier):
+                    called_funcs.add(node.name.name.lower())
+            if isinstance(node, FunctionCall):
+                if isinstance(node.name, Identifier):
+                    called_funcs.add(node.name.name.lower())
+            # IndexedComponent can be a function call (SIDE_EFFECT(1))
+            if isinstance(node, IndexedComponent):
+                if isinstance(node.prefix, Identifier):
+                    called_funcs.add(node.prefix.name.lower())
+            for attr_name in dir(node):
+                if attr_name.startswith('_'):
+                    continue
+                attr = getattr(node, attr_name, None)
+                if attr is None:
+                    continue
+                if isinstance(attr, list):
+                    for item in attr:
+                        if hasattr(item, '__dict__'):
+                            find_calls(item)
+                elif hasattr(attr, '__dict__') and not callable(attr):
+                    find_calls(attr)
+        for stmt in decl.statements:
+            find_calls(stmt)
+        for d in decl.declarations:
+            if isinstance(d, ObjectDecl) and d.init_expr:
+                find_calls(d.init_expr)
+        # Add outer vars from called nested subprograms
+        for func_name in called_funcs:
+            if func_name in self._nested_outer_vars:
+                for var_name in self._nested_outer_vars[func_name]:
+                    if var_name in enclosing_locals:
+                        outer_vars.add(var_name)
 
         return outer_vars
 
@@ -995,6 +1105,127 @@ class ASTLowering:
                         if isinstance(arg, Identifier):
                             volatile_vars.add(arg.name.lower())
 
+        # Pre-populate _nested_outer_vars for nested subprograms in this scope.
+        # This is needed BEFORE the task-shared variable scan below, because that
+        # scan checks _nested_outer_vars transitively (task body calls side_effect
+        # which references global → global must be promoted to DSEG).
+        pre_scan_locals = set()
+        for decl_node in body.declarations:
+            if isinstance(decl_node, ObjectDecl):
+                for n in decl_node.names:
+                    pre_scan_locals.add(n.lower())
+        for decl_node in body.declarations:
+            if isinstance(decl_node, SubprogramBody):
+                sub_name = decl_node.spec.name.lower()
+                if sub_name in self._nested_outer_vars:
+                    continue  # already populated
+                sub_local_names = set()
+                for p in decl_node.spec.parameters:
+                    for n in p.names:
+                        sub_local_names.add(n.lower())
+                for d in decl_node.declarations:
+                    if isinstance(d, ObjectDecl):
+                        for n in d.names:
+                            sub_local_names.add(n.lower())
+                # Find identifiers referencing enclosing locals
+                sub_outer = set()
+                def _pre_visit(node):
+                    if node is None:
+                        return
+                    if isinstance(node, Identifier):
+                        nm = node.name.lower()
+                        if nm not in sub_local_names and nm in pre_scan_locals:
+                            sub_outer.add(nm)
+                    for attr_name in dir(node):
+                        if attr_name.startswith('_'):
+                            continue
+                        attr = getattr(node, attr_name, None)
+                        if attr is None:
+                            continue
+                        if isinstance(attr, list):
+                            for item in attr:
+                                if hasattr(item, '__dict__'):
+                                    _pre_visit(item)
+                        elif hasattr(attr, '__dict__') and not callable(attr):
+                            _pre_visit(attr)
+                for s in decl_node.statements:
+                    _pre_visit(s)
+                for d in decl_node.declarations:
+                    if isinstance(d, ObjectDecl) and d.init_expr:
+                        _pre_visit(d.init_expr)
+                if sub_outer:
+                    self._nested_outer_vars[sub_name] = sub_outer
+
+        # Pre-scan: identify variables shared with task bodies.
+        # These are promoted to DSEG (global data) so task bodies can access them
+        # regardless of the enclosing scope's stack frame layout.
+        task_shared_vars: set[str] = set()
+        for decl_node in body.declarations:
+            if isinstance(decl_node, TaskBody):
+                # Scan this task body for references to enclosing scope variables
+                task_local_names = set()
+                for d in decl_node.declarations:
+                    if isinstance(d, ObjectDecl):
+                        for n in d.names:
+                            task_local_names.add(n.lower())
+                # Collect identifiers from task body statements and init_exprs
+                def scan_for_names(node):
+                    if node is None:
+                        return
+                    if isinstance(node, Identifier):
+                        name = node.name.lower()
+                        if name not in task_local_names:
+                            task_shared_vars.add(name)
+                    # Also check for function calls (may need forwarded outer vars)
+                    if isinstance(node, (ProcedureCallStmt, FunctionCall)):
+                        call_name = None
+                        if hasattr(node, 'name') and isinstance(node.name, Identifier):
+                            call_name = node.name.name.lower()
+                        if call_name and call_name in self._nested_outer_vars:
+                            for v in self._nested_outer_vars[call_name]:
+                                task_shared_vars.add(v)
+                    if isinstance(node, IndexedComponent):
+                        if isinstance(node.prefix, Identifier):
+                            pn = node.prefix.name.lower()
+                            if pn in self._nested_outer_vars:
+                                for v in self._nested_outer_vars[pn]:
+                                    task_shared_vars.add(v)
+                    for attr_name in dir(node):
+                        if attr_name.startswith('_'):
+                            continue
+                        attr = getattr(node, attr_name, None)
+                        if attr is None:
+                            continue
+                        if isinstance(attr, list):
+                            for item in attr:
+                                if hasattr(item, '__dict__'):
+                                    scan_for_names(item)
+                        elif hasattr(attr, '__dict__') and not callable(attr):
+                            scan_for_names(attr)
+                for stmt in decl_node.statements:
+                    scan_for_names(stmt)
+                for d in decl_node.declarations:
+                    if isinstance(d, ObjectDecl) and d.init_expr:
+                        scan_for_names(d.init_expr)
+
+        # Create DSEG shadow labels for task-shared variables.
+        # Filter: only keep names that are actual local variables in this scope.
+        scope_name = spec.name.lower() if spec else "main"
+        saved_task_promoted = dict(self._task_promoted_vars)
+        actual_local_names = set()
+        for decl_node in body.declarations:
+            if isinstance(decl_node, ObjectDecl):
+                for n in decl_node.names:
+                    actual_local_names.add(n.lower())
+        for var_name in task_shared_vars:
+            if var_name in actual_local_names:
+                dseg_label = f"_tsk_sh_{self._new_label('ts')[1:]}"  # unique label
+                self._task_promoted_vars[var_name] = dseg_label
+                self._task_promoted_globals[dseg_label] = var_name
+                # Register as a global variable so codegen emits DSEG declaration
+                if self.builder.module:
+                    self.builder.module.globals[dseg_label] = (IRType.WORD, 2)
+
         # Calculate local variable sizes
         stack_offset = 0
 
@@ -1103,6 +1334,10 @@ class ASTLowering:
         for decl in body.declarations:
             self._lower_declaration(decl)
 
+        # Wait for task activation if any tasks were created in this scope
+        if self._scope_has_tasks and self._scope_has_tasks[-1]:
+            self.builder.call(Label("_TASK_ACT_WAIT"), comment="wait for task activation")
+
         # Process statements (with exception handlers if present)
         if body.handled_exception_handlers:
             self._lower_block_with_handlers(
@@ -1129,6 +1364,9 @@ class ASTLowering:
         if not self._block_has_return(self.builder.block):
             if return_type == IRType.VOID:
                 self.builder.ret()
+
+        # Restore task promoted vars
+        self._task_promoted_vars = saved_task_promoted
 
         # Restore context and builder state, and leave scope
         self.ctx = old_ctx
@@ -3083,6 +3321,78 @@ class ASTLowering:
                         if local:
                             local.dynamic_bounds = dyn_bounds
 
+        # Check if this is a task type object — emit TASK_CREATE for each element
+        is_task_type_obj = False
+        task_type_name_for_obj = None
+        if type_name and type_name.lower() in self._task_type_names:
+            is_task_type_obj = True
+            task_type_name_for_obj = type_name.lower()
+        elif ada_type:
+            # Check for array of task type
+            from uada80.type_system import ArrayType as _TaskArrayType, TaskType as _TaskTypeCheck
+            if isinstance(ada_type, _TaskTypeCheck):
+                is_task_type_obj = True
+                task_type_name_for_obj = ada_type.name.lower() if ada_type.name else type_name and type_name.lower()
+            elif isinstance(ada_type, _TaskArrayType) and isinstance(getattr(ada_type, 'component_type', None), _TaskTypeCheck):
+                is_task_type_obj = True
+                task_type_name_for_obj = ada_type.component_type.name.lower() if ada_type.component_type.name else None
+        # Fallback: check if type_name matches a known task type name for arrays
+        if not is_task_type_obj and type_name and isinstance(ada_type, ArrayType if 'ArrayType' in dir() else type(None)):
+            pass  # handled above
+        # Also detect via _current_body_declarations for locally-declared task type arrays
+        if not is_task_type_obj and type_name is None and decl.type_mark:
+            # Anonymous array: ARRAY(1..N) OF TaskType
+            if isinstance(decl.type_mark, ArrayTypeDef):
+                comp_type_node = decl.type_mark.component_type
+                comp_name = None
+                if isinstance(comp_type_node, Identifier):
+                    comp_name = comp_type_node.name.lower()
+                elif isinstance(comp_type_node, SubtypeIndication) and isinstance(getattr(comp_type_node, 'type_mark', None), Identifier):
+                    comp_name = comp_type_node.type_mark.name.lower()
+                if comp_name and comp_name in self._task_type_names:
+                    is_task_type_obj = True
+                    task_type_name_for_obj = comp_name
+
+        if is_task_type_obj and task_type_name_for_obj and self.ctx:
+            self._uses_tasking = True
+            body_label = self._task_type_body_labels.get(task_type_name_for_obj)
+            if not body_label:
+                scope_prefix = ""
+                if self.ctx and self.ctx.subprogram_name:
+                    scope_prefix = f"{self.ctx.subprogram_name}_"
+                body_label = f"_task_body_{scope_prefix}{task_type_name_for_obj}"
+
+            from uada80.type_system import ArrayType as _TaskArrType
+            for name in decl.names:
+                local = self.ctx.locals.get(name.lower())
+                if local:
+                    if isinstance(ada_type, _TaskArrType) and ada_type.bounds:
+                        # Array of task type: create task for each element
+                        low, high = ada_type.bounds[0]
+                        for i in range(low, high + 1):
+                            self.builder.call(Label("_TASK_ACT_INC"), comment="count pending activation")
+                            tid = self.builder.new_vreg(IRType.WORD, f"_{name}_{i}_tid")
+                            self.builder.task_create(tid, Label(body_label),
+                                                      comment=f"create task {name}({i})")
+                            elem_offset = (i - low) * 2
+                            frame_offset = -(local.stack_offset + local.size) + elem_offset
+                            self.builder.store(
+                                MemoryLocation(ir_type=IRType.WORD, offset=frame_offset,
+                                               is_frame_offset=True),
+                                tid, comment=f"store task id {name}({i})")
+                    else:
+                        # Simple task type object: create task, store id
+                        self.builder.call(Label("_TASK_ACT_INC"), comment="count pending activation")
+                        tid = self.builder.new_vreg(IRType.WORD, f"_{name}_tid")
+                        self.builder.task_create(tid, Label(body_label),
+                                                  comment=f"create task {name}")
+                        self.builder.mov(local.vreg, tid)
+                        self.ctx.task_objects[name.lower()] = tid
+
+                    if self._scope_has_tasks:
+                        self._scope_has_tasks[-1] = True
+            return
+
         # Process initialization
         if decl.init_expr:
             # Check if subtype indication has a range constraint with dynamic bounds
@@ -3261,6 +3571,12 @@ class ASTLowering:
                                 init_value, f"null-exclusion check for init of {name}")
                         self.builder.mov(local.vreg, init_value,
                                         comment=f"init {name}")
+                        # Write-through to DSEG shadow for task-shared variables
+                        dseg_label = self._task_promoted_vars.get(name.lower())
+                        if dseg_label:
+                            self.builder.store(
+                                MemoryLocation(is_global=True, symbol_name=dseg_label, ir_type=IRType.WORD),
+                                init_value, comment=f"sync init {name} to DSEG shadow")
                         # Track typed constant values for qualified name resolution
                         # (e.g., Proc.C1 where C1 is a constant in enclosing Proc)
                         if decl.is_constant and isinstance(init_value, Immediate):
@@ -4542,12 +4858,27 @@ class ASTLowering:
         if prot_type is None:
             return
 
+        # Collect all operation names for internal call resolution
+        old_prot_body_name = getattr(self, '_current_protected_body_name', None)
+        old_prot_body_ops = getattr(self, '_current_protected_body_ops', set())
+        self._current_protected_body_name = prot_name
+        self._current_protected_body_ops = set()
+        for item in decl.items:
+            if isinstance(item, SubprogramBody):
+                self._current_protected_body_ops.add(item.spec.name.lower())
+            elif isinstance(item, EntryBody):
+                self._current_protected_body_ops.add(item.name.lower())
+
         # Lower each operation body with lock wrapper
         for item in decl.items:
             if isinstance(item, SubprogramBody):
                 self._lower_protected_operation(decl.name, item, prot_type)
             elif isinstance(item, EntryBody):
                 self._lower_protected_entry(decl.name, item, prot_type)
+
+        # Restore
+        self._current_protected_body_name = old_prot_body_name
+        self._current_protected_body_ops = old_prot_body_ops
 
     def _lower_protected_operation(self, prot_name: str, body: SubprogramBody, prot_type: ProtectedType) -> None:
         """Lower a protected operation (procedure/function) body.
@@ -5271,6 +5602,19 @@ class ASTLowering:
         if getattr(decl, 'is_single', False):
             self._single_task_names.add(task_name_lower)
 
+        # Pre-compute expected body function label for task object creation
+        # (object decls may appear before the body in source order)
+        scope_prefix = ""
+        if self.ctx and self.ctx.subprogram_name:
+            scope_prefix = f"{self.ctx.subprogram_name}_"
+        task_key = f"{scope_prefix}{task_name_lower}"
+        count = self._task_body_count.get(task_key, 0)
+        if count > 0:
+            body_label = f"_task_body_{scope_prefix}{task_name_lower}_{count}"
+        else:
+            body_label = f"_task_body_{scope_prefix}{task_name_lower}"
+        self._task_type_body_labels[task_name_lower] = body_label
+
     def _lower_task_body(self, decl: TaskBody) -> None:
         """Lower a task body (implementation of task execution).
 
@@ -5320,9 +5664,65 @@ class ASTLowering:
         # Create new context
         self.ctx = LoweringContext(function=ir_func)
 
-        # Task body does NOT receive task_id as a stack parameter.
-        # The runtime _TASK_CREATE does not push a task_id for the task body.
-        # If the task needs its own ID, it can read _task_current TCB.
+        # Pre-allocate local variables (like _lower_subprogram_body does)
+        stack_offset = 0
+        for d in decl.declarations:
+            if isinstance(d, ObjectDecl):
+                for name in d.names:
+                    size = self._calc_type_size(d, decl.declarations)
+                    vreg = self.builder.new_vreg(IRType.WORD, name)
+                    resolved_type = None
+                    if hasattr(d, 'type_mark') and d.type_mark:
+                        resolved_type = self._resolve_local_type(d.type_mark)
+                        if resolved_type is None:
+                            resolved_type = d.type_mark
+                    self.ctx.locals[name.lower()] = LocalVariable(
+                        name=name, vreg=vreg, stack_offset=stack_offset,
+                        size=size, ada_type=resolved_type,
+                    )
+                    stack_offset += size
+        ir_func.locals_size = stack_offset
+        self.ctx.locals_size = stack_offset
+
+        # Set enclosing context for outer variable access
+        if old_ctx:
+            self.ctx.enclosing_ctx = old_ctx
+
+        # Track entries of this task for unqualified entry call detection
+        # (e.g., calling own entry A(X) from within the task body)
+        self._current_task_entry_names: set[str] = set()
+        # Track current task type name for self-referencing attributes (T'Callable, T'Terminated)
+        old_task_type_name = getattr(self, '_current_task_type_name', None)
+        self._current_task_type_name = decl.name.lower()
+        task_name_lower = decl.name.lower()
+        if task_name_lower in self._task_entry_ids:
+            self._current_task_entry_names = set(self._task_entry_ids[task_name_lower].keys())
+
+        # Find outer variable references and set up access via DSEG shadows.
+        # Variables shared between enclosing scope and task bodies are mirrored
+        # in DSEG (global data) so the task can access them without knowing the
+        # parent's stack frame layout (which is decided by the register allocator).
+        outer_var_refs = set()
+        if old_ctx:
+            outer_var_refs = self._find_task_outer_var_refs(decl, old_ctx)
+        if outer_var_refs:
+            for var_name in outer_var_refs:
+                dseg_label = self._task_promoted_vars.get(var_name)
+                if dseg_label and var_name in old_ctx.locals:
+                    local_info = old_ctx.locals[var_name]
+                    # LEA of DSEG shadow — this is the address the task will use
+                    addr_vreg = self.builder.new_vreg(IRType.PTR, f"_outer_{var_name}")
+                    self.builder.lea(addr_vreg,
+                                    MemoryLocation(is_global=True, symbol_name=dseg_label,
+                                                   ir_type=IRType.PTR),
+                                    comment=f"addr of DSEG shadow for {var_name}")
+                    # Register as _outer_<name> param (same interface as nested subprograms)
+                    outer_param_name = f"_outer_{var_name}"
+                    self.ctx.params[outer_param_name] = addr_vreg
+                    self.ctx.byref_params[outer_param_name] = True
+                    # Copy ada_type from enclosing context
+                    if local_info.ada_type:
+                        self.ctx.param_ada_types[outer_param_name] = self._resolve_local_type(local_info.ada_type)
 
         # Lower local declarations
         # Set task body declarations for type/enum lookup within task
@@ -5331,6 +5731,10 @@ class ASTLowering:
 
         for d in decl.declarations:
             self._lower_declaration(d)
+
+        # Signal activation complete (declarative part elaborated)
+        # The creating scope waits for this before proceeding to its statements.
+        self.builder.call(Label("_TASK_ACT_DEC"), comment="signal activation complete")
 
         # Lower task body statements (with exception handlers if present)
         if decl.handled_exception_handlers:
@@ -5353,6 +5757,8 @@ class ASTLowering:
         self._current_body_declarations = old_body_declarations
 
         # Restore context and builder state
+        self._current_task_entry_names = set()  # Clear task-specific entries
+        self._current_task_type_name = old_task_type_name
         self.ctx = old_ctx
         self.builder.function = old_function
         self.builder.block = old_block
@@ -5367,6 +5773,8 @@ class ASTLowering:
                              getattr(task_sym.ada_type, 'is_single_task', False))
             if is_single:
                 self._uses_tasking = True
+                # Increment activation counter before creating task
+                self.builder.call(Label("_TASK_ACT_INC"), comment="count pending activation")
                 task_id_vreg = self.builder.new_vreg(IRType.WORD, f"_{decl.name.lower()}_tid")
                 self.builder.task_create(task_id_vreg, Label(task_name),
                                          comment=f"create single task {decl.name}")
@@ -5706,7 +6114,7 @@ class ASTLowering:
         - Conditional entry: select call else stmts; end select;
         - Asynchronous select: select triggering_stmt then abort seq; end select;
 
-        For Z80 (single-threaded), we emit runtime calls for the select protocol.
+        For Z80, we emit runtime calls for the select protocol.
         """
         if self.ctx is None:
             return
@@ -5718,13 +6126,29 @@ class ASTLowering:
         # Emit select start
         self.builder.call(Label("_SELC_ST"))
 
+        # Find terminate alternative index (if any)
+        terminate_index = 0xFFFF  # no terminate
+        for i, alt in enumerate(stmt.alternatives):
+            if hasattr(alt, 'is_terminate') and alt.is_terminate:
+                terminate_index = i
+                break
+
         # Process each alternative
         for i, alt in enumerate(stmt.alternatives):
             alt_label = self._new_label(f"select_alt_{i}")
             alt_labels.append(alt_label)
 
+        # Store terminate_index to DSEG variable for _SELC_WT to read
+        terminate_vreg = self.builder.new_vreg(IRType.WORD, "_term_idx")
+        self.builder.mov(terminate_vreg, Immediate(terminate_index, IRType.WORD))
+        self.builder.store(
+            MemoryLocation(is_global=True, symbol_name="_select_term_idx",
+                           ir_type=IRType.WORD),
+            terminate_vreg,
+            comment=f"set terminate index={terminate_index}")
+
         # Wait for one alternative to be ready
-        # For MP/M, _SELC_WT checks queues and returns selected index in HL
+        # _SELC_WT reads _select_term_idx, returns selected index in HL
         self.builder.call(Label("_SELC_WT"))
 
         # The runtime returns the index of the selected alternative in HL
@@ -5743,8 +6167,12 @@ class ASTLowering:
             self.builder.jnz(cmp_result, Label(next_label))
 
             self.builder.label(alt_labels[i])
-            # Lower the statements for this alternative
-            if hasattr(alt, 'statements'):
+            if hasattr(alt, 'is_terminate') and alt.is_terminate:
+                # Terminate alternative: terminate the task
+                self.builder.call(Label("_TASK_TRM"),
+                                  comment="terminate alternative")
+            elif hasattr(alt, 'statements'):
+                # Lower the statements for this alternative
                 for s in alt.statements:
                     self._lower_statement(s)
             self.builder.jmp(Label(end_label))
@@ -6725,6 +7153,12 @@ class ASTLowering:
                         self._call_adjust(local.vreg, target_type)
                     else:
                         self.builder.mov(local.vreg, value, comment=f"{name} := ...")
+                    # Write-through to DSEG shadow for task-shared variables
+                    dseg_label = self._task_promoted_vars.get(name)
+                    if dseg_label:
+                        self.builder.store(
+                            MemoryLocation(is_global=True, symbol_name=dseg_label, ir_type=IRType.WORD),
+                            local.vreg, comment=f"sync {name} to DSEG shadow")
                     return
 
                 # Check params
@@ -7670,6 +8104,10 @@ class ASTLowering:
         for decl in stmt.declarations:
             self._lower_declaration(decl)
 
+        # Wait for task activation before entering block statements
+        if self._scope_has_tasks and self._scope_has_tasks[-1]:
+            self.builder.call(Label("_TASK_ACT_WAIT"), comment="wait for task activation")
+
         # Check if we have exception handlers
         if stmt.handled_exception_handlers:
             self._lower_block_with_handlers(
@@ -7936,6 +8374,36 @@ class ASTLowering:
                     name=Identifier(actual_name),
                     args=stmt.args
                 )
+
+        # Check if this is an internal call within a protected body
+        # (e.g., calling Start_Meter from within the same protected body)
+        prot_body_name = getattr(self, '_current_protected_body_name', None)
+        prot_body_ops = getattr(self, '_current_protected_body_ops', set())
+        if prot_body_name and isinstance(stmt.name, Identifier) and proc_name in prot_body_ops:
+            # Qualify with the protected type name
+            qualified_name = f"{prot_body_name.lower()}_{proc_name}"
+            # Push arguments
+            if stmt.args:
+                for arg in reversed(stmt.args):
+                    val = self._lower_expr(arg)
+                    self.builder.push(val)
+            # Push protected object pointer (reuse current context's pointer)
+            prot_obj = getattr(self.ctx, 'protected_obj_ptr', None)
+            if prot_obj:
+                self.builder.push(prot_obj)
+            else:
+                # Fallback: push 0 (shouldn't happen if context is set up correctly)
+                zero = self.builder.new_vreg(IRType.WORD, "_zero")
+                self.builder.mov(zero, Immediate(0, IRType.WORD))
+                self.builder.push(zero)
+            # Call the qualified operation
+            self.builder.call(Label(qualified_name), comment=f"internal protected call {proc_name}")
+            # Clean up stack
+            num_args = (len(stmt.args) if stmt.args else 0) + 1  # +1 for protected obj
+            for _ in range(num_args):
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+            return
 
         # Check if this is a protected type operation call (Buffer.Put, Counter.Increment)
         # This must come BEFORE Text_IO checks because Put/Get may match Text_IO patterns
@@ -8712,9 +9180,20 @@ class ASTLowering:
                 outer_vars = self._nested_outer_vars[proc_name_lower]
                 for var_name in reversed(list(outer_vars)):
                     pushed = False
+                    # If the variable is promoted to DSEG (task-shared),
+                    # always pass the DSEG shadow address so all code paths
+                    # (including task bodies) access the same location.
+                    dseg_label = self._task_promoted_vars.get(var_name)
+                    if dseg_label and self.ctx and var_name in self.ctx.locals:
+                        addr = self.builder.new_vreg(IRType.PTR, f"_{var_name}_addr")
+                        self.builder.lea(addr,
+                            MemoryLocation(is_global=True, symbol_name=dseg_label, ir_type=IRType.PTR),
+                            comment=f"addr of DSEG shadow for outer {var_name}")
+                        self.builder.push(addr)
+                        pushed = True
                     # If we already have this outer var as a param (forwarding in recursive calls),
                     # just push the received pointer
-                    if self.ctx:
+                    if not pushed and self.ctx:
                         outer_param_name = f"_outer_{var_name}"
                         if outer_param_name in self.ctx.params:
                             self.builder.push(self.ctx.params[outer_param_name],
@@ -12361,6 +12840,13 @@ class ASTLowering:
 
         # Determine size to allocate
         designated_type = self._resolve_type(expr.type_mark)
+        # Fallback: if _resolve_type returned None but this is a known task type,
+        # create a TaskType so the allocator can trigger task creation below.
+        if designated_type is None and isinstance(expr.type_mark, Identifier):
+            type_name = expr.type_mark.name.lower()
+            if type_name in self._task_type_names:
+                from uada80.type_system import TaskType as _FallbackTaskType
+                designated_type = _FallbackTaskType(name=type_name, entries=[])
         if designated_type:
             size = designated_type.size_bytes()
             # Tagged types need an extra 2 bytes at offset 0 for the tag (vtable ptr)
@@ -12632,6 +13118,29 @@ class ASTLowering:
                                 value,
                                 comment=f"init {comp.name}.{sub_comp.name} default",
                             )
+
+        # Handle task type allocation: `new TaskType` creates a task
+        from uada80.type_system import TaskType as _AllocTaskType
+        if isinstance(designated_type, _AllocTaskType):
+            self._uses_tasking = True
+            task_type_name = designated_type.name.lower() if designated_type.name else None
+            if task_type_name:
+                body_label = self._task_type_body_labels.get(task_type_name)
+                if not body_label:
+                    scope_prefix = ""
+                    if self.ctx and self.ctx.subprogram_name:
+                        scope_prefix = f"{self.ctx.subprogram_name}_"
+                    body_label = f"_task_body_{scope_prefix}{task_type_name}"
+                # Create the task and store its ID in the allocated memory
+                self.builder.call(Label("_TASK_ACT_INC"), comment="count pending activation")
+                tid = self.builder.new_vreg(IRType.WORD, "_alloc_tid")
+                self.builder.task_create(tid, Label(body_label),
+                                          comment=f"create task via new {task_type_name}")
+                self.builder.store(
+                    MemoryLocation(base=result, offset=0, ir_type=IRType.WORD),
+                    tid, comment="store task id in allocated memory")
+                if self._scope_has_tasks:
+                    self._scope_has_tasks[-1] = True
 
         return result
 
@@ -16670,7 +17179,8 @@ class ASTLowering:
         """Resolve a type expression to an AdaType."""
         if isinstance(type_expr, Identifier):
             sym = self.symbols.lookup(type_expr.name)
-            if sym and sym.kind in (SymbolKind.TYPE, SymbolKind.SUBTYPE):
+            if sym and sym.kind in (SymbolKind.TYPE, SymbolKind.SUBTYPE,
+                                     SymbolKind.TASK, SymbolKind.TASK_TYPE):
                 return sym.ada_type
             # Fallback: search _body_declarations_stack and package declarations
             return self._resolve_local_type(type_expr)
@@ -16757,6 +17267,16 @@ class ASTLowering:
 
         # Check locals
         if name in self.ctx.locals:
+            # For task-promoted variables, always read from the DSEG shadow
+            # so that modifications by task bodies (running on separate stacks)
+            # are visible.
+            dseg_label = self._task_promoted_vars.get(name)
+            if dseg_label:
+                result = self.builder.new_vreg(IRType.WORD, f"_{name}_dseg")
+                self.builder.load(result,
+                    MemoryLocation(is_global=True, symbol_name=dseg_label, ir_type=IRType.WORD),
+                    comment=f"load {name} from DSEG shadow")
+                return result
             local = self.ctx.locals[name]
             # For address-based renames (complex expressions), dereference the stored address
             # Simple renames share the source's vreg, so no dereferencing needed
@@ -19467,6 +19987,37 @@ class ASTLowering:
                     else:
                         return self._lower_expr(actual)
 
+        # Check if this is an internal function call within a protected body
+        prot_body_name = getattr(self, '_current_protected_body_name', None)
+        prot_body_ops = getattr(self, '_current_protected_body_ops', set())
+        if prot_body_name and isinstance(expr.name, Identifier) and func_name in prot_body_ops:
+            qualified_name = f"{prot_body_name.lower()}_{func_name}"
+            # Push arguments
+            if expr.args:
+                for arg in reversed(expr.args):
+                    arg_expr = arg.value if hasattr(arg, 'value') else arg
+                    val = self._lower_expr(arg_expr)
+                    self.builder.push(val)
+            # Push protected object pointer
+            prot_obj = getattr(self.ctx, 'protected_obj_ptr', None)
+            if prot_obj:
+                self.builder.push(prot_obj)
+            else:
+                zero = self.builder.new_vreg(IRType.WORD, "_zero")
+                self.builder.mov(zero, Immediate(0, IRType.WORD))
+                self.builder.push(zero)
+            self.builder.call(Label(qualified_name), comment=f"internal protected call {func_name}")
+            # Get return value from HL
+            self.builder.emit(IRInstr(
+                OpCode.MOV, result,
+                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+            ))
+            num_args = (len(expr.args) if expr.args else 0) + 1
+            for _ in range(num_args):
+                temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(temp)
+            return result
+
         # Check for Unchecked_Conversion instantiation call
         sym = self.symbols.lookup(func_name)
         if sym and sym.is_unchecked_conversion and len(expr.args) >= 1:
@@ -20223,9 +20774,19 @@ class ASTLowering:
                 outer_vars = self._nested_outer_vars[func_name_lower]
                 for var_name in reversed(list(outer_vars)):
                     pushed = False
+                    # If the variable is promoted to DSEG (task-shared),
+                    # always pass the DSEG shadow address.
+                    dseg_label = self._task_promoted_vars.get(var_name)
+                    if dseg_label and self.ctx and var_name in self.ctx.locals:
+                        addr = self.builder.new_vreg(IRType.PTR, f"_{var_name}_addr")
+                        self.builder.lea(addr,
+                            MemoryLocation(is_global=True, symbol_name=dseg_label, ir_type=IRType.PTR),
+                            comment=f"addr of DSEG shadow for outer {var_name}")
+                        self.builder.push(addr)
+                        pushed = True
                     # If we already have this outer var as a param (forwarding in recursive calls),
                     # just push the received pointer
-                    if self.ctx:
+                    if not pushed and self.ctx:
                         outer_param_name = f"_outer_{var_name}"
                         if outer_param_name in self.ctx.params:
                             self.builder.push(self.ctx.params[outer_param_name],
@@ -21772,11 +22333,27 @@ class ASTLowering:
             self.builder.mov(result, Immediate(1, IRType.WORD))
             return result
 
+        def _lower_task_attr_prefix(prefix):
+            """Lower the prefix of T'Callable/T'Terminated.
+            If prefix is the current task type name (self-reference), use _TSK_SELF."""
+            if isinstance(prefix, Identifier):
+                pname = prefix.name.lower()
+                cur_task = getattr(self, '_current_task_type_name', None)
+                if cur_task and pname == cur_task:
+                    # Self-reference: get current task's ID via runtime
+                    self_id = self.builder.new_vreg(IRType.WORD, "_self_tid")
+                    self.builder.call(Label("_TSK_SELF"), comment="get current task ID")
+                    self.builder.emit(IRInstr(
+                        OpCode.MOV, self_id,
+                        MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                    ))
+                    return self_id
+            return self._lower_expr(prefix)
+
         if attr == "callable":
             # T'Callable - check if task T is callable via runtime
-            # _TSK_CLBL takes task_id in HL, returns result in HL
-            task_id = self._lower_expr(expr.prefix)
-            # Push task_id, call, pop — ensures HL has the value at call site
+            # _TSK_CLBL takes task_id on stack, returns result in HL
+            task_id = _lower_task_attr_prefix(expr.prefix)
             self.builder.push(task_id)
             self.builder.call(Label("_TSK_CLBL"), comment="T'Callable")
             result = self.builder.new_vreg(IRType.WORD, "_callable")
@@ -21791,8 +22368,8 @@ class ASTLowering:
 
         if attr == "terminated":
             # T'Terminated - check if task T has terminated via runtime
-            # _TSK_TERM takes task_id in HL, returns result in HL
-            task_id = self._lower_expr(expr.prefix)
+            # _TSK_TERM takes task_id on stack, returns result in HL
+            task_id = _lower_task_attr_prefix(expr.prefix)
             self.builder.push(task_id)
             self.builder.call(Label("_TSK_TERM"), comment="T'Terminated")
             result = self.builder.new_vreg(IRType.WORD, "_terminated")

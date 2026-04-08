@@ -60,10 +60,17 @@
     PUBLIC _TASK_WAIT_ALL
     PUBLIC _TSK_CLBL        ; T'Callable
     PUBLIC _TSK_TERM        ; T'Terminated
+    PUBLIC _TSK_SELF        ; Current task's ID
+    PUBLIC _TSK_PRNT        ; Parent frame pointer
+    PUBLIC _TASK_ACT_INC    ; Increment activation counter
+    PUBLIC _TASK_ACT_DEC    ; Signal activation complete
+    PUBLIC _TASK_ACT_WAIT   ; Wait for activations
     ; _PROT_LCK and _PROT_ULK are in protlock.mac
     PUBLIC _PROT_ENQ        ; protected entry queue
     PUBLIC _PROT_REB        ; re-evaluate barriers
     PUBLIC _REQUEUE         ; requeue statement
+    PUBLIC _select_term_idx ; terminate index for SELECT_WAIT
+    PUBLIC _SELC_TRM        ; alias
     PUBLIC _PAR_STR         ; parallel start
     PUBLIC _PAR_SST         ; parallel sequence start
     PUBLIC _PAR_SEN         ; parallel sequence end
@@ -86,6 +93,7 @@ TASK_WAITING    EQU 2
 TASK_TERMINATED EQU 3
 TASK_ENTRY_WAIT EQU 4    ; waiting for entry call to complete
 TASK_ACCEPT_WAIT EQU 5   ; waiting in accept statement
+TASK_MASTER_WAIT EQU 6   ; parent waiting for children (TASK_WAIT_ALL)
 
 ; TCB (Task Control Block) field offsets
 TCB_SAVED_SP    EQU 0    ; saved stack pointer (2 bytes)
@@ -97,10 +105,11 @@ TCB_NEXT        EQU 8    ; next TCB in queue (2 bytes)
 TCB_PREV        EQU 10   ; prev TCB in queue (2 bytes)
 TCB_TASK_ID     EQU 12   ; unique task identifier (2 bytes)
 TCB_DELAY_TICKS EQU 14   ; ticks remaining for delay (2 bytes)
+TCB_PARENT_IX   EQU 16   ; parent's frame pointer (2 bytes)
 
 ; Configuration
 MAX_TASKS       EQU 8
-TCB_SIZE        EQU 16
+TCB_SIZE        EQU 18
 DEFAULT_STACK   EQU 256  ; bytes per task stack
 TIME_SLICE      EQU 10   ; ticks per time slice
 DEFAULT_PRIO    EQU 128  ; default task priority (mid-range)
@@ -134,7 +143,7 @@ _slice_remaining:
 _scheduler_lock:
     DS 1            ; non-zero = scheduler disabled
 _old_rst38:
-    DS 2            ; saved RST 38h vector
+    DS 3            ; saved RST 38h handler (JP + 2-byte address)
 
 ; TCB array (MAX_TASKS * TCB_SIZE bytes)
 _tcb_array:
@@ -149,6 +158,10 @@ _entry_nodes:
     DS ENTRY_Q_SIZE * MAX_ENTRY_NODES
 _rendezvous_caller:
     DS 2            ; TCB pointer of caller blocked during rendezvous
+_activation_count:
+    DS 2            ; number of tasks pending activation
+_select_term_idx:
+    DS 2            ; terminate alternative index for SELECT_WAIT
 
 ; =========================================
 ; Code Section
@@ -182,11 +195,20 @@ _TASK_INIT:
     ld (_task_next_id), HL
     ld A, 1
     ld (_task_count), A
+    ; Initialize activation counter
+    ld HL, 0
+    ld (_activation_count), HL
     ; Initialize entry queue free list
     call _entry_init
     ; Install timer ISR at RST 38h (IM 1)
-    ld HL, (0x0039)  ; save old vector
-    ld (_old_rst38), HL
+    ; Save old RST 38h handler (JP instruction at 0x0038)
+    ld A, (0x0038)
+    ld (_old_rst38), A         ; save opcode byte
+    ld HL, (0x0039)
+    ld (_old_rst38+1), HL      ; save target address
+    ; Write full JP instruction: C3 lo hi
+    ld A, 0C3H                 ; JP opcode
+    ld (0x0038), A
     ld HL, _TIMER_ISR
     ld (0x0039), HL
     im 1
@@ -311,26 +333,44 @@ _sched_no_current:
     ; Wrap to start
     ld HL, _tcb_array
 _sched_check_task:
-    ; Check if this task is ready (HL = TCB address)
+    ; Check if this task is ready or master-waiting (HL = TCB address)
     push HL
     pop IX           ; IX = TCB address for indexed access
     ld A, (IX+TCB_STATE)  ; get task state
     cp TASK_READY
     jr Z, _sched_found
+    cp TASK_MASTER_WAIT
+    jr Z, _sched_found
     ; Try next task (simple search)
     ld DE, TCB_SIZE
     add HL, DE
-    ; Check bounds again
+    ; Check bounds again — wrap if past end
     ld DE, _tcb_array + (MAX_TASKS * TCB_SIZE)
     or A
     sbc HL, DE
     add HL, DE
-    jr C, _sched_check_task
-    ; Wrapped around — no ready task found in this pass
-    ; Enable interrupts briefly to allow timer ISR to wake delayed tasks
+    jr C, _sched_no_wrap
+    ld HL, _tcb_array      ; wrap to start
+_sched_no_wrap:
+    ; Check if we've come back to where we started (_task_current)
+    ld DE, (_task_current)
+    or A
+    sbc HL, DE
+    add HL, DE
+    jr NZ, _sched_check_task   ; keep scanning if not back to start
+    ; Full cycle done — check current task itself (it may still be READY)
+    push HL
+    pop IX
+    ld A, (IX+TCB_STATE)
+    cp TASK_READY
+    jr Z, _sched_found
+    cp TASK_MASTER_WAIT
+    jr Z, _sched_found
+    ; No ready task found at all — enable interrupts and wait
     ei
     halt             ; wait for interrupt (timer tick)
     di
+    ; After interrupt, scan again from the beginning
     ld HL, _tcb_array
     jr _sched_check_task
 _sched_found:
@@ -412,6 +452,16 @@ _tc_found_slot:
     ; HL = initial SP for this task
     ld (IX+TCB_SAVED_SP), L
     ld (IX+TCB_SAVED_SP+1), H
+    ; Store parent's frame pointer (caller's IX) in TCB
+    ; Stack: BC, DE, IX_caller, ret_addr
+    ; IX_caller is at SP+4
+    ld HL, 4
+    add HL, SP
+    ld E, (HL)
+    inc HL
+    ld D, (HL)                   ; DE = caller's IX value
+    ld (IX+TCB_PARENT_IX), E
+    ld (IX+TCB_PARENT_IX+1), D
     ; Set task state to READY
     ld (IX+TCB_STATE), TASK_READY
     ld (IX+TCB_PRIORITY), DEFAULT_PRIO
@@ -445,6 +495,52 @@ _tc_fail:
 ; Task termination handler - called when task body returns
 _task_term_handler:
     jp _TASK_TERMINATE
+
+; -----------------------------------------
+; _TASK_ACT_INC: Increment activation counter
+; Called before creating tasks in a declarative region.
+; -----------------------------------------
+_TASK_ACT_INC:
+    push HL
+    ld HL, (_activation_count)
+    inc HL
+    ld (_activation_count), HL
+    pop HL
+    ret
+
+; -----------------------------------------
+; _TASK_ACT_DEC: Signal task activation complete
+; Called by task body after declarative part is elaborated.
+; Decrements activation counter.
+; -----------------------------------------
+_TASK_ACT_DEC:
+    push HL
+    ld HL, (_activation_count)
+    dec HL
+    ld (_activation_count), HL
+    pop HL
+    ret
+
+; -----------------------------------------
+; _TASK_ACT_WAIT: Wait for all pending activations to complete
+; Called at begin of block/subprogram that created tasks.
+; Yields until activation_count reaches 0.
+; -----------------------------------------
+_TASK_ACT_WAIT:
+    push HL
+_taw_loop:
+    ld HL, (_activation_count)
+    ld A, H
+    or L
+    jr Z, _taw_done
+    ; Still pending activations - yield and re-check
+    pop HL
+    call _TASK_YIELD
+    push HL
+    jr _taw_loop
+_taw_done:
+    pop HL
+    ret
 
 ; -----------------------------------------
 ; _TASK_YIELD: Voluntarily yield to scheduler
@@ -797,10 +893,11 @@ _ea_unlinked:
 ; -----------------------------------------
 _ENTRY_ACCEPT_END:
     ; Wake the caller that was blocked during the accept body
+    push IX          ; save caller's frame pointer
     ld HL, (_rendezvous_caller)
     ld A, H
     or L
-    ret Z            ; no caller to wake (shouldn't happen)
+    jr Z, _eae_done  ; no caller to wake (shouldn't happen)
     push HL
     pop IX
     ld A, TASK_READY
@@ -808,6 +905,8 @@ _ENTRY_ACCEPT_END:
     ; Clear rendezvous caller
     ld HL, 0
     ld (_rendezvous_caller), HL
+_eae_done:
+    pop IX           ; restore caller's frame pointer
     ret
 
 ; -----------------------------------------
@@ -819,26 +918,92 @@ _SELECT_START:
     ret              ; placeholder for future guard evaluation
 
 ; _SELECT_WAIT: Wait for one of the registered alternatives
-; For now, uses simple round-robin check
+; Reads _select_term_idx for terminate alternative index (0xFFFF = no terminate)
+; Output: HL = selected alternative index (0 for first accept, or terminate index)
 _SELECT_WAIT:
     di
     push IX
+_sw_check:
     ; Check if any entry call is pending
     ld HL, (_entry_queue_head)
     ld A, H
     or L
     jr NZ, _sw_found
-    ; No calls pending, block
+    ; No calls pending — check terminate alternative
+    ld HL, (_select_term_idx)
+    ld A, H
+    and L
+    cp 0FFH          ; 0xFFFF = no terminate
+    jr Z, _sw_block
+    ; Terminate alternative available — check if all others done/waiting
+    call _sw_check_terminate
+    ld A, H
+    or L
+    jr NZ, _sw_terminate  ; HL != 0 means should terminate
+_sw_block:
+    ; Block and wait for entry call
     ld HL, (_task_current)
     push HL
     pop IX
     ld A, TASK_ACCEPT_WAIT
     ld (IX+TCB_STATE), A
     call _do_schedule
+    ; Woken up — check again
+    jr _sw_check
 _sw_found:
+    ; Entry call available — return 0 (first alternative)
     pop IX
     ei
-    ld HL, 0            ; return first alternative index
+    ld HL, 0
+    ret
+_sw_terminate:
+    ; Fire terminate alternative — return terminate_index in HL
+    ld HL, (_select_term_idx)
+    pop IX
+    ei
+    ret
+
+; _sw_check_terminate: Check if current task should terminate
+; Returns HL = 1 if should terminate, 0 if not
+; A task should terminate when all other tasks are either:
+; INACTIVE, TERMINATED, ACCEPT_WAIT, or MASTER_WAIT
+_sw_check_terminate:
+    push IX
+    push BC
+    ld DE, (_task_current)   ; save current TCB for comparison
+    ld IX, _tcb_array
+    ld B, MAX_TASKS
+_swct_loop:
+    push IX
+    pop HL           ; HL = current TCB addr
+    ; Skip self
+    or A
+    sbc HL, DE
+    jr Z, _swct_next
+    ld A, (IX+TCB_STATE)
+    cp TASK_INACTIVE
+    jr Z, _swct_next
+    cp TASK_TERMINATED
+    jr Z, _swct_next
+    cp TASK_ACCEPT_WAIT
+    jr Z, _swct_next
+    cp TASK_MASTER_WAIT
+    jr Z, _swct_next
+    ; Found a task that is READY or ENTRY_WAIT — cannot terminate
+    pop BC
+    pop IX
+    ld HL, 0         ; return 0 (don't terminate)
+    ret
+_swct_next:
+    push DE           ; preserve DE across add
+    ld DE, TCB_SIZE
+    add IX, DE
+    pop DE            ; restore current TCB ptr
+    djnz _swct_loop
+    ; All other tasks are done/waiting — should terminate
+    pop BC
+    pop IX
+    ld HL, 1         ; return 1 (terminate)
     ret
 
 ; _SELECT_END: End a select statement
@@ -887,6 +1052,28 @@ _ftbi_found:
 
 PROT_LOCK_OFFSET EQU 0  ; Lock byte at offset 0 of protected object
 
+; _twa_wake_accept: Wake all ACCEPT_WAIT tasks to READY
+; So they can re-check terminate conditions
+_twa_wake_accept:
+    push IX
+    push BC
+    ld IX, _tcb_array + TCB_SIZE  ; skip task 0 (main)
+    ld B, MAX_TASKS - 1
+_twaw_loop:
+    ld A, (IX+TCB_STATE)
+    cp TASK_ACCEPT_WAIT
+    jr NZ, _twaw_next
+    ; Wake this task
+    ld A, TASK_READY
+    ld (IX+TCB_STATE), A
+_twaw_next:
+    ld DE, TCB_SIZE
+    add IX, DE
+    djnz _twaw_loop
+    pop BC
+    pop IX
+    ret
+
 ; NOTE: _PROTECTED_LOCK and _PROTECTED_UNLOCK are now in protlock.mac
 
 ; -----------------------------------------
@@ -909,12 +1096,25 @@ _twa_loop:
     jr Z, _twa_next
     cp TASK_TERMINATED
     jr Z, _twa_next
-    ; Found a live task - yield and re-check
+    ; Found a live task - wake ACCEPT_WAIT tasks, set MASTER_WAIT, yield
+    ; Wake all ACCEPT_WAIT tasks so they can check terminate condition
+    call _twa_wake_accept
+    ld HL, (_task_current)
+    push HL
+    pop IY
+    ld A, TASK_MASTER_WAIT
+    ld (IY+TCB_STATE), A
     pop BC
     pop IX
     ei
     call _TASK_YIELD
     di
+    ; Restore READY state
+    ld HL, (_task_current)
+    push HL
+    pop IY
+    ld A, TASK_READY
+    ld (IY+TCB_STATE), A
     push IX
     push BC
     jr _twa_check
@@ -1025,6 +1225,7 @@ _ENTRY_AE:  jp _ENTRY_ACCEPT_END
 _SELC_ST:   jp _SELECT_START
 _SELC_WT:   jp _SELECT_WAIT
 _SELC_EN:   jp _SELECT_END
+_SELC_TRM:  ; alias for _select_term_idx (data label, not code)
 ; _PROT_LCK and _PROT_ULK are in protlock.mac
 
 ; Additional stubs for protected types and parallel blocks
@@ -1061,6 +1262,33 @@ _PAR_SEN:
 
 _PAR_END:
     ; Parallel end - stub
+    ret
+
+; -----------------------------------------
+; _TSK_SELF: Get current task's ID
+; Output: HL = current task's task_id
+; -----------------------------------------
+_TSK_SELF:
+    push IX
+    ld HL, (_task_current)
+    push HL
+    pop IX
+    ld L, (IX+TCB_TASK_ID)
+    ld H, (IX+TCB_TASK_ID+1)
+    pop IX
+    ret
+
+; _TSK_PRNT: Get current task's parent frame pointer
+; Output: HL = parent's IX value at task creation time
+; -----------------------------------------
+_TSK_PRNT:
+    push IX
+    ld HL, (_task_current)
+    push HL
+    pop IX
+    ld L, (IX+TCB_PARENT_IX)
+    ld H, (IX+TCB_PARENT_IX+1)
+    pop IX
     ret
 
 ; Data aliases
