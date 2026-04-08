@@ -1467,6 +1467,8 @@ class ASTLowering:
                 self._lower_package_decl(decl)
             elif isinstance(decl, GenericInstantiation):
                 self._lower_generic_instantiation(decl)
+            elif isinstance(decl, ProtectedTypeDecl):
+                self._lower_protected_type_decl(decl)
             elif isinstance(decl, TaskTypeDecl):
                 self._lower_task_type_decl(decl)
 
@@ -1480,6 +1482,8 @@ class ASTLowering:
                 self._lower_package_decl(decl)
             elif isinstance(decl, GenericInstantiation):
                 self._lower_generic_instantiation(decl)
+            elif isinstance(decl, ProtectedTypeDecl):
+                self._lower_protected_type_decl(decl)
             elif isinstance(decl, TaskTypeDecl):
                 self._lower_task_type_decl(decl)
 
@@ -1550,6 +1554,10 @@ class ASTLowering:
                     self._lower_package_body(decl)
                 elif isinstance(decl, GenericInstantiation):
                     self._lower_generic_instantiation(decl)
+                elif isinstance(decl, ProtectedTypeDecl):
+                    self._lower_protected_type_decl(decl)
+                elif isinstance(decl, ProtectedBody):
+                    self._lower_protected_body(decl)
                 elif isinstance(decl, TaskTypeDecl):
                     self._lower_task_type_decl(decl)
                 elif isinstance(decl, TaskBody):
@@ -4286,6 +4294,106 @@ class ASTLowering:
                     # The actual checking is done by _check_subtype_predicate
                     pass
 
+    def _resolve_protected_prefix(self, prefix, selector: str):
+        """Resolve a prefix expression to (protected_type, prefix_name) or (None, None).
+
+        Handles both simple identifiers (Hold_Lock.Lock) and package-qualified
+        selected names (C940002_0.Resource.Request, Task_Pkg.Hold_Lock.Lock).
+        """
+        prefix_name = None
+        if isinstance(prefix, Identifier):
+            prefix_name = prefix.name.lower()
+        elif isinstance(prefix, SelectedName):
+            prefix_name = prefix.selector.lower() if isinstance(prefix.selector, str) else None
+
+        if not prefix_name:
+            return None, None
+
+        prot_type = None
+        # Check ctx.protected_types
+        if self.ctx and prefix_name in self.ctx.protected_types:
+            prot_type = self.ctx.protected_types[prefix_name]
+        if prot_type is None:
+            # Symbol table lookup
+            prot_sym = self.symbols.lookup(prefix_name) if self.symbols else None
+            if prot_sym and hasattr(prot_sym, 'ada_type') and isinstance(prot_sym.ada_type, ProtectedType):
+                prot_type = prot_sym.ada_type
+        if prot_type is None:
+            pt = self._get_prefix_type(prefix)
+            if isinstance(pt, ProtectedType):
+                prot_type = pt
+        if prot_type is None:
+            # Check _all_protected_types
+            if prefix_name in self._all_protected_types:
+                prot_type = self._all_protected_types[prefix_name]
+            if prot_type is None:
+                _obj_sym = self.symbols.lookup(prefix_name) if self.symbols else None
+                if _obj_sym and _obj_sym.ada_type and hasattr(_obj_sym.ada_type, 'name'):
+                    _tname = _obj_sym.ada_type.name.lower() if _obj_sym.ada_type.name else None
+                    if _tname and _tname in self._all_protected_types:
+                        prot_type = self._all_protected_types[_tname]
+            if prot_type is None:
+                # Search by selector name in all protected types
+                for _pt_name, _pt in self._all_protected_types.items():
+                    for _op in _pt.operations:
+                        if _op.name.lower() == selector.lower():
+                            prot_type = _pt
+                            break
+                    if prot_type is not None:
+                        break
+                    for _entry in _pt.entries:
+                        if _entry.name.lower() == selector.lower():
+                            prot_type = _pt
+                            break
+                    if prot_type is not None:
+                        break
+        return prot_type, prefix_name
+
+    def _push_protected_obj_addr(self, prefix, prefix_name: str):
+        """Push the address of a protected object onto the stack.
+
+        Returns True if address was pushed, False otherwise.
+        """
+        # Local variable (direct name)
+        if self.ctx and prefix_name in self.ctx.locals:
+            local = self.ctx.locals[prefix_name]
+            prot_addr = self.builder.new_vreg(IRType.PTR, "_prot_obj")
+            frame_offset = -(local.stack_offset + local.size)
+            self.builder.emit(IRInstr(
+                OpCode.LEA, prot_addr,
+                MemoryLocation(offset=frame_offset, ir_type=IRType.PTR, is_frame_offset=True),
+                comment=f"addr of protected object {prefix_name}"
+            ))
+            self.builder.push(prot_addr)
+            return True
+        # Local with package prefix
+        if self.ctx:
+            local = self._find_local(prefix_name)
+            if local and hasattr(local, 'stack_offset'):
+                prot_addr = self.builder.new_vreg(IRType.PTR, "_prot_obj")
+                frame_offset = -(local.stack_offset + local.size)
+                self.builder.emit(IRInstr(
+                    OpCode.LEA, prot_addr,
+                    MemoryLocation(offset=frame_offset, ir_type=IRType.PTR, is_frame_offset=True),
+                    comment=f"addr of protected object {prefix_name}"
+                ))
+                self.builder.push(prot_addr)
+                return True
+        # Global variable
+        if self.builder.module:
+            global_name = prefix_name.replace(".", "_")
+            if isinstance(prefix, SelectedName):
+                global_name = self._get_hierarchical_name(prefix).replace(".", "_").lower()
+            if global_name in self.builder.module.globals:
+                prot_addr = self.builder.new_vreg(IRType.PTR, "_prot_obj")
+                self.builder.load(prot_addr, Label(global_name),
+                                  comment=f"addr of global protected object")
+                self.builder.push(prot_addr)
+                return True
+        # Last resort
+        self.builder.push(Immediate(0, IRType.PTR))
+        return True
+
     def _lower_protected_type_decl(self, decl: ProtectedTypeDecl) -> None:
         """Lower a protected type declaration.
 
@@ -4294,10 +4402,9 @@ class ASTLowering:
 
         For single protected objects (which is what most are), this creates
         both the type AND allocates the object in the current stack frame.
+        At library level (ctx is None), just registers the type info for
+        the protected body to find later.
         """
-        if self.ctx is None:
-            return
-
         # Build protected type info from the declaration
         entries = []
         operations = []
@@ -4339,8 +4446,14 @@ class ASTLowering:
         )
 
         # Register in context for later lookup
-        self.ctx.protected_types[decl.name.lower()] = prot_type
+        if self.ctx:
+            self.ctx.protected_types[decl.name.lower()] = prot_type
         self._all_protected_types[decl.name.lower()] = prot_type
+
+        # At library level (no ctx), just register the type — no stack allocation needed.
+        # The protected object is a separate ObjectDecl handled as a global variable.
+        if self.ctx is None:
+            return
 
         # Allocate stack space for the protected object instance
         # Layout: 1-byte lock + components
@@ -4413,15 +4526,14 @@ class ASTLowering:
 
         Each protected procedure/function is wrapped with lock/unlock calls.
         """
-        if self.ctx is None:
-            return
-
         # Get the protected type information from ctx.protected_types first
         prot_name = decl.name.lower()
         prot_type = None
-        if prot_name in self.ctx.protected_types:
+        if self.ctx and prot_name in self.ctx.protected_types:
             prot_type = self.ctx.protected_types[prot_name]
-        else:
+        if prot_type is None and prot_name in self._all_protected_types:
+            prot_type = self._all_protected_types[prot_name]
+        if prot_type is None:
             # Fallback to symbol table lookup
             prot_sym = self.symbols.lookup(decl.name)
             if prot_sym and isinstance(prot_sym.ada_type, ProtectedType):
@@ -4801,6 +4913,8 @@ class ASTLowering:
                 self._lower_nested_package_object_init(pkg_decl, pkg_prefix)
             elif isinstance(pkg_decl, TaskTypeDecl):
                 self._lower_task_type_decl(pkg_decl)
+            elif isinstance(pkg_decl, ProtectedTypeDecl):
+                self._lower_protected_type_decl(pkg_decl)
             elif isinstance(pkg_decl, SubprogramDecl) and pkg_decl.renames:
                 alias_name = self._get_hierarchical_name(pkg_decl.renames)
                 if alias_name:
@@ -4816,6 +4930,8 @@ class ASTLowering:
                 self._lower_nested_package_object_init(pkg_decl, pkg_prefix)
             elif isinstance(pkg_decl, TaskTypeDecl):
                 self._lower_task_type_decl(pkg_decl)
+            elif isinstance(pkg_decl, ProtectedTypeDecl):
+                self._lower_protected_type_decl(pkg_decl)
             elif isinstance(pkg_decl, SubprogramDecl) and pkg_decl.renames:
                 alias_name = self._get_hierarchical_name(pkg_decl.renames)
                 if alias_name:
@@ -5086,6 +5202,12 @@ class ASTLowering:
             elif isinstance(decl, GenericInstantiation):
                 # Generic instantiation inside nested package body
                 self._lower_generic_instantiation(decl)
+            elif isinstance(decl, ProtectedTypeDecl):
+                self._lower_protected_type_decl(decl)
+            elif isinstance(decl, ProtectedBody):
+                self._enclosing_ctx_for_nested_pkg = saved_ctx
+                self._lower_protected_body(decl)
+                self._enclosing_ctx_for_nested_pkg = None
             elif isinstance(decl, TaskTypeDecl):
                 self._lower_task_type_decl(decl)
             elif isinstance(decl, TaskBody):
@@ -7822,70 +7944,21 @@ class ASTLowering:
             selector = stmt.name.selector
 
             # Check if prefix is a protected object
-            if isinstance(prefix, Identifier):
-                prefix_name = prefix.name.lower()
+            prot_type, prefix_name = self._resolve_protected_prefix(prefix, selector)
 
-                # First check ctx.protected_types (set during lowering)
-                prot_type = None
-                if self.ctx and prefix_name in self.ctx.protected_types:
-                    prot_type = self.ctx.protected_types[prefix_name]
-                else:
-                    # Fallback to symbol table lookup
-                    prot_sym = self.symbols.lookup(prefix_name) if self.symbols else None
-                    if prot_sym and hasattr(prot_sym, 'ada_type') and isinstance(prot_sym.ada_type, ProtectedType):
-                        prot_type = prot_sym.ada_type
-                # Fallback: check _get_prefix_type and _find_local for protected type
-                if prot_type is None:
-                    pt = self._get_prefix_type(prefix)
-                    if isinstance(pt, ProtectedType):
-                        prot_type = pt
-                # Fallback: check _all_protected_types by looking up object's type name
-                if prot_type is None and hasattr(self, '_all_protected_types'):
-                    # Try symbol table for type name
-                    _obj_sym = self.symbols.lookup(prefix_name) if self.symbols else None
-                    if _obj_sym and _obj_sym.ada_type and hasattr(_obj_sym.ada_type, 'name'):
-                        _tname = _obj_sym.ada_type.name.lower() if _obj_sym.ada_type.name else None
-                        if _tname and _tname in self._all_protected_types:
-                            prot_type = self._all_protected_types[_tname]
-                    # Also check if the selector matches any protected operation
-                    if prot_type is None:
-                        for _pt_name, _pt in self._all_protected_types.items():
-                            for _op in _pt.operations:
-                                if _op.name.lower() == selector.lower():
-                                    prot_type = _pt
-                                    break
-                            if prot_type:
-                                break
-
-                if prot_type:
+            if prot_type:
                     # This is a call to a protected operation
-                    # Generate: push protected object address, then call operation
-                    # Ada is case-insensitive, so normalize to lowercase
                     prot_type_name = (prot_type.name if hasattr(prot_type, 'name') else prefix_name).lower()
                     op_name = f"{prot_type_name}_{selector.lower()}"
 
                     # Push arguments first (right to left in C calling convention)
-                    # The protected object address is pushed LAST so it's at (ix+4)
                     if stmt.args:
                         for arg in reversed(stmt.args):
                             val = self._lower_expr(arg)
                             self.builder.push(val)
 
                     # Get address of protected object and push it last (so it's at ix+4)
-                    if self.ctx and prefix_name in self.ctx.locals:
-                        local = self.ctx.locals[prefix_name]
-                        prot_addr = self.builder.new_vreg(IRType.PTR, "_prot_obj")
-                        # Compute frame offset: local is at ix - (locals_size - stack_offset)
-                        frame_offset = -(local.stack_offset + local.size)
-                        self.builder.emit(IRInstr(
-                            OpCode.LEA, prot_addr,
-                            MemoryLocation(offset=frame_offset, ir_type=IRType.PTR, is_frame_offset=True),
-                            comment=f"addr of protected object {prefix_name}"
-                        ))
-                        self.builder.push(prot_addr)
-                    else:
-                        # Protected object may be global or not found - push 0 as placeholder
-                        self.builder.push(Immediate(0, IRType.PTR))
+                    self._push_protected_obj_addr(prefix, prefix_name)
 
                     # Call the protected operation
                     self.builder.call(Label(op_name), comment=f"call protected {selector}")
@@ -11628,33 +11701,9 @@ class ASTLowering:
                 return result
 
         # Check if this is a protected type function call (e.g., Counter.Value)
-        if isinstance(expr.prefix, Identifier):
-            prefix_name = expr.prefix.name.lower()
+        if isinstance(expr.prefix, (Identifier, SelectedName)):
             selector = expr.selector
-
-            # Check ctx.protected_types first
-            prot_type = None
-            if self.ctx and prefix_name in self.ctx.protected_types:
-                prot_type = self.ctx.protected_types[prefix_name]
-            else:
-                # Fallback to symbol table lookup
-                prot_sym = self.symbols.lookup(prefix_name) if self.symbols else None
-                if prot_sym and hasattr(prot_sym, 'ada_type') and isinstance(prot_sym.ada_type, ProtectedType):
-                    prot_type = prot_sym.ada_type
-            # Fallback: check _get_prefix_type for protected type
-            if prot_type is None:
-                pt = self._get_prefix_type(expr.prefix)
-                if isinstance(pt, ProtectedType):
-                    prot_type = pt
-            # Fallback: search all known protected types for matching operation
-            if prot_type is None and hasattr(self, '_all_protected_types'):
-                for _pt_name, _pt in self._all_protected_types.items():
-                    for _op in _pt.operations:
-                        if _op.name.lower() == selector.lower():
-                            prot_type = _pt
-                            break
-                    if prot_type:
-                        break
+            prot_type, prefix_name = self._resolve_protected_prefix(expr.prefix, selector)
 
             if prot_type:
                 # Check if the selector is a function in this protected type
@@ -11666,21 +11715,7 @@ class ASTLowering:
 
                         result = self.builder.new_vreg(IRType.WORD, "_prot_func_result")
 
-                        # Get address of protected object (it's a local variable)
-                        if prefix_name in self.ctx.locals:
-                            local = self.ctx.locals[prefix_name]
-                            prot_addr = self.builder.new_vreg(IRType.PTR, "_prot_obj")
-                            # Compute frame offset: local is at ix - (locals_size - stack_offset)
-                            frame_offset = -(local.stack_offset + local.size)
-                            self.builder.emit(IRInstr(
-                                OpCode.LEA, prot_addr,
-                                MemoryLocation(offset=frame_offset, ir_type=IRType.PTR, is_frame_offset=True),
-                                comment=f"addr of protected object {prefix_name}"
-                            ))
-                            self.builder.push(prot_addr)
-                        else:
-                            # Protected object may be global or not found - push 0
-                            self.builder.push(Immediate(0, IRType.PTR))
+                        self._push_protected_obj_addr(expr.prefix, prefix_name)
 
                         # Call the protected function
                         self.builder.call(Label(func_label), comment=f"call protected function {selector}")
@@ -19539,56 +19574,13 @@ class ASTLowering:
             prefix = expr.name.prefix
             selector = expr.name.selector
 
-            # Check if prefix is a protected object
-            if isinstance(prefix, Identifier):
-                prefix_name = prefix.name.lower()
+            prot_type, prefix_name = self._resolve_protected_prefix(prefix, selector)
 
-                # First check ctx.protected_types (set during lowering)
-                prot_type = None
-                if self.ctx and prefix_name in self.ctx.protected_types:
-                    prot_type = self.ctx.protected_types[prefix_name]
-                else:
-                    # Fallback to symbol table lookup
-                    prot_sym = self.symbols.lookup(prefix_name) if self.symbols else None
-                    if prot_sym and hasattr(prot_sym, 'ada_type') and isinstance(prot_sym.ada_type, ProtectedType):
-                        prot_type = prot_sym.ada_type
-                # Fallback: check _get_prefix_type for protected type
-                if prot_type is None:
-                    pt = self._get_prefix_type(prefix)
-                    if isinstance(pt, ProtectedType):
-                        prot_type = pt
-                # Fallback: search all known protected types for matching operation
-                if prot_type is None and hasattr(self, '_all_protected_types'):
-                    for _pt_name, _pt in self._all_protected_types.items():
-                        for _op in _pt.operations:
-                            if _op.name.lower() == selector.lower():
-                                prot_type = _pt
-                                break
-                        if prot_type:
-                            break
-
-                if prot_type:
-                    # This is a call to a protected function
-                    # Generate: push protected object address, call function, get result
-                    # Ada is case-insensitive, so normalize to lowercase
+            if prot_type:
                     prot_type_name = (prot_type.name if hasattr(prot_type, 'name') else prefix_name).lower()
                     func_label = f"{prot_type_name}_{selector.lower()}"
 
-                    # Get address of protected object (it's a local variable)
-                    if self.ctx and prefix_name in self.ctx.locals:
-                        local = self.ctx.locals[prefix_name]
-                        prot_addr = self.builder.new_vreg(IRType.PTR, "_prot_obj")
-                        # Compute frame offset: local is at ix - (locals_size - stack_offset)
-                        frame_offset = -(local.stack_offset + local.size)
-                        self.builder.emit(IRInstr(
-                            OpCode.LEA, prot_addr,
-                            MemoryLocation(offset=frame_offset, ir_type=IRType.PTR, is_frame_offset=True),
-                            comment=f"addr of protected object {prefix_name}"
-                        ))
-                        self.builder.push(prot_addr)
-                    else:
-                        # Protected object may be global or not found - push 0 as placeholder
-                        self.builder.push(Immediate(0, IRType.PTR))
+                    self._push_protected_obj_addr(prefix, prefix_name)
 
                     # Push any additional arguments
                     if expr.args:
@@ -19613,97 +19605,98 @@ class ASTLowering:
                         self.builder.pop(temp)
 
                     return result
-                else:
-                    # Check if this is actually a record array field access (not a function call)
-                    # e.g., Old.List(I) where Old is access-to-record and List is an array field
-                    from uada80.type_system import RecordType as _RecordType, ArrayType as _ArrayType, AccessType as _AccessType
-                    _rec_type = None
-                    _local = self._find_local(prefix_name)
-                    if _local and _local.ada_type:
-                        _rec_type = self._resolve_local_type(_local.ada_type)
-                    if _rec_type is None and self.ctx and prefix_name in self.ctx.param_ada_types:
-                        _rec_type = self.ctx.param_ada_types[prefix_name]
-                    if _rec_type is None:
-                        _sym = self.symbols.lookup(prefix_name) if self.symbols else None
-                        if _sym and _sym.ada_type:
-                            _rec_type = _sym.ada_type
-                    # Fallback: use _get_prefix_type which handles package-prefixed locals
-                    if _rec_type is None:
-                        _rec_type = self._get_prefix_type(prefix)
-                    # Fallback: if local found but type unresolved, search AST declarations
-                    # for the type name (handles nested package body types)
-                    if _rec_type is None and _local and _local.ada_type:
-                        _sti = _local.ada_type
-                        if isinstance(_sti, SubtypeIndication) and _sti.type_mark:
-                            _type_name = None
-                            if isinstance(_sti.type_mark, Identifier):
-                                _type_name = _sti.type_mark.name.lower()
-                            if _type_name:
-                                from uada80.ast_nodes import TypeDecl as _TD, PackageDecl as _PD, PackageBody as _PB
-                                _all_decls = list(getattr(self, '_current_body_declarations', None) or [])
-                                for _dl in getattr(self, '_body_declarations_stack', []):
-                                    _all_decls.extend(_dl)
-                                for _d in _all_decls:
-                                    if isinstance(_d, _TD) and _d.name.lower() == _type_name and _d.ada_type:
-                                        _rec_type = _d.ada_type
-                                        break
-                                    if isinstance(_d, (_PD, _PB)):
-                                        for _sd in list(getattr(_d, 'declarations', [])) + list(getattr(_d, 'private_declarations', None) or []):
-                                            if isinstance(_sd, _TD) and _sd.name.lower() == _type_name and _sd.ada_type:
-                                                _rec_type = _sd.ada_type
-                                                break
-                                        if _rec_type is not None:
+            if not prot_type and isinstance(prefix, Identifier):
+                prefix_name = prefix.name.lower()
+                # Check if this is actually a record array field access (not a function call)
+                # e.g., Old.List(I) where Old is access-to-record and List is an array field
+                from uada80.type_system import RecordType as _RecordType, ArrayType as _ArrayType, AccessType as _AccessType
+                _rec_type = None
+                _local = self._find_local(prefix_name)
+                if _local and _local.ada_type:
+                    _rec_type = self._resolve_local_type(_local.ada_type)
+                if _rec_type is None and self.ctx and prefix_name in self.ctx.param_ada_types:
+                    _rec_type = self.ctx.param_ada_types[prefix_name]
+                if _rec_type is None:
+                    _sym = self.symbols.lookup(prefix_name) if self.symbols else None
+                    if _sym and _sym.ada_type:
+                        _rec_type = _sym.ada_type
+                # Fallback: use _get_prefix_type which handles package-prefixed locals
+                if _rec_type is None:
+                    _rec_type = self._get_prefix_type(prefix)
+                # Fallback: if local found but type unresolved, search AST declarations
+                # for the type name (handles nested package body types)
+                if _rec_type is None and _local and _local.ada_type:
+                    _sti = _local.ada_type
+                    if isinstance(_sti, SubtypeIndication) and _sti.type_mark:
+                        _type_name = None
+                        if isinstance(_sti.type_mark, Identifier):
+                            _type_name = _sti.type_mark.name.lower()
+                        if _type_name:
+                            from uada80.ast_nodes import TypeDecl as _TD, PackageDecl as _PD, PackageBody as _PB
+                            _all_decls = list(getattr(self, '_current_body_declarations', None) or [])
+                            for _dl in getattr(self, '_body_declarations_stack', []):
+                                _all_decls.extend(_dl)
+                            for _d in _all_decls:
+                                if isinstance(_d, _TD) and _d.name.lower() == _type_name and _d.ada_type:
+                                    _rec_type = _d.ada_type
+                                    break
+                                if isinstance(_d, (_PD, _PB)):
+                                    for _sd in list(getattr(_d, 'declarations', [])) + list(getattr(_d, 'private_declarations', None) or []):
+                                        if isinstance(_sd, _TD) and _sd.name.lower() == _type_name and _sd.ada_type:
+                                            _rec_type = _sd.ada_type
                                             break
-                    # Follow implicit dereference for access types
-                    if isinstance(_rec_type, _AccessType) and _rec_type.designated_type:
-                        _rec_type = _rec_type.designated_type
-                    if isinstance(_rec_type, _RecordType):
-                        for _comp in _rec_type.components:
-                            _ctype = _comp.component_type
-                            # Follow access type to designated type for access-to-array fields
-                            if isinstance(_ctype, _AccessType) and _ctype.designated_type:
-                                _ctype = _ctype.designated_type
-                            if _comp.name.lower() == selector.lower() and isinstance(_ctype, _ArrayType):
-                                # This is record.array_field(index) — redirect to _lower_indexed
-                                from uada80.ast_nodes import IndexedComponent as _IC
-                                indexed_expr = _IC(prefix=expr.name, indices=list(
-                                    a.value if hasattr(a, 'value') else a for a in expr.args
-                                ))
-                                return self._lower_indexed(indexed_expr)
-
-                    # Check if this is a call through an access-to-subprogram record field
-                    # e.g., RO_4.C(4.5) where C is a record component of access-to-function type
-                    if isinstance(_rec_type, _RecordType):
-                        from uada80.type_system import AccessSubprogramType as _AST_func
-                        _as_comp = _rec_type.get_component(selector)
-                        if _as_comp and isinstance(_as_comp.component_type, _AST_func):
-                            # Load the access-to-subprogram value from the record field
-                            func_ptr = self._lower_expr(expr.name)
-                            # Indirect call through the function pointer
-                            # Push arguments (right to left)
-                            stack_slots = 0
-                            if expr.args:
-                                for arg in reversed(expr.args):
-                                    val = self._lower_expr(arg.value if hasattr(arg, 'value') else arg)
-                                    self.builder.push(val)
-                                    stack_slots += 1
-                            self.builder.emit(IRInstr(
-                                OpCode.CALL_INDIRECT,
-                                src1=func_ptr,
-                                comment=f"indirect func call via {prefix_name}.{selector}"
+                                    if _rec_type is not None:
+                                        break
+                # Follow implicit dereference for access types
+                if isinstance(_rec_type, _AccessType) and _rec_type.designated_type:
+                    _rec_type = _rec_type.designated_type
+                if isinstance(_rec_type, _RecordType):
+                    for _comp in _rec_type.components:
+                        _ctype = _comp.component_type
+                        # Follow access type to designated type for access-to-array fields
+                        if isinstance(_ctype, _AccessType) and _ctype.designated_type:
+                            _ctype = _ctype.designated_type
+                        if _comp.name.lower() == selector.lower() and isinstance(_ctype, _ArrayType):
+                            # This is record.array_field(index) — redirect to _lower_indexed
+                            from uada80.ast_nodes import IndexedComponent as _IC
+                            indexed_expr = _IC(prefix=expr.name, indices=list(
+                                a.value if hasattr(a, 'value') else a for a in expr.args
                             ))
-                            for _ in range(stack_slots):
-                                temp = self.builder.new_vreg(IRType.WORD, "_discard")
-                                self.builder.pop(temp)
-                            # Capture result from HL
-                            self.builder.emit(IRInstr(
-                                OpCode.MOV, result,
-                                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
-                                comment=f"capture indirect call return from {prefix_name}.{selector}"
-                            ))
-                            return result
+                            return self._lower_indexed(indexed_expr)
 
-                    # Not a protected type - this is a package-qualified function call
+                # Check if this is a call through an access-to-subprogram record field
+                # e.g., RO_4.C(4.5) where C is a record component of access-to-function type
+                if isinstance(_rec_type, _RecordType):
+                    from uada80.type_system import AccessSubprogramType as _AST_func
+                    _as_comp = _rec_type.get_component(selector)
+                    if _as_comp and isinstance(_as_comp.component_type, _AST_func):
+                        # Load the access-to-subprogram value from the record field
+                        func_ptr = self._lower_expr(expr.name)
+                        # Indirect call through the function pointer
+                        # Push arguments (right to left)
+                        stack_slots = 0
+                        if expr.args:
+                            for arg in reversed(expr.args):
+                                val = self._lower_expr(arg.value if hasattr(arg, 'value') else arg)
+                                self.builder.push(val)
+                                stack_slots += 1
+                        self.builder.emit(IRInstr(
+                            OpCode.CALL_INDIRECT,
+                            src1=func_ptr,
+                            comment=f"indirect func call via {prefix_name}.{selector}"
+                        ))
+                        for _ in range(stack_slots):
+                            temp = self.builder.new_vreg(IRType.WORD, "_discard")
+                            self.builder.pop(temp)
+                        # Capture result from HL
+                        self.builder.emit(IRInstr(
+                            OpCode.MOV, result,
+                            MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                            comment=f"capture indirect call return from {prefix_name}.{selector}"
+                        ))
+                        return result
+
+                # Not a protected type - this is a package-qualified function call
                     # Check if this is a predefined operator that should use inline code
                     # (e.g., P."="(X, Y) for scalar types)
                     # Map of predefined binary operators
@@ -21780,17 +21773,36 @@ class ASTLowering:
             return result
 
         if attr == "callable":
-            # T'Callable - returns True if task T is callable
-            # Used in tasking - for Z80 single-threaded, always True
+            # T'Callable - check if task T is callable via runtime
+            # _TSK_CLBL takes task_id in HL, returns result in HL
+            task_id = self._lower_expr(expr.prefix)
+            # Push task_id, call, pop — ensures HL has the value at call site
+            self.builder.push(task_id)
+            self.builder.call(Label("_TSK_CLBL"), comment="T'Callable")
             result = self.builder.new_vreg(IRType.WORD, "_callable")
-            self.builder.mov(result, Immediate(1, IRType.WORD))
+            self.builder.emit(IRInstr(
+                OpCode.MOV, result,
+                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                comment="callable result from HL"
+            ))
+            temp = self.builder.new_vreg(IRType.WORD, "_discard")
+            self.builder.pop(temp)
             return result
 
         if attr == "terminated":
-            # T'Terminated - returns True if task T has terminated
-            # Used in tasking - for Z80 single-threaded, always False
+            # T'Terminated - check if task T has terminated via runtime
+            # _TSK_TERM takes task_id in HL, returns result in HL
+            task_id = self._lower_expr(expr.prefix)
+            self.builder.push(task_id)
+            self.builder.call(Label("_TSK_TERM"), comment="T'Terminated")
             result = self.builder.new_vreg(IRType.WORD, "_terminated")
-            self.builder.mov(result, Immediate(0, IRType.WORD))
+            self.builder.emit(IRInstr(
+                OpCode.MOV, result,
+                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                comment="terminated result from HL"
+            ))
+            temp = self.builder.new_vreg(IRType.WORD, "_discard")
+            self.builder.pop(temp)
             return result
 
         if attr == "identity":

@@ -147,6 +147,8 @@ _entry_free_list:
     DS 2            ; head of free node list
 _entry_nodes:
     DS ENTRY_Q_SIZE * MAX_ENTRY_NODES
+_rendezvous_caller:
+    DS 2            ; TCB pointer of caller blocked during rendezvous
 
 ; =========================================
 ; Code Section
@@ -588,6 +590,9 @@ _ei_loop:
     xor A
     ld (_entry_queue_head), A
     ld (_entry_queue_head+1), A
+    ; Initialize rendezvous caller to 0
+    ld (_rendezvous_caller), A
+    ld (_rendezvous_caller+1), A
     ret
 
 ; _entry_alloc: Allocate a queue node
@@ -770,14 +775,12 @@ _ea_unlinked:
     ld L, (IX+ENTRY_Q_PARAMS)
     ld H, (IX+ENTRY_Q_PARAMS+1)
     push HL          ; save params
-    ; Wake caller task
+    ; Save caller TCB in _rendezvous_caller so _ENTRY_ACCEPT_END can wake it
     ld L, (IX+ENTRY_Q_CALLER)
     ld H, (IX+ENTRY_Q_CALLER+1)
-    push HL
-    pop IY           ; IY = caller TCB
-    ld A, TASK_READY
-    ld (IY+TCB_STATE), A
-    ; Free the node
+    ld (_rendezvous_caller), HL
+    ; Caller stays in ENTRY_WAIT state until accept body completes
+    ; Free the queue node
     push IX
     pop HL
     call _entry_free
@@ -790,10 +793,21 @@ _ea_unlinked:
 
 ; -----------------------------------------
 ; _ENTRY_ACCEPT_END: Mark end of accept body
-; Called when accept body completes
+; Wakes the caller task that was blocked during rendezvous
 ; -----------------------------------------
 _ENTRY_ACCEPT_END:
-    ; Rendezvous complete - caller already woken in _ENTRY_ACCEPT
+    ; Wake the caller that was blocked during the accept body
+    ld HL, (_rendezvous_caller)
+    ld A, H
+    or L
+    ret Z            ; no caller to wake (shouldn't happen)
+    push HL
+    pop IX
+    ld A, TASK_READY
+    ld (IX+TCB_STATE), A
+    ; Clear rendezvous caller
+    ld HL, 0
+    ld (_rendezvous_caller), HL
     ret
 
 ; -----------------------------------------
@@ -824,6 +838,7 @@ _SELECT_WAIT:
 _sw_found:
     pop IX
     ei
+    ld HL, 0            ; return first alternative index
     ret
 
 ; _SELECT_END: End a select statement
@@ -919,13 +934,20 @@ _twa_next:
 
 ; -----------------------------------------
 ; _TSK_CLBL: Check if task is callable (T'Callable)
-; Input: HL = task_id
+; Input: task_id on stack at (SP+2) [caller pushes before call]
 ; Output: HL = 1 (callable) or 0 (not callable)
 ; A task is callable unless it is completed or terminated.
 ; -----------------------------------------
 _TSK_CLBL:
     push DE
     push BC
+    ; Load task_id from stack: ret_addr(2) + DE(2) + BC(2) = SP+6
+    ld HL, 6
+    add HL, SP
+    ld A, (HL)
+    inc HL
+    ld H, (HL)
+    ld L, A
     call _find_task_by_id
     ld A, H
     or L
@@ -950,12 +972,19 @@ _tclbl_false:
 
 ; -----------------------------------------
 ; _TSK_TERM: Check if task is terminated (T'Terminated)
-; Input: HL = task_id
+; Input: task_id on stack at (SP+2) [caller pushes before call]
 ; Output: HL = 1 (terminated) or 0 (not terminated)
 ; -----------------------------------------
 _TSK_TERM:
     push DE
     push BC
+    ; Load task_id from stack: ret_addr(2) + DE(2) + BC(2) = SP+6
+    ld HL, 6
+    add HL, SP
+    ld A, (HL)
+    inc HL
+    ld H, (HL)
+    ld L, A
     call _find_task_by_id
     ld A, H
     or L
@@ -1000,7 +1029,10 @@ _SELC_EN:   jp _SELECT_END
 
 ; Additional stubs for protected types and parallel blocks
 _PROT_ENQ:
-    ; Protected entry queue - stub for bare-metal Z80
+    ; Protected entry queue: caller is blocked waiting for barrier.
+    ; Yield CPU so other tasks can modify the protected state
+    ; and make the barrier true.
+    call _do_schedule
     ret
 
 _PROT_REB:
