@@ -324,6 +324,11 @@ _sched_check_task:
     sbc HL, DE
     add HL, DE
     jr C, _sched_check_task
+    ; Wrapped around — no ready task found in this pass
+    ; Enable interrupts briefly to allow timer ISR to wake delayed tasks
+    ei
+    halt             ; wait for interrupt (timer tick)
+    di
     ld HL, _tcb_array
     jr _sched_check_task
 _sched_found:
