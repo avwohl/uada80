@@ -343,10 +343,15 @@ def compile_and_run_acats(test_files, timeout=5.0):
         if proc.returncode != 0:
             return "link", False, proc.stderr.strip()
 
-        # Run
+        # Run — enable timer interrupts if program uses tasking
+        run_cmd = [CPMEMU_CMD, "--z80"]
+        asm_text = asm_file.read_text()
+        if "TASK_INI" in asm_text or "_TASK_INI" in asm_text:
+            run_cmd.extend(["--int-cycles=50000"])
+        run_cmd.append(str(com_file))
         try:
             proc = subprocess.run(
-                [CPMEMU_CMD, "--z80", str(com_file)],
+                run_cmd,
                 capture_output=True, text=True, timeout=timeout,
                 cwd=str(tmpdir)
             )

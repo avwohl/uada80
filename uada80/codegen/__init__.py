@@ -8166,26 +8166,45 @@ class Z80CodeGen:
         self._emit_instr("call", "_TASK_DLU")
 
     def _gen_entry_call(self, instr: IRInstr) -> None:
-        """Generate ENTRY_CALL instruction."""
-        self._emit("    ; call task entry")
-        # Push entry ID
-        self._load_to_hl(instr.src2)
+        """Generate ENTRY_CALL instruction.
+
+        Stack protocol: push params_ptr, task_id, entry_id then call _ENTRY_CL.
+        dst (if present) holds params_ptr to push.
+        """
+        self._emit("    ; entry call")
+        # Push params_ptr (from dst field, or 0 if not set)
+        if instr.dst is not None:
+            self._load_to_hl(instr.dst)
+        else:
+            self._emit_instr("ld", "hl", "0")
         self._emit_instr("push", "hl")
         # Push task ID
         self._load_to_hl(instr.src1)
         self._emit_instr("push", "hl")
+        # Push entry ID
+        self._load_to_hl(instr.src2)
+        self._emit_instr("push", "hl")
         # Call entry
         self._emit_instr("call", "_ENTRY_CL")
-        # Clean up stack
+        # Clean up stack (3 words)
+        self._emit_instr("pop", "hl")
         self._emit_instr("pop", "hl")
         self._emit_instr("pop", "hl")
 
     def _gen_entry_accept(self, instr: IRInstr) -> None:
-        """Generate ENTRY_ACCEPT instruction."""
+        """Generate ENTRY_ACCEPT instruction.
+
+        Loads entry_id into HL, calls _ENTRY_AC.
+        _ENTRY_AC returns params_ptr in HL, stored to dst vreg.
+        """
         self._emit("    ; accept entry call")
-        # Load entry ID
+        # Load entry ID into HL
         self._load_to_hl(instr.src1)
+        # Call accept - returns params_ptr in HL
         self._emit_instr("call", "_ENTRY_AC")
+        # Save params_ptr (HL) to destination vreg
+        if instr.dst is not None and isinstance(instr.dst, VReg):
+            self._store_from_hl(instr.dst)
 
 
 def generate_z80(module: IRModule, emit_inline_runtime: bool = False) -> str:

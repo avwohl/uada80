@@ -643,13 +643,19 @@ class IRBuilder:
         """Emit a task delay-until instruction."""
         self.emit(IRInstr(OpCode.TASK_DELAY_UNTIL, src1=time, comment=comment))
 
-    def entry_call(self, task_id: IRValue, entry_id: IRValue, comment: str = "") -> None:
-        """Emit an entry call instruction."""
-        self.emit(IRInstr(OpCode.ENTRY_CALL, src1=task_id, src2=entry_id, comment=comment))
+    def entry_call(self, task_id: IRValue, entry_id: IRValue, params_ptr: IRValue = None, comment: str = "") -> None:
+        """Emit an entry call instruction.
 
-    def entry_accept(self, entry_id: IRValue, comment: str = "") -> None:
-        """Emit an entry accept instruction."""
-        self.emit(IRInstr(OpCode.ENTRY_ACCEPT, src1=entry_id, comment=comment))
+        params_ptr is stored in dst field (not a result, but the param block address).
+        """
+        self.emit(IRInstr(OpCode.ENTRY_CALL, dst=params_ptr, src1=task_id, src2=entry_id, comment=comment))
+
+    def entry_accept(self, dst: VReg, entry_id: IRValue, comment: str = "") -> None:
+        """Emit an entry accept instruction.
+
+        dst receives the params_ptr returned by the runtime.
+        """
+        self.emit(IRInstr(OpCode.ENTRY_ACCEPT, dst=dst, src1=entry_id, comment=comment))
 
     # Additional operations for protected types and tasking
 

@@ -304,6 +304,10 @@ class ASTLowering:
         self._task_type_names: set[str] = set()
         # Track all task entry names for fallback entry call detection
         self._task_entry_names: set[str] = set()
+        # Stack tracking whether current scope created tasks (for _TASK_WAI)
+        self._scope_has_tasks: list[bool] = []
+        # Map (task_type_name_lower) -> {entry_name_lower: entry_id}
+        self._task_entry_ids: dict[str, dict[str, int]] = {}
         # Track all tagged types discovered during lowering (for vtable generation)
         self._tagged_types: list[RecordType] = []
         # Track actual assembly labels for primitive operations of tagged types
@@ -1084,6 +1088,9 @@ class ASTLowering:
         # Generate precondition checks
         self._generate_preconditions(spec)
 
+        # Track whether this subprogram scope creates tasks
+        self._scope_has_tasks.append(False)
+
         # Pre-register function labels from nested package bodies so that
         # forward references (e.g., PROC1 calling PACK1.NEXT when PACK1 is
         # declared after PROC1) resolve correctly.
@@ -1106,6 +1113,14 @@ class ASTLowering:
         # Note: In a full implementation, postconditions would be checked
         # before each return statement. For simplicity, we check at the end.
         self._generate_postconditions(spec)
+
+        # Wait for child tasks before returning (Ada master semantics)
+        if self._scope_has_tasks and self._scope_has_tasks[-1]:
+            self.builder.call(Label("_TASK_WAI"), comment="wait for child tasks")
+
+        # Pop scope task tracking
+        if self._scope_has_tasks:
+            self._scope_has_tasks.pop()
 
         # Add implicit return if needed
         if not self._block_has_return(self.builder.block):
@@ -4597,8 +4612,13 @@ class ASTLowering:
             # Queue the entry call (runtime will re-evaluate barrier later)
             # For entry families, we need to store the family index with the queue entry
             self.builder.push(prot_obj)
-            # Entry ID combines base entry ID with family index
-            base_entry_id = hash(entry.name) & 0xFFFF
+            # Entry ID - deterministic sequential assignment
+            entry_name_lower = entry.name.lower()
+            base_entry_id = 1  # fallback
+            for tn, emap in self._task_entry_ids.items():
+                if entry_name_lower in emap:
+                    base_entry_id = emap[entry_name_lower]
+                    break
             if family_index_vreg:
                 # entry_id = base_id * 256 + family_index
                 # This allows up to 256 indices per family (adjustable)
@@ -5092,15 +5112,19 @@ class ASTLowering:
         Task types (task type T;) can have multiple instances.
         """
         # Track task type names for entry call detection across scopes
-        self._task_type_names.add(decl.name.lower())
-        # Track entry names for fallback detection
+        task_name_lower = decl.name.lower()
+        self._task_type_names.add(task_name_lower)
+        # Assign deterministic entry IDs (1, 2, 3...) for this task type
         if hasattr(decl, 'entries') and decl.entries:
-            for entry in decl.entries:
+            entry_id_map = {}
+            for i, entry in enumerate(decl.entries):
                 if hasattr(entry, 'name'):
                     self._task_entry_names.add(entry.name.lower())
+                    entry_id_map[entry.name.lower()] = i + 1
+            self._task_entry_ids[task_name_lower] = entry_id_map
         # Track single tasks for entry call detection in lowering
         if getattr(decl, 'is_single', False):
-            self._single_task_names.add(decl.name.lower())
+            self._single_task_names.add(task_name_lower)
 
     def _lower_task_body(self, decl: TaskBody) -> None:
         """Lower a task body (implementation of task execution).
@@ -5151,13 +5175,9 @@ class ASTLowering:
         # Create new context
         self.ctx = LoweringContext(function=ir_func)
 
-        # Task body receives task ID as implicit parameter
-        task_id_vreg = self.builder.new_vreg(IRType.WORD, "_task_id")
-        self.builder.pop(task_id_vreg)
-
-        # Store task ID for use by task attributes
-        if self.ctx:
-            self.ctx.task_id = task_id_vreg
+        # Task body does NOT receive task_id as a stack parameter.
+        # The runtime _TASK_CREATE does not push a task_id for the task body.
+        # If the task needs its own ID, it can read _task_current TCB.
 
         # Lower local declarations
         # Set task body declarations for type/enum lookup within task
@@ -5206,6 +5226,9 @@ class ASTLowering:
                 self.builder.task_create(task_id_vreg, Label(task_name),
                                          comment=f"create single task {decl.name}")
                 self.ctx.task_objects[decl.name.lower()] = task_id_vreg
+                # Mark current scope as having created tasks
+                if self._scope_has_tasks:
+                    self._scope_has_tasks[-1] = True
 
         # Generate entry stub functions for each entry in this task
         # The stubs call the entry queue mechanism
@@ -5302,8 +5325,11 @@ class ASTLowering:
             # No parameters - use null pointer
             self.builder.mov(params_ptr, Immediate(0, IRType.PTR))
 
-        # Compute entry ID (hash of entry name for uniqueness)
-        base_entry_id = hash(entry.name) & 0xFFFF
+        # Compute deterministic entry ID from task's entry map
+        task_name_lower = task_name.lower()
+        entry_name_lower = entry.name.lower()
+        entry_ids = self._task_entry_ids.get(task_name_lower, {})
+        base_entry_id = entry_ids.get(entry_name_lower, 1)
 
         # For entry families, combine base entry ID with family index
         if family_index_vreg:
@@ -5449,29 +5475,78 @@ class ASTLowering:
 
         Syntax: accept Entry_Name (params) do ... end;
 
-        For Z80 (single-threaded), we emit a runtime call to handle
-        the rendezvous protocol. In a full implementation, this would
-        involve task scheduling and synchronization.
+        The runtime _ENTRY_AC blocks until a matching entry call arrives,
+        then returns params_ptr (address of caller's parameter block).
+        Accept body can read IN params and write OUT params through this pointer.
         """
         if self.ctx is None:
             return
 
-        # Push numeric entry ID for the runtime (must match caller's hash)
-        entry_id = hash(stmt.entry_name) & 0xFFFF
+        # Look up deterministic entry ID (must match caller's entry stub)
+        entry_name_lower = stmt.entry_name.lower()
+        entry_id = 1  # default fallback
+        for task_name, entry_map in self._task_entry_ids.items():
+            if entry_name_lower in entry_map:
+                entry_id = entry_map[entry_name_lower]
+                break
+
+        # Use ENTRY_ACCEPT IR opcode — returns params_ptr in dst
         entry_id_vreg = self.builder.new_vreg(IRType.WORD, "_entry_id")
         self.builder.mov(entry_id_vreg, Immediate(entry_id, IRType.WORD))
-        self.builder.push(entry_id_vreg)
+        params_ptr_vreg = self.builder.new_vreg(IRType.PTR, "_accept_params")
+        self.builder.entry_accept(params_ptr_vreg, entry_id_vreg,
+                                   comment=f"accept {stmt.entry_name}")
 
-        # Call runtime to wait for entry call
-        self.builder.call(Label("_ENTRY_AC"), comment=f"accept {stmt.entry_name}")
-
-        # Clean up stack
-        temp = self.builder.new_vreg(IRType.WORD, "_discard")
-        self.builder.pop(temp)
+        # Set up formal parameters as locals mapped to params_ptr + offset
+        # Each parameter is 2 bytes at consecutive offsets
+        saved_locals = {}
+        param_offset = 0
+        param_info = []  # (name, mode, offset) for copy-back
+        for pspec in stmt.parameters:
+            mode = pspec.mode or "in"
+            for pname in pspec.names:
+                pname_lower = pname.lower()
+                # Create a local variable for this accept param
+                local_vreg = self.builder.new_vreg(IRType.WORD, f"_ap_{pname_lower}")
+                # Copy IN/IN-OUT value from param block to local
+                if mode in ("in", "in out"):
+                    # Load from params_ptr + offset
+                    self.builder.load(local_vreg,
+                                      MemoryLocation(ir_type=IRType.WORD,
+                                                     base=params_ptr_vreg,
+                                                     offset=param_offset),
+                                      comment=f"read IN param {pname}")
+                # Save existing local (if any) and register accept param
+                if pname_lower in self.ctx.locals:
+                    saved_locals[pname_lower] = self.ctx.locals[pname_lower]
+                from types import SimpleNamespace
+                self.ctx.locals[pname_lower] = SimpleNamespace(
+                    vreg=local_vreg, size=2, stack_offset=0, ada_type=pspec.type_mark
+                )
+                param_info.append((pname_lower, mode, param_offset))
+                param_offset += 2
 
         # Lower the accept body statements
         for s in stmt.statements:
             self._lower_statement(s)
+
+        # Copy OUT/IN-OUT values back to param block
+        for pname_lower, mode, offset in param_info:
+            if mode in ("out", "in out"):
+                local_vreg = self.ctx.locals[pname_lower].vreg
+                self.builder.store(
+                    MemoryLocation(ir_type=IRType.WORD,
+                                   base=params_ptr_vreg,
+                                   offset=offset),
+                    local_vreg,
+                    comment=f"write OUT param {pname_lower}")
+
+        # Restore any shadowed locals
+        for name, saved in saved_locals.items():
+            self.ctx.locals[name] = saved
+        for pname_lower, mode, offset in param_info:
+            if pname_lower not in saved_locals and pname_lower in self.ctx.locals:
+                del self.ctx.locals[pname_lower]
 
         # Signal accept completion
         self.builder.call(Label("_ENTRY_AE"))
@@ -7318,6 +7393,9 @@ class ASTLowering:
         if self.ctx is None:
             return
 
+        # Track whether this block creates tasks (for _TASK_WAI at exit)
+        self._scope_has_tasks.append(False)
+
         # Save any existing locals that will be shadowed by block declarations
         # This allows proper Ada block-scoped shadowing with case-insensitive names
         shadowed_locals: dict[str, LocalVariable] = {}
@@ -7459,6 +7537,14 @@ class ASTLowering:
         # Restore _current_body_declarations after block
         self._body_declarations_stack.pop()
         self._current_body_declarations = saved_body_decls
+
+        # Wait for child tasks before leaving scope (Ada master semantics)
+        if self._scope_has_tasks and self._scope_has_tasks[-1]:
+            self.builder.call(Label("_TASK_WAI"), comment="wait for child tasks")
+
+        # Pop scope task tracking
+        if self._scope_has_tasks:
+            self._scope_has_tasks.pop()
 
         # Leave block scope
         self.symbols.leave_scope()
@@ -7953,36 +8039,72 @@ class ASTLowering:
 
             if task_id_vreg is not None:
                 # This is a task entry call — emit _ENTRY_CL
-                entry_id = hash(selector) & 0xFFFF
+                # Use deterministic entry ID matching accept side
+                entry_id = 1  # fallback
+                selector_lower = selector.lower()
+                for tn, emap in self._task_entry_ids.items():
+                    if selector_lower in emap:
+                        entry_id = emap[selector_lower]
+                        break
 
-                # Push args (right to left) if any
-                if stmt.args:
-                    for arg in reversed(stmt.args):
+                # Build contiguous parameter block in caller's frame
+                # Reserve N*2 bytes at a known frame offset
+                from uada80.ast_nodes import ActualParameter
+                num_params = len(stmt.args) if stmt.args else 0
+                param_arg_exprs = list(stmt.args) if stmt.args else []
+
+                if num_params > 0:
+                    block_size = num_params * 2
+                    # Reserve space in function's locals area
+                    base_offset = -(self.ctx.function.locals_size + block_size)
+                    self.ctx.function.locals_size += block_size
+
+                    # Evaluate and store each arg in the contiguous block
+                    for i, arg in enumerate(param_arg_exprs):
                         val = self._lower_expr(arg)
-                        self.builder.push(val)
+                        slot_offset = base_offset + i * 2
+                        self.builder.store(
+                            MemoryLocation(ir_type=IRType.WORD, offset=slot_offset,
+                                           is_frame_offset=True),
+                            val, comment=f"entry param[{i}]")
 
-                # Push null params_ptr (or actual if args present)
-                params_ptr = self.builder.new_vreg(IRType.PTR, "_params_ptr")
-                self.builder.mov(params_ptr, Immediate(0, IRType.PTR))
-                self.builder.push(params_ptr)
+                    # Compute params_ptr = address of param block base
+                    params_ptr = self.builder.new_vreg(IRType.PTR, "_params_ptr")
+                    self.builder.emit(IRInstr(
+                        OpCode.LEA, params_ptr,
+                        MemoryLocation(offset=base_offset, ir_type=IRType.PTR,
+                                       is_frame_offset=True),
+                        comment="addr of entry param block"
+                    ))
+                else:
+                    params_ptr = None
 
-                # Push task_id
-                self.builder.push(task_id_vreg)
-
-                # Push entry_id
+                # Emit entry call via IR opcode
                 entry_id_vreg = self.builder.new_vreg(IRType.WORD, "_entry_id")
                 self.builder.mov(entry_id_vreg, Immediate(entry_id, IRType.WORD))
-                self.builder.push(entry_id_vreg)
+                self.builder.entry_call(task_id_vreg, entry_id_vreg,
+                                        params_ptr=params_ptr,
+                                        comment=f"entry call {prefix_name or '?'}.{selector}")
 
-                # Call entry
-                self.builder.call(Label("_ENTRY_CL"),
-                                  comment=f"entry call {prefix_name or '?'}.{selector}")
-
-                # Clean up stack (3 words + any args)
-                num_cleanup = 3 + (len(stmt.args) if stmt.args else 0)
-                for _ in range(num_cleanup):
-                    temp = self.builder.new_vreg(IRType.WORD, "_discard")
-                    self.builder.pop(temp)
+                # After rendezvous: copy OUT/IN-OUT values back to actual variables
+                for i, arg in enumerate(param_arg_exprs):
+                    actual = arg.value if isinstance(arg, ActualParameter) else arg
+                    if isinstance(actual, Identifier):
+                        name = actual.name.lower()
+                        slot_offset = base_offset + i * 2
+                        out_val = self.builder.new_vreg(IRType.WORD, "_ep_out")
+                        self.builder.load(out_val,
+                            MemoryLocation(ir_type=IRType.WORD, offset=slot_offset,
+                                           is_frame_offset=True),
+                            comment=f"read back param[{i}]")
+                        if self.ctx and name in self.ctx.locals:
+                            self.builder.mov(self.ctx.locals[name].vreg, out_val)
+                        elif self.ctx and name in self.ctx.params:
+                            if name in self.ctx.byref_params:
+                                self.builder.store(
+                                    MemoryLocation(ir_type=IRType.WORD,
+                                                   addr_vreg=self.ctx.params[name]),
+                                    out_val)
                 return
 
         # Check if this is a call through an access-to-subprogram record field
