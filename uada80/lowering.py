@@ -5776,6 +5776,17 @@ class ASTLowering:
         self.builder.call(Label("_TASK_ACT_DEC"), comment="signal activation complete")
 
         # Lower task body statements (with exception handlers if present)
+        # In Ada, an unhandled exception in a task body silently terminates
+        # the task (ARM 11.4.1(7)). We always wrap task body statements with
+        # an implicit catch-all handler that calls _TASK_TRM.
+        implicit_handler_label = self._new_label("task_exc")
+        self.builder.emit(IRInstr(
+            OpCode.EXC_PUSH,
+            dst=Label(implicit_handler_label),
+            src1=Immediate(0, IRType.WORD),  # 0 = catch all
+        ))
+        self.ctx.exception_handler_stack.append((1, None))
+
         if decl.handled_exception_handlers:
             self._lower_block_with_handlers(
                 decl.statements, decl.handled_exception_handlers
@@ -5784,10 +5795,16 @@ class ASTLowering:
             for stmt in decl.statements:
                 self._lower_statement(stmt)
 
-        # At end of task body, call task termination
+        # Normal exit: pop implicit handler, terminate task
+        self.builder.emit(IRInstr(OpCode.EXC_POP))
+        self.ctx.exception_handler_stack.pop()
         self.builder.call(Label("_TASK_TRM"))
+        self.builder.ret()
 
-        # Return (though task terminate doesn't return)
+        # Implicit exception handler: silently terminate the task
+        exc_block = self.builder.new_block(implicit_handler_label)
+        self.builder.set_block(exc_block)
+        self.builder.call(Label("_TASK_TRM"))
         self.builder.ret()
 
         # Restore task body declarations
@@ -6321,6 +6338,7 @@ class ASTLowering:
         """Lower: SELECT accept E1; OR accept E2; OR terminate; END SELECT;
 
         Server-side selective accept with entry ID registration.
+        Guards (WHEN condition =>) are evaluated to skip closed alternatives.
         """
         end_label = self._new_label("select_end")
         alt_labels = []
@@ -6328,17 +6346,26 @@ class ASTLowering:
         # Emit select start (resets entry count)
         self.builder.call(Label("_SELC_ST"))
 
-        # Find terminate alternative index (if any)
-        terminate_index = 0xFFFF  # no terminate
-        for i, alt in enumerate(stmt.alternatives):
-            if hasattr(alt, 'is_terminate') and alt.is_terminate:
-                terminate_index = i
-                break
+        # Initialize terminate_index to 0xFFFF (no terminate)
+        init_term = self.builder.new_vreg(IRType.WORD, "_term_init")
+        self.builder.mov(init_term, Immediate(0xFFFF, IRType.WORD))
+        self.builder.store(
+            MemoryLocation(is_global=True, symbol_name="_select_term_idx",
+                           ir_type=IRType.WORD),
+            init_term, comment="init: no terminate")
 
-        # Register entry IDs for each accept alternative
+        # Register entry IDs for each accept alternative, respecting guards
         for i, alt in enumerate(stmt.alternatives):
             alt_label = self._new_label(f"select_alt_{i}")
             alt_labels.append(alt_label)
+
+            skip_label = None
+            if alt.guard is not None:
+                # Evaluate guard condition
+                guard_val = self._lower_expr(alt.guard)
+                skip_label = self._new_label(f"guard_skip_{i}")
+                # If guard is False (0), skip this alternative
+                self.builder.jz(guard_val, Label(skip_label))
 
             if alt.statements and isinstance(alt.statements[0], AcceptStmt):
                 accept = alt.statements[0]
@@ -6349,26 +6376,40 @@ class ASTLowering:
                         entry_id = emap[entry_name_lower]
                         break
                 # Register this entry ID with the runtime
+                # Push alt_index first (higher on stack), then entry_id
+                alt_vreg = self.builder.new_vreg(IRType.WORD, f"_reg_alt_{i}")
+                self.builder.mov(alt_vreg, Immediate(i, IRType.WORD))
+                self.builder.push(alt_vreg)
                 reg_vreg = self.builder.new_vreg(IRType.WORD, f"_reg_eid_{i}")
                 self.builder.mov(reg_vreg, Immediate(entry_id, IRType.WORD))
                 self.builder.push(reg_vreg)
                 self.builder.call(Label("_SELC_REG"),
-                                  comment=f"register entry {accept.entry_name} id={entry_id}")
+                                  comment=f"register entry {accept.entry_name} id={entry_id} alt={i}")
                 discard = self.builder.new_vreg(IRType.WORD, "_discard")
                 self.builder.pop(discard)
+                self.builder.pop(discard)
+
+            if hasattr(alt, 'is_terminate') and alt.is_terminate:
+                # Set terminate_index (inside guard check if guarded)
+                term_vreg = self.builder.new_vreg(IRType.WORD, "_term_idx_g")
+                self.builder.mov(term_vreg, Immediate(i, IRType.WORD))
+                self.builder.store(
+                    MemoryLocation(is_global=True, symbol_name="_select_term_idx",
+                                   ir_type=IRType.WORD),
+                    term_vreg,
+                    comment=f"terminate alt index={i}")
+
+            if skip_label is not None:
+                self.builder.label(skip_label)
 
         # Use 0xFFFE for "else" (don't block, return immediately if no match)
         if stmt.else_statements:
-            terminate_index = 0xFFFE  # special: else alternative
-
-        # Store terminate_index to DSEG variable
-        terminate_vreg = self.builder.new_vreg(IRType.WORD, "_term_idx")
-        self.builder.mov(terminate_vreg, Immediate(terminate_index, IRType.WORD))
-        self.builder.store(
-            MemoryLocation(is_global=True, symbol_name="_select_term_idx",
-                           ir_type=IRType.WORD),
-            terminate_vreg,
-            comment=f"set terminate index={terminate_index}")
+            else_term = self.builder.new_vreg(IRType.WORD, "_term_else")
+            self.builder.mov(else_term, Immediate(0xFFFE, IRType.WORD))
+            self.builder.store(
+                MemoryLocation(is_global=True, symbol_name="_select_term_idx",
+                               ir_type=IRType.WORD),
+                else_term, comment="else alternative")
 
         # Wait for one alternative to be ready
         self.builder.call(Label("_SELC_WT"))
@@ -22621,6 +22662,15 @@ class ASTLowering:
                         MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
                     ))
                     return self_id
+                # Check task_objects for single task / task type instances
+                if self.ctx and pname in self.ctx.task_objects:
+                    return self.ctx.task_objects[pname]
+                # Check enclosing contexts
+                ctx = self.ctx
+                while ctx:
+                    if pname in ctx.task_objects:
+                        return ctx.task_objects[pname]
+                    ctx = ctx.enclosing_ctx
             return self._lower_expr(prefix)
 
         if attr == "callable":

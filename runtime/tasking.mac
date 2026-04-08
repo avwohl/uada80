@@ -171,6 +171,8 @@ _cond_entry_node:
     DS 2            ; saved queue node for conditional entry call
 _select_entry_ids:
     DS 16           ; up to 8 entry IDs for selective accept (2 bytes each)
+_select_alt_ids:
+    DS 16           ; original alternative indices parallel to entry IDs
 _select_entry_cnt:
     DS 1            ; number of entries registered for current select
 
@@ -1105,13 +1107,13 @@ _SELECT_START:
     ret
 
 ; _SELC_REG: Register an entry ID for selective accept
-; Stack: entry_id (2 bytes) at SP+2 (after return addr)
+; Stack: alt_index (2 bytes) at SP+4, entry_id (2 bytes) at SP+2
 ; Called once per accept alternative in a selective accept
 _SELC_REG:
     push IX
     ld IX, 0
     add IX, SP
-    ; IX+0=saved_IX, IX+2=ret_addr, IX+4=entry_id
+    ; IX+0=saved_IX, IX+2=ret_addr, IX+4=entry_id, IX+6=alt_index
     ld L, (IX+4)
     ld H, (IX+5)     ; HL = entry_id
     push DE
@@ -1123,6 +1125,18 @@ _SELC_REG:
     add HL, DE
     add HL, DE       ; HL = &_select_entry_ids[count] (2 bytes each)
     pop DE           ; DE = entry_id
+    ld (HL), E
+    inc HL
+    ld (HL), D
+    ; Store alt_index in parallel array
+    ld A, (_select_entry_cnt)
+    ld E, A
+    ld D, 0
+    ld HL, _select_alt_ids
+    add HL, DE
+    add HL, DE       ; HL = &_select_alt_ids[count] (2 bytes each)
+    ld E, (IX+6)
+    ld D, (IX+7)     ; DE = alt_index
     ld (HL), E
     inc HL
     ld (HL), D
@@ -1178,13 +1192,20 @@ _sw_q_search:
     ld H, (IY+ENTRY_Q_NEXT+1)
     jr _sw_q_search
 _sw_q_match:
-    ; Found! Alternative index is in C
+    ; Found! Registration index is in C — look up original alt_index
     pop HL                ; discard saved entry_id
     pop IX
     pop BC
-    ; Return C as the selected alternative index
+    ; Return _select_alt_ids[C] as the selected alternative index
     ld L, C
     ld H, 0
+    add HL, HL           ; C * 2 (2 bytes per entry)
+    ld DE, _select_alt_ids
+    add HL, DE           ; HL = &_select_alt_ids[C]
+    ld E, (HL)
+    inc HL
+    ld D, (HL)
+    ex DE, HL            ; HL = alt_index
     pop IX
     ei
     ret
