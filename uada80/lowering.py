@@ -1364,8 +1364,23 @@ class ASTLowering:
             self._lower_declaration(decl)
 
         # Wait for task activation if any tasks were created in this scope
-        if self._scope_has_tasks and self._scope_has_tasks[-1]:
+        func_has_tasks = self._scope_has_tasks and self._scope_has_tasks[-1]
+        if func_has_tasks:
             self.builder.call(Label("_TASK_ACT_WAIT"), comment="wait for task activation")
+
+        # If function has tasks, wrap statements in implicit exception handler
+        # to ensure task wait on exception paths (Ada master completion rule)
+        _func_tw_handler = None
+        _func_tw_normal = None
+        if func_has_tasks:
+            _func_tw_handler = self._new_label("fn_tw_exc")
+            _func_tw_normal = self._new_label("fn_tw_ok")
+            self.builder.emit(IRInstr(
+                OpCode.EXC_PUSH,
+                dst=Label(_func_tw_handler),
+                src1=Immediate(0, IRType.WORD),
+            ))
+            self.ctx.exception_handler_stack.append((1, None))
 
         # Process statements (with exception handlers if present)
         if body.handled_exception_handlers:
@@ -1382,8 +1397,16 @@ class ASTLowering:
         self._generate_postconditions(spec)
 
         # Wait for child tasks before returning (Ada master semantics)
-        if self._scope_has_tasks and self._scope_has_tasks[-1]:
+        if func_has_tasks:
+            self.builder.emit(IRInstr(OpCode.EXC_POP))
+            self.ctx.exception_handler_stack.pop()
             self.builder.call(Label("_TASK_WAI"), comment="wait for child tasks")
+            self.builder.jmp(Label(_func_tw_normal))
+            exc_block = self.builder.new_block(_func_tw_handler)
+            self.builder.set_block(exc_block)
+            self.builder.call(Label("_TASK_WAI"), comment="wait for child tasks (exc path)")
+            self.builder.call(Label("_exc_do_raise"), comment="re-raise after task wait")
+            self.builder.label(_func_tw_normal)
 
         # Pop scope task tracking
         if self._scope_has_tasks:
@@ -1938,8 +1961,14 @@ class ASTLowering:
                 if init_ada_type and isinstance(init_expr, Aggregate):
                     if not getattr(init_expr, 'resolved_type', None):
                         init_expr.resolved_type = init_ada_type
+                # Set fixed-point context for Duration/fixed-point literals
+                old_fx_delta = getattr(self, '_fixed_point_context_delta', None)
+                from uada80.type_system import FixedType as _FxTypePkgInit
+                if isinstance(init_ada_type, _FxTypePkgInit):
+                    self._fixed_point_context_delta = getattr(init_ada_type, 'delta', None) or getattr(init_ada_type, 'small', None)
                 # Evaluate the initializer
                 value = self._lower_expr(init_expr)
+                self._fixed_point_context_delta = old_fx_delta
                 if global_size > 2:
                     # Composite type: value is address of source data, use memcpy
                     dst_addr = self.builder.new_vreg(IRType.PTR, f"_init_dst")
@@ -2007,7 +2036,13 @@ class ASTLowering:
             if init_ada_type and isinstance(init_expr, Aggregate):
                 if not getattr(init_expr, 'resolved_type', None):
                     init_expr.resolved_type = init_ada_type
+            # Set fixed-point context for Duration/fixed-point literals
+            old_fx_delta = getattr(self, '_fixed_point_context_delta', None)
+            from uada80.type_system import FixedType as _FxTypePkgInit2
+            if isinstance(init_ada_type, _FxTypePkgInit2):
+                self._fixed_point_context_delta = getattr(init_ada_type, 'delta', None) or getattr(init_ada_type, 'small', None)
             value = self._lower_expr(init_expr)
+            self._fixed_point_context_delta = old_fx_delta
             if global_size > 2:
                 dst_addr = self.builder.new_vreg(IRType.PTR, f"_init_dst")
                 self.builder.lea(
@@ -2533,7 +2568,13 @@ class ASTLowering:
                 if init_ada_type and isinstance(init_expr, Aggregate):
                     if not getattr(init_expr, 'resolved_type', None):
                         init_expr.resolved_type = init_ada_type
+                # Set fixed-point context for Duration/fixed-point literals
+                _ofx = getattr(self, '_fixed_point_context_delta', None)
+                from uada80.type_system import FixedType as _FxTP
+                if isinstance(init_ada_type, _FxTP):
+                    self._fixed_point_context_delta = getattr(init_ada_type, 'delta', None) or getattr(init_ada_type, 'small', None)
                 value = self._lower_expr(init_expr)
+                self._fixed_point_context_delta = _ofx
                 global_size = 2
                 if self.builder.module and global_name in self.builder.module.globals:
                     _, global_size = self.builder.module.globals[global_name]
@@ -2702,7 +2743,13 @@ class ASTLowering:
                 if init_ada_type and isinstance(init_expr, Aggregate):
                     if not getattr(init_expr, 'resolved_type', None):
                         init_expr.resolved_type = init_ada_type
+                # Set fixed-point context for Duration/fixed-point literals
+                _ofx = getattr(self, '_fixed_point_context_delta', None)
+                from uada80.type_system import FixedType as _FxTP
+                if isinstance(init_ada_type, _FxTP):
+                    self._fixed_point_context_delta = getattr(init_ada_type, 'delta', None) or getattr(init_ada_type, 'small', None)
                 value = self._lower_expr(init_expr)
+                self._fixed_point_context_delta = _ofx
                 global_size = 2
                 if self.builder.module and global_name in self.builder.module.globals:
                     _, global_size = self.builder.module.globals[global_name]
@@ -6399,6 +6446,31 @@ class ASTLowering:
                     term_vreg,
                     comment=f"terminate alt index={i}")
 
+            # Check for delay alternative (first statement is DelayStmt)
+            if (alt.statements and isinstance(alt.statements[0], DelayStmt)
+                    and not isinstance(alt.statements[0], AcceptStmt)):
+                delay_stmt = alt.statements[0]
+                # Evaluate delay expression with Duration fixed-point context
+                old_fx_delta = getattr(self, '_fixed_point_context_delta', None)
+                from uada80.type_system import PREDEFINED_TYPES
+                duration_type = PREDEFINED_TYPES.get("Duration")
+                if duration_type:
+                    self._fixed_point_context_delta = getattr(duration_type, 'delta', None)
+                delay_val = self._lower_expr(delay_stmt.expression)
+                self._fixed_point_context_delta = old_fx_delta
+                # Store delay ticks
+                self.builder.store(
+                    MemoryLocation(is_global=True, symbol_name="_seldl_t",
+                                   ir_type=IRType.WORD),
+                    delay_val, comment=f"select delay ticks, alt={i}")
+                # Store delay alternative index
+                dly_idx = self.builder.new_vreg(IRType.WORD, "_dly_idx")
+                self.builder.mov(dly_idx, Immediate(i, IRType.WORD))
+                self.builder.store(
+                    MemoryLocation(is_global=True, symbol_name="_seldl_i",
+                                   ir_type=IRType.WORD),
+                    dly_idx, comment=f"select delay alt index={i}")
+
             if skip_label is not None:
                 self.builder.label(skip_label)
 
@@ -6467,6 +6539,9 @@ class ASTLowering:
                                   comment="terminate alternative")
             elif hasattr(alt, 'statements'):
                 for s in alt.statements:
+                    # Skip the delay stmt in delay alternatives (timeout already served)
+                    if isinstance(s, DelayStmt):
+                        continue
                     self._lower_statement(s)
             self.builder.jmp(Label(end_label))
 
@@ -6490,8 +6565,15 @@ class ASTLowering:
         if self.ctx is None:
             return
 
+        # Set fixed-point context for Duration literals
+        old_fx_delta = getattr(self, '_fixed_point_context_delta', None)
+        from uada80.type_system import PREDEFINED_TYPES
+        duration_type = PREDEFINED_TYPES.get("Duration")
+        if duration_type:
+            self._fixed_point_context_delta = getattr(duration_type, 'delta', None)
         # Evaluate the delay expression
         delay_val = self._lower_expr(stmt.expression)
+        self._fixed_point_context_delta = old_fx_delta
         self.builder.push(delay_val)
 
         if stmt.is_until:
@@ -8397,8 +8479,25 @@ class ASTLowering:
             self._lower_declaration(decl)
 
         # Wait for task activation before entering block statements
-        if self._scope_has_tasks and self._scope_has_tasks[-1]:
+        block_has_tasks = self._scope_has_tasks and self._scope_has_tasks[-1]
+        if block_has_tasks:
             self.builder.call(Label("_TASK_ACT_WAIT"), comment="wait for task activation")
+
+        # If block has tasks, wrap ALL statements (including explicit handlers)
+        # in an implicit exception handler that waits for child tasks before
+        # propagating exceptions. Ada requires master completion even on
+        # exception paths (ARM 9.3).
+        implicit_task_handler = None
+        task_normal_exit = None
+        if block_has_tasks:
+            implicit_task_handler = self._new_label("blk_tw_exc")
+            task_normal_exit = self._new_label("blk_tw_ok")
+            self.builder.emit(IRInstr(
+                OpCode.EXC_PUSH,
+                dst=Label(implicit_task_handler),
+                src1=Immediate(0, IRType.WORD),  # 0 = catch all
+            ))
+            self.ctx.exception_handler_stack.append((1, None))
 
         # Check if we have exception handlers
         if stmt.handled_exception_handlers:
@@ -8415,8 +8514,18 @@ class ASTLowering:
         self._current_body_declarations = saved_body_decls
 
         # Wait for child tasks before leaving scope (Ada master semantics)
-        if self._scope_has_tasks and self._scope_has_tasks[-1]:
+        if block_has_tasks:
+            # Normal exit: pop implicit handler, wait for tasks
+            self.builder.emit(IRInstr(OpCode.EXC_POP))
+            self.ctx.exception_handler_stack.pop()
             self.builder.call(Label("_TASK_WAI"), comment="wait for child tasks")
+            self.builder.jmp(Label(task_normal_exit))
+            # Exception path: wait for tasks, then re-raise
+            exc_block = self.builder.new_block(implicit_task_handler)
+            self.builder.set_block(exc_block)
+            self.builder.call(Label("_TASK_WAI"), comment="wait for child tasks (exc path)")
+            self.builder.call(Label("_exc_do_raise"), comment="re-raise after task wait")
+            self.builder.label(task_normal_exit)
 
         # Pop scope task tracking
         if self._scope_has_tasks:

@@ -70,6 +70,8 @@
     PUBLIC _PROT_REB        ; re-evaluate barriers
     PUBLIC _REQUEUE         ; requeue statement
     PUBLIC _select_term_idx ; terminate index for SELECT_WAIT
+    PUBLIC _seldl_t         ; delay ticks for SELECT_WAIT delay alt
+    PUBLIC _seldl_i         ; delay alt index for SELECT_WAIT
     PUBLIC _SELC_TRM        ; alias
     PUBLIC _ENTRY_COND_CALL ; conditional entry call
     PUBLIC _ENTR_CND        ; alias for conditional entry call
@@ -116,7 +118,7 @@ TCB_PARENT_IX   EQU 16   ; parent's frame pointer (2 bytes)
 ; Configuration
 MAX_TASKS       EQU 8
 TCB_SIZE        EQU 18
-DEFAULT_STACK   EQU 256  ; bytes per task stack
+DEFAULT_STACK   EQU 512  ; bytes per task stack
 TIME_SLICE      EQU 10   ; ticks per time slice
 DEFAULT_PRIO    EQU 128  ; default task priority (mid-range)
 
@@ -139,7 +141,7 @@ _task_current:
 _task_ready_head:
     DS 2            ; head of ready queue
 _task_count:
-    DS 1            ; number of active tasks
+    DS 2            ; number of active tasks (word for safe LD HL access)
 _task_next_id:
     DS 2            ; next task ID to assign
 _tick_count:
@@ -176,6 +178,10 @@ _select_alt_ids:
     DS 16           ; original alternative indices parallel to entry IDs
 _select_entry_cnt:
     DS 2            ; number of entries registered for current select
+_seldl_t:
+    DS 2            ; delay ticks for delay alternative (0 = no delay)
+_seldl_i:
+    DS 2            ; alternative index to return if delay expires
 
 ; =========================================
 ; Code Section
@@ -291,7 +297,16 @@ _ud_loop:
     pop IX
     ld A, (IX+TCB_STATE)
     cp TASK_WAITING
+    jr Z, _ud_has_delay
+    cp TASK_ACCEPT_WAIT
     jr NZ, _ud_next
+    ; ACCEPT_WAIT: only decrement if delay_ticks > 0 (select delay alt)
+    ld E, (IX+TCB_DELAY_TICKS)
+    ld D, (IX+TCB_DELAY_TICKS+1)
+    ld A, D
+    or E
+    jr Z, _ud_next        ; no delay set, pure accept wait
+_ud_has_delay:
     ; Check if delay has expired
     ld E, (IX+TCB_DELAY_TICKS)
     ld D, (IX+TCB_DELAY_TICKS+1)
@@ -318,6 +333,11 @@ _ud_next:
 ; _do_schedule: Find next ready task and switch to it
 ; -----------------------------------------
 _do_schedule:
+    ; Set scheduler lock to prevent timer ISR from calling _do_schedule
+    ; while we are already inside it (the halt loop enables interrupts
+    ; so the ISR can fire _update_delays, but must not re-enter scheduler)
+    ld A, 1
+    ld (_scheduler_lock), A
     ; Save current task's SP
     ld HL, (_task_current)
     ld A, H
@@ -382,6 +402,8 @@ _sched_no_wrap:
     cp TASK_MASTER_WAIT
     jr Z, _sched_found
     ; No ready task found at all — enable interrupts and wait
+    ; (scheduler_lock stays set so ISR won't call _do_schedule,
+    ;  but _update_delays still runs to decrement delay counters)
     ei
     halt             ; wait for interrupt (timer tick)
     di
@@ -389,6 +411,9 @@ _sched_no_wrap:
     ld HL, _tcb_array
     jr _sched_check_task
 _sched_found:
+    ; Clear scheduler lock before switching
+    xor A
+    ld (_scheduler_lock), A
     ; Switch to new task
     ld (_task_current), HL
     ; restore SP from (HL) - TCB+0
@@ -1105,6 +1130,7 @@ _ecc_no_alloc:
 _SELECT_START:
     ld HL, 0
     ld (_select_entry_cnt), HL
+    ld (_seldl_t), HL       ; reset delay ticks (no delay)
     ret
 
 ; _SELC_REG: Register an entry ID for selective accept
@@ -1240,7 +1266,38 @@ _sw_has_alt:
     or L
     jr NZ, _sw_terminate  ; HL != 0 means should terminate
 _sw_block:
-    ; Block and wait for entry call
+    ; Check for delay alternative before blocking
+    ld HL, (_seldl_t)
+    ld A, H
+    or L
+    jr Z, _sw_block_indef   ; no delay, block indefinitely
+    ; Has delay alternative — set delay counter and block
+    ld HL, (_task_current)
+    push HL
+    pop IX
+    ld HL, (_seldl_t)
+    ld (IX+TCB_DELAY_TICKS), L
+    ld (IX+TCB_DELAY_TICKS+1), H
+    ld A, TASK_ACCEPT_WAIT  ; still ACCEPT_WAIT so entries can find us
+    ld (IX+TCB_STATE), A
+    call _do_schedule
+    ; Woken up — either entry arrived or delay expired
+    ; Check if delay expired (delay_ticks == 0)
+    ld HL, (_task_current)
+    push HL
+    pop IX
+    ld A, (IX+TCB_DELAY_TICKS)
+    ld L, A
+    ld A, (IX+TCB_DELAY_TICKS+1)
+    or L
+    jr NZ, _sw_check        ; delay not expired, entry must have arrived
+    ; Delay expired — return delay alternative index
+    ld HL, (_seldl_i)
+    pop IX
+    ei
+    ret
+_sw_block_indef:
+    ; Block indefinitely — wait for entry call
     ld HL, (_task_current)
     push HL
     pop IX
@@ -1512,6 +1569,7 @@ _tterm_true:
 ; Output: HL = number of pending calls
 ; -----------------------------------------
 _ENTR_CNT:
+    di
     push DE
     push BC
     push IX
@@ -1547,6 +1605,7 @@ _ecnt_done:
     pop IX
     pop BC
     pop DE
+    ei
     ret
 
 ; =========================================

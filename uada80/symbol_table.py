@@ -1233,10 +1233,10 @@ class SymbolTable:
         day_duration_type = FixedType(
             name="Day_Duration",
             kind=TypeKind.FIXED,
-            size_bits=32,
+            size_bits=16,
             delta=duration_type.delta,
             range_first=0.0,
-            range_last=86400.0,
+            range_last=duration_type.range_last,
             base_type=duration_type,
         )
 

@@ -1119,13 +1119,15 @@ def create_predefined_types() -> dict[str, AdaType]:
     )
 
     # Duration type (fixed point for time intervals)
+    # 16-bit with delta=0.01 (centisecond resolution): 1 raw unit ≈ 1 timer tick
+    # Range: -327.68s to +327.67s (sufficient for tasking tests)
     types["Duration"] = FixedType(
         name="Duration",
         kind=TypeKind.FIXED,
-        size_bits=32,
-        delta=0.000001,  # 1 microsecond resolution
-        range_first=-86400.0,  # -1 day
-        range_last=86400.0,  # +1 day
+        size_bits=16,
+        delta=0.01,  # 10ms resolution, ~1 tick per unit
+        range_first=-327.68,
+        range_last=327.67,
     )
 
     return types

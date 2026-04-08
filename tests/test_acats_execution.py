@@ -347,7 +347,7 @@ def compile_and_run_acats(test_files, timeout=5.0):
         run_cmd = [CPMEMU_CMD, "--z80"]
         asm_text = asm_file.read_text()
         if "TASK_INI" in asm_text or "_TASK_INI" in asm_text:
-            run_cmd.extend(["--int-cycles=50000"])
+            run_cmd.extend(["--int-cycles=10000"])
         run_cmd.append(str(com_file))
         try:
             proc = subprocess.run(
