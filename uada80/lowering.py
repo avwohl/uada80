@@ -307,6 +307,7 @@ class ASTLowering:
         self._task_type_names: set[str] = set()
         # Track all task entry names for fallback entry call detection
         self._task_entry_names: set[str] = set()
+        self._task_entry_family_names: set[str] = set()  # entries that are families
         # Stack tracking whether current scope created tasks (for _TASK_WAI)
         self._scope_has_tasks: list[bool] = []
         # Map (task_type_name_lower) -> {entry_name_lower: entry_id}
@@ -690,6 +691,11 @@ class ASTLowering:
         def find_calls(node):
             if node is None:
                 return
+            if isinstance(node, Identifier):
+                # Parameterless function calls parse as Identifier
+                iname = node.name.lower()
+                if iname in self._nested_outer_vars:
+                    called_funcs.add(iname)
             if isinstance(node, ProcedureCallStmt):
                 if isinstance(node.name, Identifier):
                     called_funcs.add(node.name.name.lower())
@@ -1195,6 +1201,11 @@ class ASTLowering:
                         name = node.name.lower()
                         if name not in task_local_names:
                             task_shared_vars.add(name)
+                            # Parameterless function calls parse as Identifier
+                            # — follow transitive outer vars
+                            if name in self._nested_outer_vars:
+                                for v in self._nested_outer_vars[name]:
+                                    task_shared_vars.add(v)
                     # Also check for function calls (may need forwarded outer vars)
                     if isinstance(node, (ProcedureCallStmt, FunctionCall)):
                         call_name = None
@@ -5679,6 +5690,8 @@ class ASTLowering:
                 if hasattr(entry, 'name'):
                     self._task_entry_names.add(entry.name.lower())
                     entry_id_map[entry.name.lower()] = i + 1
+                    if getattr(entry, 'family_index', None) is not None:
+                        self._task_entry_family_names.add(entry.name.lower())
             self._task_entry_ids[task_name_lower] = entry_id_map
         # Track single tasks for entry call detection in lowering
         if getattr(decl, 'is_single', False):
@@ -6144,15 +6157,31 @@ class ASTLowering:
 
         # Look up deterministic entry ID (must match caller's entry stub)
         entry_name_lower = stmt.entry_name.lower()
-        entry_id = 1  # default fallback
+        base_entry_id = 1  # default fallback
         for task_name, entry_map in self._task_entry_ids.items():
             if entry_name_lower in entry_map:
-                entry_id = entry_map[entry_name_lower]
+                base_entry_id = entry_map[entry_name_lower]
                 break
 
-        # Use ENTRY_ACCEPT IR opcode — returns params_ptr in dst
-        entry_id_vreg = self.builder.new_vreg(IRType.WORD, "_entry_id")
-        self.builder.mov(entry_id_vreg, Immediate(entry_id, IRType.WORD))
+        # For entry families, combine base_id with family index: entry_id = base_id * 256 + index
+        if stmt.entry_index is not None:
+            family_idx_vreg = self._lower_expr(stmt.entry_index)
+            scaled_base = self.builder.new_vreg(IRType.WORD, "_scaled_base")
+            self.builder.emit(IRInstr(
+                OpCode.MUL, scaled_base,
+                Immediate(base_entry_id, IRType.WORD),
+                Immediate(256, IRType.WORD),
+                comment="scale base entry id for accept family"
+            ))
+            entry_id_vreg = self.builder.new_vreg(IRType.WORD, "_entry_id")
+            self.builder.emit(IRInstr(
+                OpCode.ADD, entry_id_vreg, scaled_base, family_idx_vreg,
+                comment="combine with accept family index"
+            ))
+        else:
+            # Use ENTRY_ACCEPT IR opcode — returns params_ptr in dst
+            entry_id_vreg = self.builder.new_vreg(IRType.WORD, "_entry_id")
+            self.builder.mov(entry_id_vreg, Immediate(base_entry_id, IRType.WORD))
         params_ptr_vreg = self.builder.new_vreg(IRType.PTR, "_accept_params")
         self.builder.entry_accept(params_ptr_vreg, entry_id_vreg,
                                    comment=f"accept {stmt.entry_name}")
@@ -6417,21 +6446,38 @@ class ASTLowering:
             if alt.statements and isinstance(alt.statements[0], AcceptStmt):
                 accept = alt.statements[0]
                 entry_name_lower = accept.entry_name.lower()
-                entry_id = 0
+                base_entry_id = 0
                 for _tn, emap in self._task_entry_ids.items():
                     if entry_name_lower in emap:
-                        entry_id = emap[entry_name_lower]
+                        base_entry_id = emap[entry_name_lower]
                         break
                 # Register this entry ID with the runtime
                 # Push alt_index first (higher on stack), then entry_id
                 alt_vreg = self.builder.new_vreg(IRType.WORD, f"_reg_alt_{i}")
                 self.builder.mov(alt_vreg, Immediate(i, IRType.WORD))
                 self.builder.push(alt_vreg)
-                reg_vreg = self.builder.new_vreg(IRType.WORD, f"_reg_eid_{i}")
-                self.builder.mov(reg_vreg, Immediate(entry_id, IRType.WORD))
-                self.builder.push(reg_vreg)
+                # For entry families, compute combined ID
+                if accept.entry_index is not None:
+                    family_idx_vreg = self._lower_expr(accept.entry_index)
+                    scaled_base = self.builder.new_vreg(IRType.WORD, f"_sb_{i}")
+                    self.builder.emit(IRInstr(
+                        OpCode.MUL, scaled_base,
+                        Immediate(base_entry_id, IRType.WORD),
+                        Immediate(256, IRType.WORD),
+                        comment=f"scale base entry id for select family"
+                    ))
+                    combined_eid = self.builder.new_vreg(IRType.WORD, f"_ceid_{i}")
+                    self.builder.emit(IRInstr(
+                        OpCode.ADD, combined_eid, scaled_base, family_idx_vreg,
+                        comment=f"combine with select family index"
+                    ))
+                    self.builder.push(combined_eid)
+                else:
+                    reg_vreg = self.builder.new_vreg(IRType.WORD, f"_reg_eid_{i}")
+                    self.builder.mov(reg_vreg, Immediate(base_entry_id, IRType.WORD))
+                    self.builder.push(reg_vreg)
                 self.builder.call(Label("_SELC_REG"),
-                                  comment=f"register entry {accept.entry_name} id={entry_id} alt={i}")
+                                  comment=f"register entry {accept.entry_name} id={base_entry_id} alt={i}")
                 discard = self.builder.new_vreg(IRType.WORD, "_discard")
                 self.builder.pop(discard)
                 self.builder.pop(discard)
@@ -8839,6 +8885,133 @@ class ASTLowering:
                         self.builder.pop(temp)
                     return
 
+        # Check if this is an entry family call: T.EF(family_idx)(params...)
+        # Parses as IndexedComponent(prefix=SelectedName(T, EF), indices=[family_idx])
+        if isinstance(stmt.name, IndexedComponent) and isinstance(stmt.name.prefix, SelectedName):
+            ic_prefix = stmt.name.prefix  # SelectedName(T, EF)
+            selector = ic_prefix.selector
+            prefix = ic_prefix.prefix  # T
+            if selector.lower() in self._task_entry_family_names:
+                # This is an entry family call
+                task_id_vreg = None
+                prefix_name = None
+                if isinstance(prefix, Identifier):
+                    prefix_name = prefix.name.lower()
+                    if self.ctx and prefix_name in self.ctx.task_objects:
+                        task_id_vreg = self.ctx.task_objects[prefix_name]
+                    else:
+                        task_sym = self.symbols.lookup(prefix_name) if self.symbols else None
+                        if task_sym and hasattr(task_sym, 'ada_type') and isinstance(task_sym.ada_type, TaskType):
+                            if self.ctx and prefix_name in self.ctx.locals:
+                                task_id_vreg = self.ctx.locals[prefix_name].vreg
+                            else:
+                                try:
+                                    task_id_vreg = self._lower_expr(prefix)
+                                except Exception:
+                                    pass
+                        elif task_sym and task_sym.kind in (SymbolKind.TASK, SymbolKind.TASK_TYPE):
+                            try:
+                                task_id_vreg = self._lower_expr(prefix)
+                            except Exception:
+                                pass
+                        if task_id_vreg is None and self.ctx and prefix_name in self.ctx.params:
+                            param_type_name = self.ctx.param_types.get(prefix_name, "")
+                            if param_type_name in self._task_type_names:
+                                task_id_vreg = self.ctx.params[prefix_name]
+                        if task_id_vreg is None and prefix_name in self._task_entry_names:
+                            try:
+                                task_id_vreg = self._lower_expr(prefix)
+                            except Exception:
+                                pass
+                else:
+                    try:
+                        task_id_vreg = self._lower_expr(prefix)
+                    except Exception:
+                        pass
+
+                if task_id_vreg is not None:
+                    # Look up base entry ID
+                    selector_lower = selector.lower()
+                    base_entry_id = 1
+                    for tn, emap in self._task_entry_ids.items():
+                        if selector_lower in emap:
+                            base_entry_id = emap[selector_lower]
+                            break
+
+                    # Evaluate family index from IndexedComponent indices
+                    family_idx_expr = stmt.name.indices[0] if stmt.name.indices else None
+                    if family_idx_expr:
+                        family_idx_vreg = self._lower_expr(family_idx_expr)
+                    else:
+                        family_idx_vreg = self.builder.new_vreg(IRType.WORD, "_fidx")
+                        self.builder.mov(family_idx_vreg, Immediate(0, IRType.WORD))
+
+                    # Compute combined entry_id = base_id * 256 + family_index
+                    scaled_base = self.builder.new_vreg(IRType.WORD, "_scaled_base")
+                    self.builder.emit(IRInstr(
+                        OpCode.MUL, scaled_base,
+                        Immediate(base_entry_id, IRType.WORD),
+                        Immediate(256, IRType.WORD),
+                        comment="scale base entry id for family"
+                    ))
+                    combined_id = self.builder.new_vreg(IRType.WORD, "_combined_id")
+                    self.builder.emit(IRInstr(
+                        OpCode.ADD, combined_id, scaled_base, family_idx_vreg,
+                        comment="combine with family index"
+                    ))
+
+                    # Build parameter block from stmt.args
+                    from uada80.ast_nodes import ActualParameter
+                    num_params = len(stmt.args) if stmt.args else 0
+                    param_arg_exprs = list(stmt.args) if stmt.args else []
+                    base_offset = 0
+                    if num_params > 0:
+                        block_size = num_params * 2
+                        base_offset = -(self.ctx.function.locals_size + block_size)
+                        self.ctx.function.locals_size += block_size
+                        for i, arg in enumerate(param_arg_exprs):
+                            val = self._lower_expr(arg)
+                            slot_offset = base_offset + i * 2
+                            self.builder.store(
+                                MemoryLocation(ir_type=IRType.WORD, offset=slot_offset,
+                                               is_frame_offset=True),
+                                val, comment=f"entry family param[{i}]")
+                        params_ptr = self.builder.new_vreg(IRType.PTR, "_params_ptr")
+                        self.builder.emit(IRInstr(
+                            OpCode.LEA, params_ptr,
+                            MemoryLocation(offset=base_offset, ir_type=IRType.PTR,
+                                           is_frame_offset=True),
+                            comment="addr of entry family param block"
+                        ))
+                    else:
+                        params_ptr = None
+
+                    # Emit entry call with combined ID
+                    self.builder.entry_call(task_id_vreg, combined_id,
+                                            params_ptr=params_ptr,
+                                            comment=f"entry family call {prefix_name or '?'}.{selector}")
+
+                    # Copy OUT/IN-OUT values back
+                    for i, arg in enumerate(param_arg_exprs):
+                        actual = arg.value if isinstance(arg, ActualParameter) else arg
+                        if isinstance(actual, Identifier):
+                            name = actual.name.lower()
+                            slot_offset = base_offset + i * 2
+                            out_val = self.builder.new_vreg(IRType.WORD, "_ep_out")
+                            self.builder.load(out_val,
+                                MemoryLocation(ir_type=IRType.WORD, offset=slot_offset,
+                                               is_frame_offset=True),
+                                comment=f"read back family param[{i}]")
+                            if self.ctx and name in self.ctx.locals:
+                                self.builder.mov(self.ctx.locals[name].vreg, out_val)
+                            elif self.ctx and name in self.ctx.params:
+                                if name in self.ctx.byref_params:
+                                    self.builder.store(
+                                        MemoryLocation(ir_type=IRType.WORD,
+                                                       addr_vreg=self.ctx.params[name]),
+                                        out_val)
+                    return
+
         # Check if this is a task entry call (T.E style)
         if isinstance(stmt.name, SelectedName):
             prefix = stmt.name.prefix
@@ -9028,19 +9201,28 @@ class ASTLowering:
             if task_id_vreg is not None:
                 # This is a task entry call — emit _ENTRY_CL
                 # Use deterministic entry ID matching accept side
-                entry_id = 1  # fallback
+                base_entry_id = 1  # fallback
                 selector_lower = selector.lower()
                 for tn, emap in self._task_entry_ids.items():
                     if selector_lower in emap:
-                        entry_id = emap[selector_lower]
+                        base_entry_id = emap[selector_lower]
                         break
 
-                # Build contiguous parameter block in caller's frame
-                # Reserve N*2 bytes at a known frame offset
+                # Check if this is an entry family call
+                # For families, first arg is family index, rest are params
+                is_family = selector_lower in self._task_entry_family_names
                 from uada80.ast_nodes import ActualParameter
-                num_params = len(stmt.args) if stmt.args else 0
-                param_arg_exprs = list(stmt.args) if stmt.args else []
+                all_args = list(stmt.args) if stmt.args else []
+                family_idx_expr = None
+                if is_family and all_args:
+                    family_idx_expr = all_args[0]
+                    param_arg_exprs = all_args[1:]
+                else:
+                    param_arg_exprs = all_args
 
+                # Build contiguous parameter block in caller's frame
+                num_params = len(param_arg_exprs)
+                base_offset = 0
                 if num_params > 0:
                     block_size = num_params * 2
                     # Reserve space in function's locals area
@@ -9067,9 +9249,26 @@ class ASTLowering:
                 else:
                     params_ptr = None
 
-                # Emit entry call via IR opcode
-                entry_id_vreg = self.builder.new_vreg(IRType.WORD, "_entry_id")
-                self.builder.mov(entry_id_vreg, Immediate(entry_id, IRType.WORD))
+                # Compute entry ID (with family index if applicable)
+                if is_family and family_idx_expr is not None:
+                    # Evaluate family index
+                    fi_actual = family_idx_expr.value if isinstance(family_idx_expr, ActualParameter) else family_idx_expr
+                    fi_vreg = self._lower_expr(fi_actual)
+                    scaled_base = self.builder.new_vreg(IRType.WORD, "_scaled_base")
+                    self.builder.emit(IRInstr(
+                        OpCode.MUL, scaled_base,
+                        Immediate(base_entry_id, IRType.WORD),
+                        Immediate(256, IRType.WORD),
+                        comment="scale base entry id for family"
+                    ))
+                    entry_id_vreg = self.builder.new_vreg(IRType.WORD, "_entry_id")
+                    self.builder.emit(IRInstr(
+                        OpCode.ADD, entry_id_vreg, scaled_base, fi_vreg,
+                        comment="combine with family index"
+                    ))
+                else:
+                    entry_id_vreg = self.builder.new_vreg(IRType.WORD, "_entry_id")
+                    self.builder.mov(entry_id_vreg, Immediate(base_entry_id, IRType.WORD))
                 self.builder.entry_call(task_id_vreg, entry_id_vreg,
                                         params_ptr=params_ptr,
                                         comment=f"entry call {prefix_name or '?'}.{selector}")
