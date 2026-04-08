@@ -76,6 +76,7 @@
     PUBLIC _select_entry_ids ; entry IDs for selective accept
     PUBLIC _select_entry_cnt ; entry count for selective accept
     PUBLIC _SELC_REG        ; register entry ID for selective accept
+    PUBLIC _ENTR_CNT        ; E'Count (entry count)
     PUBLIC _PAR_STR         ; parallel start
     PUBLIC _PAR_SST         ; parallel sequence start
     PUBLIC _PAR_SEN         ; parallel sequence end
@@ -174,7 +175,7 @@ _select_entry_ids:
 _select_alt_ids:
     DS 16           ; original alternative indices parallel to entry IDs
 _select_entry_cnt:
-    DS 1            ; number of entries registered for current select
+    DS 2            ; number of entries registered for current select
 
 ; =========================================
 ; Code Section
@@ -1102,8 +1103,8 @@ _ecc_no_alloc:
 ; _SELECT_START: Begin a select statement
 ; Resets the entry count for selective accept
 _SELECT_START:
-    xor A
-    ld (_select_entry_cnt), A
+    ld HL, 0
+    ld (_select_entry_cnt), HL
     ret
 
 ; _SELC_REG: Register an entry ID for selective accept
@@ -1501,6 +1502,49 @@ _TSK_TERM:
     ret
 _tterm_true:
     ld HL, 1
+    pop BC
+    pop DE
+    ret
+
+; -----------------------------------------
+; _ENTR_CNT: Count pending entry calls for a given entry_id (E'Count)
+; Input: entry_id on stack at (SP+2) [caller pushes before call]
+; Output: HL = number of pending calls
+; -----------------------------------------
+_ENTR_CNT:
+    push DE
+    push BC
+    push IX
+    ; Load entry_id from stack: ret_addr(2) + DE(2) + BC(2) + IX(2) = SP+8
+    ld HL, 8
+    add HL, SP
+    ld E, (HL)
+    inc HL
+    ld D, (HL)        ; DE = wanted entry_id
+    ; Walk queue, count matches
+    ld BC, 0           ; BC = count
+    ld HL, (_entry_queue_head)
+_ecnt_loop:
+    ld A, H
+    or L
+    jr Z, _ecnt_done   ; end of queue
+    push HL
+    pop IX              ; IX = current node
+    ld A, (IX+ENTRY_Q_ENTRY_ID)
+    cp E
+    jr NZ, _ecnt_next
+    ld A, (IX+ENTRY_Q_ENTRY_ID+1)
+    cp D
+    jr NZ, _ecnt_next
+    inc BC              ; match found
+_ecnt_next:
+    ld L, (IX+ENTRY_Q_NEXT)
+    ld H, (IX+ENTRY_Q_NEXT+1)
+    jr _ecnt_loop
+_ecnt_done:
+    push BC
+    pop HL              ; HL = count
+    pop IX
     pop BC
     pop DE
     ret

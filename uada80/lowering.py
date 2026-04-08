@@ -6411,6 +6411,31 @@ class ASTLowering:
                                ir_type=IRType.WORD),
                 else_term, comment="else alternative")
 
+        # If any alternatives have guards, check if all are closed (PROGRAM_ERROR)
+        has_guards = any(alt.guard is not None for alt in stmt.alternatives)
+        if has_guards and not stmt.else_statements:
+            # Read _select_entry_cnt; if 0 and _select_term_idx == 0xFFFF, raise PROGRAM_ERROR
+            ok_label = self._new_label("select_ok")
+            cnt_vreg = self.builder.new_vreg(IRType.WORD, "_sel_cnt")
+            self.builder.load(cnt_vreg,
+                MemoryLocation(is_global=True, symbol_name="_select_entry_cnt",
+                               ir_type=IRType.BYTE),
+                comment="check entry count")
+            self.builder.jnz(cnt_vreg, Label(ok_label))
+            # cnt == 0: check if terminate is also absent
+            tidx = self.builder.new_vreg(IRType.WORD, "_sel_tidx")
+            self.builder.load(tidx,
+                MemoryLocation(is_global=True, symbol_name="_select_term_idx",
+                               ir_type=IRType.WORD),
+                comment="check terminate index")
+            chk = self.builder.new_vreg(IRType.WORD, "_sel_chk")
+            self.builder.cmp_ne(chk, tidx, Immediate(0xFFFF, IRType.WORD))
+            self.builder.jnz(chk, Label(ok_label))
+            # All closed: raise PROGRAM_ERROR
+            self.builder.call(Label("_raise_program_error"),
+                              comment="all alternatives closed")
+            self.builder.label(ok_label)
+
         # Wait for one alternative to be ready
         self.builder.call(Label("_SELC_WT"))
 
@@ -22714,9 +22739,30 @@ class ASTLowering:
 
         if attr == "count":
             # E'Count - returns number of calls queued on entry E
-            # For Z80 single-threaded tasking, always 0
+            # Look up the entry_id and call _ENTR_CNT
+            entry_name = None
+            if isinstance(expr.prefix, Identifier):
+                entry_name = expr.prefix.name.lower()
+            elif isinstance(expr.prefix, SelectedName):
+                entry_name = expr.prefix.selector.lower()
+            entry_id = 0
+            if entry_name:
+                for _tn, emap in self._task_entry_ids.items():
+                    if entry_name in emap:
+                        entry_id = emap[entry_name]
+                        break
+            eid_vreg = self.builder.new_vreg(IRType.WORD, "_eid_cnt")
+            self.builder.mov(eid_vreg, Immediate(entry_id, IRType.WORD))
+            self.builder.push(eid_vreg)
+            self.builder.call(Label("_ENTR_CNT"), comment=f"E'Count for {entry_name}")
             result = self.builder.new_vreg(IRType.WORD, "_count")
-            self.builder.mov(result, Immediate(0, IRType.WORD))
+            self.builder.emit(IRInstr(
+                OpCode.MOV, result,
+                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                comment="entry count from HL"
+            ))
+            temp = self.builder.new_vreg(IRType.WORD, "_discard")
+            self.builder.pop(temp)
             return result
 
         if attr == "storage_size":
