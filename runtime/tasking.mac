@@ -294,13 +294,14 @@ _ud_loop:
     ld D, (IX+TCB_DELAY_TICKS+1)
     ld A, D
     or E
-    jr Z, _ud_next        ; already zero
+    jr Z, _ud_wake        ; zero ticks = wake immediately
     dec DE
     ld (IX+TCB_DELAY_TICKS), E
     ld (IX+TCB_DELAY_TICKS+1), D
     ld A, D
     or E
     jr NZ, _ud_next       ; still waiting
+_ud_wake:
     ; Delay expired - wake the task
     ld A, TASK_READY
     ld (IX+TCB_STATE), A
@@ -587,10 +588,22 @@ _TASK_TERMINATE:
 
 ; -----------------------------------------
 ; _TASK_DELAY: Delay for HL ticks
+; If HL=0, just yield once (don't block forever)
 ; -----------------------------------------
 _TASK_DELAY:
     push IX         ; save caller's frame pointer
     di
+    ; Check for zero delay — just yield
+    ld A, H
+    or L
+    jr NZ, _td_nonzero
+    ; Zero delay — yield once and return
+    call _do_schedule
+    ei
+    pop IX
+    ret
+_td_nonzero:
+    ; Ensure at least 1 tick delay
     push HL           ; save ticks to delay
     ld HL, (_task_current)
     push HL
