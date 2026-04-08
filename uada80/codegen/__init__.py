@@ -6801,7 +6801,12 @@ class Z80CodeGen:
         vregs: set[int] = set()
         for block in func.blocks:
             for instr in block.instructions:
-                for operand in [instr.dst, instr.src1, instr.src2]:
+                operands = [instr.dst, instr.src1, instr.src2]
+                # Include extra_src if present (e.g., for ENTRY_COND_CALL params_ptr)
+                extra = getattr(instr, 'extra_src', None)
+                if extra is not None:
+                    operands.append(extra)
+                for operand in operands:
                     if isinstance(operand, VReg) and operand.id not in param_ids:
                         vregs.add(operand.id)
                     elif isinstance(operand, MemoryLocation):
@@ -6964,6 +6969,8 @@ class Z80CodeGen:
             self._gen_task_delay_until(instr)
         elif op == OpCode.ENTRY_CALL:
             self._gen_entry_call(instr)
+        elif op == OpCode.ENTRY_COND_CALL:
+            self._gen_entry_cond_call(instr)
         elif op == OpCode.ENTRY_ACCEPT:
             self._gen_entry_accept(instr)
         elif op == OpCode.INLINE_ASM:
@@ -8203,6 +8210,36 @@ class Z80CodeGen:
         self._emit_instr("pop", "hl")
         self._emit_instr("pop", "hl")
         self._emit_instr("pop", "hl")
+
+    def _gen_entry_cond_call(self, instr: IRInstr) -> None:
+        """Generate ENTRY_COND_CALL instruction.
+
+        Like ENTRY_CALL but non-blocking. Returns 0 in HL if rendezvous happened,
+        1 if not possible. Result stored in dst vreg.
+        """
+        self._emit("    ; conditional entry call")
+        # Push params_ptr (from extra_src, or 0 if not set)
+        params_ptr = getattr(instr, 'extra_src', None)
+        if params_ptr is not None:
+            self._load_to_hl(params_ptr)
+        else:
+            self._emit_instr("ld", "hl", "0")
+        self._emit_instr("push", "hl")
+        # Push task ID
+        self._load_to_hl(instr.src1)
+        self._emit_instr("push", "hl")
+        # Push entry ID
+        self._load_to_hl(instr.src2)
+        self._emit_instr("push", "hl")
+        # Call conditional entry
+        self._emit_instr("call", "_ENTR_CND")
+        # Clean up stack (3 words)
+        self._emit_instr("pop", "de")
+        self._emit_instr("pop", "de")
+        self._emit_instr("pop", "de")
+        # HL = 0 (success) or 1 (failure), store to dst
+        if instr.dst is not None:
+            self._store_from_hl(instr.dst)
 
     def _gen_entry_accept(self, instr: IRInstr) -> None:
         """Generate ENTRY_ACCEPT instruction.

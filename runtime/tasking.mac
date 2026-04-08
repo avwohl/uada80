@@ -71,6 +71,11 @@
     PUBLIC _REQUEUE         ; requeue statement
     PUBLIC _select_term_idx ; terminate index for SELECT_WAIT
     PUBLIC _SELC_TRM        ; alias
+    PUBLIC _ENTRY_COND_CALL ; conditional entry call
+    PUBLIC _ENTR_CND        ; alias for conditional entry call
+    PUBLIC _select_entry_ids ; entry IDs for selective accept
+    PUBLIC _select_entry_cnt ; entry count for selective accept
+    PUBLIC _SELC_REG        ; register entry ID for selective accept
     PUBLIC _PAR_STR         ; parallel start
     PUBLIC _PAR_SST         ; parallel sequence start
     PUBLIC _PAR_SEN         ; parallel sequence end
@@ -162,6 +167,12 @@ _activation_count:
     DS 2            ; number of tasks pending activation
 _select_term_idx:
     DS 2            ; terminate alternative index for SELECT_WAIT
+_cond_entry_node:
+    DS 2            ; saved queue node for conditional entry call
+_select_entry_ids:
+    DS 16           ; up to 8 entry IDs for selective accept (2 bytes each)
+_select_entry_cnt:
+    DS 1            ; number of entries registered for current select
 
 ; =========================================
 ; Code Section
@@ -910,32 +921,285 @@ _eae_done:
     ret
 
 ; -----------------------------------------
+; _ENTRY_COND_CALL: Conditional entry call (non-blocking)
+; Stack: entry_id, task_id, params_ptr (same as _ENTRY_CALL)
+; Output: HL = 0 if rendezvous happened, HL = 1 if not possible
+; Does NOT block — takes else branch if entry can't be immediately serviced
+; -----------------------------------------
+_ENTRY_COND_CALL:
+    di
+    push IX
+    ld IX, 0
+    add IX, SP
+    ; IX+0=saved_IX, IX+2=ret_addr, IX+4=entry_id, IX+6=task_id, IX+8=params
+    ; Read all params
+    ld L, (IX+6)     ; task_id
+    ld H, (IX+7)
+    push HL          ; save task_id
+    ld E, (IX+4)     ; entry_id
+    ld D, (IX+5)
+    push DE          ; save entry_id
+    ld L, (IX+8)     ; params_ptr
+    ld H, (IX+9)
+    push HL          ; save params_ptr
+    ; Allocate queue node
+    call _entry_alloc
+    ld A, H
+    or L
+    jr Z, _ecc_no_alloc
+    ; HL = queue node
+    push HL
+    pop IX           ; IX = queue node
+    ; Set caller TCB
+    ld HL, (_task_current)
+    ld (IX+ENTRY_Q_CALLER), L
+    ld (IX+ENTRY_Q_CALLER+1), H
+    ; Fill from saved values on stack
+    pop HL           ; params_ptr
+    ld (IX+ENTRY_Q_PARAMS), L
+    ld (IX+ENTRY_Q_PARAMS+1), H
+    pop HL           ; entry_id
+    ld (IX+ENTRY_Q_ENTRY_ID), L
+    ld (IX+ENTRY_Q_ENTRY_ID+1), H
+    ; Add to queue head
+    ld HL, (_entry_queue_head)
+    ld (IX+ENTRY_Q_NEXT), L
+    ld (IX+ENTRY_Q_NEXT+1), H
+    push IX
+    pop HL
+    ld (_entry_queue_head), HL
+    ; Save our queue node address for later check
+    ld (_cond_entry_node), HL
+    ; Stay READY (don't set ENTRY_WAIT)
+    ; Wake target if it's in ACCEPT_WAIT
+    pop HL           ; task_id
+    call _find_task_by_id
+    ld A, H
+    or L
+    jr Z, _ecc_yield
+    push HL
+    pop IY
+    ld A, (IY+TCB_STATE)
+    cp TASK_ACCEPT_WAIT
+    jr NZ, _ecc_yield
+    ld A, TASK_READY
+    ld (IY+TCB_STATE), A
+_ecc_yield:
+    ; Yield once to let target run
+    call _do_schedule
+    ; Back from yield — check if our node was consumed
+    ; Search entry queue for our saved node pointer
+    ld DE, (_cond_entry_node)    ; DE = our node address
+    ld HL, _entry_queue_head
+_ecc_search:
+    ld C, (HL)
+    inc HL
+    ld B, (HL)       ; BC = current node ptr
+    ld A, B
+    or C
+    jr Z, _ecc_consumed  ; end of queue — our node was consumed
+    ; Check if BC == DE (our node)
+    ld A, C
+    cp E
+    jr NZ, _ecc_search_next
+    ld A, B
+    cp D
+    jr Z, _ecc_still_queued
+_ecc_search_next:
+    ; Move to next: HL = &(BC->next)
+    push BC
+    pop IX
+    ld HL, 0
+    add HL, BC       ; HL = node address (ENTRY_Q_NEXT is at offset 0)
+    jr _ecc_search
+_ecc_consumed:
+    ; Node was consumed — rendezvous happened, success!
+    pop IX
+    ei
+    ld HL, 0
+    ret
+_ecc_still_queued:
+    ; Node still in queue — rendezvous didn't happen
+    ; Remove our node from the queue
+    ; We need to find the node and unlink it
+    ; DE = our node address
+    ; Walk queue again to find prev
+    ld HL, _entry_queue_head
+    ld IY, 0         ; prev = NULL (meaning head)
+_ecc_remove_search:
+    ld C, (HL)
+    inc HL
+    ld B, (HL)       ; BC = current node
+    ld A, C
+    cp E
+    jr NZ, _ecc_rm_next
+    ld A, B
+    cp D
+    jr Z, _ecc_rm_found
+_ecc_rm_next:
+    push BC
+    pop IY           ; prev = current node
+    ld HL, 0
+    add HL, BC       ; HL = &current->next
+    jr _ecc_remove_search
+_ecc_rm_found:
+    ; BC = our node (== DE), IY = prev (or 0 if head)
+    push DE
+    pop IX           ; IX = our node
+    ld E, (IX+ENTRY_Q_NEXT)
+    ld D, (IX+ENTRY_Q_NEXT+1)   ; DE = next node
+    ; Check if we're at head
+    push IY
+    pop HL
+    ld A, H
+    or L
+    jr NZ, _ecc_rm_mid
+    ; Unlinking from head
+    ld (_entry_queue_head), DE
+    jr _ecc_rm_done
+_ecc_rm_mid:
+    ld (IY+ENTRY_Q_NEXT), E
+    ld (IY+ENTRY_Q_NEXT+1), D
+_ecc_rm_done:
+    ; Free the node
+    push IX
+    pop HL
+    call _entry_free
+    ; Return failure
+    pop IX
+    ei
+    ld HL, 1
+    ret
+_ecc_no_alloc:
+    ; No queue node available — return failure (take else branch)
+    pop HL           ; params_ptr
+    pop HL           ; entry_id
+    pop HL           ; task_id
+    pop IX
+    ei
+    ld HL, 1
+    ret
+
+; -----------------------------------------
 ; Select statement support
 ; -----------------------------------------
 
 ; _SELECT_START: Begin a select statement
+; Resets the entry count for selective accept
 _SELECT_START:
-    ret              ; placeholder for future guard evaluation
+    xor A
+    ld (_select_entry_cnt), A
+    ret
+
+; _SELC_REG: Register an entry ID for selective accept
+; Stack: entry_id (2 bytes) at SP+2 (after return addr)
+; Called once per accept alternative in a selective accept
+_SELC_REG:
+    push IX
+    ld IX, 0
+    add IX, SP
+    ; IX+0=saved_IX, IX+2=ret_addr, IX+4=entry_id
+    ld L, (IX+4)
+    ld H, (IX+5)     ; HL = entry_id
+    push DE
+    ld A, (_select_entry_cnt)
+    ld E, A
+    ld D, 0
+    push HL          ; save entry_id
+    ld HL, _select_entry_ids
+    add HL, DE
+    add HL, DE       ; HL = &_select_entry_ids[count] (2 bytes each)
+    pop DE           ; DE = entry_id
+    ld (HL), E
+    inc HL
+    ld (HL), D
+    ; Increment count
+    ld A, (_select_entry_cnt)
+    inc A
+    ld (_select_entry_cnt), A
+    pop DE
+    pop IX
+    ret
 
 ; _SELECT_WAIT: Wait for one of the registered alternatives
 ; Reads _select_term_idx for terminate alternative index (0xFFFF = no terminate)
-; Output: HL = selected alternative index (0 for first accept, or terminate index)
+; Reads _select_entry_ids[0.._select_entry_cnt-1] for registered entry IDs
+; Output: HL = selected alternative index (matching entry index, or terminate index)
 _SELECT_WAIT:
     di
     push IX
 _sw_check:
-    ; Check if any entry call is pending
+    ; Search queue for any entry matching our registered entry IDs
+    ld A, (_select_entry_cnt)
+    or A
+    jr Z, _sw_no_entries   ; no entries registered, check terminate
+    ; For each registered entry ID, search the queue
+    ld B, A               ; B = entry count
+    ld C, 0               ; C = current alternative index
+    ld IX, _select_entry_ids
+_sw_try_entry:
+    push BC
+    push IX
+    ; Get entry ID at IX
+    ld L, (IX+0)
+    ld H, (IX+1)          ; HL = wanted entry_id
+    ; Search entry queue for this entry_id
+    push HL
     ld HL, (_entry_queue_head)
+_sw_q_search:
     ld A, H
     or L
-    jr NZ, _sw_found
-    ; No calls pending — check terminate alternative
+    jr Z, _sw_q_not_found  ; end of queue
+    push HL
+    pop IY                ; IY = current node
+    ld E, (IY+ENTRY_Q_ENTRY_ID)
+    ld D, (IY+ENTRY_Q_ENTRY_ID+1)
+    pop HL                ; HL = wanted entry_id
+    push HL
+    or A
+    sbc HL, DE
+    jr Z, _sw_q_match     ; found matching entry!
+    add HL, DE            ; restore HL
+    ; Move to next node
+    ld L, (IY+ENTRY_Q_NEXT)
+    ld H, (IY+ENTRY_Q_NEXT+1)
+    jr _sw_q_search
+_sw_q_match:
+    ; Found! Alternative index is in C
+    pop HL                ; discard saved entry_id
+    pop IX
+    pop BC
+    ; Return C as the selected alternative index
+    ld L, C
+    ld H, 0
+    pop IX
+    ei
+    ret
+_sw_q_not_found:
+    pop HL                ; discard saved entry_id
+    pop IX
+    pop BC
+    ; Try next entry
+    inc IX
+    inc IX                ; advance to next entry_id (2 bytes)
+    inc C                 ; next alternative index
+    djnz _sw_try_entry
+_sw_no_entries:
+    ; No matching entries pending — check terminate/else alternative
     ld HL, (_select_term_idx)
+    ; Check for 0xFFFF (no terminate) — must block
     ld A, H
-    and L
-    cp 0FFH          ; 0xFFFF = no terminate
-    jr Z, _sw_block
-    ; Terminate alternative available — check if all others done/waiting
+    cp 0FFH
+    jr NZ, _sw_has_alt  ; high byte != FF, it's a valid alternative index
+    ld A, L
+    cp 0FFH
+    jr Z, _sw_block     ; 0xFFFF = no terminate/else, must block
+    cp 0FEH
+    jr Z, _sw_else      ; 0xFFFE = else alternative, return immediately
+    ; High byte FF but not FFFF or FFFE — treat as block
+    jr _sw_block
+_sw_has_alt:
+    ; HL is a valid terminate alternative index — check if should terminate
     call _sw_check_terminate
     ld A, H
     or L
@@ -950,11 +1214,11 @@ _sw_block:
     call _do_schedule
     ; Woken up — check again
     jr _sw_check
-_sw_found:
-    ; Entry call available — return 0 (first alternative)
+_sw_else:
+    ; Else alternative — return 0xFFFE immediately
+    ld HL, 0FFFEH
     pop IX
     ei
-    ld HL, 0
     ret
 _sw_terminate:
     ; Fire terminate alternative — return terminate_index in HL
@@ -1225,6 +1489,7 @@ _ENTRY_AE:  jp _ENTRY_ACCEPT_END
 _SELC_ST:   jp _SELECT_START
 _SELC_WT:   jp _SELECT_WAIT
 _SELC_EN:   jp _SELECT_END
+_ENTR_CND:  jp _ENTRY_COND_CALL
 _SELC_TRM:  ; alias for _select_term_idx (data label, not code)
 ; _PROT_LCK and _PROT_ULK are in protlock.mac
 

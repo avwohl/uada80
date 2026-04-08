@@ -3055,10 +3055,91 @@ _year:
     LD HL, 1901
     RET
 
-; _split - Ada.Calendar.Split stub
-; No-op implementation
+; _split - Ada.Calendar.Split
+; Input: stack params (C convention, right-to-left push order):
+;   IX+4 = Time pointer, IX+6 = Year addr, IX+8 = Month addr,
+;   IX+10 = Day addr, IX+12 = Seconds addr
+; Writes default values to out params (1901, 1, 1, 0)
 ; ============================================================
-; _split already defined elsewhere for string splitting
+    PUBLIC _split
+_split:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+    ; Year = 1901
+    LD L, (IX+6)
+    LD H, (IX+7)
+    LD (HL), LOW 1901
+    INC HL
+    LD (HL), HIGH 1901
+    ; Month = 1
+    LD L, (IX+8)
+    LD H, (IX+9)
+    LD (HL), 1
+    INC HL
+    LD (HL), 0
+    ; Day = 1
+    LD L, (IX+10)
+    LD H, (IX+11)
+    LD (HL), 1
+    INC HL
+    LD (HL), 0
+    ; Seconds = 0
+    LD L, (IX+12)
+    LD H, (IX+13)
+    LD (HL), 0
+    INC HL
+    LD (HL), 0
+    POP IX
+    RET
+
+; _day - Ada.Calendar.Day
+; Input: IX+4 = Time pointer
+; Output: HL = day number (stub: always 1)
+; ============================================================
+    PUBLIC _day
+_day:
+    LD HL, 1
+    RET
+
+; _seconds - Ada.Calendar.Seconds
+; Input: IX+4 = Time pointer
+; Output: HL = seconds since midnight (stub: always 0)
+; ============================================================
+    PUBLIC _seconds
+_seconds:
+    LD HL, 0
+    RET
+
+; _month - Ada.Calendar.Month
+; Input: IX+4 = Time pointer
+; Output: HL = month (stub: always 1)
+; ============================================================
+    PUBLIC _month
+_month:
+    LD HL, 1
+    RET
+
+; _op_add - Ada.Calendar "+" (Time + Duration -> Time)
+; Input: stack - two 16-bit args (Time ptr, Duration value)
+; Output: HL = result Time pointer (stub: returns first arg)
+; ============================================================
+    PUBLIC _op_add
+_op_add:
+    POP DE          ; return address
+    POP HL          ; first arg (Time ptr or value)
+    PUSH HL         ; restore stack for cleanup
+    PUSH DE         ; restore return address
+    RET
+
+; _op_sub - Ada.Calendar "-" (Time - Time -> Duration, Time - Duration -> Time)
+; Input: stack - two 16-bit args
+; Output: HL = result (stub: returns 0)
+; ============================================================
+    PUBLIC _op_sub
+_op_sub:
+    LD HL, 0
+    RET
 
 ; ============================================================
 ; Tagged Type Dispatch

@@ -217,6 +217,7 @@ class OpCode(Enum):
     TASK_DELAY = auto()  # delay for src1 ticks
     TASK_DELAY_UNTIL = auto()  # delay until src1 time
     ENTRY_CALL = auto()  # call task entry (src1=task_id, src2=entry_id)
+    ENTRY_COND_CALL = auto()  # conditional entry call (dst=result, src1=task_id, src2=entry_id)
     ENTRY_ACCEPT = auto()  # accept entry call (src1=entry_id)
 
 
@@ -649,6 +650,19 @@ class IRBuilder:
         params_ptr is stored in dst field (not a result, but the param block address).
         """
         self.emit(IRInstr(OpCode.ENTRY_CALL, dst=params_ptr, src1=task_id, src2=entry_id, comment=comment))
+
+    def entry_cond_call(self, result: VReg, task_id: IRValue, entry_id: IRValue,
+                        params_ptr: IRValue = None, comment: str = "") -> None:
+        """Emit a conditional entry call (non-blocking).
+
+        result receives 0 if rendezvous happened, 1 if not possible.
+        params_ptr is passed via extra field in comment encoding.
+        """
+        # Use ENTRY_COND_CALL opcode. dst=result, src1=task_id, src2=entry_id
+        # params_ptr encoded as extra_src in the instruction
+        instr = IRInstr(OpCode.ENTRY_COND_CALL, dst=result, src1=task_id, src2=entry_id, comment=comment)
+        instr.extra_src = params_ptr  # Store params_ptr as extra source
+        self.emit(instr)
 
     def entry_accept(self, dst: VReg, entry_id: IRValue, comment: str = "") -> None:
         """Emit an entry accept instruction.

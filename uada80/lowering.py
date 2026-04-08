@@ -311,6 +311,10 @@ class ASTLowering:
         self._scope_has_tasks: list[bool] = []
         # Map (task_type_name_lower) -> {entry_name_lower: entry_id}
         self._task_entry_ids: dict[str, dict[str, int]] = {}
+        # Stack of (task_type_name, entry_ids_map) for unqualified entry call detection
+        # in nested task bodies. Innermost task is last. When an unqualified call
+        # name matches an entry, emit an entry call to the appropriate task.
+        self._task_entry_scope_stack: list[tuple[str, dict[str, int]]] = []
         # Track all tagged types discovered during lowering (for vtable generation)
         self._tagged_types: list[RecordType] = []
         # Track actual assembly labels for primitive operations of tagged types
@@ -1159,8 +1163,23 @@ class ASTLowering:
         # Pre-scan: identify variables shared with task bodies.
         # These are promoted to DSEG (global data) so task bodies can access them
         # regardless of the enclosing scope's stack frame layout.
+        # Also scan DECLARE blocks in statements for task bodies.
         task_shared_vars: set[str] = set()
+        all_task_bodies = []
         for decl_node in body.declarations:
+            if isinstance(decl_node, TaskBody):
+                all_task_bodies.append(decl_node)
+        # Recursively find task bodies in DECLARE blocks (BlockStmt)
+        def _find_task_bodies_in_stmts(stmts):
+            for s in (stmts or []):
+                if isinstance(s, BlockStmt):
+                    for d in (s.declarations or []):
+                        if isinstance(d, TaskBody):
+                            all_task_bodies.append(d)
+                    _find_task_bodies_in_stmts(s.statements)
+        _find_task_bodies_in_stmts(body.statements)
+
+        for decl_node in all_task_bodies:
             if isinstance(decl_node, TaskBody):
                 # Scan this task body for references to enclosing scope variables
                 task_local_names = set()
@@ -1217,6 +1236,16 @@ class ASTLowering:
             if isinstance(decl_node, ObjectDecl):
                 for n in decl_node.names:
                     actual_local_names.add(n.lower())
+        # Also include variables from DECLARE blocks that contain task bodies
+        def _collect_block_locals(stmts):
+            for s in (stmts or []):
+                if isinstance(s, BlockStmt):
+                    for d in (s.declarations or []):
+                        if isinstance(d, ObjectDecl):
+                            for n in d.names:
+                                actual_local_names.add(n.lower())
+                    _collect_block_locals(s.statements)
+        _collect_block_locals(body.statements)
         for var_name in task_shared_vars:
             if var_name in actual_local_names:
                 dseg_label = f"_tsk_sh_{self._new_label('ts')[1:]}"  # unique label
@@ -2716,6 +2745,12 @@ class ASTLowering:
                     decl.spec.name = f"{inst.name}.{original_name}"
                     self._lower_subprogram_body(decl)
                     decl.spec.name = original_name
+                elif isinstance(decl, TaskTypeDecl):
+                    # Lower task type declaration inside generic body
+                    self._lower_task_type_decl(decl)
+                elif isinstance(decl, TaskBody):
+                    # Lower task body inside generic body
+                    self._lower_task_body(decl)
                 elif isinstance(decl, GenericInstantiation):
                     original_name = decl.name
                     decl.name = f"{inst.name}.{original_name}"
@@ -5697,6 +5732,10 @@ class ASTLowering:
         task_name_lower = decl.name.lower()
         if task_name_lower in self._task_entry_ids:
             self._current_task_entry_names = set(self._task_entry_ids[task_name_lower].keys())
+            # Push onto scope stack so nested tasks/procedures can see enclosing entries
+            self._task_entry_scope_stack.append(
+                (task_name_lower, self._task_entry_ids[task_name_lower])
+            )
 
         # Find outer variable references and set up access via DSEG shadows.
         # Variables shared between enclosing scope and task bodies are mirrored
@@ -5758,6 +5797,10 @@ class ASTLowering:
 
         # Restore context and builder state
         self._current_task_entry_names = set()  # Clear task-specific entries
+        # Pop the entry scope stack if we pushed onto it
+        if (self._task_entry_scope_stack and
+                self._task_entry_scope_stack[-1][0] == decl.name.lower()):
+            self._task_entry_scope_stack.pop()
         self._current_task_type_name = old_task_type_name
         self.ctx = old_ctx
         self.builder.function = old_function
@@ -6108,22 +6151,181 @@ class ASTLowering:
     def _lower_select(self, stmt: SelectStmt) -> None:
         """Lower a select statement (selective accept, timed entry, etc.).
 
-        Supports various forms:
-        - Selective accept: select accept E1; or accept E2; end select;
-        - Timed entry call: select call or delay D; end select;
-        - Conditional entry: select call else stmts; end select;
-        - Asynchronous select: select triggering_stmt then abort seq; end select;
-
-        For Z80, we emit runtime calls for the select protocol.
+        Detects the select form and dispatches:
+        - Selective accept: first alternative has AcceptStmt
+        - Conditional entry call: has else_statements (first alt is entry call)
+        - Timed entry call: first alt is entry call, second is delay
+        - Asynchronous select: has then_abort_statements
         """
         if self.ctx is None:
             return
 
-        # Generate labels for each alternative
+        # Determine select form
+        first_alt = stmt.alternatives[0] if stmt.alternatives else None
+        first_stmt = first_alt.statements[0] if first_alt and first_alt.statements else None
+
+        is_selective_accept = isinstance(first_stmt, AcceptStmt)
+        is_conditional_entry = (stmt.else_statements is not None and not is_selective_accept)
+        is_timed_entry = (not is_selective_accept and not is_conditional_entry and
+                          len(stmt.alternatives) >= 2 and
+                          stmt.alternatives[1].statements and
+                          isinstance(stmt.alternatives[1].statements[0], DelayStmt))
+
+        if is_conditional_entry:
+            self._lower_conditional_entry_call(stmt)
+        elif is_timed_entry:
+            self._lower_timed_entry_call(stmt)
+        elif is_selective_accept:
+            self._lower_selective_accept(stmt)
+        else:
+            # Fallback: lower as selective accept (handles ATC etc.)
+            self._lower_selective_accept(stmt)
+
+    def _lower_conditional_entry_call(self, stmt: SelectStmt) -> None:
+        """Lower: SELECT entry_call; ELSE stmts; END SELECT;
+
+        Uses _ENTR_CND for non-blocking entry call attempt.
+        """
+        end_label = self._new_label("cond_end")
+        else_label = self._new_label("cond_else")
+
+        # Extract the entry call from first alternative
+        first_alt = stmt.alternatives[0]
+        entry_stmt = first_alt.statements[0] if first_alt.statements else None
+
+        # Try to emit conditional entry call
+        result_vreg = self._emit_cond_entry_call(entry_stmt)
+
+        if result_vreg is not None:
+            # Branch: HL=0 means success, HL!=0 means take else
+            self.builder.jnz(result_vreg, Label(else_label))
+
+            # Success path: execute remaining statements in first alternative
+            for s in first_alt.statements[1:]:
+                self._lower_statement(s)
+            self.builder.jmp(Label(end_label))
+        else:
+            # Couldn't detect entry call — just lower normally, jump to end
+            for s in first_alt.statements:
+                self._lower_statement(s)
+            self.builder.jmp(Label(end_label))
+
+        # Else path
+        self.builder.label(else_label)
+        if stmt.else_statements:
+            for s in stmt.else_statements:
+                self._lower_statement(s)
+
+        self.builder.label(end_label)
+
+    def _lower_timed_entry_call(self, stmt: SelectStmt) -> None:
+        """Lower: SELECT entry_call; OR DELAY D; stmts; END SELECT;
+
+        For now, implemented as conditional entry call (delay ignored).
+        This is an approximation: if the entry isn't immediately available,
+        the delay alternative is taken.
+        """
+        end_label = self._new_label("timed_end")
+        delay_label = self._new_label("timed_delay")
+
+        first_alt = stmt.alternatives[0]
+        entry_stmt = first_alt.statements[0] if first_alt.statements else None
+
+        result_vreg = self._emit_cond_entry_call(entry_stmt)
+
+        if result_vreg is not None:
+            self.builder.jnz(result_vreg, Label(delay_label))
+            for s in first_alt.statements[1:]:
+                self._lower_statement(s)
+            self.builder.jmp(Label(end_label))
+        else:
+            for s in first_alt.statements:
+                self._lower_statement(s)
+            self.builder.jmp(Label(end_label))
+
+        # Delay alternative
+        self.builder.label(delay_label)
+        delay_alt = stmt.alternatives[1]
+        for s in delay_alt.statements:
+            self._lower_statement(s)
+
+        self.builder.label(end_label)
+
+    def _emit_cond_entry_call(self, entry_stmt) -> 'VReg | None':
+        """Emit a conditional entry call for a ProcedureCallStmt that is an entry call.
+
+        Returns a VReg holding the result (0=success, 1=failure), or None if
+        the statement isn't a recognized entry call.
+        """
+        if not isinstance(entry_stmt, ProcedureCallStmt):
+            return None
+
+        # Check if the call name is a SelectedName (T.Entry)
+        name = entry_stmt.name
+        if not isinstance(name, SelectedName):
+            return None
+
+        # Extract prefix (task variable) and selector (entry name)
+        selector = name.selector if isinstance(name.selector, str) else str(name.selector)
+        selector_lower = selector.lower()
+
+        # Look up entry ID
+        entry_id = None
+        for _tn, emap in self._task_entry_ids.items():
+            if selector_lower in emap:
+                entry_id = emap[selector_lower]
+                break
+        if entry_id is None:
+            return None
+
+        # Lower the prefix to get task_id
+        try:
+            task_id_vreg = self._lower_expr(name.prefix)
+        except Exception:
+            return None
+
+        # Build parameter block
+        from uada80.ast_nodes import ActualParameter
+        num_params = len(entry_stmt.args) if entry_stmt.args else 0
+        params_ptr = None
+
+        if num_params > 0:
+            block_size = num_params * 2
+            base_offset = -(self.ctx.function.locals_size + block_size)
+            self.ctx.function.locals_size += block_size
+            for i, arg in enumerate(entry_stmt.args):
+                val = self._lower_expr(arg)
+                slot_offset = base_offset + i * 2
+                self.builder.store(
+                    MemoryLocation(ir_type=IRType.WORD, offset=slot_offset,
+                                   is_frame_offset=True),
+                    val, comment=f"cond entry param[{i}]")
+            params_ptr = self.builder.new_vreg(IRType.PTR, "_params_ptr")
+            self.builder.emit(IRInstr(
+                OpCode.LEA, params_ptr,
+                MemoryLocation(offset=base_offset, ir_type=IRType.PTR,
+                               is_frame_offset=True),
+                comment="addr of cond entry param block"
+            ))
+
+        # Emit conditional entry call
+        entry_id_vreg = self.builder.new_vreg(IRType.WORD, "_entry_id")
+        self.builder.mov(entry_id_vreg, Immediate(entry_id, IRType.WORD))
+        result = self.builder.new_vreg(IRType.WORD, "_cond_result")
+        self.builder.entry_cond_call(result, task_id_vreg, entry_id_vreg,
+                                     params_ptr=params_ptr,
+                                     comment=f"cond entry call {selector}")
+        return result
+
+    def _lower_selective_accept(self, stmt: SelectStmt) -> None:
+        """Lower: SELECT accept E1; OR accept E2; OR terminate; END SELECT;
+
+        Server-side selective accept with entry ID registration.
+        """
         end_label = self._new_label("select_end")
         alt_labels = []
 
-        # Emit select start
+        # Emit select start (resets entry count)
         self.builder.call(Label("_SELC_ST"))
 
         # Find terminate alternative index (if any)
@@ -6133,12 +6335,33 @@ class ASTLowering:
                 terminate_index = i
                 break
 
-        # Process each alternative
+        # Register entry IDs for each accept alternative
         for i, alt in enumerate(stmt.alternatives):
             alt_label = self._new_label(f"select_alt_{i}")
             alt_labels.append(alt_label)
 
-        # Store terminate_index to DSEG variable for _SELC_WT to read
+            if alt.statements and isinstance(alt.statements[0], AcceptStmt):
+                accept = alt.statements[0]
+                entry_name_lower = accept.entry_name.lower()
+                entry_id = 0
+                for _tn, emap in self._task_entry_ids.items():
+                    if entry_name_lower in emap:
+                        entry_id = emap[entry_name_lower]
+                        break
+                # Register this entry ID with the runtime
+                reg_vreg = self.builder.new_vreg(IRType.WORD, f"_reg_eid_{i}")
+                self.builder.mov(reg_vreg, Immediate(entry_id, IRType.WORD))
+                self.builder.push(reg_vreg)
+                self.builder.call(Label("_SELC_REG"),
+                                  comment=f"register entry {accept.entry_name} id={entry_id}")
+                discard = self.builder.new_vreg(IRType.WORD, "_discard")
+                self.builder.pop(discard)
+
+        # Use 0xFFFE for "else" (don't block, return immediately if no match)
+        if stmt.else_statements:
+            terminate_index = 0xFFFE  # special: else alternative
+
+        # Store terminate_index to DSEG variable
         terminate_vreg = self.builder.new_vreg(IRType.WORD, "_term_idx")
         self.builder.mov(terminate_vreg, Immediate(terminate_index, IRType.WORD))
         self.builder.store(
@@ -6148,7 +6371,6 @@ class ASTLowering:
             comment=f"set terminate index={terminate_index}")
 
         # Wait for one alternative to be ready
-        # _SELC_WT reads _select_term_idx, returns selected index in HL
         self.builder.call(Label("_SELC_WT"))
 
         # The runtime returns the index of the selected alternative in HL
@@ -6159,6 +6381,13 @@ class ASTLowering:
             comment="selected alternative index"
         ))
 
+        # Check for else branch (selected == 0xFFFE)
+        else_label = self._new_label("select_else") if stmt.else_statements else None
+        if else_label:
+            else_cmp = self.builder.new_vreg(IRType.WORD, "_else_cmp")
+            self.builder.cmp_eq(else_cmp, selected, Immediate(0xFFFE, IRType.WORD))
+            self.builder.jnz(else_cmp, Label(else_label))
+
         # Generate code for each alternative (jump table style)
         for i, alt in enumerate(stmt.alternatives):
             next_label = alt_labels[i + 1] if i + 1 < len(alt_labels) else end_label
@@ -6168,18 +6397,15 @@ class ASTLowering:
 
             self.builder.label(alt_labels[i])
             if hasattr(alt, 'is_terminate') and alt.is_terminate:
-                # Terminate alternative: terminate the task
                 self.builder.call(Label("_TASK_TRM"),
                                   comment="terminate alternative")
             elif hasattr(alt, 'statements'):
-                # Lower the statements for this alternative
                 for s in alt.statements:
                     self._lower_statement(s)
             self.builder.jmp(Label(end_label))
 
         # Handle else clause if present
-        if stmt.else_statements:
-            else_label = self._new_label("select_else")
+        if else_label:
             self.builder.label(else_label)
             for s in stmt.else_statements:
                 self._lower_statement(s)
@@ -8953,6 +9179,53 @@ class ASTLowering:
                             args=stmt.args,
                             span=getattr(stmt, 'span', None),
                         )
+
+            # Check if this is an unqualified task entry call (e.g., E1; or SYNC1;)
+            # within a task body. Walk the task entry scope stack from innermost to
+            # outermost to find which task owns this entry.
+            call_name_lower_entry = stmt.name.name.lower()
+            if self._task_entry_scope_stack and call_name_lower_entry in self._task_entry_names:
+                # Find which task on the scope stack owns this entry
+                for _tesc_task_name, _tesc_entry_map in reversed(self._task_entry_scope_stack):
+                    if call_name_lower_entry in _tesc_entry_map:
+                        # This is an unqualified entry call to task _tesc_task_name
+                        entry_id = _tesc_entry_map[call_name_lower_entry]
+                        # Get self task ID via _TSK_SELF runtime call
+                        self_id = self.builder.new_vreg(IRType.WORD, "_self_tid")
+                        self.builder.call(Label("_TSK_SELF"), comment="get current task ID for entry call")
+                        self.builder.emit(IRInstr(
+                            OpCode.MOV, self_id,
+                            MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
+                        ))
+                        # Build parameter block if any
+                        from uada80.ast_nodes import ActualParameter
+                        num_params = len(stmt.args) if stmt.args else 0
+                        params_ptr = None
+                        if num_params > 0:
+                            block_size = num_params * 2
+                            base_offset = -(self.ctx.function.locals_size + block_size)
+                            self.ctx.function.locals_size += block_size
+                            for i, arg in enumerate(stmt.args if stmt.args else []):
+                                val = self._lower_expr(arg)
+                                slot_offset = base_offset + i * 2
+                                self.builder.store(
+                                    MemoryLocation(ir_type=IRType.WORD, offset=slot_offset,
+                                                   is_frame_offset=True),
+                                    val, comment=f"entry param[{i}]")
+                            params_ptr = self.builder.new_vreg(IRType.PTR, "_params_ptr")
+                            self.builder.emit(IRInstr(
+                                OpCode.LEA, params_ptr,
+                                MemoryLocation(offset=base_offset, ir_type=IRType.PTR,
+                                               is_frame_offset=True),
+                                comment="addr of entry param block"
+                            ))
+                        # Emit the entry call
+                        entry_id_vreg = self.builder.new_vreg(IRType.WORD, "_entry_id")
+                        self.builder.mov(entry_id_vreg, Immediate(entry_id, IRType.WORD))
+                        self.builder.entry_call(self_id, entry_id_vreg,
+                                                params_ptr=params_ptr,
+                                                comment=f"unqualified entry call {call_name_lower_entry}")
+                        return
 
             # Check if this is an access-to-subprogram call (indirect call)
             # Must check BEFORE _resolve_overload, since parameters/variables with
