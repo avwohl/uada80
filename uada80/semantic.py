@@ -7627,8 +7627,9 @@ class SemanticAnalyzer:
                         )
                         return None
 
-        # Check if prefix is a qualified type name (type conversion via SelectedName)
-        # e.g., Ada.Text_IO.Count (I+1)
+        # Check if prefix is a qualified type/function name via SelectedName
+        # e.g., Ada.Text_IO.Count (I+1) for type conversion
+        #   or  Standard.Func(X) for function call
         if isinstance(expr.prefix, SelectedName):
             # Try to look up the type via its package
             # Get the package part (prefix) and type name (selector)
@@ -7659,6 +7660,27 @@ class SemanticAnalyzer:
                                     expr
                                 )
                         return target_type
+                    elif symbol.kind == SymbolKind.FUNCTION:
+                        # Package.Function(Args) — function call
+                        for idx in expr.indices:
+                            self._analyze_expr(idx)
+                        return symbol.return_type if hasattr(symbol, 'return_type') and symbol.return_type else symbol.ada_type
+            # For STANDARD.X: Ada's Standard package implicitly contains all
+            # library-level declarations.  Fall back to global scope lookup.
+            if (prefix_name and prefix_name.lower() == 'standard'
+                    and type_key and type_key not in (pkg_symbol.public_symbols or {})):
+                global_sym = self.symbols.lookup(type_key)
+                if global_sym:
+                    if global_sym.kind == SymbolKind.FUNCTION:
+                        for idx in expr.indices:
+                            self._analyze_expr(idx)
+                        return global_sym.return_type if hasattr(global_sym, 'return_type') and global_sym.return_type else global_sym.ada_type
+                    elif global_sym.kind in (SymbolKind.TYPE, SymbolKind.SUBTYPE):
+                        if len(expr.indices) != 1:
+                            self.error("type conversion takes exactly one argument", expr)
+                            return None
+                        arg_type = self._analyze_expr(expr.indices[0])
+                        return global_sym.ada_type
 
         # Otherwise, it's array indexing
         prefix_type = self._analyze_expr(expr.prefix)

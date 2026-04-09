@@ -3592,6 +3592,10 @@ class ASTLowering:
                             dst=local_addr,
                             src1=MemoryLocation(offset=frame_offset, ir_type=IRType.PTR, is_frame_offset=True),
                         ))
+                        # Range check on float64 init value before copying
+                        if ada_type and self._type_needs_range_check(ada_type):
+                            self._emit_float64_range_check(src_ptr,
+                                float(ada_type.range_first), float(ada_type.range_last))
                         # Copy 8 bytes from source to local
                         self.builder.push(src_ptr)
                         self.builder.push(local_addr)
@@ -4683,6 +4687,48 @@ class ASTLowering:
 
         # Re-register the subtype in the current scope so it's visible during lowering.
         ada_type = getattr(decl, 'ada_type', None)
+
+        # When inside a generic instantiation, the subtype indication may refer
+        # to a generic formal type parameter (e.g., "subtype SI is I" where I is
+        # a formal).  Resolve to the actual type so attributes like 'First/'Last
+        # reflect the real type bounds.
+        if ada_type is not None and self._generic_type_map:
+            base_name = None
+            if hasattr(decl, 'subtype_indication') and decl.subtype_indication:
+                tm = decl.subtype_indication.type_mark
+                if isinstance(tm, Identifier):
+                    base_name = tm.name
+                elif isinstance(tm, SelectedName):
+                    base_name = self._get_hierarchical_name(tm)
+            if base_name and base_name.lower() in self._generic_type_map:
+                actual_type = self._generic_actual_types.get(base_name.lower())
+                if actual_type is None:
+                    actual_name = self._generic_type_map[base_name.lower()]
+                    actual_sym = self.symbols.lookup(actual_name)
+                    if actual_sym and actual_sym.ada_type:
+                        actual_type = actual_sym.ada_type
+                if actual_type is not None:
+                    # For unconstrained subtypes ("subtype SI is I"), use the
+                    # actual type directly.  For constrained subtypes
+                    # ("subtype SI is I range ..."), create a subtype with the
+                    # actual as base.
+                    has_constraint = (hasattr(decl, 'subtype_indication')
+                                     and decl.subtype_indication
+                                     and decl.subtype_indication.constraint)
+                    if not has_constraint:
+                        ada_type = actual_type
+                    else:
+                        # Keep the constrained subtype but update its base type
+                        if hasattr(ada_type, 'base_type'):
+                            ada_type.base_type = actual_type
+                        # Copy attributes from actual type if missing
+                        from uada80.type_system import IntegerType as _IntT
+                        if isinstance(actual_type, _IntT) and isinstance(ada_type, _IntT):
+                            if ada_type.low == 0 and ada_type.high == 0:
+                                ada_type.low = actual_type.low
+                                ada_type.high = actual_type.high
+                    decl.ada_type = ada_type
+
         if ada_type and not self.symbols.is_defined_locally(decl.name):
             sym = Symbol(
                 name=decl.name,
@@ -14086,12 +14132,13 @@ class ASTLowering:
                     low_bound = round(rf / delta)
                     high_bound = round(rl / delta)
 
-        # For FloatType, skip range checks entirely.
-        # Float64 values are stored as 6-byte memory structures (pointers),
-        # so integer comparison against bounds is meaningless. Proper float
-        # range checking would require float64 comparison routines.
+        # For FloatType, use _f64_cmp for range checking if bounds are present
         from uada80.type_system import FloatType as _FlType
         if isinstance(target_type, _FlType):
+            rf = target_type.range_first
+            rl = target_type.range_last
+            if rf is not None and rl is not None and self._is_float64_type(target_type):
+                self._emit_float64_range_check(value, float(rf), float(rl))
             return
 
         if low_bound is None or high_bound is None:
@@ -14509,7 +14556,9 @@ class ASTLowering:
                 MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.PTR),
                 comment="result_ptr = SP"
             ))
-            # Push result pointer and integer value
+            # _f64_itof expects: stack[+6]=dest_ptr, stack[+4]=int_value
+            # Push dest_ptr first (goes to higher stack address IX+6,7)
+            # then int_value (goes to lower stack address IX+4,5)
             self.builder.push(result_ptr)
             self.builder.push(int_val)
             self.builder.call(Label("_f64_itof"))
@@ -15152,7 +15201,12 @@ class ASTLowering:
     def _lower_fixed_point_binary(self, op: BinaryOp, left_val, right_val):
         """Lower a fixed-point binary operation.
 
-        Uses runtime functions for 32-bit fixed-point arithmetic.
+        Fixed-point values are stored as 16-bit delta-scaled integers:
+            stored = round(real_value / delta)
+        Add/sub: direct 16-bit arithmetic (same scale).
+        Mul: (a * b) / scale, where scale = round(1/delta).
+        Div: (a * scale) / b, where scale = round(1/delta).
+        Mul/div use _fxmul16/_fxdiv16 with 32-bit intermediate.
         """
         if self.ctx is None:
             return Immediate(0, IRType.WORD)
@@ -15160,58 +15214,70 @@ class ASTLowering:
         result = self.builder.new_vreg(IRType.WORD, "_fixed_result")
 
         if op == BinaryOp.ADD:
-            # Fixed-point addition: just add the 32-bit values
-            # Call _fixed_add(left_hi, left_lo, right_hi, right_lo)
-            self.builder.push(right_val)  # Simplified - push high words
-            self.builder.push(left_val)
-            self.builder.call(Label("_fixed_add"))
-            temp = self.builder.new_vreg(IRType.WORD, "_discard")
-            self.builder.pop(temp)
-            self.builder.pop(temp)
-            self.builder.emit(IRInstr(OpCode.MOV, result,
-                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
-                comment="fixed add result"))
+            # Same scale: just add 16-bit values
+            self.builder.add(result, left_val, right_val)
 
         elif op == BinaryOp.SUB:
-            self.builder.push(right_val)
-            self.builder.push(left_val)
-            self.builder.call(Label("_fixed_sub"))
-            temp = self.builder.new_vreg(IRType.WORD, "_discard")
-            self.builder.pop(temp)
-            self.builder.pop(temp)
-            self.builder.emit(IRInstr(OpCode.MOV, result,
-                MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
-                comment="fixed sub result"))
+            # Same scale: just subtract 16-bit values
+            self.builder.sub(result, left_val, right_val)
 
         elif op == BinaryOp.MUL:
-            # Fixed-point multiply requires scaling: (a * b) >> 16
+            # Fixed-point multiply: result = (a * b) / scale
+            # scale = round(1/delta) so that (a/delta * b/delta) / (1/delta) = a*b/delta
+            scale = self._get_fixed_point_scale()
+            scale_reg = self.builder.new_vreg(IRType.WORD, "_fx_scale")
+            self.builder.emit(IRInstr(OpCode.MOV, scale_reg,
+                Immediate(scale, IRType.WORD), comment=f"fixed-point scale={scale}"))
+            self.builder.push(scale_reg)
             self.builder.push(right_val)
             self.builder.push(left_val)
-            self.builder.call(Label("_fixed_mul"))
-            temp = self.builder.new_vreg(IRType.WORD, "_discard")
-            self.builder.pop(temp)
-            self.builder.pop(temp)
+            self.builder.call(Label("_fxmul16"))
+            # Capture result from HL BEFORE cleaning up stack
             self.builder.emit(IRInstr(OpCode.MOV, result,
                 MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
                 comment="fixed mul result"))
+            # Clean up 3 args (6 bytes) from stack
+            self.builder.emit(IRInstr(
+                OpCode.ADD,
+                MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+                Immediate(6, IRType.WORD),
+                comment="clean up stack after _fxmul16"
+            ))
 
         elif op == BinaryOp.DIV:
-            # Fixed-point divide requires scaling: (a << 16) / b
+            # Fixed-point divide: result = (a * scale) / b
+            scale = self._get_fixed_point_scale()
+            scale_reg = self.builder.new_vreg(IRType.WORD, "_fx_scale")
+            self.builder.emit(IRInstr(OpCode.MOV, scale_reg,
+                Immediate(scale, IRType.WORD), comment=f"fixed-point scale={scale}"))
+            self.builder.push(scale_reg)
             self.builder.push(right_val)
             self.builder.push(left_val)
-            self.builder.call(Label("_fixed_div"))
-            temp = self.builder.new_vreg(IRType.WORD, "_discard")
-            self.builder.pop(temp)
-            self.builder.pop(temp)
+            self.builder.call(Label("_fxdiv16"))
+            # Capture result from HL BEFORE cleaning up stack
             self.builder.emit(IRInstr(OpCode.MOV, result,
                 MemoryLocation(is_global=False, symbol_name="_HL", ir_type=IRType.WORD),
                 comment="fixed div result"))
+            # Clean up 3 args (6 bytes) from stack
+            self.builder.emit(IRInstr(
+                OpCode.ADD,
+                MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+                Immediate(6, IRType.WORD),
+                comment="clean up stack after _fxdiv16"
+            ))
 
         else:
             # For comparison ops, use integer comparison on high word
             return None
 
         return result
+
+    def _get_fixed_point_scale(self):
+        """Get the scale factor (1/delta) for the current fixed-point context."""
+        delta = getattr(self, '_fixed_point_context_delta', None)
+        if delta and delta > 0:
+            return max(1, round(1.0 / delta))
+        return 1  # fallback
 
     # =========================================================================
     # Float64 (IEEE 754 Double Precision) Support
@@ -15418,8 +15484,9 @@ class ASTLowering:
             MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.PTR),
             comment="result_ptr = SP"
         ))
-        self.builder.push(val)
+        # _f64_itof expects: dest_ptr at IX+6 (pushed first), int_value at IX+4 (pushed last)
         self.builder.push(result_ptr)
+        self.builder.push(val)
         self.builder.call(Label("_f64_itof"))
         discard = self.builder.new_vreg(IRType.WORD, "_discard")
         self.builder.pop(discard)
@@ -15457,11 +15524,11 @@ class ASTLowering:
         ))
 
         # Push pointers for function call
-        # Runtime expects: IX+4=a_ptr, IX+6=b_ptr, IX+8=result_ptr
-        # So push order: result first (ends at highest addr), then b, then a
-        self.builder.push(result_ptr)  # result location (IX+8)
-        self.builder.push(right_ptr)   # second operand (IX+6)
-        self.builder.push(left_ptr)    # first operand (IX+4)
+        # Runtime reads: IX+4=a_ptr, IX+6=b_ptr, IX+8=result_ptr
+        # Push order: result first (highest addr IX+8), then b, then a (lowest IX+4)
+        self.builder.push(result_ptr)  # result_ptr (IX+8)
+        self.builder.push(right_ptr)   # b_ptr (IX+6)
+        self.builder.push(left_ptr)    # a_ptr (IX+4)
 
         # Select the right function
         if op == BinaryOp.ADD:
@@ -15623,6 +15690,54 @@ class ASTLowering:
 
         # Result is in the allocated stack space, pointed to by result_ptr
         return result_ptr
+
+    def _emit_float64_range_check(self, value_ptr, low: float, high: float):
+        """Emit runtime range check for Float64 value against float bounds.
+
+        Uses _f64_cmp to compare and raises Constraint_Error if out of range.
+        value_ptr: pointer to the float64 value to check
+        low, high: Python floats for the range bounds
+        """
+        if self.ctx is None:
+            return
+        if self.builder.module:
+            self.builder.module.need_runtime("_f64_cmp")
+            self.builder.module.need_runtime("_raise_constraint_error")
+
+        low_ptr = self._lower_float64_literal(low)
+        high_ptr = self._lower_float64_literal(high)
+
+        # Check value >= low: cmp(value, low), A=-1 means value < low
+        self.builder.push(low_ptr)    # b_ptr (IX+6)
+        self.builder.push(value_ptr)  # a_ptr (IX+4)
+        self.builder.call(Label("_f64_cmp"))
+        self.builder.emit(IRInstr(
+            OpCode.ADD,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            Immediate(4, IRType.WORD),
+            comment="pop _f64_cmp args"
+        ))
+        # A = -1 (0xFF) if value < low. Check: CP 0FFH / JR Z, raise
+        self.builder.emit(IRInstr(
+            OpCode.INLINE_ASM, None, None, None,
+            comment="CP 0FFH\nJR NZ, $+5\nJP _raise_constraint_error"
+        ))
+
+        # Check value <= high: cmp(value, high), A=1 means value > high
+        self.builder.push(high_ptr)   # b_ptr (IX+6)
+        self.builder.push(value_ptr)  # a_ptr (IX+4)
+        self.builder.call(Label("_f64_cmp"))
+        self.builder.emit(IRInstr(
+            OpCode.ADD,
+            MemoryLocation(is_global=False, symbol_name="_SP", ir_type=IRType.WORD),
+            Immediate(4, IRType.WORD),
+            comment="pop _f64_cmp args"
+        ))
+        # A = 1 if value > high. Check: CP 1 / JR Z, raise
+        self.builder.emit(IRInstr(
+            OpCode.INLINE_ASM, None, None, None,
+            comment="CP 1\nJR NZ, $+5\nJP _raise_constraint_error"
+        ))
 
     def _lower_float64_math_attr(self, func_name: str, operand_ptr, operand_type):
         """Lower a Float64 math attribute (floor, ceil, trunc).
@@ -16141,7 +16256,11 @@ class ASTLowering:
         return result_ptr
 
     def _f64_call_binary(self, func_name: str, result_ptr, left_ptr, right_ptr):
-        """Call binary Float64 function: result = func(left, right)."""
+        """Call binary Float64 function: result = func(left, right).
+
+        Runtime reads: IX+4=a_ptr, IX+6=b_ptr, IX+8=result_ptr
+        Push order: result first (highest addr IX+8), b second (IX+6), a last (IX+4).
+        """
         # Register runtime dependencies
         if self.builder.module:
             self.builder.module.need_runtime(func_name)
@@ -16149,9 +16268,9 @@ class ASTLowering:
                 self.builder.module.need_runtime(left_ptr.name)
             if isinstance(right_ptr, Label):
                 self.builder.module.need_runtime(right_ptr.name)
-        self.builder.push(result_ptr)
-        self.builder.push(right_ptr)
-        self.builder.push(left_ptr)
+        self.builder.push(result_ptr)    # result_ptr -> IX+8
+        self.builder.push(right_ptr)     # b_ptr -> IX+6
+        self.builder.push(left_ptr)      # a_ptr -> IX+4
         self.builder.call(Label(func_name))
         self.builder.emit(IRInstr(
             OpCode.ADD,
@@ -18475,8 +18594,16 @@ class ASTLowering:
         elif op == BinaryOp.SUB:
             self.builder.sub(result, left, right)
         elif op == BinaryOp.MUL:
+            if is_fixed:
+                fx_result = self._lower_fixed_point_binary(BinaryOp.MUL, left, right)
+                if fx_result is not None:
+                    return fx_result
             self.builder.mul(result, left, right)
         elif op == BinaryOp.DIV:
+            if is_fixed:
+                fx_result = self._lower_fixed_point_binary(BinaryOp.DIV, left, right)
+                if fx_result is not None:
+                    return fx_result
             self.builder.div(result, left, right)
         elif op == BinaryOp.AND:
             self.builder.and_(result, left, right)
