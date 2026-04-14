@@ -5,7 +5,7 @@ with Ada.Text_IO; use Ada.Text_IO;
 
 package body Ada.Integer_Text_IO is
 
-   Digits : constant String := "0123456789ABCDEF";
+   Digit_Chars : constant String := "0123456789ABCDEF";
 
    -- Helper: Convert integer to string
    procedure Int_To_String
@@ -25,7 +25,7 @@ package body Ada.Integer_Text_IO is
 
       -- Convert to string (reverse order)
       loop
-         Buf (I) := Digits ((Temp mod Base) + 1);
+         Buf (I) := Digit_Chars ((Temp mod Base) + 1);
          Temp := Temp / Base;
          I := I - 1;
          exit when Temp = 0;
@@ -130,27 +130,29 @@ package body Ada.Integer_Text_IO is
          C := Str (I);
          if C in '0' .. '9' then
             Digit := Character'Pos (C) - Character'Pos ('0');
+            if Digit >= B then
+               exit;
+            end if;
+            Result := Result * B + Digit;
          elsif C in 'A' .. 'F' then
             Digit := Character'Pos (C) - Character'Pos ('A') + 10;
+            if Digit >= B then
+               exit;
+            end if;
+            Result := Result * B + Digit;
          elsif C in 'a' .. 'f' then
             Digit := Character'Pos (C) - Character'Pos ('a') + 10;
+            if Digit >= B then
+               exit;
+            end if;
+            Result := Result * B + Digit;
          elsif C = '#' then
-            I := I + 1;  -- Skip trailing #
+            I := I + 1;
             exit;
-         elsif C = '_' then
-            I := I + 1;  -- Skip underscores in numbers
-            goto Continue;
-         else
+         elsif C /= '_' then
             exit;
          end if;
-
-         if Digit >= B then
-            exit;  -- Invalid digit for this base
-         end if;
-
-         Result := Result * B + Digit;
          I := I + 1;
-         <<Continue>>
       end loop;
 
       if Neg then

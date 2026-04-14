@@ -32,10 +32,11 @@ class SourceSpan:
 # ============================================================================
 
 
+@dataclass
 class ASTNode:
     """Base class for all AST nodes."""
 
-    span: Optional[SourceSpan] = None
+    span: Optional[SourceSpan] = field(default=None, repr=False, compare=False, kw_only=True)
 
 
 @dataclass

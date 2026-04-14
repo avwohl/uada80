@@ -191,6 +191,7 @@ class OpCode(Enum):
     # Special
     NOP = auto()  # no operation
     GETSP = auto()  # dst = current stack pointer
+    ALLOCA = auto()  # dst = allocate src1 bytes on stack, dst = new SP
     LABEL = auto()  # label definition (pseudo-instruction)
     INLINE_ASM = auto()  # inline assembly (asm code in comment field)
 

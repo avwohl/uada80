@@ -105,6 +105,8 @@ RUNTIME_CATALOG = {
     "_fix_to_int": RuntimeRoutine("_fix_to_int", RuntimeCategory.FIXED, "Fixed to integer"),
     "_fix_from_int": RuntimeRoutine("_fix_from_int", RuntimeCategory.FIXED, "Integer to fixed"),
     "_fix_cmp": RuntimeRoutine("_fix_cmp", RuntimeCategory.FIXED, "Fixed-point compare"),
+    "_fxmul16": RuntimeRoutine("_fxmul16", RuntimeCategory.FIXED, "Fixed-point 16-bit multiply"),
+    "_fxdiv16": RuntimeRoutine("_fxdiv16", RuntimeCategory.FIXED, "Fixed-point 16-bit divide"),
 
     # =========================================================================
     # String operations (strings.asm)

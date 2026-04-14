@@ -4117,7 +4117,7 @@ def test_character_value_attribute():
         Ada.Integer_Text_IO.Put(Character'Pos(C));
         Ada.Text_IO.New_Line;
 
-        C := Character'Value("B");  -- without quotes
+        C := Character'Value("'B'");  -- with quotes
         Ada.Integer_Text_IO.Put(Character'Pos(C));
         Ada.Text_IO.New_Line;
 
@@ -4156,7 +4156,7 @@ def test_wide_character_value_attribute():
         Ada.Integer_Text_IO.Put(Val);
         Ada.Text_IO.New_Line;
 
-        Val := Wide_Character'Pos(Wide_Character'Value("B"));  -- without quotes
+        Val := Wide_Character'Pos(Wide_Character'Value("'B'"));  -- with quotes
         Ada.Integer_Text_IO.Put(Val);
         Ada.Text_IO.New_Line;
 
@@ -4195,7 +4195,7 @@ def test_wide_wide_character_value_attribute():
         Ada.Integer_Text_IO.Put(Val);
         Ada.Text_IO.New_Line;
 
-        Val := Wide_Wide_Character'Pos(Wide_Wide_Character'Value("B"));  -- without quotes
+        Val := Wide_Wide_Character'Pos(Wide_Wide_Character'Value("'B'"));  -- with quotes
         Ada.Integer_Text_IO.Put(Val);
         Ada.Text_IO.New_Line;
 

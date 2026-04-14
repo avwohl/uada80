@@ -1205,7 +1205,11 @@ _f64_cmp:
         ; Get sign of b
         pop     hl              ; HL = b_ptr (was DE)
         push    hl
+        ld      c, 7            ; Reload C=7 (B may have corrupted BC)
+        ld      a, b            ; Save sign of a
+        ld      b, 0            ; BC = 7
         add     hl, bc
+        ld      b, a            ; Restore B = sign of a
         ld      a, (hl)
         and     80h
         ld      c, a            ; C = sign of b

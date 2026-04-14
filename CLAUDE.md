@@ -40,13 +40,20 @@ tests/            # pytest test suite
 
 ## Running Tests
 
-```bash
-# Full test suite
-pytest tests/ -v -o addopts=""
+**Always run execution tests.** The CP/M emulator (`cpmemu`) is built and available at `../cpmemu/src/cpmemu`. Make sure it is on PATH when running tests. Do not skip execution tests.
 
-# Just execution tests (requires cpmemu)
-pytest tests/test_execution.py -v -o addopts=""
+```bash
+# Full test suite (requires cpmemu on PATH)
+PATH="../cpmemu/src:$PATH" pytest tests/ -v -o addopts=""
+
+# Just execution tests
+PATH="../cpmemu/src:$PATH" pytest tests/test_execution.py -v -o addopts=""
+
+# ACATS conformance tests (end-to-end compile+run on cpmemu)
+PATH="../cpmemu/src:$PATH" pytest tests/test_acats_execution.py -v -o addopts=""
 ```
+
+The `-o addopts=""` flag overrides pyproject.toml defaults (coverage plugins not needed for dev runs).
 
 ## Z80 Assembly Conventions
 
@@ -91,8 +98,9 @@ MP/M provides real tasking via BDOS calls (P_CREATE, Q_MAKE, etc.).
 
 ## CI
 
-- Tests run on Python 3.10-3.12
-- Execution tests skipped in CI (require cpmemu)
+- Tests run on Python 3.10+
+- Execution tests require cpmemu (at `../cpmemu/src/cpmemu`)
+- Tasking tests use MP/M II emulator (at `../mpm2/`)
 - Pylint threshold: 9.5/10
 
 ## Memory Layout (CP/M)
@@ -140,6 +148,16 @@ verbose = 0
 Run with: `cpmemu examples/mytest.cfg`
 
 See `../cpmemu/examples/` for more examples: `example.cfg`, `compiler.cfg`, `simple_test.cfg`.
+
+## Float64 Runtime Calling Convention
+
+Float64 functions use pointer-based arguments passed on stack via PUSH. After `push ix; ld ix,0; add ix,sp`, arguments are at IX+4, IX+6, IX+8 (last pushed = IX+4).
+
+- **Binary ops** (`_f64_add/sub/mul/div`): Push order: result_ptr first (IX+8), b_ptr second (IX+6), a_ptr last (IX+4). Runtime reads a from IX+4, b from IX+6, stores result via IX+8.
+- **`_f64_cmp`**: Push b_ptr first (IX+6), a_ptr last (IX+4). Returns A=-1 (a<b), 0 (a==b), 1 (a>b).
+- **`_f64_copy`**: Push src_ptr first (IX+6), dest_ptr last (IX+4).
+- **`_f64_itof`**: Push dest_ptr first (IX+6), int_value last (IX+4).
+- **`_f64_neg/abs`**: Push src_ptr first (IX+6), dest_ptr last (IX+4).
 
 ## Common Issues
 

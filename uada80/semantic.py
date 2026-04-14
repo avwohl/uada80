@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Tuple
 
 from uada80.ast_nodes import (
     ASTNode,
@@ -1993,6 +1993,11 @@ class SemanticAnalyzer:
         count = 0
         for formal in formals:
             if isinstance(formal, GenericObjectDecl):
+                # Skip use/use-type pseudo-formals injected by the parser for
+                # `use Package;` / `use type Package.Type;` clauses inside the
+                # generic formal part (Ada RM 12.7). They are not real formals.
+                if getattr(formal, 'mode', None) in ("use", "use_type"):
+                    continue
                 # Multi-name declaration like "F, L : E" counts as len(names) parameters
                 names = getattr(formal, 'names', None)
                 if names:
@@ -2121,6 +2126,10 @@ class SemanticAnalyzer:
         expanded_formals: list[tuple[str, object]] = []
         for formal in generic_decl.generic_formals:
             if isinstance(formal, _GOD_map):
+                # Skip use/use-type pseudo-formals injected by the parser for
+                # `use P;` / `use type P.T;` clauses inside the formal part.
+                if getattr(formal, 'mode', None) in ("use", "use_type"):
+                    continue
                 names = getattr(formal, 'names', None) or [formal.name]
                 for n in names:
                     expanded_formals.append((n, formal))
@@ -2378,9 +2387,12 @@ class SemanticAnalyzer:
         # Build type mapping from formal type parameters to actual types
         type_map: dict[str, AdaType] = {}
         if not is_builtin and generic_decl:
-            from uada80.ast_nodes import GenericTypeDecl
+            from uada80.ast_nodes import GenericTypeDecl, GenericObjectDecl as _GOD_sub
             formal_idx = 0
             for formal in generic_decl.formals:
+                # Skip use/use-type pseudo-formals — they don't consume an actual.
+                if isinstance(formal, _GOD_sub) and getattr(formal, 'mode', None) in ("use", "use_type"):
+                    continue
                 if isinstance(formal, GenericTypeDecl) and formal_idx < len(inst.actual_parameters):
                     actual = inst.actual_parameters[formal_idx]
                     # Get the actual type name
@@ -2841,7 +2853,7 @@ class SemanticAnalyzer:
                     for disc_spec in decl.discriminants:
                         disc_type = self._resolve_type(disc_spec.type_mark)
                         if disc_type is None:
-                            disc_type = IntegerType(name="_unknown", size_bits=16, low=0, high=0)
+                            disc_type = IntegerType(name="_unknown", size_bits=16, low=-32768, high=32767)
                         for disc_name in disc_spec.names:
                             ada_type.discriminants.append(
                                 RecordComponent(
@@ -2882,7 +2894,7 @@ class SemanticAnalyzer:
                 for disc_spec in decl.discriminants:
                     disc_type = self._resolve_type(disc_spec.type_mark)
                     if disc_type is None:
-                        disc_type = IntegerType(name="_unknown", size_bits=16, low=0, high=0)
+                        disc_type = IntegerType(name="_unknown", size_bits=16, low=-32768, high=32767)
                     # Wrap in AccessType if discriminant is an access discriminant
                     if getattr(disc_spec, 'is_access', False) and not isinstance(disc_type, (AccessType, AccessSubprogramType)):
                         disc_type = AccessType(
@@ -3372,7 +3384,7 @@ class SemanticAnalyzer:
             for disc_spec in decl.discriminants:
                 disc_type = self._resolve_type(disc_spec.type_mark)
                 if disc_type is None:
-                    disc_type = IntegerType(name="_unknown", size_bits=16, low=0, high=0)
+                    disc_type = IntegerType(name="_unknown", size_bits=16, low=-32768, high=32767)
                 for disc_name in disc_spec.names:
                     disc_list.append(
                         RecordComponent(
@@ -3919,7 +3931,7 @@ class SemanticAnalyzer:
 
         return FloatType(
             name=name,
-            size_bits=32 if digits <= 6 else 64,
+            size_bits=64,  # Z80 has no FP hardware - all FloatTypes use 64-bit runtime
             digits=digits,
             range_first=range_first,
             range_last=range_last,
@@ -3931,14 +3943,28 @@ class SemanticAnalyzer:
         """Build an enumeration type."""
         # Build set of character literal names from parser indices
         char_lits = set()
+        char_idx_set = set()
         if hasattr(type_def, 'char_literal_indices') and type_def.char_literal_indices:
+            char_idx_set = set(type_def.char_literal_indices)
             for idx in type_def.char_literal_indices:
                 if idx < len(type_def.literals):
                     char_lits.add(type_def.literals[idx])
+
+        # Build positions dict with quoted keys for character literals
+        # to avoid collisions (e.g., TYPE E IS (A, 'A', B, 'B', ...))
+        positions = {}
+        for i, lit in enumerate(type_def.literals):
+            if i in char_idx_set:
+                key = f"'{lit}'"
+            else:
+                key = lit
+            positions[key] = i
+
         return EnumerationType(
             name=name,
             size_bits=0,
             literals=type_def.literals,
+            positions=positions,
             char_literals=char_lits,
         )
 
@@ -3967,6 +3993,26 @@ class SemanticAnalyzer:
                     # Dynamic bounds - mark as unconstrained at compile time
                     bounds.append((0, 0))  # Placeholder for dynamic bounds
                 index_types.append(PREDEFINED_TYPES["Integer"])
+            elif isinstance(idx_subtype, AttributeReference) and \
+                    idx_subtype.attribute.lower() == 'range':
+                # T'Range or A'Range — copy the index range from the
+                # referenced array type/object's first dimension.
+                arr_type = None
+                if isinstance(idx_subtype.prefix, Identifier):
+                    sym = self.symbols.lookup(idx_subtype.prefix.name)
+                    if sym is not None:
+                        arr_type = sym.ada_type
+                self._analyze_expr(idx_subtype)
+                if isinstance(arr_type, ArrayType) and arr_type.bounds:
+                    low, high = arr_type.bounds[0]
+                    bounds.append((low, high))
+                    if arr_type.index_types:
+                        index_types.append(arr_type.index_types[0])
+                    else:
+                        index_types.append(PREDEFINED_TYPES["Integer"])
+                else:
+                    bounds.append((0, 0))
+                    index_types.append(PREDEFINED_TYPES["Integer"])
             else:
                 # Type or subtype mark (e.g., INTEGER RANGE -2..2, COLOR RANGE RED..BLUE)
                 idx_type = self._resolve_type(idx_subtype)
@@ -4024,7 +4070,7 @@ class SemanticAnalyzer:
                 comp_type = self._resolve_type(comp_decl.type_mark)
             # If type couldn't be resolved, use a placeholder type
             if comp_type is None:
-                comp_type = IntegerType(name="_unknown", size_bits=16, low=0, high=0)
+                comp_type = IntegerType(name="_unknown", size_bits=16, low=-32768, high=32767)
             for comp_name in comp_decl.names:
                 components.append(
                     RecordComponent(name=comp_name, component_type=comp_type,
@@ -4050,7 +4096,7 @@ class SemanticAnalyzer:
                     else:
                         comp_type = self._resolve_type(comp_decl.type_mark)
                     if comp_type is None:
-                        comp_type = IntegerType(name="_unknown", size_bits=16, low=0, high=0)
+                        comp_type = IntegerType(name="_unknown", size_bits=16, low=-32768, high=32767)
                     for comp_name in comp_decl.names:
                         var_components.append(
                             RecordComponent(name=comp_name, component_type=comp_type,
@@ -4134,9 +4180,44 @@ class SemanticAnalyzer:
         """Build a derived type."""
         # Check for array index constraint in parent expression
         # e.g., type T is new String(1..10) parses parent_type as Slice
+        # e.g., type F is new J(A'Range) parses parent_type as IndexedComponent
         array_constraint = None
+        array_index_bounds = None  # list of (low, high) tuples for multi-dim case
         if isinstance(type_def.parent_type, Slice):
             array_constraint = type_def.parent_type.range_expr
+            if isinstance(array_constraint, AttributeReference) and \
+                    array_constraint.attribute.lower() == 'range':
+                low, high = self._bounds_from_range_attr(array_constraint)
+                if isinstance(low, int) and isinstance(high, int):
+                    array_index_bounds = [(low, high)]
+        elif isinstance(type_def.parent_type, IndexedComponent):
+            ic = type_def.parent_type
+            bounds_list = []
+            all_static = True
+            for idx in ic.indices:
+                if hasattr(idx, 'expression') and idx.expression is not None:
+                    idx = idx.expression
+                if isinstance(idx, RangeExpr):
+                    low = self._try_eval_static(idx.low)
+                    high = self._try_eval_static(idx.high)
+                    if isinstance(low, int) and isinstance(high, int):
+                        bounds_list.append((low, high))
+                    else:
+                        all_static = False
+                        break
+                elif isinstance(idx, AttributeReference) and \
+                        idx.attribute.lower() == 'range':
+                    low, high = self._bounds_from_range_attr(idx)
+                    if isinstance(low, int) and isinstance(high, int):
+                        bounds_list.append((low, high))
+                    else:
+                        all_static = False
+                        break
+                else:
+                    all_static = False
+                    break
+            if all_static and bounds_list:
+                array_index_bounds = bounds_list
 
         parent = self._resolve_type(type_def.parent_type)
         if parent is None:
@@ -4259,7 +4340,7 @@ class SemanticAnalyzer:
                     comp_type = self._resolve_type(comp_decl.type_mark)
                     # If type couldn't be resolved, use a placeholder type
                     if comp_type is None:
-                        comp_type = IntegerType(name="_unknown", size_bits=16, low=0, high=0)
+                        comp_type = IntegerType(name="_unknown", size_bits=16, low=-32768, high=32767)
                     for comp_name in comp_decl.names:
                         components.append(
                             RecordComponent(name=comp_name, component_type=comp_type,
@@ -4319,7 +4400,7 @@ class SemanticAnalyzer:
             for comp_decl in type_def.record_extension.components:
                 comp_type = self._resolve_type(comp_decl.type_mark)
                 if comp_type is None:
-                    comp_type = IntegerType(name="_unknown", size_bits=16, low=0, high=0)
+                    comp_type = IntegerType(name="_unknown", size_bits=16, low=-32768, high=32767)
                 for comp_name in comp_decl.names:
                     components.append(
                         RecordComponent(name=comp_name, component_type=comp_type,
@@ -4357,24 +4438,60 @@ class SemanticAnalyzer:
             isinstance(parent, FloatType) and parent.kind == TypeKind.FIXED
         ):
             delta = getattr(parent, "delta", 0.0)
+            small = getattr(parent, "small", None) or delta
+            range_first = parent.range_first
+            range_last = parent.range_last
+            # Honor explicit DELTA constraint (type T is new P delta D range L..H)
+            # DerivedTypeDef stores delta in delta_constraint attribute
+            delta_node = getattr(type_def, 'delta_constraint', None)
+            if delta_node is not None:
+                d = self._try_eval_static(delta_node)
+                if d is not None:
+                    delta = float(d)
+            # Honor explicit RANGE constraint
+            if type_def.constraint and isinstance(type_def.constraint, RangeExpr):
+                lo = self._try_eval_static(type_def.constraint.low)
+                hi = self._try_eval_static(type_def.constraint.high)
+                if lo is not None:
+                    range_first = float(lo)
+                if hi is not None:
+                    range_last = float(hi)
             return FixedType(
                 name=name,
                 size_bits=parent.size_bits,
                 delta=delta,
-                range_first=parent.range_first,
-                range_last=parent.range_last,
+                range_first=range_first,
+                range_last=range_last,
                 digits=parent.digits,
+                small=small,
                 base_type=parent if isinstance(parent, FixedType) else None,
             )
 
         # Handle derivation from float type
         if isinstance(parent, FloatType):
+            # Honor explicit DIGITS specifier on derived type
+            new_digits = parent.digits
+            digits_node = getattr(type_def, 'digits_constraint', None)
+            if digits_node is not None:
+                d = self._try_eval_static(digits_node)
+                if isinstance(d, int) and d > 0:
+                    new_digits = d
+            # Honor explicit RANGE constraint on derived type
+            new_first = parent.range_first
+            new_last = parent.range_last
+            if type_def.constraint and isinstance(type_def.constraint, RangeExpr):
+                lo_val = self._try_eval_static(type_def.constraint.low)
+                hi_val = self._try_eval_static(type_def.constraint.high)
+                if isinstance(lo_val, (int, float)):
+                    new_first = float(lo_val)
+                if isinstance(hi_val, (int, float)):
+                    new_last = float(hi_val)
             return FloatType(
                 name=name,
                 size_bits=parent.size_bits,
-                digits=parent.digits,
-                range_first=parent.range_first,
-                range_last=parent.range_last,
+                digits=new_digits,
+                range_first=new_first,
+                range_last=new_last,
                 base_type=parent,
             )
 
@@ -4395,7 +4512,22 @@ class SemanticAnalyzer:
 
         # Handle derivation from array type
         if isinstance(parent, ArrayType):
-            # Apply index constraint if present (e.g., type T is new String(1..10))
+            # Apply index constraint if present (e.g., type T is new String(1..10)
+            # or type F is new J(A'Range))
+            if array_index_bounds and not parent.is_constrained:
+                comp_size = parent.component_type.size_bits if parent.component_type else 8
+                total_elements = 1
+                for low, high in array_index_bounds:
+                    total_elements *= max(0, high - low + 1)
+                return ArrayType(
+                    name=name,
+                    size_bits=total_elements * comp_size,
+                    index_types=parent.index_types,
+                    component_type=parent.component_type,
+                    is_constrained=True,
+                    bounds=array_index_bounds,
+                    base_type=parent,
+                )
             if array_constraint and isinstance(array_constraint, RangeExpr) and not parent.is_constrained:
                 low = self._try_eval_static(array_constraint.low)
                 high = self._try_eval_static(array_constraint.high)
@@ -4455,6 +4587,16 @@ class SemanticAnalyzer:
                 is_access_protected=parent.is_access_protected,
             )
             derived.base_type = parent
+            return derived
+
+        # Handle derivation from task type (TYPE LPT IS NEW TT)
+        if isinstance(parent, TaskType):
+            derived = TaskType(
+                name=name,
+                entries=list(parent.entries),
+                discriminants=list(parent.discriminants) if parent.discriminants else [],
+                parent_type=parent,
+            )
             return derived
 
         return parent
@@ -4749,6 +4891,42 @@ class SemanticAnalyzer:
             )
         return None
 
+    def _bounds_from_range_attr(
+        self, attr_ref: AttributeReference
+    ) -> Tuple[Optional[int], Optional[int]]:
+        """Resolve `Prefix'Range` to a (low, high) tuple of static ints, or (None, None).
+
+        Looks up the prefix in the symbol table and returns the bounds of the
+        requested dimension (default dimension 1) of an array type.
+        """
+        if attr_ref.attribute.lower() != 'range':
+            return (None, None)
+        arr_type = None
+        prefix = attr_ref.prefix
+        if isinstance(prefix, Identifier):
+            sym = self.symbols.lookup(prefix.name) if self.symbols else None
+            if sym is not None:
+                arr_type = sym.ada_type
+            if arr_type is None:
+                arr_type = self._resolve_type(prefix)
+        else:
+            arr_type = self._resolve_type(prefix)
+        if not isinstance(arr_type, ArrayType) or not arr_type.bounds:
+            return (None, None)
+        dim = 0
+        if attr_ref.args:
+            dim_arg = attr_ref.args[0]
+            if hasattr(dim_arg, 'expression') and dim_arg.expression is not None:
+                dim_arg = dim_arg.expression
+            dim_val = self._try_eval_static(dim_arg)
+            if isinstance(dim_val, int) and dim_val >= 1:
+                dim = dim_val - 1
+        if 0 <= dim < len(arr_type.bounds):
+            low, high = arr_type.bounds[dim]
+            if isinstance(low, int) and isinstance(high, int):
+                return (low, high)
+        return (None, None)
+
     def _resolve_subtype_indication(
         self, subtype_ind: SubtypeIndication
     ) -> Optional[AdaType]:
@@ -4770,22 +4948,27 @@ class SemanticAnalyzer:
             if isinstance(base_type, ArrayType) and not base_type.is_constrained:
                 # Extract bounds from slice range
                 slice_range = type_mark.range_expr
+                low: Optional[int] = None
+                high: Optional[int] = None
                 if isinstance(slice_range, RangeExpr):
                     low = self._try_eval_static(slice_range.low)
                     high = self._try_eval_static(slice_range.high)
-                    # Ensure low and high are actual integers
-                    if isinstance(low, int) and isinstance(high, int):
-                        # Create constrained array type with bounds
-                        return ArrayType(
-                            name=f"{base_type.name}({low}..{high})",
-                            kind=base_type.kind,
-                            size_bits=(high - low + 1) * (base_type.component_type.size_bits if base_type.component_type else 8),
-                            component_type=base_type.component_type,
-                            index_types=base_type.index_types,
-                            bounds=[(low, high)],
-                            is_constrained=True,
-                            base_type=base_type,
-                        )
+                elif isinstance(slice_range, AttributeReference) and \
+                        slice_range.attribute.lower() == 'range':
+                    low, high = self._bounds_from_range_attr(slice_range)
+                # Ensure low and high are actual integers
+                if isinstance(low, int) and isinstance(high, int):
+                    # Create constrained array type with bounds
+                    return ArrayType(
+                        name=f"{base_type.name}({low}..{high})",
+                        kind=base_type.kind,
+                        size_bits=(high - low + 1) * (base_type.component_type.size_bits if base_type.component_type else 8),
+                        component_type=base_type.component_type,
+                        index_types=base_type.index_types,
+                        bounds=[(low, high)],
+                        is_constrained=True,
+                        base_type=base_type,
+                    )
             return base_type
         elif isinstance(type_mark, IndexedComponent):
             base_type = self._resolve_type(type_mark.prefix)
@@ -4796,9 +4979,20 @@ class SemanticAnalyzer:
                     all_bounds = []
                     all_static = True
                     for idx in type_mark.indices:
+                        # Unwrap ActualParameter wrapper if present
+                        if hasattr(idx, 'expression') and idx.expression is not None:
+                            idx = idx.expression
                         if isinstance(idx, RangeExpr):
                             low = self._try_eval_static(idx.low)
                             high = self._try_eval_static(idx.high)
+                            if isinstance(low, int) and isinstance(high, int):
+                                all_bounds.append((low, high))
+                            else:
+                                all_static = False
+                                break
+                        elif isinstance(idx, AttributeReference) and \
+                                idx.attribute.lower() == 'range':
+                            low, high = self._bounds_from_range_attr(idx)
                             if isinstance(low, int) and isinstance(high, int):
                                 all_bounds.append((low, high))
                             else:
@@ -5016,12 +5210,18 @@ class SemanticAnalyzer:
     _PROCEDURE_FOUND = AdaType(name="_procedure_found", kind=TypeKind.PRIVATE)
 
     def _find_prefix_notation_primitive(
-        self, tagged_type, selector: str
+        self, tagged_type, selector: str,
+        extra_args_count: Optional[int] = None,
     ) -> Optional[AdaType]:
         """Find a primitive operation for prefix notation calls.
 
         In Ada 2005+, you can call X.Method(Args) where Method is a primitive
         operation that takes X (or access to X, or X'Class) as the first parameter.
+
+        If extra_args_count is provided, only primitives taking
+        (1 + extra_args_count) parameters will match — this disambiguates
+        overloaded primitives when the caller knows the number of explicit
+        arguments after the prefix object.
 
         Returns the return type for functions, _PROCEDURE_FOUND sentinel for
         procedures, or None if not found.
@@ -5033,6 +5233,11 @@ class SemanticAnalyzer:
             while sym is not None:
                 if sym.kind in (SymbolKind.FUNCTION, SymbolKind.PROCEDURE):
                     if sym.parameters:
+                        # If caller specified an expected arity, filter by it
+                        if (extra_args_count is not None and
+                                len(sym.parameters) != 1 + extra_args_count):
+                            sym = sym.overloaded_next
+                            continue
                         first_param = sym.parameters[0]
                         first_type = first_param.ada_type
 
@@ -5383,11 +5588,24 @@ class SemanticAnalyzer:
         """Analyze a case statement."""
         expr_type = self._analyze_expr(stmt.expr)
 
+        # Store the resolved type on the case expression for lowering to use
+        if expr_type:
+            stmt.expr.resolved_type = expr_type
+
         # Case expression must be discrete
         if expr_type and not expr_type.is_discrete():
             self.error("case expression must be discrete type", stmt.expr)
 
+        # Analyze choice expressions with the case expression type as context
+        # so that enum literals (character and identifier) get resolved_type set
         for alt in stmt.alternatives:
+            for choice in alt.choices:
+                if isinstance(choice, ExprChoice):
+                    self._analyze_expr(choice.expr, expected_type=expr_type)
+                elif isinstance(choice, RangeChoice):
+                    if hasattr(choice, 'range_expr') and choice.range_expr:
+                        self._analyze_expr(choice.range_expr.low, expected_type=expr_type)
+                        self._analyze_expr(choice.range_expr.high, expected_type=expr_type)
             for s in alt.statements:
                 self._analyze_statement(s)
 
@@ -5417,6 +5635,19 @@ class SemanticAnalyzer:
                 self.symbols.enter_scope(stmt.label if stmt.label else None)
                 iterator = stmt.iteration_scheme.iterator
                 iter_type = self._analyze_expr(iterator.iterable)
+
+                # Re-analyze range bounds with the resolved iter_type as context
+                # so that char literals in enum ranges get resolved_type set
+                if iter_type and hasattr(iter_type, 'is_discrete') and iter_type.is_discrete():
+                    iterable = iterator.iterable
+                    if isinstance(iterable, RangeExpr):
+                        self._analyze_expr(iterable.low, expected_type=iter_type)
+                        self._analyze_expr(iterable.high, expected_type=iter_type)
+                    elif isinstance(iterable, SubtypeIndication):
+                        if (iterable.constraint and isinstance(iterable.constraint, RangeConstraint)
+                                and hasattr(iterable.constraint, 'range_expr')):
+                            self._analyze_expr(iterable.constraint.range_expr.low, expected_type=iter_type)
+                            self._analyze_expr(iterable.constraint.range_expr.high, expected_type=iter_type)
 
                 # For "for X of Array" loops, get the element type
                 loop_var_type = iter_type
@@ -6741,16 +6972,24 @@ class SemanticAnalyzer:
                 expr.selector,
             )
 
+        # Store resolved type for lowering
+        if selector_type:
+            expr.selector.resolved_type = selector_type
+
         # Analyze all alternatives and find common type
         result_type: Optional[AdaType] = None
         for alt in expr.alternatives:
-            # Analyze choice expressions (simple analysis)
+            # Analyze choice expressions with selector type as context
             for choice in alt.choices:
                 if isinstance(choice, ExprChoice):
-                    self._analyze_expr(choice.expr)
+                    self._analyze_expr(choice.expr, expected_type=selector_type)
                 elif isinstance(choice, RangeChoice):
                     if choice.range_expr:
-                        self._analyze_expr(choice.range_expr)
+                        if isinstance(choice.range_expr, RangeExpr):
+                            self._analyze_expr(choice.range_expr.low, expected_type=selector_type)
+                            self._analyze_expr(choice.range_expr.high, expected_type=selector_type)
+                        else:
+                            self._analyze_expr(choice.range_expr, expected_type=selector_type)
                 # OthersChoice needs no analysis
 
             # Analyze the result expression
@@ -6773,13 +7012,18 @@ class SemanticAnalyzer:
         # Analyze the tested expression
         expr_type = self._analyze_expr(expr.expr)
 
-        # Analyze each choice
+        # Analyze each choice with the tested expression's type as context
+        # so that char literals in enum membership tests get resolved_type set
         for choice in expr.choices:
             if isinstance(choice, ExprChoice):
-                self._analyze_expr(choice.expr)
+                self._analyze_expr(choice.expr, expected_type=expr_type)
             elif isinstance(choice, RangeChoice):
                 if choice.range_expr:
-                    self._analyze_expr(choice.range_expr)
+                    if isinstance(choice.range_expr, RangeExpr):
+                        self._analyze_expr(choice.range_expr.low, expected_type=expr_type)
+                        self._analyze_expr(choice.range_expr.high, expected_type=expr_type)
+                    else:
+                        self._analyze_expr(choice.range_expr, expected_type=expr_type)
             # OthersChoice doesn't need analysis
 
         # Membership tests always return Boolean
@@ -7420,7 +7664,8 @@ class SemanticAnalyzer:
                     return None
                 # For arithmetic operators, return common numeric type
                 if op_name in {'+', '-', '*', '/', 'MOD', 'REM', '**'}:
-                    if left_type.kind in (TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.FLOAT, TypeKind.FIXED):
+                    if left_type.kind in (TypeKind.INTEGER, TypeKind.MODULAR, TypeKind.FLOAT, TypeKind.FIXED,
+                                          TypeKind.UNIVERSAL_INTEGER, TypeKind.UNIVERSAL_REAL):
                         return left_type
                 # For comparison operators, return Boolean
                 if op_name in {'=', '/=', '<', '>', '<=', '>='}:
@@ -7681,6 +7926,41 @@ class SemanticAnalyzer:
                             return None
                         arg_type = self._analyze_expr(expr.indices[0])
                         return global_sym.ada_type
+
+        # Prefix-notation call with arguments: Obj.Func(Args) where Func is a
+        # primitive operation of Obj's tagged type taking (Obj_Type, Args...).
+        # Without this check, Obj.Func would resolve (via _analyze_selected_name)
+        # to the zero-extra-arg overload's return type, and then we'd try to
+        # index that return value.
+        if isinstance(expr.prefix, SelectedName):
+            inner_prefix_type = self._analyze_expr(expr.prefix.prefix)
+            if inner_prefix_type is not None:
+                # Resolve access/private/class-wide to the underlying tagged type
+                candidate_type = inner_prefix_type
+                if isinstance(candidate_type, AccessType):
+                    designated = candidate_type.designated_type
+                    if designated and designated.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE):
+                        completed = self.symbols.lookup_type(designated.name)
+                        if completed:
+                            designated = completed
+                    if designated is not None:
+                        candidate_type = designated
+                if candidate_type.kind in (TypeKind.INCOMPLETE, TypeKind.PRIVATE):
+                    completed = self.symbols.lookup_type(candidate_type.name)
+                    if completed:
+                        candidate_type = completed
+                if getattr(candidate_type, 'is_tagged', False):
+                    prim_type = self._find_prefix_notation_primitive(
+                        candidate_type, expr.prefix.selector,
+                        extra_args_count=len(expr.indices),
+                    )
+                    if prim_type is not None:
+                        # Analyze the extra arguments for side effects/errors
+                        for idx in expr.indices:
+                            self._analyze_expr(idx)
+                        if prim_type is self._PROCEDURE_FOUND:
+                            return None
+                        return prim_type
 
         # Otherwise, it's array indexing
         prefix_type = self._analyze_expr(expr.prefix)
@@ -8548,6 +8828,13 @@ class SemanticAnalyzer:
                     arg = expr.args[0].value if hasattr(expr.args[0], 'value') else expr.args[0]
                     return self._eval_static_impl(arg, report_errors)
 
+            # Type conversion parsed as FunctionCall: T(expr) — treat as identity for static eval
+            if func_name and expr.args and len(expr.args) == 1:
+                sym = self.symbols.lookup(func_name)
+                if sym and sym.kind == SymbolKind.TYPE:
+                    arg = expr.args[0].value if hasattr(expr.args[0], 'value') else expr.args[0]
+                    return self._eval_static_impl(arg, report_errors)
+
             if func_name and func_name.startswith('"') and func_name.endswith('"'):
                 op = func_name[1:-1].upper()
                 args = [a.value if hasattr(a, 'value') else a for a in (expr.args or [])]
@@ -8597,6 +8884,15 @@ class SemanticAnalyzer:
                         args = expr.indices
                     if len(args) == 1:
                         arg = getattr(args[0], 'value', args[0])
+                        return self._eval_static_impl(arg, report_errors)
+                # Type conversion parsed as IndexedComponent: T(expr) — try identity for static eval.
+                # We don't model rounding/truncation here, so this is approximate but adequate
+                # for use in derived-type RANGE constraints (the common ACATS pattern).
+                sym = self.symbols.lookup(expr.prefix.name)
+                if sym and sym.kind == SymbolKind.TYPE:
+                    args_list = expr.actual_params or expr.indices or []
+                    if len(args_list) == 1:
+                        arg = getattr(args_list[0], 'value', args_list[0])
                         return self._eval_static_impl(arg, report_errors)
 
             # Handle prefix operator notation like P."+"(a, b) parsed as IndexedComponent

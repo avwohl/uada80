@@ -6926,6 +6926,24 @@ class Z80CodeGen:
                 self._store_from_hl(instr.dst)
             else:
                 pass  # discard if no valid destination
+        elif op == OpCode.ALLOCA:
+            # Allocate src1 bytes on stack, return new SP in dst.
+            # Subtracts size from SP and returns the new SP value (= ptr to allocated region).
+            # Load size into HL
+            self._load_to_hl(instr.src1)
+            # Negate HL: HL = -HL
+            self._emit_instr("xor", "a")
+            self._emit_instr("sub", "l")
+            self._emit_instr("ld", "l", "a")
+            self._emit_instr("sbc", "a", "a")
+            self._emit_instr("sub", "h")
+            self._emit_instr("ld", "h", "a")
+            # HL = -size; SP = SP + (-size)
+            self._emit_instr("add", "hl", "sp")
+            self._emit_instr("ld", "sp", "hl")
+            # HL is now the new SP — store it as the dst pointer
+            if isinstance(instr.dst, VReg):
+                self._store_from_hl(instr.dst)
         # Exception handling
         elif op == OpCode.EXC_PUSH:
             self._gen_exc_push(instr)

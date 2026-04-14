@@ -86,6 +86,23 @@
     PUBLIC _task_cur        ; alias for _task_current
     PUBLIC _tick_cnt        ; alias for _tick_count
 
+; Ada.Dynamic_Priorities stubs
+    PUBLIC _set_priority
+    PUBLIC _get_priority
+; Ada.Synchronous_Task_Control stubs
+    PUBLIC _set_true
+    PUBLIC _set_false
+    PUBLIC _current_state
+    PUBLIC _suspend_until_true
+; Ada.Asynchronous_Task_Control stubs
+    PUBLIC _hold
+    PUBLIC _continue
+    PUBLIC _is_held
+; System.Tasking helper aliases (used by adalib bodies)
+    PUBLIC _enter_protected
+    PUBLIC _leave_protected
+    PUBLIC _yield
+
 ; External dependencies
     EXTRN _heap_alloc
     EXTRN _raise_tasking_error
@@ -1692,6 +1709,90 @@ _TSK_PRNT:
     ld H, (IX+TCB_PARENT_IX+1)
     pop IX
     ret
+
+; ============================================================
+; Ada.Dynamic_Priorities stubs
+; Set_Priority(prio[, T]) - prio is an integer, T defaults to current task.
+; Stub ignores priority.
+; ============================================================
+_set_priority:
+    ret
+
+; Get_Priority([T]) -> Integer. Returns 0.
+_get_priority:
+    ld hl, 0
+    ret
+
+; ============================================================
+; Ada.Synchronous_Task_Control stubs
+; Suspension_Object is a 1-byte record with a Boolean State field.
+; Procedures take its address (in/out parameter) on the stack.
+; ============================================================
+_set_true:
+    ld hl, 2
+    add hl, sp
+    ld e, (hl)
+    inc hl
+    ld d, (hl)          ; DE = pointer to Suspension_Object
+    ld a, 1
+    ld (de), a          ; State := True
+    ret
+
+_set_false:
+    ld hl, 2
+    add hl, sp
+    ld e, (hl)
+    inc hl
+    ld d, (hl)
+    xor a
+    ld (de), a          ; State := False
+    ret
+
+_current_state:
+    ld hl, 2
+    add hl, sp
+    ld e, (hl)
+    inc hl
+    ld d, (hl)
+    ld a, (de)
+    ld l, a
+    ld h, 0
+    ret
+
+_suspend_until_true:
+    ; Stub: clear state and return immediately (no real wait).
+    ld hl, 2
+    add hl, sp
+    ld e, (hl)
+    inc hl
+    ld d, (hl)
+    xor a
+    ld (de), a
+    ret
+
+; ============================================================
+; Ada.Asynchronous_Task_Control stubs
+; All take a Task_Id (integer) on the stack.
+; ============================================================
+_hold:
+    ret
+
+_continue:
+    ret
+
+_is_held:
+    ld hl, 0            ; always False
+    ret
+
+; ============================================================
+; System.Tasking helper aliases used by adalib package bodies
+; ============================================================
+_enter_protected:
+    ret                 ; no-op on single-tasking targets
+_leave_protected:
+    ret
+_yield:
+    jp _TASK_YIELD
 
 ; Data aliases
     DSEG

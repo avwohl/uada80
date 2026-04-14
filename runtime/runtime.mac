@@ -467,6 +467,49 @@ _rem16_zero:
     JP _exc_do_raise
 
 ; ============================================================
+; _shl16 - 16-bit left shift
+; Input: HL = value, DE = shift count
+; Output: HL = value << count
+; Destroys: A, DE
+; ============================================================
+    PUBLIC _shl16
+_shl16:
+    LD A, E
+    OR A
+    RET Z               ; no shift needed
+    CP 16
+    JR C, _shl16_loop
+    LD HL, 0            ; shift >= 16 yields 0
+    RET
+_shl16_loop:
+    ADD HL, HL          ; HL = HL * 2
+    DEC A
+    JR NZ, _shl16_loop
+    RET
+
+; ============================================================
+; _shr16 - 16-bit logical right shift (unsigned)
+; Input: HL = value, DE = shift count
+; Output: HL = value >> count
+; Destroys: A, DE
+; ============================================================
+    PUBLIC _shr16
+_shr16:
+    LD A, E
+    OR A
+    RET Z               ; no shift needed
+    CP 16
+    JR C, _shr16_loop
+    LD HL, 0            ; shift >= 16 yields 0
+    RET
+_shr16_loop:
+    SRL H               ; shift high byte right
+    RR L                ; rotate low byte right with carry
+    DEC A
+    JR NZ, _shr16_loop
+    RET
+
+; ============================================================
 ; _raise_constraint_error - Handle constraint error
 ; Called when array bounds check fails or other constraint violation.
 ; For CP/M, this halts the program with an error.
@@ -528,6 +571,74 @@ _raise_tasking_error:
 ; ============================================================
 ; Text_IO Support
 ; ============================================================
+
+; ============================================================
+; _standard_output / _standard_input / _standard_error
+; Return file handle constants for Ada.Text_IO
+; On CP/M these are just constants (0=stdin, 1=stdout, 2=stderr)
+; ============================================================
+    PUBLIC _standard_output
+    PUBLIC _standard_input
+    PUBLIC _std_out
+    PUBLIC _std_err
+_standard_output:
+_std_out:
+    LD HL, 1            ; stdout handle = 1
+    RET
+_standard_input:
+    LD HL, 0            ; stdin handle = 0
+    RET
+_std_err:
+    LD HL, 2            ; stderr handle = 2
+    RET
+
+; ============================================================
+; _set_col - Set column position (Ada.Text_IO.Set_Col)
+; Input: Column number on stack (at SP+2), file handle at SP+4
+; Output: Outputs spaces until column is reached
+; Destroys: A, DE, HL
+; ============================================================
+    PUBLIC _set_col
+_set_col:
+    ; Get target column from stack
+    LD HL, 2
+    ADD HL, SP
+    LD E, (HL)
+    INC HL
+    LD D, (HL)
+    ; DE = target column (1-based)
+    ; Get current column
+    LD HL, (_cur_col)
+    ; If current >= target, output newline first
+    OR A
+    SBC HL, DE
+    JR C, _sc_pad       ; current < target, just pad
+    ; current >= target: newline then pad
+    PUSH DE
+    CALL _new_line
+    LD HL, 1
+    LD (_cur_col), HL   ; reset to column 1
+    POP DE
+_sc_pad:
+    ; Now pad from current col to target col
+    LD HL, (_cur_col)
+_sc_loop:
+    OR A
+    SBC HL, DE
+    JR NC, _sc_done     ; current >= target
+    ADD HL, DE          ; restore HL
+    PUSH HL
+    PUSH DE
+    LD E, ' '
+    LD C, 2
+    CALL 5
+    POP DE
+    POP HL
+    INC HL
+    JR _sc_loop
+_sc_done:
+    LD (_cur_col), DE   ; update current column
+    RET
 
 ; ============================================================
 ; _put_line / _put_int_line - Print string and newline
@@ -1200,47 +1311,57 @@ _m32_hl_pos:
     INC DE
 _m32_de_pos:
 
-    ; BC = multiplicand, HL:DE = result (starts at 0)
+    ; Unsigned 16x16->32 multiply
+    ; HL * DE -> HL:DE (HL=high, DE=low)
+    ;
+    ; Method: shift multiplier right, shift accumulator left, add
+    ; Unlike previous version, we shift the 32-bit RESULT left
+    ; (not the multiplicand), so no overflow tracking needed.
+    ;
+    ; Algorithm: result = 0
+    ;   for each bit of DE (from MSB to LSB):
+    ;     result <<= 1
+    ;     if bit set: result += HL (original multiplicand)
+    ;
+    ; Registers: BC = multiplicand, DE = multiplier
+    ;            (SP) = result_high, HL = result_low
     LD B, H
-    LD C, L
-    LD HL, 0                ; high word
-    PUSH HL                 ; save high word on stack
-    LD HL, 0                ; low word
+    LD C, L                 ; BC = multiplicand (constant)
+    LD HL, 0
+    PUSH HL                 ; result_high = 0
+    ; HL = result_low = 0
 
-    ; DE = multiplier, BC = multiplicand
+    ; Process multiplier bits from MSB (bit 15) to LSB (bit 0)
     LD A, 16
 
 _m32_loop:
-    ; Check low bit of DE
-    BIT 0, E
+    ; Shift 32-bit result left by 1
+    ADD HL, HL              ; result_low <<= 1 (carry = overflow)
+    EX (SP), HL             ; HL = result_high, (SP) = result_low
+    ADC HL, HL              ; result_high <<= 1 + carry
+    EX (SP), HL             ; restore: (SP) = result_high, HL = result_low
+
+    ; Check MSB of DE (multiplier)
+    BIT 7, D
     JR Z, _m32_skip
 
-    ; Add BC to result low word (in HL)
-    ADD HL, BC
+    ; result += multiplicand (BC)
+    ADD HL, BC              ; result_low += multiplicand
     JR NC, _m32_skip
-    ; Carry into high word
     EX (SP), HL
-    INC HL
+    INC HL                  ; result_high += carry
     EX (SP), HL
 
 _m32_skip:
-    ; Shift DE right
-    SRL D
-    RR E
-
-    ; Shift BC left (into high bits)
-    SLA C
-    RL B
-
-    ; Check if BC overflowed into high word
-    ; (For full 32-bit we'd need to track this)
+    ; Shift multiplier left (to get next bit into MSB position)
+    SLA E
+    RL D
 
     DEC A
     JR NZ, _m32_loop
 
-    ; Result: (SP) = high word, HL = low word
-    EX DE, HL               ; DE = low word
-    POP HL                  ; HL = high word
+    EX DE, HL               ; DE = result_low
+    POP HL                  ; HL = result_high
 
     ; Apply sign
     POP AF
@@ -1573,6 +1694,8 @@ _i2s_done:
 ; Destroys: A, BC, DE
 ; ============================================================
     PUBLIC _s2i
+    PUBLIC _str_to_int
+_str_to_int:
 _s2i:
     PUSH IX
     LD IX, 0
@@ -3368,6 +3491,214 @@ _fixed_div:
     RET
 
 ; ============================================================
+; _fxmul16 - 16-bit fixed-point multiply
+; Stack: IX+4=a, IX+6=b, IX+8=scale
+; Computes: result = (a * b) / scale  (32-bit intermediate)
+; Returns: HL = 16-bit result
+; ============================================================
+    PUBLIC _fxmul16
+_fxmul16:
+    PUSH IX
+    PUSH BC
+    LD IX, 0
+    ADD IX, SP
+    ; Get operands
+    LD L, (IX+6)
+    LD H, (IX+7)        ; HL = a
+    LD E, (IX+8)
+    LD D, (IX+9)        ; DE = b
+    ; Signed 16x16->32 multiply
+    CALL _mul16_32       ; HL:DE = a*b (HL=high, DE=low)
+    ; Now divide 32-bit HL:DE by scale (IX+10..IX+11)
+    ; Use _sdiv32_16: HL:DE / BC -> HL
+    LD C, (IX+10)
+    LD B, (IX+11)        ; BC = scale
+    CALL _sdiv32_16      ; HL = (a*b) / scale
+    POP BC
+    POP IX
+    RET
+
+; ============================================================
+; _fxdiv16 - 16-bit fixed-point divide
+; Stack: IX+4=a, IX+6=b, IX+8=scale
+; Computes: result = (a * scale) / b  (32-bit intermediate)
+; Returns: HL = 16-bit result
+; ============================================================
+    PUBLIC _fxdiv16
+_fxdiv16:
+    PUSH IX
+    PUSH BC
+    LD IX, 0
+    ADD IX, SP
+    ; Get operands
+    LD L, (IX+6)
+    LD H, (IX+7)        ; HL = a
+    LD E, (IX+10)
+    LD D, (IX+11)        ; DE = scale
+    ; Signed 16x16->32 multiply: a * scale
+    CALL _mul16_32       ; HL:DE = a*scale (HL=high, DE=low)
+    ; Divide by b
+    LD C, (IX+8)
+    LD B, (IX+9)         ; BC = b
+    CALL _sdiv32_16      ; HL = (a*scale) / b
+    POP BC
+    POP IX
+    RET
+
+; ============================================================
+; _sdiv32_16 - Signed 32-bit by 16-bit division
+; Input: HL:DE = 32-bit dividend (HL=high, DE=low), BC = 16-bit divisor
+; Output: HL = 16-bit quotient
+; Destroys: A, DE
+; ============================================================
+    PUBLIC _sdiv32_16
+_sdiv32_16:
+    ; Check for divide by zero
+    LD A, B
+    OR C
+    JR NZ, _sd32_nz
+    LD HL, 0
+    RET
+_sd32_nz:
+    ; Compute result sign: H xor B (bit 7)
+    LD A, H
+    XOR B
+    PUSH AF              ; Save result sign on stack
+
+    ; Make dividend (HL:DE) positive
+    BIT 7, H
+    JR Z, _sd32_dvd_pos
+    ; Negate HL:DE: ~HL:DE + 1
+    LD A, E
+    CPL
+    LD E, A
+    LD A, D
+    CPL
+    LD D, A
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC DE
+    LD A, D
+    OR E
+    JR NZ, _sd32_dvd_pos
+    INC HL               ; Carry into high word
+_sd32_dvd_pos:
+    ; Make divisor (BC) positive
+    BIT 7, B
+    JR Z, _sd32_dvr_pos
+    LD A, C
+    CPL
+    LD C, A
+    LD A, B
+    CPL
+    LD B, A
+    INC BC
+_sd32_dvr_pos:
+    ; Now HL:DE is positive dividend, BC is positive divisor
+    ; Do unsigned 32/16 division
+    CALL _udiv32_16      ; HL = quotient
+    ; Apply sign
+    POP AF               ; result sign
+    BIT 7, A
+    RET Z                ; positive result
+    ; Negate HL
+    LD A, L
+    CPL
+    LD L, A
+    LD A, H
+    CPL
+    LD H, A
+    INC HL
+    RET
+
+; ============================================================
+; _udiv32_16 - Unsigned 32-bit by 16-bit division
+; Input: HL:DE = 32-bit dividend (HL=high, DE=low), BC = 16-bit divisor
+; Output: HL = 16-bit quotient (low 16 bits)
+; Destroys: A, DE
+; Uses a two-phase approach: first divide high word, then low word
+; with remainder carried forward.
+; ============================================================
+_udiv32_16:
+    ; Phase 1: divide high word by BC
+    ; HL = high word, DE = low word, BC = divisor
+    PUSH DE              ; save low word
+    CALL _udv16bc        ; HL = HL/BC, DE = remainder
+    ; discard quotient_hi (HL), keep remainder in DE
+    EX DE, HL            ; HL = remainder_hi
+    POP DE               ; DE = original low word
+
+    ; Phase 2: divide (remainder_hi:low_word) by BC
+    ; HL = remainder (high), DE = low word
+    ; Standard shift-and-subtract: 16 iterations
+    ; remainder in HL, shifting bits from DE, quotient built in DE
+    ; Divisor in BC. Loop counter in A.
+    LD A, 16
+_ud32_loop:
+    ; Shift DE left, carry into HL
+    SLA E
+    RL D
+    ADC HL, HL
+
+    ; Try subtract BC from HL
+    PUSH AF              ; save loop counter
+    AND A                ; clear carry
+    SBC HL, BC
+    JR NC, _ud32_fits
+    ; Doesn't fit - restore HL
+    ADD HL, BC
+    POP AF
+    JR _ud32_next
+_ud32_fits:
+    SET 0, E
+    POP AF
+_ud32_next:
+    DEC A
+    JR NZ, _ud32_loop
+
+    EX DE, HL            ; HL = quotient
+    RET
+
+; ============================================================
+; _udv16bc - Unsigned 16/16 division (divisor in BC)
+; Input: HL = dividend, BC = divisor
+; Output: HL = quotient, DE = remainder
+; ============================================================
+_udv16bc:
+    LD A, B
+    OR C
+    JR NZ, _udv16bc_nz
+    LD HL, 0
+    LD DE, 0
+    RET
+_udv16bc_nz:
+    LD DE, 0             ; DE = remainder
+    LD A, 16             ; 16 bits
+_udv16bc_lp:
+    ; Shift HL left, top bit into DE
+    ADD HL, HL
+    EX DE, HL
+    ADC HL, HL
+    ; Try subtract BC
+    AND A
+    SBC HL, BC
+    JR NC, _udv16bc_fit
+    ADD HL, BC
+    EX DE, HL
+    JR _udv16bc_nxt
+_udv16bc_fit:
+    EX DE, HL
+    SET 0, L
+_udv16bc_nxt:
+    DEC A
+    JR NZ, _udv16bc_lp
+    RET
+
+; ============================================================
 ; C Interface Support
 ; ============================================================
 
@@ -3468,6 +3799,54 @@ _MEMCPY:
     LD D, (IX+9)        ; DE = dest
     LDIR                ; copy BC bytes from HL to DE
 _memcpy_done:
+    POP IX
+    RET
+
+; ============================================================
+; _MEMMOVE - Copy memory block with overlap handling
+; Stack: SP+2: count (word), SP+4: src ptr, SP+6: dest ptr
+; If dest <= src or no overlap: uses LDIR (forward copy)
+; If dest > src and overlapping: uses LDDR (backward copy)
+; ============================================================
+    PUBLIC _MEMMOVE
+_MEMMOVE:
+    PUSH IX
+    LD IX, 0
+    ADD IX, SP
+    ; IX+4: count, IX+6: src, IX+8: dest
+    LD C, (IX+4)
+    LD B, (IX+5)        ; BC = count
+    LD A, B
+    OR C
+    JR Z, _memmove_done ; if count == 0, done
+    LD L, (IX+6)
+    LD H, (IX+7)        ; HL = src
+    LD E, (IX+8)
+    LD D, (IX+9)        ; DE = dest
+    ; Compare dest vs src
+    ; If DE <= HL, forward copy is safe
+    LD A, D
+    CP H
+    JR C, _memmove_fwd   ; D < H => dest < src
+    JR NZ, _memmove_bwd  ; D > H => dest > src
+    LD A, E
+    CP L
+    JR C, _memmove_fwd   ; E < L => dest < src
+    JR Z, _memmove_done  ; same address, nothing to do
+_memmove_bwd:
+    ; Backward copy: start from end
+    ; Point HL to src+count-1, DE to dest+count-1
+    ADD HL, BC
+    DEC HL               ; HL = src + count - 1
+    EX DE, HL
+    ADD HL, BC
+    DEC HL               ; HL = dest + count - 1
+    EX DE, HL            ; HL = src end, DE = dest end
+    LDDR                 ; copy BC bytes backward
+    JR _memmove_done
+_memmove_fwd:
+    LDIR                 ; copy BC bytes forward
+_memmove_done:
     POP IX
     RET
 
@@ -3917,6 +4296,10 @@ _fix_img_int:
     DS 2                    ; Integer part
 _fix_img_frc:
     DS 2                    ; Fractional part
+
+; Text_IO column tracking
+_cur_col:
+    DW 1                    ; Current output column (1-based)
 
 ; Heap start marker (must be last)
     PUBLIC _heap_start

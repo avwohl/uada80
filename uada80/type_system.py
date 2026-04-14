@@ -736,12 +736,47 @@ class RecordType(AdaType):
             primitive_ops=self.primitive_ops,
         )
 
+    @staticmethod
+    def _prim_signatures_match(a: PrimitiveOperation, b: PrimitiveOperation) -> bool:
+        """Two primitives override one another iff they have the same name AND
+        the same parameter shape: same arity, and non-controlling parameter
+        types match by name.
+
+        Controlling parameters (positions whose type is the tagged type itself
+        or any tagged type in the derivation chain) are treated as wildcards
+        because when a primitive is inherited by a derived type, the controlling
+        type changes but the operation still overrides the parent's slot.
+        """
+        if a.name.lower() != b.name.lower():
+            return False
+        if len(a.parameter_types) != len(b.parameter_types):
+            return False
+
+        def _tname(t):
+            if t is None:
+                return None
+            return getattr(t, 'name', None) or repr(t)
+
+        def _is_tagged(t):
+            return t is not None and getattr(t, 'is_tagged', False)
+
+        for pa, pb in zip(a.parameter_types, b.parameter_types):
+            # Treat controlling parameters (both tagged) as matching regardless
+            # of actual type — this handles the derived-type inheritance case
+            # where the parent's primitive_ops refer to the parent type but
+            # the overriding primitive refers to the derived type.
+            if _is_tagged(pa) and _is_tagged(pb):
+                continue
+            if _tname(pa) != _tname(pb):
+                return False
+        return True
+
     def add_primitive(self, op: PrimitiveOperation) -> None:
         """Add a primitive operation to this tagged type."""
-        # Check if this overrides a parent's operation
-        if self.parent_type and self.parent_type.is_tagged and hasattr(self.parent_type, 'primitive_ops'):
-            for i, parent_op in enumerate(self.parent_type.primitive_ops):
-                if parent_op.name.lower() == op.name.lower():
+        # Check if this overrides a parent's operation (full signature match)
+        if self.parent_type and self.parent_type.is_tagged and hasattr(self.parent_type, 'all_primitives'):
+            for parent_op in self.parent_type.all_primitives():
+                if self._prim_signatures_match(parent_op, op):
                     # Override: use same slot
                     op.slot_index = parent_op.slot_index
                     self.primitive_ops.append(op)
@@ -761,15 +796,15 @@ class RecordType(AdaType):
         # Add interface primitives (abstract placeholders)
         for iface in self.interfaces:
             for iface_op in iface.all_primitives():
-                # Check if already have this operation (from parent or another interface)
-                if not any(p.name.lower() == iface_op.name.lower() for p in result):
+                # Check if already have this operation (matched by full signature)
+                if not any(self._prim_signatures_match(p, iface_op) for p in result):
                     result.append(iface_op)
 
-        # Add own primitives, replacing overridden ones
+        # Add own primitives, replacing overridden ones (matched by full signature)
         for op in self.primitive_ops:
             replaced = False
             for i, p in enumerate(result):
-                if p.name.lower() == op.name.lower():
+                if self._prim_signatures_match(p, op):
                     result[i] = op
                     replaced = True
                     break
@@ -881,6 +916,7 @@ class TaskType(AdaType):
     entries: list["EntryInfo"] = field(default_factory=list)
     discriminants: list[RecordComponent] = field(default_factory=list)
     is_single_task: bool = False  # task T is vs task type T is
+    parent_type: Optional["AdaType"] = None  # For derived task types (TYPE LPT IS NEW TT)
 
     def __post_init__(self) -> None:
         self.kind = TypeKind.TASK
@@ -1061,13 +1097,18 @@ def create_predefined_types() -> dict[str, AdaType]:
     )
 
     # Wide_Wide_Character type (32-bit full Unicode)
-    # Note: We don't enumerate all 1.1M code points - just define the type
+    # Note: We don't enumerate all 1.1M code points - just define the type.
+    # The first/last bounds are set explicitly so _emit_range_check (and the
+    # full-range skip in it) can recognize that any 16-bit Integer source is
+    # already in range — without these, EnumerationType.high falls back to 0.
     types["Wide_Wide_Character"] = EnumerationType(
         name="Wide_Wide_Character",
         kind=TypeKind.ENUMERATION,
         size_bits=32,
         literals=[],  # Too many to enumerate (0..16#10FFFF#)
         positions={},
+        first=0,
+        last=0x10FFFF,
     )
 
     # Wide_Wide_String type (unconstrained array of Wide_Wide_Character)
@@ -1094,11 +1135,11 @@ def create_predefined_types() -> dict[str, AdaType]:
         size_bits=0,  # Conceptual, not stored
     )
 
-    # Float type (single precision floating point - 32-bit IEEE on Z80)
+    # Float type (Z80 has no FP hardware - all FloatTypes use 64-bit runtime)
     types["Float"] = FloatType(
         name="Float",
         kind=TypeKind.FLOAT,
-        size_bits=32,
+        size_bits=64,
         digits=6,  # Standard single precision
     )
 
@@ -1186,6 +1227,10 @@ def is_derived_from(t: AdaType, root_name: str) -> bool:
     # For non-tagged derived record types (parent_type=None but base_type set)
     if isinstance(t, RecordType) and not t.parent_type and hasattr(t, 'base_type') and t.base_type:
         return is_derived_from(t.base_type, root_name)
+
+    # For derived task types (TYPE LPT IS NEW TT)
+    if isinstance(t, TaskType) and t.parent_type:
+        return is_derived_from(t.parent_type, root_name)
 
     return False
 
@@ -1605,24 +1650,24 @@ def can_convert(from_type: AdaType, to_type: AdaType) -> bool:
                     return True
             return True  # Any specific tagged type can convert to any class-wide
 
-    # For tagged types (RecordType), also check parent_type chain
+    # Check parent_type chain for types that use it (RecordType, TaskType, etc.)
     # This handles conversions like Car(derived) to Vehicle(parent)
-    if isinstance(from_type, RecordType) and from_type.parent_type:
+    if hasattr(from_type, 'parent_type') and from_type.parent_type:
         if same_type(from_type.parent_type, to_type):
             return True
         # Check ancestor chain via parent_type
         ancestor = from_type.parent_type
-        while isinstance(ancestor, RecordType) and ancestor.parent_type:
+        while hasattr(ancestor, 'parent_type') and ancestor.parent_type:
             if same_type(ancestor, to_type) or same_type(ancestor.parent_type, to_type):
                 return True
             ancestor = ancestor.parent_type
 
-    if isinstance(to_type, RecordType) and to_type.parent_type:
+    if hasattr(to_type, 'parent_type') and to_type.parent_type:
         if same_type(to_type.parent_type, from_type):
             return True
         # Check ancestor chain via parent_type
         ancestor = to_type.parent_type
-        while isinstance(ancestor, RecordType) and ancestor.parent_type:
+        while hasattr(ancestor, 'parent_type') and ancestor.parent_type:
             if same_type(ancestor, from_type) or same_type(ancestor.parent_type, from_type):
                 return True
             ancestor = ancestor.parent_type
@@ -1633,16 +1678,12 @@ def can_convert(from_type: AdaType, to_type: AdaType) -> bool:
     def get_ultimate_ancestor(t: AdaType) -> AdaType:
         """Follow base_type/parent_type chain to find ultimate ancestor for derived types."""
         current = t
-        # For RecordType, follow parent_type chain, then base_type
-        if isinstance(current, RecordType):
-            while isinstance(current, RecordType) and current.parent_type:
-                current = current.parent_type
-            # For non-tagged derived records (parent_type=None, base_type set)
-            while hasattr(current, 'base_type') and current.base_type:
-                current = current.base_type
-        else:
-            while hasattr(current, 'base_type') and current.base_type:
-                current = current.base_type
+        # Follow parent_type chain (RecordType, TaskType, etc.)
+        while hasattr(current, 'parent_type') and current.parent_type:
+            current = current.parent_type
+        # Then follow base_type chain
+        while hasattr(current, 'base_type') and current.base_type:
+            current = current.base_type
         return current
 
     from_ancestor = get_ultimate_ancestor(from_type)

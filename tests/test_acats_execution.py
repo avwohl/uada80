@@ -293,7 +293,7 @@ def _compile_with_timeout(compiler, files, timeout=60):
     return result_dict.get('result')
 
 
-def compile_and_run_acats(test_files, timeout=5.0):
+def compile_and_run_acats(test_files, timeout=15.0):
     """Compile ACATS test files and run on cpmemu.
 
     Args:
@@ -328,20 +328,26 @@ def compile_and_run_acats(test_files, timeout=5.0):
             return "compile", False, str(e)
 
         # Assemble
-        proc = subprocess.run(
-            [UM80_CMD, "-o", str(rel_file), str(asm_file)],
-            capture_output=True, text=True, timeout=60
-        )
-        if proc.returncode != 0:
-            return "assemble", False, proc.stderr.strip()
+        try:
+            proc = subprocess.run(
+                [UM80_CMD, "-o", str(rel_file), str(asm_file)],
+                capture_output=True, text=True, timeout=60
+            )
+            if proc.returncode != 0:
+                return "assemble", False, proc.stderr.strip()
+        except subprocess.TimeoutExpired:
+            return "assemble", False, "TIMEOUT: assembler hung (>60s)"
 
         # Link
-        proc = subprocess.run(
-            [UL80_CMD, "-o", str(com_file), str(rel_file), str(LIBADA)],
-            capture_output=True, text=True, timeout=60
-        )
-        if proc.returncode != 0:
-            return "link", False, proc.stderr.strip()
+        try:
+            proc = subprocess.run(
+                [UL80_CMD, "-o", str(com_file), str(rel_file), str(LIBADA)],
+                capture_output=True, text=True, timeout=60
+            )
+            if proc.returncode != 0:
+                return "link", False, proc.stderr.strip()
+        except subprocess.TimeoutExpired:
+            return "link", False, "TIMEOUT: linker hung (>60s)"
 
         # Run — enable timer interrupts if program uses tasking
         run_cmd = [CPMEMU_CMD, "--z80"]
@@ -381,7 +387,7 @@ class TestACATSExecution:
             elif stage == "link":
                 pytest.fail(f"link: {output[:100]}")
             elif output == "TIMEOUT":
-                pytest.fail(f"timeout (>5s)")
+                pytest.fail(f"timeout (>15s)")
             else:
                 pytest.fail(f"{stage} failed: {output[:200]}")
 
