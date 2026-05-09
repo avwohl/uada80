@@ -14,7 +14,7 @@ def main():
     """Main entry point for the uada80 compiler."""
     parser = argparse.ArgumentParser(
         prog="uada80",
-        description="Ada compiler for Z80/8080 processors",
+        description="Ada compiler for the Z80 processor",
     )
 
     parser.add_argument(

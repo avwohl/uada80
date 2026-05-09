@@ -1,7 +1,7 @@
 """
-uada80 - Ada compiler for Z80/8080.
+uada80 - Ada compiler for Z80.
 
-A full Ada language compiler targeting Z80 processors.
+A full Ada language compiler targeting the Zilog Z80 processor.
 """
 
 __version__ = "0.2.0"

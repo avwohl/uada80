@@ -1,5 +1,12 @@
 # Optimization Code Analysis from uplm80
 
+> **Status: superseded.** This document analysed uplm80's optimizer code as
+> a candidate for extraction into uada80, before the work happened. Reality
+> as of today: uada80 ships its own `uada80/optimizer/` (`ast_optimizer.py`
+> + `config.py`) and uses the external [`upeepz80`](https://github.com/avwohl/upeepz80)
+> package for peephole — Z80-only, no 8080 patterns or mnemonic translation.
+> Kept for historical context.
+
 ## Overview
 The uplm80 project contains two main optimization components that can be factored out for reuse in uada80:
 
@@ -86,9 +93,7 @@ The peephole optimizer is ~2877 lines and performs assembly-level optimizations.
 1. **Pattern-based optimization**: Define before/after patterns
 2. **Multi-pass optimization**: Iterate until no changes
 3. **Target-specific rules**:
-   - 8080-specific patterns
    - Z80-specific patterns (JR relative jumps, etc.)
-   - Mnemonic translation (8080→Z80)
 
 #### Pattern Categories
 - Register allocation cleanup

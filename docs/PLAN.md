@@ -1,8 +1,14 @@
 # uada80 - Ada Compiler for Z80
 
+> **Status: historical planning document.** This was the pre-implementation
+> plan. The actual code has moved on — module names, the `shared/` layout,
+> and the phase checklists below no longer match reality. See `CLAUDE.md`
+> and the package source tree for the current structure. Kept here as a
+> record of the original design intent.
+
 ## Project Overview
 
-Full Ada language compiler targeting Z80/8080 processors. Primary goal: pass ACATS (Ada Conformance Assessment Test Suite) 4.2A.
+Full Ada language compiler targeting the Z80 processor. Primary goal: pass ACATS (Ada Conformance Assessment Test Suite) 4.2A.
 
 ## Resources Acquired
 
@@ -103,7 +109,7 @@ uada80/
 │   ├── z80_postopt.py       # Post-assembly optimizer
 │   ├── symbols.py           # Symbol table
 │   ├── errors.py            # Error reporting
-│   └── target.py            # Target enum (Z80/8080)
+│   └── target.py            # Target enum (Z80)
 │
 ├── runtime/                  # Z80 runtime library
 │   ├── startup.asm          # CRT0 equivalent
