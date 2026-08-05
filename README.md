@@ -218,9 +218,9 @@ cd runtime && make clean && make
 ### CP/M Target Platform
 - [docs/CPM_RUNTIME.md](docs/CPM_RUNTIME.md) - **Complete Ada/CP/M runtime specification**
 - [docs/CPM_QUICK_REFERENCE.md](docs/CPM_QUICK_REFERENCE.md) - **CP/M quick reference for developers**
-- [docs/cpm22_bdos_calls.pdf](docs/cpm22_bdos_calls.pdf) - BDOS system call reference
-- [docs/cpm22_bios_calls.pdf](docs/cpm22_bios_calls.pdf) - BIOS hardware interface
-- [docs/cpm22_memory_layout.pdf](docs/cpm22_memory_layout.pdf) - CP/M memory organization
+- [cpm22_bdos_calls.pdf](https://github.com/avwohl/retro_docs/blob/main/cpmemu/cpm22_bdos_calls.pdf) - BDOS system call reference
+- [cpm22_bios_calls.pdf](https://github.com/avwohl/retro_docs/blob/main/cpmemu/cpm22_bios_calls.pdf) - BIOS hardware interface
+- [cpm22_memory_layout.pdf](https://github.com/avwohl/retro_docs/blob/main/cpmemu/cpm22_memory_layout.pdf) - CP/M memory organization
 
 ### Ada Language Specifications
 - [specs/](specs/) - Ada language specifications and ACATS tests
