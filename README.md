@@ -28,7 +28,7 @@ clauses. The Z80 standard library and ACATS validation are still open.
 OS-native preemptive multitasking.
 
 Integers are limited to 8-bit and 16-bit (32-bit via library), floating point is
-software only, and the heap is small. See [docs/FEATURES.md](docs/FEATURES.md)
+software only, and the heap is small. See [docs/FEATURES.md](https://github.com/avwohl/uada80/blob/main/docs/FEATURES.md)
 for the goals, the full checklist and all limitations.
 
 ## Architecture
@@ -37,7 +37,7 @@ for the goals, the full checklist and all limitations.
 Ada Source → Lexer → Parser → AST → Semantic Analysis → Optimizer → Code Gen → Z80 Assembly
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed design documentation.
+See [docs/ARCHITECTURE.md](https://github.com/avwohl/uada80/blob/main/docs/ARCHITECTURE.md) for detailed design documentation.
 
 ## Building
 
@@ -73,26 +73,26 @@ cpmemu --z80 hello.com
 ```
 
 A Hello World program and more examples are in
-[docs/EXAMPLES.md](docs/EXAMPLES.md) and in
+[docs/EXAMPLES.md](https://github.com/avwohl/uada80/blob/main/docs/EXAMPLES.md) and in
 [learn-ada-z80](https://github.com/avwohl/learn-ada-z80).
 
 ## Documentation
 
-- [docs/FEATURES.md](docs/FEATURES.md) - Goals, feature status by phase, limitations
-- [docs/EXAMPLES.md](docs/EXAMPLES.md) - Example programs
-- [docs/TESTING.md](docs/TESTING.md) - Running tests, ACATS and learn-ada-z80 results
-- [docs/MPM2_TASKING.md](docs/MPM2_TASKING.md) - Ada tasking on MP/M II, building for MP/M II, runtime libraries
-- [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) - How to contribute
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - Compiler architecture and design
-- [docs/AST_DESIGN.md](docs/AST_DESIGN.md) - Abstract syntax tree structure
-- [docs/OPTIMIZATION_ANALYSIS.md](docs/OPTIMIZATION_ANALYSIS.md) - Optimization strategies
-- [docs/LANGUAGE_SUBSET.md](docs/LANGUAGE_SUBSET.md) - Supported Ada language features
-- [docs/CPM_RUNTIME.md](docs/CPM_RUNTIME.md) - **Complete Ada/CP/M runtime specification**
-- [docs/CPM_QUICK_REFERENCE.md](docs/CPM_QUICK_REFERENCE.md) - **CP/M quick reference for developers**
+- [docs/FEATURES.md](https://github.com/avwohl/uada80/blob/main/docs/FEATURES.md) - Goals, feature status by phase, limitations
+- [docs/EXAMPLES.md](https://github.com/avwohl/uada80/blob/main/docs/EXAMPLES.md) - Example programs
+- [docs/TESTING.md](https://github.com/avwohl/uada80/blob/main/docs/TESTING.md) - Running tests, ACATS and learn-ada-z80 results
+- [docs/MPM2_TASKING.md](https://github.com/avwohl/uada80/blob/main/docs/MPM2_TASKING.md) - Ada tasking on MP/M II, building for MP/M II, runtime libraries
+- [docs/CONTRIBUTING.md](https://github.com/avwohl/uada80/blob/main/docs/CONTRIBUTING.md) - How to contribute
+- [docs/ARCHITECTURE.md](https://github.com/avwohl/uada80/blob/main/docs/ARCHITECTURE.md) - Compiler architecture and design
+- [docs/AST_DESIGN.md](https://github.com/avwohl/uada80/blob/main/docs/AST_DESIGN.md) - Abstract syntax tree structure
+- [docs/OPTIMIZATION_ANALYSIS.md](https://github.com/avwohl/uada80/blob/main/docs/OPTIMIZATION_ANALYSIS.md) - Optimization strategies
+- [docs/LANGUAGE_SUBSET.md](https://github.com/avwohl/uada80/blob/main/docs/LANGUAGE_SUBSET.md) - Supported Ada language features
+- [docs/CPM_RUNTIME.md](https://github.com/avwohl/uada80/blob/main/docs/CPM_RUNTIME.md) - **Complete Ada/CP/M runtime specification**
+- [docs/CPM_QUICK_REFERENCE.md](https://github.com/avwohl/uada80/blob/main/docs/CPM_QUICK_REFERENCE.md) - **CP/M quick reference for developers**
 - [cpm22_bdos_calls.pdf](https://github.com/avwohl/retro_docs/blob/main/cpmemu/cpm22_bdos_calls.pdf) - BDOS system call reference
 - [cpm22_bios_calls.pdf](https://github.com/avwohl/retro_docs/blob/main/cpmemu/cpm22_bios_calls.pdf) - BIOS hardware interface
 - [cpm22_memory_layout.pdf](https://github.com/avwohl/retro_docs/blob/main/cpmemu/cpm22_memory_layout.pdf) - CP/M memory organization
-- [specs/](specs/) - Ada language specifications and ACATS tests
+- [specs/](https://github.com/avwohl/uada80/blob/main/specs/) - Ada language specifications and ACATS tests
 
 ## License
 
