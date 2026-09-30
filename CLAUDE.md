@@ -164,3 +164,6 @@ Float64 functions use pointer-based arguments passed on stack via PUSH. After `p
 1. **um80 not found**: Install with `pip install um80`
 2. **Link errors**: Rebuild runtime with `make -C runtime`
 3. **Timeout**: Z80 is slow; increase timeout for complex programs
+
+## README stays short
+README.md is at most 150 lines. New detail goes in docs/<topic>.md with a one-line link from the README; never add sections to the README.
