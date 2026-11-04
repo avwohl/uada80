@@ -1,0 +1,18 @@
+Todo list.  Open items only.
+
+[ANY] The peephole is skipped with no message above 3000 lines of assembler.
+  Compiler.compile and Compiler.compile_files (uada80/compiler.py) run the
+  peephole only when asm.count('\n') <= 3000, and print nothing when they
+  skip it, so a big program gets unoptimized code and the user is not told.
+  The count takes comment lines too, so source-line markers for a debugger
+  (cpmemu docs/debugger_plan.md) would turn the peephole off and change the
+  code.  Missing: why the limit exists (time, memory, or an old peephole
+  bug) - only the owner knows - and so whether to raise it, lift it, or say
+  so.  Found 2026-11-04 by the cpmemu debugger survey; not fixed.
+
+[ANY] The header comment of the exception handler frame in
+  runtime/runtime.mac says "Exception handler frame layout (8 bytes)" and
+  lists four words: previous handler, SP, handler address, exception ID.
+  The frame the code pushes, and the "; Frame:" comments under it, have
+  five words, 10 bytes: prev, sp, ix, addr, exc_id.  The header misses the
+  saved IX.  Found 2026-11-04 by the cpmemu debugger survey; not fixed.
