@@ -307,7 +307,11 @@ def test_record_type():
 
 
 def test_record_type_mixed():
-    """Test record with mixed component sizes."""
+    """Test record with mixed component sizes.
+
+    A record that is not packed gives each component a 16-bit word, because
+    the Z80 code generator reads and writes record fields with 16-bit loads.
+    """
     int_type = PREDEFINED_TYPES["Integer"]
     bool_type = PREDEFINED_TYPES["Boolean"]
 
@@ -320,8 +324,32 @@ def test_record_type_mixed():
         ],
     )
 
-    # Flag is 8 bits, Count is 16 bits
-    # Total should be 24 bits (3 bytes)
+    # Flag is 8 bits and takes a 16-bit word; Count is 16 bits at the next word.
+    assert [c.offset_bits for c in rec.components] == [0, 16]
+    assert rec.size_bits == 32
+
+
+def test_record_type_mixed_packed():
+    """Test the same record when it is packed.
+
+    A packed record keeps Boolean in 1 bit and starts a 16-bit component at
+    the next byte.
+    """
+    int_type = PREDEFINED_TYPES["Integer"]
+    bool_type = PREDEFINED_TYPES["Boolean"]
+
+    rec = RecordType(
+        name="PackedMixedRecord",
+        size_bits=0,
+        is_packed=True,
+        components=[
+            RecordComponent(name="Flag", component_type=bool_type),
+            RecordComponent(name="Count", component_type=int_type),
+        ],
+    )
+
+    # Flag is 1 bit; Count is 16 bits at the next byte: 3 bytes in all.
+    assert [c.offset_bits for c in rec.components] == [0, 8]
     assert rec.size_bits == 24
 
 
@@ -494,12 +522,17 @@ def test_array_attributes():
 
 
 def test_predefined_float():
-    """Test predefined Float type (32-bit single precision)."""
+    """Test predefined Float type.
+
+    Float has the 6 digits of single precision, and its storage is 64 bits:
+    the Z80 runtime has one floating-point format, IEEE 754 double
+    (runtime/float64.mac), and all float types use that format.
+    """
     float_type = PREDEFINED_TYPES["Float"]
 
     assert float_type.name == "Float"
     assert float_type.kind == TypeKind.FLOAT
-    assert float_type.size_bits == 32
+    assert float_type.size_bits == 64
     assert float_type.digits == 6  # Single precision has ~6 decimal digits
 
 
