@@ -261,14 +261,15 @@ class FloatType(AdaType):
             self.size_bits = self._compute_size()
 
     def _compute_size(self) -> int:
-        """Compute size based on required digits."""
-        # On Z80, we use software floating point
-        # Single precision (32-bit) gives ~7 decimal digits
-        # Double precision (64-bit) gives ~15 decimal digits
-        if self.digits <= 7:
-            return 32  # Single precision
-        else:
-            return 64  # Double precision (very slow on Z80)
+        """Return the storage size of a float type: always 64 bits.
+
+        The Z80 has no floating-point hardware, and the runtime has one
+        floating-point format, IEEE 754 double (runtime/float64.mac).  The
+        lowering uses that runtime for every FloatType and moves 8 bytes
+        for each value, so a smaller size here would make the storage too
+        small for the value.  The digits value does not change the size.
+        """
+        return 64
 
 
 @dataclass

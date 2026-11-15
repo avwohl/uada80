@@ -7,6 +7,7 @@ from uada80.type_system import (
     IntegerType,
     ModularType,
     EnumerationType,
+    FloatType,
     ArrayType,
     RecordType,
     RecordComponent,
@@ -554,3 +555,24 @@ def test_predefined_long_long_float():
     assert llf_type.kind == TypeKind.FLOAT
     assert llf_type.size_bits == 64
     assert llf_type.digits == 15
+
+
+@pytest.mark.parametrize("digits", [1, 6, 7, 8, 15])
+def test_float_type_default_size(digits):
+    """A float type with no size given gets 64 bits for each digits value.
+
+    The lowering uses the Float64 runtime for every FloatType and moves
+    8 bytes for each value.  A 32-bit size for 7 digits or fewer made the
+    storage smaller than the value.
+    """
+    float_type = FloatType(name="F", digits=digits)
+
+    assert float_type.kind == TypeKind.FLOAT
+    assert float_type.size_bits == 64
+    assert float_type.size_bytes() == 8
+    assert float_type.digits == digits
+
+
+def test_float_type_default_digits_size():
+    """A float type with no digits and no size given gets 64 bits."""
+    assert FloatType(name="F").size_bits == 64
